@@ -17,19 +17,36 @@ import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-m
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
 const FLAT_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/provider-entry.d.ts";
 const DEEP_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts";
+const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
+  name: "@openclaw/ai",
+  version: "2026.6.11",
+  exports: {
+    ".": { import: "./dist/index.mjs" },
+    "./providers": { import: "./dist/providers.mjs" },
+    "./internal/*": { import: "./dist/internal/*.mjs" },
+  },
+});
 
 function withTarball(
   inventory: string[],
   files: Record<string, string>,
   testBody: (tarball: string) => void,
   version = "0.0.0",
-  options: { includeControlUi?: boolean; includeShrinkwrap?: boolean } = {},
+  options: {
+    includeControlUi?: boolean;
+    includeShrinkwrap?: boolean;
+    packageJson?: Record<string, unknown>;
+    shrinkwrapRootPackage?: Record<string, unknown>;
+  } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
   try {
     const packageRoot = join(root, "package");
     mkdirSync(join(packageRoot, "dist"), { recursive: true });
-    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw", version }));
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version, ...options.packageJson }),
+    );
     if (options.includeShrinkwrap !== false) {
       writeFileSync(
         join(packageRoot, "npm-shrinkwrap.json"),
@@ -41,6 +58,7 @@ function withTarball(
             "": {
               name: "openclaw",
               version,
+              ...options.shrinkwrapRootPackage,
             },
           },
         }),
@@ -81,7 +99,7 @@ describe("check-openclaw-package-tarball", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(
-      "Usage: node scripts/check-openclaw-package-tarball.mjs <openclaw.tgz>",
+      "Usage: node scripts/check-openclaw-package-tarball.mjs [--require-bundled-workspace-deps] <openclaw.tgz>",
     );
     expect(result.stderr).toBe("");
   });
@@ -433,6 +451,247 @@ describe("check-openclaw-package-tarball", () => {
         );
       },
       "2026.4.27",
+    );
+  });
+
+  it("rejects workspace protocol dependencies in package manifests", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "package.json dependencies.@openclaw/ai must not use workspace protocol workspace:*",
+        );
+      },
+      "2026.6.11",
+      { packageJson: { dependencies: { "@openclaw/ai": "workspace:*" } } },
+    );
+  });
+
+  it("rejects workspace protocol dependencies in shrinkwrap root metadata", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "npm-shrinkwrap.json packages root dependencies.@openclaw/ai must not use workspace protocol workspace:*",
+        );
+      },
+      "2026.6.11",
+      { shrinkwrapRootPackage: { dependencies: { "@openclaw/ai": "workspace:*" } } },
+    );
+  });
+
+  it("accepts separately published private workspace dependencies by default", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.6.11",
+      { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },
+    );
+  });
+
+  it("rejects private workspace dependencies that are not bundled when strict packaging requires it", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "package.json dependencies.@openclaw/ai must be listed in bundleDependencies because it is private to the OpenClaw workspace",
+        );
+        expect(result.stderr).toContain(
+          "package.json dependencies.@openclaw/ai must be bundled in node_modules/@openclaw/ai",
+        );
+      },
+      "2026.6.11",
+      { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },
+    );
+  });
+
+  it("rejects private workspace dependencies when only metadata is bundled", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai is missing required runtime entry dist/index.mjs",
+        );
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai is missing required runtime entry dist/providers.mjs",
+        );
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai is missing required runtime entry dist/internal/runtime.mjs",
+        );
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
+  it("accepts private workspace dependencies when their runtime is bundled", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
+        "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
+  it("rejects a missing required bundled AI runtime entry", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
+        "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai is missing required runtime entry dist/providers.mjs",
+        );
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
+  it("rejects bundled AI entries that its manifest does not export", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": JSON.stringify({
+          name: "@openclaw/ai",
+          version: "2026.6.11",
+          exports: {
+            ".": "./dist/index.mjs",
+            "./providers": null,
+            "./internal/*": "./dist/internal/*.mjs",
+          },
+        }),
+        "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai runtime specifier @openclaw/ai/providers is not resolvable",
+        );
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
+  it("rejects missing relative imports from bundled AI runtime entries", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
+        "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": 'export * from "./missing.mjs";\n',
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai dist/internal/runtime.mjs imports missing dist/internal/missing.mjs",
+        );
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
     );
   });
 

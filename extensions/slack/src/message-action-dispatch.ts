@@ -2,10 +2,12 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   normalizeInteractiveReply,
   normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
@@ -16,7 +18,7 @@ import { resolveDefaultSlackAccountId } from "./accounts.js";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
-  resolveSlackInteractiveBlockOffsets,
+  resolveSlackBlockOffsets,
 } from "./blocks-render.js";
 
 type SlackActionInvoke = (
@@ -24,6 +26,15 @@ type SlackActionInvoke = (
   cfg: ChannelMessageActionContext["cfg"],
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
+
+function resolveSlackPresentationText(
+  content: string | undefined,
+  presentation: ReturnType<typeof normalizeMessagePresentation>,
+): string {
+  return presentation?.blocks.some((block) => block.type === "chart")
+    ? renderMessagePresentationFallbackText({ text: content, presentation })
+    : (content ?? "");
+}
 
 /** Translate generic channel action requests into Slack-specific tool invocations and payload shapes. */
 export async function handleSlackMessageAction(params: {
@@ -56,14 +67,12 @@ export async function handleSlackMessageAction(params: {
       ? buildSlackPresentationBlocks(presentation)
       : undefined;
     const interactiveBlocks = interactive
-      ? buildSlackInteractiveBlocks(
-          interactive,
-          resolveSlackInteractiveBlockOffsets(presentationBlocks),
-        )
+      ? buildSlackInteractiveBlocks(interactive, resolveSlackBlockOffsets(presentationBlocks))
       : undefined;
     const mergedBlocks = [...(presentationBlocks ?? []), ...(interactiveBlocks ?? [])];
     const blocks = mergedBlocks.length > 0 ? mergedBlocks : undefined;
-    if (!content && !mediaUrl && !blocks) {
+    const accessibleContent = resolveSlackPresentationText(content, presentation);
+    if (!accessibleContent && !mediaUrl && !blocks) {
       throw new Error("Slack send requires message, blocks, or media.");
     }
     const replyBroadcast = readBooleanParam(actionParams, "replyBroadcast");
@@ -78,7 +87,7 @@ export async function handleSlackMessageAction(params: {
       {
         action: "sendMessage",
         to,
-        content: content ?? "",
+        content: accessibleContent,
         mediaUrl: mediaUrl ?? undefined,
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
@@ -92,9 +101,16 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "react") {
-    const messageId = readStringParam(actionParams, "messageId", {
-      required: true,
+    const messageIdRaw = resolveReactionMessageId({
+      args: actionParams,
+      toolContext: ctx.toolContext,
     });
+    if (messageIdRaw == null) {
+      throw new Error(
+        "messageId required. Provide messageId explicitly or react to the current inbound message.",
+      );
+    }
+    const messageId = String(messageIdRaw);
     const emoji = readStringParam(actionParams, "emoji", { allowEmpty: true });
     const remove = typeof actionParams.remove === "boolean" ? actionParams.remove : undefined;
     return await invoke(
@@ -155,7 +171,8 @@ export async function handleSlackMessageAction(params: {
     const content = readStringParam(actionParams, "message", { allowEmpty: true });
     const presentation = normalizeMessagePresentation(actionParams.presentation);
     const blocks = presentation ? buildSlackPresentationBlocks(presentation) : undefined;
-    if (!content && !blocks) {
+    const accessibleContent = resolveSlackPresentationText(content, presentation);
+    if (!accessibleContent && !blocks) {
       throw new Error("Slack edit requires message or blocks.");
     }
     return await invoke(
@@ -163,7 +180,7 @@ export async function handleSlackMessageAction(params: {
         action: "editMessage",
         channelId: resolveChannelId(),
         messageId,
-        content: content ?? "",
+        content: accessibleContent,
         blocks,
         accountId,
       },

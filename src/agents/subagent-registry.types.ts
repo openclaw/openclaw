@@ -84,7 +84,7 @@ export type SubagentCompletionDeliveryState = {
     | "waiting_for_requester_turn";
 };
 
-export type SubagentKillReconciliationState = {
+type SubagentKillReconciliationState = {
   /** Actual cancellation time; a yielded run may have an older execution end. */
   killedAt: number;
   /** Requester aborts must not re-inject a delayed completion after queues are cleared. */

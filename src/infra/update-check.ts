@@ -101,7 +101,12 @@ function parseNpmPackageTargetMetadata(raw: string): {
   version: string | null;
   nodeEngine: string | null;
 } {
-  const parsed = JSON.parse(raw.trim()) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.trim()) as unknown;
+  } catch (err) {
+    throw new Error(`npm view returned invalid JSON: ${String(err)}`, { cause: err });
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { version: null, nodeEngine: null };
   }
@@ -297,7 +302,7 @@ async function detectGitRoot(root: string): Promise<string | null> {
   return top ? path.resolve(top) : null;
 }
 
-export async function checkGitUpdateStatus(params: {
+async function checkGitUpdateStatus(params: {
   root: string;
   timeoutMs?: number;
   fetch?: boolean;

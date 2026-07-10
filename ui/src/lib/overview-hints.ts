@@ -36,7 +36,7 @@ const INSECURE_CONTEXT_CODES = new Set<string>([
 
 type AuthHintKind = "required" | "failed";
 
-export type PairingHint =
+type PairingHint =
   | {
       kind: "pairing-required";
       requestId: string | null;
@@ -72,15 +72,6 @@ export function resolvePairingHint(
     return { kind: "pairing-required", requestId: null };
   }
   return null;
-}
-
-/** Whether the overview should show device-pairing guidance for this error. */
-export function shouldShowPairingHint(
-  connected: boolean,
-  lastError: string | null,
-  lastErrorCode?: string | null,
-): boolean {
-  return resolvePairingHint(connected, lastError, lastErrorCode) !== null;
 }
 
 /**

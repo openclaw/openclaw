@@ -550,6 +550,50 @@ describe("describeReplyTarget", () => {
     expect(result?.quoteSourceText).toBeUndefined();
   });
 
+  it("describes rich-message-only reply targets with canonical block text", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        rich_message: {
+          blocks: [
+            {
+              type: "details",
+              summary: "Run summary",
+              blocks: [
+                {
+                  type: "list",
+                  items: [
+                    {
+                      label: "1.",
+                      blocks: [{ type: "paragraph", text: "CI clean" }],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              type: "mathematical_expression",
+              expression: "a^2+b^2=c^2",
+            },
+            {
+              type: "photo",
+              caption: { text: "Chart", credit: "OpenClaw" },
+            },
+          ],
+        },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as never);
+
+    expect(result?.body).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
+    expect(result?.quoteSourceText).toBeUndefined();
+  });
+
   it("drops binary reply captions with no safe fallback", () => {
     const result = describeReplyTarget({
       message_id: 2,

@@ -40,17 +40,22 @@ data class VoiceConversationEntry(
   val isStreaming: Boolean = false,
 )
 
+internal data class GatewayTranscriptionSession(
+  val id: String,
+  val gatewayId: String,
+)
+
 /** Coordinates live mic transcription, queued sends, and assistant audio replies. */
 internal class MicCaptureManager(
   private val context: Context,
   private val scope: CoroutineScope,
-  private val createTranscriptionSession: suspend () -> String,
+  private val createTranscriptionSession: suspend () -> GatewayTranscriptionSession,
   private val appendTranscriptionAudio: suspend (
-    sessionId: String,
+    session: GatewayTranscriptionSession,
     audio: ByteArray,
     onError: (String) -> Unit,
   ) -> Unit,
-  private val closeTranscriptionSession: suspend (sessionId: String) -> Unit,
+  private val closeTranscriptionSession: suspend (session: GatewayTranscriptionSession) -> Unit,
   /**
    * Send [message] to the gateway and return the full chat.send ACK.
    * [onRunIdKnown] is called with the idempotency key *before* the network
@@ -108,14 +113,16 @@ internal class MicCaptureManager(
   private var pendingRunId: String? = null
   private var pendingAssistantEntryId: String? = null
   private var gatewayConnected = false
+  private var gatewayGeneration = 0L
 
-  @Volatile private var transcriptionSessionId: String? = null
+  @Volatile private var transcriptionSession: GatewayTranscriptionSession? = null
   private var transcriptionStartJob: Job? = null
   private var transcriptionCaptureJob: Job? = null
   private var transcriptionAppendJob: Job? = null
   private var transcriptionDrainJob: Job? = null
   private var transcriptFlushJob: Job? = null
   private var pendingRunTimeoutJob: Job? = null
+  private var sendJob: Job? = null
   private var stopRequested = false
   private val ttsPauseLock = Any()
   private var ttsPauseDepth = 0
@@ -210,7 +217,7 @@ internal class MicCaptureManager(
         ttsPauseDepth += 1
         if (ttsPauseDepth > 1) return@synchronized false
         resumeMicAfterTts = _micEnabled.value
-        val active = resumeMicAfterTts || transcriptionSessionId != null || _isListening.value
+        val active = resumeMicAfterTts || transcriptionSession != null || _isListening.value
         if (!active) return@synchronized false
         stopRequested = true
         transcriptFlushJob?.cancel()
@@ -255,7 +262,7 @@ internal class MicCaptureManager(
   fun onGatewayConnectionChanged(connected: Boolean) {
     gatewayConnected = connected
     if (connected) {
-      if (_micEnabled.value && transcriptionSessionId == null) {
+      if (_micEnabled.value && transcriptionSession == null) {
         start()
       }
       sendQueuedIfIdle()
@@ -271,6 +278,33 @@ internal class MicCaptureManager(
     if (hasQueuedMessages()) {
       _statusText.value = queuedWaitingStatus()
     }
+  }
+
+  /** Retires voice data owned by the old gateway before another gateway can connect. */
+  fun onGatewayScopeChanging() {
+    gatewayGeneration += 1
+    gatewayConnected = false
+    transcriptionDrainJob?.cancel()
+    transcriptionDrainJob = null
+    transcriptFlushJob?.cancel()
+    transcriptFlushJob = null
+    transcriptionStartJob?.cancel()
+    transcriptionStartJob = null
+    sendJob?.cancel()
+    sendJob = null
+    pendingRunTimeoutJob?.cancel()
+    pendingRunTimeoutJob = null
+    pendingRunId = null
+    pendingAssistantEntryId = null
+    synchronized(messageQueueLock) { messageQueue.clear() }
+    publishQueue()
+    _conversation.value = emptyList()
+    _liveTranscript.value = null
+    flushedPartialTranscript = null
+    _isSending.value = false
+    stopRequested = true
+    stopTranscription(preserveStatus = true)
+    _statusText.value = if (_micEnabled.value) "Mic on · waiting for gateway" else "Mic off"
   }
 
   internal fun submitTranscribedMessage(text: String) {
@@ -352,22 +386,22 @@ internal class MicCaptureManager(
       _statusText.value = "Mic on · waiting for gateway"
       return
     }
-    if (transcriptionSessionId != null || transcriptionStartJob?.isActive == true) return
+    if (transcriptionSession != null || transcriptionStartJob?.isActive == true) return
 
     val startJob =
       scope.launch {
         var restartAfterCancellation = false
         try {
-          val sessionId = createTranscriptionSession()
+          val session = createTranscriptionSession()
           if (stopRequested || !_micEnabled.value) {
-            closeTranscriptionSession(sessionId)
+            closeTranscriptionSession(session)
             return@launch
           }
-          transcriptionSessionId = sessionId
+          transcriptionSession = session
           _isListening.value = true
           _statusText.value = listeningStatus()
-          startTranscriptionCapture(sessionId)
-          Log.d(tag, "transcription session started sessionId=$sessionId")
+          startTranscriptionCapture(session)
+          Log.d(tag, "transcription session started sessionId=${session.id}")
         } catch (err: Throwable) {
           if (err is CancellationException) {
             restartAfterCancellation = _micEnabled.value && gatewayConnected && !stopRequested
@@ -395,9 +429,9 @@ internal class MicCaptureManager(
 
   private fun stopTranscription(preserveStatus: Boolean = false) {
     val status = _statusText.value
-    val sessionId = transcriptionSessionId
-    transcriptionSessionId = null
-    if (sessionId != null) {
+    val session = transcriptionSession
+    transcriptionSession = null
+    if (session != null) {
       transcriptionStartJob?.cancel()
       transcriptionStartJob = null
     } else if (transcriptionStartJob?.isActive != true) {
@@ -416,10 +450,10 @@ internal class MicCaptureManager(
     } else {
       _statusText.value = status
     }
-    if (!sessionId.isNullOrBlank()) {
+    if (session != null) {
       scope.launch {
         try {
-          closeTranscriptionSession(sessionId)
+          closeTranscriptionSession(session)
         } catch (err: Throwable) {
           if (err !is CancellationException) {
             Log.d(tag, "transcription close ignored: ${err.message ?: err::class.simpleName}")
@@ -480,47 +514,59 @@ internal class MicCaptureManager(
     pendingRunTimeoutJob = null
     _statusText.value = if (_micEnabled.value) "Listening · sending queued voice" else "Sending queued voice"
 
-    scope.launch {
-      try {
-        val ack =
-          sendToGateway(next) { earlyRunId ->
-            // Called with the idempotency key before chat.send fires so that
-            // pendingRunId is populated before any chat events can arrive.
-            pendingRunId = earlyRunId
+    val sendGeneration = gatewayGeneration
+    sendJob =
+      scope.launch {
+        try {
+          val ack =
+            sendToGateway(next) { earlyRunId ->
+              // Called with the idempotency key before chat.send fires so that
+              // pendingRunId is populated before any chat events can arrive.
+              if (sendGeneration == gatewayGeneration) {
+                pendingRunId = earlyRunId
+              }
+            }
+          if (sendGeneration != gatewayGeneration) return@launch
+          val runId = ack.runId
+          // Update to the real runId if the gateway returned a different one.
+          if (runId != null && runId != pendingRunId) pendingRunId = runId
+          when {
+            ack.isTerminalSuccess -> {
+              completePendingTurn()
+              refreshAfterTerminalSuccess()
+            }
+            ack.isTerminalFailure -> {
+              completePendingTurn()
+              _statusText.value = "Send failed: Chat failed before the run started; try again."
+            }
+            runId == null -> {
+              completePendingTurn()
+            }
+            else -> {
+              armPendingRunTimeout(runId)
+            }
           }
-        val runId = ack.runId
-        // Update to the real runId if the gateway returned a different one.
-        if (runId != null && runId != pendingRunId) pendingRunId = runId
-        when {
-          ack.isTerminalSuccess -> {
-            completePendingTurn()
-            refreshAfterTerminalSuccess()
-          }
-          ack.isTerminalFailure -> {
-            completePendingTurn()
-            _statusText.value = "Send failed: Chat failed before the run started; try again."
-          }
-          runId == null -> {
-            completePendingTurn()
-          }
-          else -> {
-            armPendingRunTimeout(runId)
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: Throwable) {
+          if (sendGeneration != gatewayGeneration) return@launch
+          pendingRunTimeoutJob?.cancel()
+          pendingRunTimeoutJob = null
+          _isSending.value = false
+          pendingRunId = null
+          pendingAssistantEntryId = null
+          _statusText.value =
+            if (!gatewayConnected) {
+              queuedWaitingStatus()
+            } else {
+              "Send failed: ${err.message ?: err::class.simpleName}"
+            }
+        } finally {
+          if (sendGeneration == gatewayGeneration) {
+            sendJob = null
           }
         }
-      } catch (err: Throwable) {
-        pendingRunTimeoutJob?.cancel()
-        pendingRunTimeoutJob = null
-        _isSending.value = false
-        pendingRunId = null
-        pendingAssistantEntryId = null
-        _statusText.value =
-          if (!gatewayConnected) {
-            queuedWaitingStatus()
-          } else {
-            "Send failed: ${err.message ?: err::class.simpleName}"
-          }
       }
-    }
   }
 
   private fun armPendingRunTimeout(runId: String) {
@@ -621,7 +667,7 @@ internal class MicCaptureManager(
   }
 
   @SuppressLint("MissingPermission")
-  private fun startTranscriptionCapture(sessionId: String) {
+  private fun startTranscriptionCapture(session: GatewayTranscriptionSession) {
     transcriptionCaptureJob?.cancel()
     transcriptionAppendJob?.cancel()
     val audioFrames =
@@ -634,14 +680,14 @@ internal class MicCaptureManager(
     transcriptionAppendJob =
       scope.launch(Dispatchers.IO) {
         for (frame in audioFrames) {
-          if (transcriptionSessionId != sessionId) continue
+          if (transcriptionSession != session) continue
           try {
-            appendTranscriptionAudio(sessionId, pcm16ToPcmu(frame)) { message ->
-              failTranscription(sessionId, message)
+            appendTranscriptionAudio(session, pcm16ToPcmu(frame)) { message ->
+              failTranscription(session, message)
             }
           } catch (err: Throwable) {
             if (err is CancellationException) throw err
-            failTranscription(sessionId, err.message ?: err::class.simpleName ?: "request failed")
+            failTranscription(session, err.message ?: err::class.simpleName ?: "request failed")
           }
         }
       }
@@ -653,15 +699,15 @@ internal class MicCaptureManager(
           audioInput = AndroidAudioInputSession.open(context, transcriptionSampleRateHz, frameBytes)
           val buffer = ByteArray(frameBytes)
           audioInput.startRecording()
-          while (coroutineContext.isActive && _micEnabled.value && transcriptionSessionId == sessionId) {
+          while (coroutineContext.isActive && _micEnabled.value && transcriptionSession == session) {
             val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
-            _inputLevel.value = pcm16Level(buffer, read)
+            _inputLevel.value = TalkAudioLevel.pcm16Level(buffer, read)
             audioFrames.trySend(buffer.copyOf(read))
           }
         } catch (err: Throwable) {
           if (err is CancellationException) throw err
-          failTranscription(sessionId, err.message ?: err::class.simpleName ?: "capture failed")
+          failTranscription(session, err.message ?: err::class.simpleName ?: "capture failed")
         } finally {
           audioFrames.close()
           audioInput?.close()
@@ -678,8 +724,8 @@ internal class MicCaptureManager(
         null
       } ?: return
     val sessionId = obj["transcriptionSessionId"].asStringOrNull() ?: obj["sessionId"].asStringOrNull()
-    val currentSessionId = transcriptionSessionId
-    if (currentSessionId == null || sessionId != currentSessionId) return
+    val currentSession = transcriptionSession
+    if (currentSession == null || sessionId != currentSession.id) return
 
     when (obj["type"].asStringOrNull()) {
       "ready", "inputAudio", "speechStart" -> {
@@ -713,7 +759,7 @@ internal class MicCaptureManager(
             ?.trim()
             .orEmpty()
             .ifEmpty { "transcription failed" }
-        failTranscription(currentSessionId, message)
+        failTranscription(currentSession, message)
       }
       "close" -> {
         _micEnabled.value = false
@@ -723,10 +769,10 @@ internal class MicCaptureManager(
   }
 
   private fun failTranscription(
-    sessionId: String,
+    session: GatewayTranscriptionSession,
     message: String,
   ) {
-    if (transcriptionSessionId != sessionId) return
+    if (transcriptionSession != session) return
     _statusText.value = "Transcription failed: $message"
     _micEnabled.value = false
     stopTranscription(preserveStatus = true)
@@ -738,26 +784,6 @@ internal class MicCaptureManager(
       hasQueuedMessages() -> "Listening · ${queuedMessageCount()} queued"
       else -> "Listening"
     }
-
-  private fun pcm16Level(
-    frame: ByteArray,
-    length: Int,
-  ): Float {
-    var total = 0L
-    var count = 0
-    var index = 0
-    val limit = length - (length % 2)
-    while (index < limit) {
-      val sample =
-        (frame[index].toInt() and 0xff) or
-          (frame[index + 1].toInt() shl 8)
-      total += kotlin.math.abs(sample.toShort().toInt())
-      count += 1
-      index += 2
-    }
-    if (count == 0) return 0f
-    return ((total / count).toFloat() / Short.MAX_VALUE).coerceIn(0f, 1f)
-  }
 
   private fun pcm16ToPcmu(pcm16: ByteArray): ByteArray {
     val output = ByteArray(pcm16.size / 2)

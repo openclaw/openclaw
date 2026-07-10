@@ -48,7 +48,11 @@ function createOptions(
 
 const okResolution = {
   ok: true as const,
-  payload: { url: "wss://gw.example:8443", bootstrapToken: "boot-123" },
+  payload: {
+    url: "wss://gw.example:8443",
+    urls: ["wss://gw.example:8443", "ws://192.168.1.20:18789"],
+    bootstrapToken: "boot-123",
+  },
   authLabel: "token" as const,
   urlSource: "remote",
 };
@@ -77,6 +81,7 @@ describe("device.pair.setupCode", () => {
       setupCode: "SETUP-CODE-XYZ",
       qrDataUrl: "data:image/png;base64,qr",
       gatewayUrl: "wss://gw.example:8443",
+      gatewayUrls: ["wss://gw.example:8443", "ws://192.168.1.20:18789"],
       auth: "token",
       urlSource: "remote",
     });
@@ -157,6 +162,21 @@ describe("device.pair.setupCode", () => {
     expect(ok).toBe(true);
     expect(payload.qrDataUrl).toBeUndefined();
     expect(payload.setupCode).toBe("SETUP-CODE-XYZ");
+  });
+
+  it("requests a node-only bootstrap profile for companion setup", async () => {
+    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
+    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
+
+    const { options } = createOptions({ includeQr: false, bootstrapProfile: "node" });
+    await devicePairSetupHandlers["device.pair.setupCode"](options);
+
+    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        bootstrapProfile: { roles: ["node"], scopes: [] },
+      }),
+    );
   });
 
   it("omits an oversized QR but still returns the setup code", async () => {

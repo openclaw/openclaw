@@ -6,7 +6,11 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
+import {
+  OPENCLAW_DELIVERY_MIRROR_MODEL,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+} from "../../shared/transcript-only-openclaw-assistant.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { updateSessionStoreEntry } from "./store.js";
@@ -623,6 +627,90 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         kind: "channel-final",
         sourceMessageId: "message-1",
       });
+    }
+  });
+
+  it("idempotently appends suppressed channel finals by key while preserving source ids", async () => {
+    writeTranscriptStore();
+
+    const text = "Channel final suppressed before delivery: stale foreground";
+    const first = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text,
+      storePath: fixture.storePath(),
+      idempotencyKey: "channel-final-suppressed:message-1:0",
+      deliveryMirror: {
+        kind: "channel-final-suppressed",
+        reason: "stale-foreground",
+        sourceMessageId: "message-1",
+      },
+    });
+    const replay = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text,
+      storePath: fixture.storePath(),
+      idempotencyKey: "channel-final-suppressed:message-1:0",
+      deliveryMirror: {
+        kind: "channel-final-suppressed",
+        reason: "stale-foreground",
+        sourceMessageId: "message-1",
+      },
+    });
+    const nextTurn = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text,
+      storePath: fixture.storePath(),
+      idempotencyKey: "channel-final-suppressed:message-2:0",
+      deliveryMirror: {
+        kind: "channel-final-suppressed",
+        reason: "stale-foreground",
+        sourceMessageId: "message-2",
+      },
+    });
+
+    expect(first.ok).toBe(true);
+    expect(replay.ok).toBe(true);
+    expect(nextTurn.ok).toBe(true);
+    if (first.ok && replay.ok && nextTurn.ok) {
+      expect(replay.messageId).toBe(first.messageId);
+      expect(nextTurn.messageId).not.toBe(first.messageId);
+      const lines = fs.readFileSync(first.sessionFile, "utf-8").trim().split("\n");
+      expect(lines).toHaveLength(3);
+      const firstMirror = JSON.parse(lines[1]).message;
+      const secondMirror = JSON.parse(lines[2]).message;
+      expect(firstMirror).toMatchObject({
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+        provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+        model: OPENCLAW_DELIVERY_MIRROR_MODEL,
+        openclawDeliveryMirror: {
+          kind: "channel-final-suppressed",
+          reason: "stale-foreground",
+          sourceMessageId: "message-1",
+        },
+      });
+      expect(secondMirror.openclawDeliveryMirror).toEqual({
+        kind: "channel-final-suppressed",
+        reason: "stale-foreground",
+        sourceMessageId: "message-2",
+      });
+      await appendSessionTranscriptMessage({
+        transcriptPath: first.sessionFile,
+        message: {
+          role: "user",
+          content: "next user turn",
+          timestamp: Date.now(),
+        },
+      });
+      await expect(
+        readRecentUserAssistantTextFromSessionTranscript(first.sessionFile, { limit: 10 }),
+      ).resolves.toEqual([
+        {
+          id: expect.any(String),
+          role: "user",
+          text: "next user turn",
+          timestamp: expect.any(Number),
+        },
+      ]);
     }
   });
 

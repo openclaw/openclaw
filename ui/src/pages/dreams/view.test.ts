@@ -2,12 +2,9 @@
 
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createDreamingViewState,
-  renderDreaming,
-  type DreamingProps,
-  type DreamingViewState,
-} from "./view.ts";
+import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
+
+type DreamingProps = Parameters<typeof renderDreaming>[0];
 
 let viewState = createDreamingViewState();
 
@@ -252,6 +249,15 @@ describe("dreaming view", () => {
     const container = renderInto(buildProps({ dreamingOf: "reindexing old chats\u2026" }));
 
     expectElement(container, ".dreams__lobster svg");
+
+    // The sleeper is the seeded pet cameo: eyes closed, pupils hidden.
+    const closedEyes = container.querySelector<SVGGElement>(".dreams__lobster .lob-eye-closed");
+    expect(closedEyes?.getAttribute("style")).toContain("opacity:1");
+    const openEyes = container.querySelector<SVGGElement>(".dreams__lobster .lob-eye-open");
+    expect(openEyes?.getAttribute("style")).toContain("display:none");
+    expect(
+      container.querySelector<HTMLElement>(".dreams__lobster")?.getAttribute("style"),
+    ).toContain("--lob-shell:");
 
     expect(textItems(container, ".dreams__z")).toEqual(["z", "z", "Z"]);
 

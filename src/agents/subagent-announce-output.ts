@@ -291,7 +291,11 @@ export function applySubagentWaitOutcome(params: {
     outcome = { status: "timeout" };
   } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
     outcome = { status: "error", error: "subagent run terminated" };
-  } else if (terminalOutcome?.reason === "blocked" || terminalOutcome?.reason === "failed") {
+  } else if (
+    terminalOutcome?.reason === "blocked" ||
+    terminalOutcome?.reason === "abandoned" ||
+    terminalOutcome?.reason === "failed"
+  ) {
     outcome = { status: "error", error: terminalOutcome.error ?? waitError };
   } else if (terminalOutcome?.reason === "completed") {
     outcome = { status: "ok" };

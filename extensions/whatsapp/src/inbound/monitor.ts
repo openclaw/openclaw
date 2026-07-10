@@ -4,6 +4,7 @@ import type {
   MiscMessageGenerationOptions,
   proto,
   GroupMetadata,
+  ReachoutTimelockState,
   WAMessage,
   WAMessageKey,
   WASocket,
@@ -14,6 +15,7 @@ import {
   formatLocationText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asDateTimestampMs,
@@ -41,7 +43,12 @@ import {
   type WhatsAppSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
-import { resolveEquivalentWhatsAppDirectChatJids, resolveJidToE164 } from "../text-runtime.js";
+import {
+  resolveEquivalentWhatsAppDirectChatJids,
+  resolveJidToE164,
+  toWhatsappJid,
+  toWhatsappJidWithLid,
+} from "../text-runtime.js";
 import {
   checkInboundAccessControl,
   type AcceptedInboundAccessControlResult,
@@ -104,14 +111,33 @@ const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress
 const GROUP_META_TTL_MS = 5 * 60 * 1000;
 const BAILEYS_MESSAGE_TTL_MS = 10 * 60 * 1000;
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
   subject?: string;
   expires: number;
 };
+
+function resolveRetryableWhatsAppInboundError(
+  error: unknown,
+): WhatsAppRetryableInboundError | null {
+  if (error instanceof WhatsAppRetryableInboundError) {
+    return error;
+  }
+  const hasSessionInitConflict = collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.error,
+  ]).some((candidate) =>
+    REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+  );
+  if (!hasSessionInitConflict) {
+    return null;
+  }
+  return new WhatsAppRetryableInboundError(formatErrorMessage(error), { cause: error });
+}
 export type WhatsAppGroupMetadataCache = Map<string, WhatsAppGroupMetadataCacheEntry>;
-export type WhatsAppBaileysCacheEntry<T> = {
+type WhatsAppBaileysCacheEntry<T> = {
   expiresAt: number;
   value: T;
 };
@@ -238,6 +264,33 @@ function isGroupJid(jid: string): boolean {
   return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
 }
 
+function isDirectUserJid(jid: string): boolean {
+  return /^(\d+)(?::\d+)?@(s\.whatsapp\.net|c\.us|lid|hosted|hosted\.lid)$/i.test(jid.trim());
+}
+
+function getActiveReachoutTimelock(
+  state: ReachoutTimelockState | undefined,
+): ReachoutTimelockState | undefined {
+  if (state?.isActive !== true) {
+    return undefined;
+  }
+  const endsAt = state.timeEnforcementEnds?.getTime();
+  return endsAt === undefined || !Number.isFinite(endsAt) || endsAt > Date.now()
+    ? state
+    : undefined;
+}
+
+function formatReachoutTimelockError(state: ReachoutTimelockState): string {
+  const details = [
+    state.enforcementType ? `type=${state.enforcementType}` : undefined,
+    state.timeEnforcementEnds instanceof Date &&
+    Number.isFinite(state.timeEnforcementEnds.getTime())
+      ? `until=${state.timeEnforcementEnds.toISOString()}`
+      : undefined,
+  ].filter(Boolean);
+  return `WhatsApp reachout timelock is active; direct messages are temporarily blocked${details.length ? ` (${details.join(", ")})` : ""}`;
+}
+
 function recordAcceptedInboundActivity(accountId: string): void {
   recordChannelActivity({
     channel: "whatsapp",
@@ -265,6 +318,12 @@ type AdmittedWebInboundCallbackMessage = WebInboundMessage & {
   admission: AdmittedWebInboundMessage["admission"];
 };
 
+type AppendReplyWindow = {
+  afterMs: number;
+  untilMs: number;
+  maxAgeMs: number;
+};
+
 type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
@@ -280,6 +339,8 @@ type MonitorWebInboxOptions = {
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Bounded reconnect window for offline append auto-replies. */
+  appendReplyWindow?: AppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
   /** Optional shared socket reference so reply closures can follow reconnects. */
@@ -457,12 +518,13 @@ export async function attachWebInboxToSocket(
       (entry): entry is QueuedInboundMessage & { readReceipt: WhatsAppReadReceiptTarget } =>
         Boolean(entry.readReceipt),
     );
-    if (error instanceof WhatsAppRetryableInboundError) {
-      dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, error));
+    const retryableError = resolveRetryableWhatsAppInboundError(error);
+    if (retryableError) {
+      dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, retryableError));
       await Promise.all(
         durableEntries.map((entry) =>
           durableInboundJournal.release(entry.durableId, {
-            lastError: formatError(error),
+            lastError: formatError(retryableError),
           }),
         ),
       );
@@ -612,6 +674,12 @@ export async function attachWebInboxToSocket(
         ? (result as { message?: proto.IMessage }).message
         : undefined;
     rememberBaileysMessage(remoteJid, messageId, message);
+    // Baileys derives the participant for fromMe quotes from its own userJid.
+    // Retain only the facts needed to avoid the cache-miss fromMe=false fallback.
+    cacheInboundMessageMeta(options.accountId, remoteJid, messageId, {
+      fromMe: true,
+      body: extractText(message ?? undefined),
+    });
   };
   const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
     // The local send has failed terminally, but Baileys may still deliver it.
@@ -622,6 +690,95 @@ export async function attachWebInboxToSocket(
       },
       () => {},
     );
+  };
+  let reachoutTimeLock: ReachoutTimelockState | undefined;
+  let reachoutTimeLockFetch: Promise<ReachoutTimelockState | undefined> | undefined;
+  let reachoutTimeLockVersion = 0;
+  let verifiedSendReady:
+    | { jid: string; sock: WASocket; reachoutTimeLockVersion: number }
+    | undefined;
+  const rememberReachoutTimeLock = (state: ReachoutTimelockState | undefined) => {
+    reachoutTimeLock = state;
+    reachoutTimeLockVersion += 1;
+    verifiedSendReady = undefined;
+  };
+  const fetchReachoutTimeLock = async (
+    currentSock: WASocket,
+  ): Promise<ReachoutTimelockState | undefined> => {
+    if (typeof currentSock.fetchAccountReachoutTimelock !== "function") {
+      return undefined;
+    }
+    if (!reachoutTimeLockFetch) {
+      reachoutTimeLockFetch = currentSock
+        .fetchAccountReachoutTimelock()
+        .then((state) => {
+          rememberReachoutTimeLock(state);
+          return state;
+        })
+        .catch((err: unknown) => {
+          logWhatsAppVerbose(
+            options.verbose,
+            `Failed fetching WhatsApp reachout timelock before send: ${formatError(err)}`,
+          );
+          return undefined;
+        })
+        .finally(() => {
+          reachoutTimeLockFetch = undefined;
+        });
+    }
+    return await reachoutTimeLockFetch;
+  };
+  const rememberVerifiedSendReady = (jid: string, currentSock: WASocket) => {
+    verifiedSendReady = {
+      jid,
+      sock: currentSock,
+      reachoutTimeLockVersion,
+    };
+  };
+  const consumeVerifiedSendReady = (jid: string, currentSock: WASocket): boolean => {
+    if (
+      verifiedSendReady?.jid !== jid ||
+      verifiedSendReady.sock !== currentSock ||
+      verifiedSendReady.reachoutTimeLockVersion !== reachoutTimeLockVersion
+    ) {
+      return false;
+    }
+    verifiedSendReady = undefined;
+    return true;
+  };
+  const assertCanSendToJid = async (
+    jid: string,
+    currentSock: WASocket,
+    readinessOptions?: { rememberReady?: boolean; useVerifiedReady?: boolean },
+  ) => {
+    if (!isDirectUserJid(jid)) {
+      return;
+    }
+    if (readinessOptions?.useVerifiedReady && consumeVerifiedSendReady(jid, currentSock)) {
+      return;
+    }
+    const state =
+      getActiveReachoutTimelock(reachoutTimeLock) ?? (await fetchReachoutTimeLock(currentSock));
+    const activeState = getActiveReachoutTimelock(state);
+    if (activeState) {
+      throw new Error(formatReachoutTimelockError(activeState));
+    }
+    if (readinessOptions?.rememberReady && state) {
+      // The top-level direct send checks readiness before typing; consume this
+      // same socket/JID/version proof at the native send so inactive accounts
+      // are not queried twice for one outbound action.
+      rememberVerifiedSendReady(jid, currentSock);
+    }
+  };
+  const assertCanSendTo = async (to: string) => {
+    const currentSock = getCurrentSock();
+    if (!currentSock) {
+      throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+    }
+    const jid = options.authDir
+      ? toWhatsappJidWithLid(to, { authDir: options.authDir })
+      : toWhatsappJid(to);
+    await assertCanSendToJid(jid, currentSock, { rememberReady: true });
   };
 
   const sendTrackedMessage = async (
@@ -634,6 +791,7 @@ export async function attachWebInboxToSocket(
       const currentSock = getCurrentSock();
       if (currentSock) {
         try {
+          await assertCanSendToJid(jid, currentSock, { useVerifiedReady: true });
           const result = await createWhatsAppSocketOperationTimeoutAdapter(
             currentSock,
             sendOperationTimeoutMs,
@@ -992,7 +1150,14 @@ export async function attachWebInboxToSocket(
     const APPEND_RECENT_GRACE_MS = 60_000;
     const msgTsSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
     const msgTsMs = msgTsSeconds !== undefined ? msgTsSeconds * 1000 : 0;
-    return msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS;
+    // Reconnect catch-up is temporary; after it expires, preserve steady-state
+    // handling for fresh appends instead of rejecting every later append.
+    const nowMs = Date.now();
+    const appendAfterMs =
+      options.appendReplyWindow && nowMs <= options.appendReplyWindow.untilMs
+        ? Math.max(options.appendReplyWindow.afterMs, nowMs - options.appendReplyWindow.maxAgeMs)
+        : connectedAtMs - APPEND_RECENT_GRACE_MS;
+    return msgTsMs < appendAfterMs;
   };
 
   const processDurableInboundMessage = async (
@@ -1204,10 +1369,12 @@ export async function attachWebInboxToSocket(
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
-      if (!getCurrentSock()) {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
         return;
       }
       try {
+        await assertCanSendToJid(chatJid, currentSock);
         await sendApiSocketOperations.sendPresenceUpdate("composing", chatJid);
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
@@ -1466,6 +1633,9 @@ export async function attachWebInboxToSocket(
   };
   const handleConnectionUpdate = (update: Partial<import("baileys").ConnectionState>) => {
     try {
+      if ("reachoutTimeLock" in update) {
+        rememberReachoutTimeLock(update.reachoutTimeLock);
+      }
       if (update.connection === "close") {
         if (options.socketRef?.current === sock) {
           options.socketRef.current = null;
@@ -1640,6 +1810,7 @@ export async function attachWebInboxToSocket(
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
+    assertSendReady: assertCanSendTo,
     sendComposingTo: sendApi.sendComposingTo,
     sendMessage: sendApi.sendMessage,
     sendPoll: sendApi.sendPoll,

@@ -80,6 +80,8 @@ export function registerBrowserAgentActHookRoutes(
               targetId: tab.targetId,
               uid,
               filePath: resolvedPaths[0] ?? "",
+              timeoutMs: timeoutMs ?? ctx.state().resolved.actionTimeoutMs,
+              signal: req.signal,
             });
             return res.json({ ok: true });
           }
@@ -157,6 +159,8 @@ export function registerBrowserAgentActHookRoutes(
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
+              timeoutMs: ctx.state().resolved.actionTimeoutMs,
+              signal: req.signal,
               // Existing-session Chrome MCP has no dialog hook primitive. Patch
               // one-shot window dialog functions in-page, then restore them.
               fn: `() => {

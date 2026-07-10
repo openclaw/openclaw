@@ -10,6 +10,7 @@ extension OnboardingView {
         self.state.connectionMode = .local
         self.preferredGatewayID = nil
         self.showAdvancedConnection = false
+        self.showRemoteChoices = false
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
     }
 
@@ -18,6 +19,7 @@ extension OnboardingView {
         self.state.connectionMode = .unconfigured
         self.preferredGatewayID = nil
         self.showAdvancedConnection = false
+        self.showRemoteChoices = false
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
     }
 
@@ -64,6 +66,11 @@ extension OnboardingView {
     func finish() {
         OnboardingController.markComplete()
         OnboardingController.shared.close()
+        // Land people in the real conversation, not on an empty desktop: the
+        // agent chat is the product, and it is verified working by now.
+        if self.state.connectionMode != .unconfigured {
+            AppNavigationActions.openChat()
+        }
     }
 
     func copyToPasteboard(_ text: String) {

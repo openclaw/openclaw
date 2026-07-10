@@ -12,9 +12,10 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
+import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 
-export type VoiceResponseParams = {
+type VoiceResponseParams = {
   /** Voice call config */
   voiceConfig: VoiceCallConfig;
   /** Core OpenClaw config */
@@ -27,14 +28,20 @@ export type VoiceResponseParams = {
   sessionKey?: string;
   /** Caller's phone number */
   from: string;
+  /** Agent frozen on the call record. */
+  agentId?: string;
   /** Conversation transcript */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   /** Latest user message */
   userMessage: string;
+  /** Delivers completed reply blocks while post-turn work is still running. */
+  onEarlyText?: (text: string) => Promise<boolean>;
 };
 
-export type VoiceResponseResult = {
+type VoiceResponseResult = {
   text: string | null;
+  /** Whether the complete response was handed to the transport before compaction. */
+  deliveredEarly: boolean;
   error?: string;
 };
 
@@ -198,6 +205,18 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
   return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
 }
 
+async function deliverEarlyText(
+  callback: (text: string) => Promise<boolean>,
+  text: string,
+): Promise<boolean> {
+  try {
+    return await callback(text);
+  } catch (error) {
+    console.error("[voice-call] Early TTS delivery failed:", error);
+    return false;
+  }
+}
+
 function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
   const trimmed = sessionKey.trim();
   if (trimmed.toLowerCase().startsWith("agent:")) {
@@ -222,21 +241,26 @@ export async function generateVoiceResponse(
     userMessage,
     coreConfig,
     agentRuntime,
+    onEarlyText,
   } = params;
 
   if (!coreConfig) {
-    return { text: null, error: "Core config unavailable for voice response" };
+    return {
+      text: null,
+      deliveredEarly: false,
+      error: "Core config unavailable for voice response",
+    };
   }
   const cfg = coreConfig;
+  const agentId = resolveCallAgentId({ agentId: params.agentId }, voiceConfig);
 
   const resolvedSessionKey = resolveVoiceCallSessionKey({
-    config: voiceConfig,
+    config: { ...voiceConfig, agentId },
     callId,
     phone: from,
     explicitSessionKey: sessionKey,
     coreSession: coreConfig.session,
   });
-  const agentId = voiceConfig.agentId ?? "main";
   const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
 
   // Resolve paths
@@ -292,7 +316,11 @@ export async function generateVoiceResponse(
             })) ?? undefined;
         }
         if (!sessionEntry?.sessionId) {
-          return { text: null, error: "Voice response session could not be initialized" };
+          return {
+            text: null,
+            deliveredEarly: false,
+            error: "Voice response session could not be initialized",
+          };
         }
         const sessionId = sessionEntry.sessionId;
 
@@ -322,6 +350,12 @@ export async function generateVoiceResponse(
           voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
         const runId = `voice:${callId}:${Date.now()}`;
 
+        const blockReplyPayloads: VoiceResponsePayload[] = [];
+        let latestToolBoundaryMessageIndex: number | undefined;
+        let blockReplyBoundariesReliable = true;
+        let deliveredEarly = false;
+        let lastFlushedText: string | null = null;
+
         const result = await agentRuntime.runEmbeddedAgent({
           sessionId,
           sessionKey: resolvedSessionKey,
@@ -348,21 +382,67 @@ export async function generateVoiceResponse(
           agentDir,
           toolsAllow,
           abortSignal,
+          blockReplyBreak: "text_end",
+          onBlockReply: (payload, context) => {
+            if (latestToolBoundaryMessageIndex !== undefined) {
+              const messageIndex = context?.assistantMessageIndex;
+              if (messageIndex === undefined) {
+                blockReplyBoundariesReliable = false;
+                return;
+              }
+              if (messageIndex <= latestToolBoundaryMessageIndex) {
+                return;
+              }
+            }
+            blockReplyPayloads.push(payload);
+          },
+          onBlockReplyFlush: async (context) => {
+            if (context.reason === "tool_start") {
+              // Deferred replies can arrive after this callback. Retain the
+              // assistant index at the actual tool boundary to reject them.
+              blockReplyPayloads.length = 0;
+              latestToolBoundaryMessageIndex = context.assistantMessageIndex;
+              blockReplyBoundariesReliable = true;
+              return;
+            }
+            if (context.reason !== "pre_compaction") {
+              return;
+            }
+            const pendingPayloads = blockReplyPayloads.splice(0);
+            const boundariesReliable = blockReplyBoundariesReliable;
+            latestToolBoundaryMessageIndex = undefined;
+            blockReplyBoundariesReliable = true;
+            if (!context.attemptAccepted) {
+              return;
+            }
+            // Call-control APIs acknowledge a playback request, not playback
+            // completion. Never let a later retry flush replace in-flight audio.
+            if (deliveredEarly || !onEarlyText || !boundariesReliable) {
+              return;
+            }
+            const text = extractSpokenTextFromPayloads(pendingPayloads);
+            if (!text) {
+              return;
+            }
+            lastFlushedText = text;
+            deliveredEarly = await deliverEarlyText(onEarlyText, text);
+          },
         });
 
-        const text = extractSpokenTextFromPayloads(
-          (result.payloads ?? []) as VoiceResponsePayload[],
-        );
+        const text =
+          extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]) ??
+          lastFlushedText ??
+          extractSpokenTextFromPayloads(blockReplyPayloads);
 
         if (!text && result.meta?.aborted) {
-          return { text: null, error: "Response generation was aborted" };
+          return { text: null, deliveredEarly: false, error: "Response generation was aborted" };
         }
 
-        return { text };
+        return { text, deliveredEarly };
       },
     );
   } catch (err) {
     console.error(`[voice-call] Response generation failed:`, err);
-    return { text: null, error: String(err) };
+    return { text: null, deliveredEarly: false, error: String(err) };
   }
 }

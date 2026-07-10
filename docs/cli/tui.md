@@ -38,6 +38,9 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
 - `--local` cannot combine with `--url`, `--token`, or `--password`.
 - `tui` resolves configured Gateway auth SecretRefs for token/password auth
   when possible (`env`/`file`/`exec` providers).
+- With no explicit URL or port, `tui` follows the active local Gateway port
+  recorded by the running Gateway. Explicit `--url`, `OPENCLAW_GATEWAY_URL`,
+  `OPENCLAW_GATEWAY_PORT`, and remote Gateway config keep precedence.
 - Launched from inside a configured agent workspace directory, TUI auto-selects
   that agent for the session key default (unless `--session` is explicitly
   `agent:<id>:...`).

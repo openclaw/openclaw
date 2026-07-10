@@ -25,6 +25,21 @@ export type CodexAppServerTranscriptMirrorResult = {
 };
 
 const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
+const MIRROR_ORIGIN_META_KEY = "mirrorOrigin" as const;
+const CODEX_APP_SERVER_MIRROR_ORIGIN = "codex-app-server" as const;
+
+function attachCodexMirrorOrigin(message: AgentMessage): AgentMessage {
+  const record = message as unknown as Record<string, unknown>;
+  const existing = record["__openclaw"];
+  const baseMeta =
+    existing && typeof existing === "object" && !Array.isArray(existing)
+      ? (existing as Record<string, unknown>)
+      : {};
+  return {
+    ...record,
+    __openclaw: { ...baseMeta, [MIRROR_ORIGIN_META_KEY]: CODEX_APP_SERVER_MIRROR_ORIGIN },
+  } as unknown as AgentMessage;
+}
 
 function buildSenderLabel(params: {
   senderId?: string;
@@ -313,11 +328,19 @@ export async function mirrorCodexAppServerTranscript(params: {
       let nextMessageSeq = mirrorState.messageCount;
       for (const message of messages) {
         const dedupeIdentity = buildMirrorDedupeIdentity(message);
-        const idempotencyKey = params.idempotencyScope
-          ? `${params.idempotencyScope}:${dedupeIdentity}`
-          : undefined;
+        const sourceUserIdempotencyKey =
+          message.role === "user"
+            ? normalizeOptionalString(
+                (message as unknown as { idempotencyKey?: unknown }).idempotencyKey,
+              )
+            : undefined;
+        // The gateway owns user-turn identity. Preserve its key so clients can
+        // correlate optimistic rows; provider mirror identity is only a fallback.
+        const idempotencyKey =
+          sourceUserIdempotencyKey ??
+          (params.idempotencyScope ? `${params.idempotencyScope}:${dedupeIdentity}` : undefined);
         const transcriptMessage = {
-          ...message,
+          ...(attachCodexMirrorOrigin(message) as unknown as Record<string, unknown>),
           ...(idempotencyKey ? { idempotencyKey } : {}),
         } as AgentMessage;
         if (idempotencyKey && mirrorState.idempotencyKeys.has(idempotencyKey)) {
@@ -347,10 +370,10 @@ export async function mirrorCodexAppServerTranscript(params: {
         const messageToAppend = (
           idempotencyKey
             ? {
-                ...(nextMessage as unknown as Record<string, unknown>),
+                ...(attachCodexMirrorOrigin(nextMessage) as unknown as Record<string, unknown>),
                 idempotencyKey,
               }
-            : nextMessage
+            : attachCodexMirrorOrigin(nextMessage)
         ) as AgentMessage;
         const appended = await transcript.appendMessage({
           message: messageToAppend,

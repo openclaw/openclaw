@@ -8,6 +8,11 @@ const withPageScopedCdpClient = vi.fn();
 const markBackendDomRefsOnPage = vi.fn();
 const formatAriaSnapshot = vi.fn();
 const gotoPageWithNavigationGuard = vi.fn();
+const createDownloadCaptureForPage = vi.fn(() => ({
+  armed: true,
+  promise: new Promise(() => {}),
+  cancel: vi.fn(),
+}));
 
 vi.mock("./pw-session.js", () => ({
   assertPageNavigationCompletedSafely: vi.fn(),
@@ -16,8 +21,13 @@ vi.mock("./pw-session.js", () => ({
   forceDisconnectPlaywrightForTarget: vi.fn(),
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  isDownloadStartingNavigationError: vi.fn(() => false),
   isPolicyDenyNavigationError: vi.fn(() => false),
   storeRoleRefsForTarget,
+}));
+
+vi.mock("./pw-download-capture.js", () => ({
+  createDownloadCaptureForPage,
 }));
 
 vi.mock("./pw-session.page-cdp.js", () => ({
@@ -182,6 +192,23 @@ describe("pw-tools-core aria snapshot storage", () => {
     });
 
     expect(ariaSnapshotMock).toHaveBeenCalledWith({ mode: "ai", timeout: 5000 });
+  });
+
+  it("does not split a surrogate pair when truncating ai snapshots", async () => {
+    const prefix = `- button "${"A".repeat(18)}`;
+    const ariaSnapshotMock = vi.fn().mockResolvedValue(`${prefix}🙂"`);
+    const page = { ariaSnapshot: ariaSnapshotMock };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.snapshotAiViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      maxChars: prefix.length + 1,
+    });
+
+    expect(result.snapshot).toBe(`${prefix}\n\n[...TRUNCATED - page too large]`);
+    expect(result.truncated).toBe(true);
   });
 
   it("uses the default navigation timeout for non-finite timeouts", async () => {

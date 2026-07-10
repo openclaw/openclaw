@@ -1,9 +1,10 @@
+import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
+  readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
 // Inference backend detection shared by onboarding bootstrap and Crestodian setup.
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../crestodian/probes.js";
@@ -14,17 +15,19 @@ import { probeLocalCommand, type LocalCommandProbe } from "../crestodian/probes.
  * asking the user anything. The ladder order is a documented contract
  * (docs/cli/crestodian.md "Setup bootstrap") — change docs when changing it.
  */
-export const OPENAI_API_DEFAULT_MODEL_REF = `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+export const OPENAI_API_DEFAULT_MODEL_REF = "openai/gpt-5.6";
 export const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-4-8";
 export const CLAUDE_CLI_DEFAULT_MODEL_REF = "claude-cli/claude-opus-4-8";
-export const CODEX_APP_SERVER_DEFAULT_MODEL_REF = OPENAI_API_DEFAULT_MODEL_REF;
+export const CODEX_APP_SERVER_DEFAULT_MODEL_REF = "openai/gpt-5.6-sol";
+export const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3.1-pro-preview";
 
 export type InferenceBackendKind =
   | "existing-model"
   | "openai-api-key"
   | "anthropic-api-key"
   | "claude-cli"
-  | "codex-cli";
+  | "codex-cli"
+  | "gemini-cli";
 
 export type InferenceBackendCandidate = {
   kind: InferenceBackendKind;
@@ -44,6 +47,7 @@ export type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
   readClaudeCliCredentials?: () => { type: string } | null;
   readCodexCliCredentials?: () => { type: string } | null;
+  readGeminiCliCredentials?: () => { type: string } | null;
 };
 
 export type DetectInferenceBackendsOptions = {
@@ -98,9 +102,17 @@ export async function detectInferenceBackends(
   const readCodex =
     options.deps?.readCodexCliCredentials ??
     (() => readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
+  const readGemini =
+    options.deps?.readGeminiCliCredentials ??
+    (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
 
   const candidates: InferenceBackendCandidate[] = [];
-  const existingModel = resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
+  const defaultAgentModel = options.config
+    ? resolveAgentConfig(options.config, resolveDefaultAgentId(options.config))?.model
+    : undefined;
+  const existingModel =
+    resolveAgentModelPrimaryValue(defaultAgentModel) ??
+    resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
   if (existingModel) {
     candidates.push({
       kind: "existing-model",
@@ -129,7 +141,11 @@ export async function detectInferenceBackends(
     });
   }
 
-  const [claudeProbe, codexProbe] = await Promise.all([probe("claude"), probe("codex")]);
+  const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([
+    probe("claude"),
+    probe("codex"),
+    probe("gemini"),
+  ]);
   const cliCandidates: InferenceBackendCandidate[] = [];
   if (claudeProbe.found) {
     const credentials = detectCliCredentialState({
@@ -159,16 +175,23 @@ export async function detectInferenceBackends(
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
+  if (geminiProbe.found) {
+    // Gemini CLI stores its OAuth login in a plain file on every platform (no
+    // keychain), so a missing credential file is a definitive logout signal.
+    const credentials = readGemini() !== null;
+    cliCandidates.push({
+      kind: "gemini-cli",
+      modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
+      label: "Gemini CLI",
+      detail: describeCliDetail(credentials),
+      credentials,
+    });
+  }
   // Stable partition: logged-out installs sink, ladder order preserved inside
-  // each partition (claude before codex per the documented ladder).
+  // each partition (claude before codex before gemini per the documented ladder).
   candidates.push(
     ...cliCandidates.filter((candidate) => candidate.credentials !== false),
     ...cliCandidates.filter((candidate) => candidate.credentials === false),
   );
   return candidates;
-}
-
-/** Format a candidate for prompts/logs, e.g. "Codex — openai/gpt-5.5 (logged in)". */
-export function formatInferenceBackendCandidate(candidate: InferenceBackendCandidate): string {
-  return `${candidate.label} — ${candidate.modelRef} (${candidate.detail})`;
 }

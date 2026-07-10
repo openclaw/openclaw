@@ -12,6 +12,7 @@ import {
   firstPositional,
   optionValue,
   positionalArgs,
+  scanTopLevelChars,
   splitShellWords,
   splitTopLevelPipes,
   splitTopLevelStages,
@@ -299,6 +300,120 @@ function summarizePipeline(stage: string): string {
   return summarizeKnownExec(trimLeadingEnv(splitShellWords(stage)));
 }
 
+type HeredocTerminator = {
+  value: string;
+  stripLeadingTabs: boolean;
+};
+
+function collectHeredocTerminators(commandLine: string): HeredocTerminator[] {
+  const terminators: HeredocTerminator[] = [];
+  scanTopLevelChars(commandLine, (char, index) => {
+    if (
+      char !== "<" ||
+      commandLine[index - 1] === "<" ||
+      commandLine[index + 1] !== "<" ||
+      commandLine[index + 2] === "<"
+    ) {
+      return true;
+    }
+
+    const stripLeadingTabs = commandLine[index + 2] === "-";
+    const parsed = parseHeredocTerminator(commandLine, index + (stripLeadingTabs ? 3 : 2));
+    if (parsed) {
+      terminators.push({ value: parsed, stripLeadingTabs });
+    }
+    return true;
+  });
+  return terminators;
+}
+
+function parseHeredocTerminator(commandLine: string, rawStart: number): string | undefined {
+  let start = rawStart;
+  while (/\s/u.test(commandLine[start] ?? "")) {
+    start += 1;
+  }
+
+  let value = "";
+  let quote: '"' | "'" | undefined;
+
+  for (let index = start; index < commandLine.length; index += 1) {
+    const char = commandLine[index] ?? "";
+
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+        continue;
+      }
+      if (quote === '"' && char === "\\" && index + 1 < commandLine.length) {
+        index += 1;
+        value += commandLine[index] ?? "";
+        continue;
+      }
+      value += char;
+      continue;
+    }
+
+    if (/[\s;&|<>]/u.test(char)) {
+      break;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "\\" && index + 1 < commandLine.length) {
+      index += 1;
+      value += commandLine[index] ?? "";
+      continue;
+    }
+    value += char;
+  }
+
+  return value || undefined;
+}
+
+function commandWithoutHeredocBodies(command: string): string | undefined {
+  if (!command.includes("\n")) {
+    return undefined;
+  }
+
+  const lines = command.split(/\r?\n/u);
+  const summaryLines: string[] = [];
+  let foundHeredoc = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    summaryLines.push(line);
+
+    const terminators = collectHeredocTerminators(line);
+    if (terminators.length === 0) {
+      continue;
+    }
+    foundHeredoc = true;
+
+    for (const terminator of terminators) {
+      index += 1;
+      while (index < lines.length) {
+        const candidate = terminator.stripLeadingTabs
+          ? (lines[index] ?? "").replace(/^\t+/u, "")
+          : (lines[index] ?? "");
+        if (candidate === terminator.value) {
+          break;
+        }
+        index += 1;
+      }
+    }
+  }
+
+  if (!foundHeredoc) {
+    return undefined;
+  }
+
+  return summaryLines
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("; ");
+}
+
 type ExecSummary = {
   text: string;
   chdirPath?: string;
@@ -362,7 +477,8 @@ function summarizeExecCommand(command: string): ExecSummary | undefined {
     return chdirPath ? { text: "", chdirPath } : undefined;
   }
 
-  const stages = splitTopLevelStages(cleaned);
+  const summaryCommand = commandWithoutHeredocBodies(cleaned) ?? cleaned;
+  const stages = splitTopLevelStages(summaryCommand);
   if (stages.length === 0) {
     return undefined;
   }

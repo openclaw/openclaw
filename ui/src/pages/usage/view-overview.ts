@@ -1,10 +1,19 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import { formatCost, formatDayLabel, formatFullDate, formatTokens } from "./metrics.ts";
+import {
+  buildUsageCostWindows,
+  buildUsageCostWindowSummary,
+  formatCost,
+  formatDayLabel,
+  formatFullDate,
+  formatIsoDate,
+  formatTokens,
+} from "./metrics.ts";
 import type { UsageInsightStats } from "./metrics.ts";
 import type {
   UsageAggregates,
@@ -19,6 +28,12 @@ function pct(part: number, total: number): number {
     return 0;
   }
   return (part / total) * 100;
+}
+
+function formatAnalysisCost(value: number): string {
+  const magnitude = Math.abs(value);
+  const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
+  return formatCost(value, decimals);
 }
 
 function handleDailyBarKeydown(
@@ -82,7 +97,7 @@ function renderFilterChips(
   const selectedSession =
     selectedSessions.length === 1 ? sessions.find((s) => s.key === selectedSessions[0]) : null;
   const sessionsLabel = selectedSession
-    ? (selectedSession.label || selectedSession.key).slice(0, 20) +
+    ? truncateUtf16Safe(selectedSession.label || selectedSession.key, 20) +
       ((selectedSession.label || selectedSession.key).length > 20 ? "…" : "")
     : selectedSessions.length === 1
       ? selectedSessions[0].slice(0, 8) + "…"
@@ -163,6 +178,67 @@ function renderFilterChips(
   `;
 }
 
+function renderCostWindowComparison(
+  daily: CostDailyEntry[],
+  rangeStartDate: string,
+  rangeEndDate: string,
+) {
+  const range = buildUsageCostWindowSummary(daily, rangeStartDate, rangeEndDate);
+  if (!range || daily.length === 0) {
+    return nothing;
+  }
+
+  const windows = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
+  const today = formatIsoDate(new Date());
+  const labelForWindow = (days: number, endDate: string) => {
+    if (days === 1) {
+      return endDate === today ? t("usage.presets.today") : formatDayLabel(endDate);
+    }
+    return t("usage.costWindows.lastDays", { count: String(days) });
+  };
+  const cards = [
+    { label: t("usage.costWindows.selectedRange"), summary: range, range: true },
+    ...windows.map((summary) => ({
+      label: labelForWindow(summary.days, summary.endDate),
+      summary,
+      range: false,
+    })),
+  ];
+
+  return html`
+    <section class="cost-window-analysis">
+      <div class="cost-window-header">
+        <div>
+          <div class="card-title usage-section-title">${t("usage.costWindows.title")}</div>
+          <div class="card-sub">
+            ${t("usage.costWindows.subtitle", { date: formatFullDate(rangeEndDate) })}
+          </div>
+        </div>
+        <div class="cost-window-range-label">
+          ${formatDayLabel(rangeStartDate)} – ${formatDayLabel(rangeEndDate)}
+        </div>
+      </div>
+      <div class="cost-window-grid">
+        ${cards.map(({ label, summary, range: isRange }) => {
+          const averageDailyCost = summary.totals.totalCost / summary.days;
+          return html`
+            <div class="cost-window-card ${isRange ? "cost-window-card--range" : ""}">
+              <div class="cost-window-card__label">${label}</div>
+              <div class="cost-window-card__value">
+                ${formatAnalysisCost(summary.totals.totalCost)}
+              </div>
+              <div class="cost-window-card__meta">
+                ${formatTokens(summary.totals.totalTokens)} ${t("usage.metrics.tokens")} ·
+                ${formatAnalysisCost(averageDailyCost)} ${t("usage.costWindows.perDay")}
+              </div>
+            </div>
+          `;
+        })}
+      </div>
+    </section>
+  `;
+}
+
 function renderDailyChartCompact(
   daily: CostDailyEntry[],
   selectedDays: string[],
@@ -182,7 +258,8 @@ function renderDailyChartCompact(
 
   const isTokenMode = chartMode === "tokens";
   const values = daily.map((d) => (isTokenMode ? d.totalTokens : d.totalCost));
-  const maxValue = Math.max(...values, isTokenMode ? 1 : 0.0001);
+  const scaleMaximum = Math.max(...values, 0);
+  const maxValue = scaleMaximum > 0 ? scaleMaximum : isTokenMode ? 1 : 0.0001;
 
   // Adaptive scaling: when the spread between largest and smallest non-zero
   // values is extreme (>50×), use square-root compression so small bars stay
@@ -190,13 +267,14 @@ function renderDailyChartCompact(
   const nonZero = values.filter((v) => v > 0);
   const minNonZero = nonZero.length > 0 ? Math.min(...nonZero) : maxValue;
   const spread = maxValue / minNonZero;
+  const usesCompressedScale = spread > 50;
   const chartAreaPx = 200;
   const minBarPx = 6;
   const barHeights = values.map((v): number => {
     if (v <= 0) {
       return 0;
     }
-    const ratio = spread > 50 ? Math.sqrt(v / maxValue) : v / maxValue;
+    const ratio = usesCompressedScale ? Math.sqrt(v / maxValue) : v / maxValue;
     return Math.max(minBarPx, ratio * chartAreaPx);
   });
 
@@ -224,106 +302,142 @@ function renderDailyChartCompact(
         </div>
         <div class="card-title">
           ${isTokenMode ? t("usage.daily.tokensTitle") : t("usage.daily.costTitle")}
+          ${usesCompressedScale
+            ? html`<span
+                class="daily-chart-scale-badge"
+                title=${t("usage.daily.compressedScaleHint")}
+                aria-label=${t("usage.daily.compressedScaleHint")}
+                >√</span
+              >`
+            : nothing}
         </div>
       </div>
       <div class="daily-chart">
-        <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
-          ${daily.map((d, idx) => {
-            const heightPx = barHeights[idx];
-            const isSelected = selectedDaySet.has(d.date);
-            const label = formatDayLabel(d.date);
-            // Shorter label for many days (just day number)
-            const shortLabel =
-              daily.length > 20 ? String(Number.parseInt(d.date.slice(8), 10)) : label;
-            const labelClass =
-              daily.length > 20 ? "daily-bar-label daily-bar-label--compact" : "daily-bar-label";
-            const segments =
-              dailyChartMode === "by-type"
-                ? isTokenMode
-                  ? [
-                      { value: d.output, class: "output" },
-                      { value: d.input, class: "input" },
-                      { value: d.cacheWrite, class: "cache-write" },
-                      { value: d.cacheRead, class: "cache-read" },
-                    ]
-                  : [
-                      { value: d.outputCost ?? 0, class: "output" },
-                      { value: d.inputCost ?? 0, class: "input" },
-                      { value: d.cacheWriteCost ?? 0, class: "cache-write" },
-                      { value: d.cacheReadCost ?? 0, class: "cache-read" },
-                    ]
-                : [];
-            const breakdownLines =
-              dailyChartMode === "by-type"
-                ? isTokenMode
-                  ? [
-                      `${t("usage.breakdown.output")} ${formatTokens(d.output)}`,
-                      `${t("usage.breakdown.input")} ${formatTokens(d.input)}`,
-                      `${t("usage.breakdown.cacheWrite")} ${formatTokens(d.cacheWrite)}`,
-                      `${t("usage.breakdown.cacheRead")} ${formatTokens(d.cacheRead)}`,
-                    ]
-                  : [
-                      `${t("usage.breakdown.output")} ${formatCost(d.outputCost ?? 0)}`,
-                      `${t("usage.breakdown.input")} ${formatCost(d.inputCost ?? 0)}`,
-                      `${t("usage.breakdown.cacheWrite")} ${formatCost(d.cacheWriteCost ?? 0)}`,
-                      `${t("usage.breakdown.cacheRead")} ${formatCost(d.cacheReadCost ?? 0)}`,
-                    ]
-                : [];
-            const totalLabel = isTokenMode ? formatTokens(d.totalTokens) : formatCost(d.totalCost);
-            const tooltipContent = {
-              dateLabel: formatFullDate(d.date),
-              tokensLabel: `${formatTokens(d.totalTokens)} ${normalizeLowercaseStringOrEmpty(
-                t("usage.metrics.tokens"),
-              )}`.trim(),
-              costLabel: formatCost(d.totalCost),
-              breakdownLines,
-            };
-            return html`
-              <openclaw-tooltip
-                .content=${[
-                  tooltipContent.dateLabel,
-                  tooltipContent.tokensLabel,
-                  tooltipContent.costLabel,
-                  ...tooltipContent.breakdownLines,
-                ].join("\n")}
-              >
-                <div
-                  class="daily-bar-wrapper ${isSelected ? "selected" : ""}"
-                  role="button"
-                  tabindex="0"
-                  aria-pressed=${isSelected ? "true" : "false"}
-                  aria-label=${`${tooltipContent.dateLabel}: ${tooltipContent.tokensLabel}, ${tooltipContent.costLabel}`}
-                  @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, onSelectDay)}
-                  @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey)}
+        <div class="daily-chart-plot">
+          <div class="daily-chart-scale" aria-hidden="true">
+            ${scaleMaximum > 0
+              ? html`
+                  <span
+                    >${isTokenMode
+                      ? formatTokens(scaleMaximum)
+                      : formatAnalysisCost(scaleMaximum)}</span
+                  >
+                  <span
+                    >${isTokenMode
+                      ? formatTokens(usesCompressedScale ? scaleMaximum / 4 : scaleMaximum / 2)
+                      : formatAnalysisCost(
+                          usesCompressedScale ? scaleMaximum / 4 : scaleMaximum / 2,
+                        )}</span
+                  >
+                  <span>${isTokenMode ? formatTokens(0) : formatCost(0)}</span>
+                `
+              : html`<span>${isTokenMode ? formatTokens(0) : formatCost(0)}</span>`}
+          </div>
+          <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
+            ${daily.map((d, idx) => {
+              const heightPx = barHeights[idx];
+              const isSelected = selectedDaySet.has(d.date);
+              const label = formatDayLabel(d.date);
+              // Shorter label for many days (just day number)
+              const shortLabel =
+                daily.length > 20 ? String(Number.parseInt(d.date.slice(8), 10)) : label;
+              const labelClass =
+                daily.length > 20 ? "daily-bar-label daily-bar-label--compact" : "daily-bar-label";
+              const segments =
+                dailyChartMode === "by-type"
+                  ? isTokenMode
+                    ? [
+                        { value: d.output, class: "output" },
+                        { value: d.input, class: "input" },
+                        { value: d.cacheWrite, class: "cache-write" },
+                        { value: d.cacheRead, class: "cache-read" },
+                      ]
+                    : [
+                        { value: d.outputCost ?? 0, class: "output" },
+                        { value: d.inputCost ?? 0, class: "input" },
+                        { value: d.cacheWriteCost ?? 0, class: "cache-write" },
+                        { value: d.cacheReadCost ?? 0, class: "cache-read" },
+                      ]
+                  : [];
+              const breakdownLines =
+                dailyChartMode === "by-type"
+                  ? isTokenMode
+                    ? [
+                        `${t("usage.breakdown.output")} ${formatTokens(d.output)}`,
+                        `${t("usage.breakdown.input")} ${formatTokens(d.input)}`,
+                        `${t("usage.breakdown.cacheWrite")} ${formatTokens(d.cacheWrite)}`,
+                        `${t("usage.breakdown.cacheRead")} ${formatTokens(d.cacheRead)}`,
+                      ]
+                    : [
+                        `${t("usage.breakdown.output")} ${formatAnalysisCost(d.outputCost ?? 0)}`,
+                        `${t("usage.breakdown.input")} ${formatAnalysisCost(d.inputCost ?? 0)}`,
+                        `${t("usage.breakdown.cacheWrite")} ${formatAnalysisCost(d.cacheWriteCost ?? 0)}`,
+                        `${t("usage.breakdown.cacheRead")} ${formatAnalysisCost(d.cacheReadCost ?? 0)}`,
+                      ]
+                  : [];
+              const totalLabel = isTokenMode
+                ? formatTokens(d.totalTokens)
+                : formatAnalysisCost(d.totalCost);
+              const tooltipContent = {
+                dateLabel: formatFullDate(d.date),
+                tokensLabel: `${formatTokens(d.totalTokens)} ${normalizeLowercaseStringOrEmpty(
+                  t("usage.metrics.tokens"),
+                )}`.trim(),
+                costLabel: formatAnalysisCost(d.totalCost),
+                breakdownLines,
+              };
+              return html`
+                <openclaw-tooltip
+                  .content=${[
+                    tooltipContent.dateLabel,
+                    tooltipContent.tokensLabel,
+                    tooltipContent.costLabel,
+                    ...tooltipContent.breakdownLines,
+                  ].join("\n")}
                 >
-                  ${dailyChartMode === "by-type"
-                    ? html`
-                        <div
-                          class="daily-bar daily-bar--stacked"
-                          style="height: ${heightPx.toFixed(0)}px;"
-                        >
-                          ${(() => {
-                            const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
-                            return segments.map(
-                              (seg) => html`
-                                <div
-                                  class="cost-segment ${seg.class}"
-                                  style="height: ${(seg.value / total) * 100}%"
-                                ></div>
-                              `,
-                            );
-                          })()}
-                        </div>
-                      `
-                    : html`
-                        <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div>
-                      `}
-                  ${showTotals ? html`<div class="daily-bar-total">${totalLabel}</div>` : nothing}
-                  <div class="${labelClass}">${shortLabel}</div>
-                </div>
-              </openclaw-tooltip>
-            `;
-          })}
+                  <div
+                    class="daily-bar-wrapper ${isSelected ? "selected" : ""}"
+                    role="button"
+                    tabindex="0"
+                    aria-pressed=${isSelected ? "true" : "false"}
+                    aria-label=${`${tooltipContent.dateLabel}: ${tooltipContent.tokensLabel}, ${tooltipContent.costLabel}`}
+                    @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, onSelectDay)}
+                    @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey)}
+                  >
+                    ${dailyChartMode === "by-type"
+                      ? html`
+                          <div
+                            class="daily-bar daily-bar--stacked"
+                            style="height: ${heightPx.toFixed(0)}px;"
+                          >
+                            ${(() => {
+                              const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
+                              return segments.map(
+                                (seg) => html`
+                                  <div
+                                    class="cost-segment ${seg.class}"
+                                    style="height: ${(seg.value / total) * 100}%"
+                                  ></div>
+                                `,
+                              );
+                            })()}
+                          </div>
+                        `
+                      : html`
+                          <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div>
+                        `}
+                    ${showTotals
+                      ? html`<div class="daily-bar-total">${totalLabel}</div>`
+                      : html`<div
+                          class="daily-bar-total daily-bar-total--placeholder"
+                          aria-hidden="true"
+                        ></div>`}
+                    <div class="${labelClass}">${shortLabel}</div>
+                  </div>
+                </openclaw-tooltip>
+              `;
+            })}
+          </div>
         </div>
       </div>
     </div>
@@ -352,14 +466,14 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
           style="width: ${(isTokenMode ? tokenPcts.output : breakdown.output.pct).toFixed(1)}%"
           title="${t("usage.breakdown.output")}: ${isTokenMode
             ? formatTokens(totals.output)
-            : formatCost(breakdown.output.cost)}"
+            : formatAnalysisCost(breakdown.output.cost)}"
         ></div>
         <div
           class="cost-segment input"
           style="width: ${(isTokenMode ? tokenPcts.input : breakdown.input.pct).toFixed(1)}%"
           title="${t("usage.breakdown.input")}: ${isTokenMode
             ? formatTokens(totals.input)
-            : formatCost(breakdown.input.cost)}"
+            : formatAnalysisCost(breakdown.input.cost)}"
         ></div>
         <div
           class="cost-segment cache-write"
@@ -368,7 +482,7 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
           )}%"
           title="${t("usage.breakdown.cacheWrite")}: ${isTokenMode
             ? formatTokens(totals.cacheWrite)
-            : formatCost(breakdown.cacheWrite.cost)}"
+            : formatAnalysisCost(breakdown.cacheWrite.cost)}"
         ></div>
         <div
           class="cost-segment cache-read"
@@ -377,34 +491,38 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
           )}%"
           title="${t("usage.breakdown.cacheRead")}: ${isTokenMode
             ? formatTokens(totals.cacheRead)
-            : formatCost(breakdown.cacheRead.cost)}"
+            : formatAnalysisCost(breakdown.cacheRead.cost)}"
         ></div>
       </div>
       <div class="cost-breakdown-legend">
         <span class="legend-item"
           ><span class="legend-dot output"></span>${t("usage.breakdown.output")}
-          ${isTokenMode ? formatTokens(totals.output) : formatCost(breakdown.output.cost)}</span
+          ${isTokenMode
+            ? formatTokens(totals.output)
+            : formatAnalysisCost(breakdown.output.cost)}</span
         >
         <span class="legend-item"
           ><span class="legend-dot input"></span>${t("usage.breakdown.input")}
-          ${isTokenMode ? formatTokens(totals.input) : formatCost(breakdown.input.cost)}</span
+          ${isTokenMode
+            ? formatTokens(totals.input)
+            : formatAnalysisCost(breakdown.input.cost)}</span
         >
         <span class="legend-item"
           ><span class="legend-dot cache-write"></span>${t("usage.breakdown.cacheWrite")}
           ${isTokenMode
             ? formatTokens(totals.cacheWrite)
-            : formatCost(breakdown.cacheWrite.cost)}</span
+            : formatAnalysisCost(breakdown.cacheWrite.cost)}</span
         >
         <span class="legend-item"
           ><span class="legend-dot cache-read"></span>${t("usage.breakdown.cacheRead")}
           ${isTokenMode
             ? formatTokens(totals.cacheRead)
-            : formatCost(breakdown.cacheRead.cost)}</span
+            : formatAnalysisCost(breakdown.cacheRead.cost)}</span
         >
       </div>
       <div class="cost-breakdown-total">
         ${t("usage.breakdown.total")}:
-        ${isTokenMode ? formatTokens(totals.totalTokens) : formatCost(totals.totalCost)}
+        ${isTokenMode ? formatTokens(totals.totalTokens) : formatAnalysisCost(totals.totalCost)}
       </div>
     </div>
   `;
@@ -514,6 +632,7 @@ function renderUsageInsights(
   aggregates: UsageAggregates,
   stats: UsageInsightStats,
   showCostHint: boolean,
+  showCostShares: boolean,
   errorHours: Array<{ label: string; value: string; sub?: string }>,
   sessionCount: number,
   totalSessions: number,
@@ -537,7 +656,7 @@ function renderUsageInsights(
       : t("usage.common.emptyValue");
   const throughputCostLabel =
     stats.throughputCostPerMin !== undefined
-      ? `${formatCost(stats.throughputCostPerMin, 4)} ${t("usage.overview.perMinute")}`
+      ? `${formatAnalysisCost(stats.throughputCostPerMin)} ${t("usage.overview.perMinute")}`
       : t("usage.common.emptyValue");
   const avgDurationLabel =
     stats.durationCount > 0
@@ -567,15 +686,28 @@ function renderUsageInsights(
     .slice(0, 5)
     .map(({ rate: _rate, ...rest }) => rest);
 
+  const costShare = (cost: number) =>
+    showCostShares && totals.totalCost > 0
+      ? t("usage.overview.costShare", { percent: ((cost / totals.totalCost) * 100).toFixed(1) })
+      : null;
+  const costAttributionSub = (cost: number, tokens: number, messageCount?: number) =>
+    [
+      costShare(cost),
+      formatTokens(tokens),
+      messageCount === undefined ? null : `${messageCount} ${t("usage.overview.messagesAbbrev")}`,
+    ]
+      .filter((part): part is string => part !== null)
+      .join(" · ");
+
   const topModels = aggregates.byModel.slice(0, 5).map((entry) => ({
     label: entry.model ?? t("usage.common.unknown"),
-    value: formatCost(entry.totals.totalCost),
-    sub: `${formatTokens(entry.totals.totalTokens)} · ${entry.count} ${t("usage.overview.messagesAbbrev")}`,
+    value: formatAnalysisCost(entry.totals.totalCost),
+    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens, entry.count),
   }));
   const topProviders = aggregates.byProvider.slice(0, 5).map((entry) => ({
     label: entry.provider ?? t("usage.common.unknown"),
-    value: formatCost(entry.totals.totalCost),
-    sub: `${formatTokens(entry.totals.totalTokens)} · ${entry.count} ${t("usage.overview.messagesAbbrev")}`,
+    value: formatAnalysisCost(entry.totals.totalCost),
+    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens, entry.count),
   }));
   const topTools = aggregates.tools.tools.slice(0, 6).map((tool) => ({
     label: tool.name,
@@ -584,13 +716,13 @@ function renderUsageInsights(
   }));
   const topAgents = aggregates.byAgent.slice(0, 5).map((entry) => ({
     label: entry.agentId,
-    value: formatCost(entry.totals.totalCost),
-    sub: formatTokens(entry.totals.totalTokens),
+    value: formatAnalysisCost(entry.totals.totalCost),
+    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens),
   }));
   const topChannels = aggregates.byChannel.slice(0, 5).map((entry) => ({
     label: entry.channel,
-    value: formatCost(entry.totals.totalCost),
-    sub: formatTokens(entry.totals.totalTokens),
+    value: formatAnalysisCost(entry.totals.totalCost),
+    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens),
   }));
 
   return html`
@@ -648,8 +780,8 @@ function renderUsageInsights(
           ${renderSummaryStat({
             title: t("usage.overview.avgCost"),
             hint: costHint,
-            value: formatCost(avgCost, 4),
-            sub: `${formatCost(totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`,
+            value: formatAnalysisCost(avgCost),
+            sub: `${formatAnalysisCost(totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`,
             className: "usage-summary-card--compact",
           })}
           ${renderSummaryStat({
@@ -865,7 +997,7 @@ function renderSessionsCard(
             ${t("usage.sessions.copy")}
           </button>
           <div class="session-bar-value">
-            ${isTokenMode ? formatTokens(value) : formatCost(value)}
+            ${isTokenMode ? formatTokens(value) : formatAnalysisCost(value)}
           </div>
         </div>
       </div>
@@ -894,7 +1026,7 @@ function renderSessionsCard(
       <div class="sessions-card-meta">
         <div class="sessions-card-stats">
           <span>
-            ${isTokenMode ? formatTokens(avgValue) : formatCost(avgValue)}
+            ${isTokenMode ? formatTokens(avgValue) : formatAnalysisCost(avgValue)}
             ${t("usage.sessions.avg")}
           </span>
           <span>${totalErrors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}</span>
@@ -1001,6 +1133,7 @@ function renderSessionsCard(
 
 export {
   renderCostBreakdownCompact,
+  renderCostWindowComparison,
   renderDailyChartCompact,
   renderFilterChips,
   renderInsightList,

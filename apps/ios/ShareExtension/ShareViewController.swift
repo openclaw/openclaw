@@ -164,7 +164,7 @@ final class ShareViewController: UIViewController {
     }
 
     private func sendMessageToGateway(_ message: String, attachments: [ShareAttachment]) async throws {
-        guard let config = ShareGatewayRelaySettings.loadConfig() else {
+        guard let config = ShareGatewayRelaySettings.loadConfigDiscardingUnscopedDeviceAuth() else {
             throw NSError(
                 domain: "OpenClawShare",
                 code: 10,
@@ -200,15 +200,17 @@ final class ShareViewController: UIViewController {
                 clientMode: "node",
                 clientDisplayName: "OpenClaw Share",
                 deviceIdentityProfile: .shareExtension,
-                includeDeviceIdentity: true)
+                includeDeviceIdentity: true,
+                allowStoredDeviceAuth: config.gatewayStableID != nil,
+                deviceAuthGatewayID: config.gatewayStableID)
         }
 
         do {
             try await gateway.connect(
                 url: url,
-                token: config.token,
-                bootstrapToken: nil,
-                password: config.password,
+                credentials: GatewayNodeSessionCredentials(
+                    token: config.token,
+                    password: config.password),
                 connectOptions: makeOptions("openclaw-ios"),
                 sessionBox: nil,
                 onConnected: {},
@@ -226,9 +228,9 @@ final class ShareViewController: UIViewController {
             guard expectsLegacyClientId else { throw error }
             try await gateway.connect(
                 url: url,
-                token: config.token,
-                bootstrapToken: nil,
-                password: config.password,
+                credentials: GatewayNodeSessionCredentials(
+                    token: config.token,
+                    password: config.password),
                 connectOptions: makeOptions("moltbot-ios"),
                 sessionBox: nil,
                 onConnected: {},

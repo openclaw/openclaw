@@ -1,7 +1,7 @@
 // Googlechat plugin module implements monitor durable behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 
-export type GoogleChatDurableReplyOptions = {
+type GoogleChatDurableReplyOptions = {
   to: string;
   replyToId?: string;
   threadId?: string;

@@ -352,7 +352,16 @@ export type AgentDefaultsConfig = {
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+  thinkingDefault?:
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max"
+    | "ultra";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /**
@@ -510,7 +519,7 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
-  /** Embedded OpenClaw reserve tokens target before floor enforcement. */
+  /** Embedded OpenClaw reserve target before floor and context-window caps. */
   reserveTokens?: number;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
@@ -568,7 +577,9 @@ export type AgentCompactionConfig = {
    */
   maxActiveTranscriptBytes?: number | string;
   /**
-   * Send brief compaction notices to the user when compaction starts and completes.
+   * Send brief context-maintenance notices to the user: when compaction starts
+   * and completes, and when a pre-compaction memory flush is exhausted so the
+   * reply continues in a degraded state.
    * Default: false (silent by default).
    */
   notifyUser?: boolean;

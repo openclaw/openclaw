@@ -41,6 +41,7 @@
       "provider": "chutes",
       "method": "api-key",
       "choiceId": "chutes-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Chutes API key",
       "choiceHint": "Open-source models including Llama, DeepSeek, and more",
       "groupId": "chutes",

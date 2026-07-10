@@ -551,15 +551,12 @@ export function makeResponse(
   body: unknown,
   init?: { ok?: boolean; status?: number; text?: string },
 ): Response {
-  const ok = init?.ok ?? true;
-  const status = init?.status ?? 200;
-  const text = init?.text ?? "";
-  return {
-    ok,
+  const status = init?.status ?? (init?.ok === false ? 500 : 200);
+  const responseBody = init?.text ?? JSON.stringify(body);
+  return new Response(responseBody, {
     status,
-    json: async () => body,
-    text: async () => text,
-  } as unknown as Response;
+    headers: { "content-type": "application/json" },
+  });
 }
 
 function mockClearAll(obj: Record<string, { mockClear: () => unknown }>) {

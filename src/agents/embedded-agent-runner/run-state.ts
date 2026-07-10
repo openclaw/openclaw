@@ -1,12 +1,16 @@
 /**
  * Shared process-local state for active and abandoned embedded-agent runs.
  */
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../../auto-reply/get-reply-options.types.js";
 import {
   getActiveReplyRunCount,
   listActiveReplyRunSessionKeys,
   listActiveReplyRunSessionIds,
   resolveActiveReplyRunSessionId,
+  type ReplyBackendQueueMessageOptions,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
@@ -28,15 +32,10 @@ export type EmbeddedAgentQueueHandle = {
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
 };
 
-export type EmbeddedAgentQueueMessageOptions = {
-  steeringMode?: "all";
-  debounceMs?: number;
-  deliveryTimeoutMs?: number;
-  waitForTranscriptCommit?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-};
+export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
 
 export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;

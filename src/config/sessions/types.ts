@@ -218,6 +218,11 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+export type PendingSkillSuggestion = {
+  skillName: string;
+  detectedAt: number;
+};
+
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -258,6 +263,12 @@ export type SessionEntry = {
   archivedAt?: number;
   /** Timestamp (ms) when the session was pinned for quick access. */
   pinnedAt?: number;
+  /** Timestamp (ms) when an operator client last marked the session read. */
+  lastReadAt?: number;
+  /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
+  markedUnreadAt?: number;
+  /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
+  lastActivityAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
@@ -265,6 +276,11 @@ export type SessionEntry = {
   spawnedWorkspaceDir?: string;
   /** Task working directory inherited by spawned sessions and reused on later turns. */
   spawnedCwd?: string;
+  /**
+   * Managed worktree bound to this session; set with spawnedCwd at worktree
+   * creation and cleared together when a plain New Chat detaches the checkout.
+   */
+  worktree?: { id: string; branch: string; repoRoot: string };
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
@@ -291,6 +307,10 @@ export type SessionEntry = {
   quotaSuspension?: QuotaSuspension;
   /** Core-owned durable goal state for this thread/session. */
   goal?: SessionGoal;
+  /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
+  pendingSkillSuggestion?: PendingSkillSuggestion;
+  /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
+  skillCaptureSignalHashes?: string[];
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
@@ -317,6 +337,28 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  /**
+   * Exact isolated-cron continuation policy. Only hidden `:run:` session rows
+   * carry this while detached generated-media work may still wake the run.
+   */
+  cronRunContinuation?: {
+    lifecycleRevision: string;
+    phase: "running" | "ready" | "continuing";
+    /** True only after this row's session changes were projected to the stable cron row. */
+    basePersisted?: boolean;
+    ownerRunId?: string;
+    /** Gateway lifecycle generation that owns a continuing claim. */
+    ownerLifecycleGeneration?: string;
+    /** CLI backend whose native session must exist before media work detaches. */
+    cliExecutionProvider?: string;
+    toolsAllow?: string[];
+    toolsAllowIsDefault?: boolean;
+    cliSessionBindingFacts?: {
+      extraSystemPromptStatic?: string;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      requireExplicitMessageTarget?: boolean;
+    };
+  };
   fastMode?: FastMode;
   verboseLevel?: string;
   traceLevel?: string;
@@ -423,6 +465,8 @@ export type SessionEntry = {
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   label?: string;
+  /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
+  category?: string;
   displayName?: string;
   channel?: string;
   groupId?: string;
@@ -727,6 +771,9 @@ export type SessionSystemPromptReport = {
     kind?: "user_request" | "room_event";
     promptChars: number;
     runtimeContextChars: number;
+    // Hook prepend/append context sent to the model but absent from the
+    // persisted transcript prompt; consumers add it on top of transcript sums.
+    modelOnlyPromptChars?: number;
   };
   injectedWorkspaceFiles: Array<{
     name: string;

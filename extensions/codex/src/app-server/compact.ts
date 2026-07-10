@@ -8,10 +8,6 @@ import {
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
-import {
-  defaultLeasedCodexAppServerClientFactory,
-  type CodexAppServerClientFactory,
-} from "./client-factory.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
@@ -22,13 +18,16 @@ import { isJsonObject, type JsonObject } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
-  clearCodexAppServerBindingForThread,
-  readCodexAppServerBinding,
-  withCodexAppServerBindingLock,
-  writeCodexAppServerBinding,
+  sessionBindingIdentity,
+  type CodexAppServerBindingIdentity,
+  type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
-import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import {
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
+  type CodexAppServerClientFactory,
+} from "./shared-client.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
 const codexNativeCompactionQueues = new Map<string, Promise<void>>();
@@ -36,6 +35,7 @@ const CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS = 30_000;
 const CODEX_NO_ACTIVE_TURN_ERROR_CODE = -32_600;
 const CODEX_NO_ACTIVE_TURN_ERROR_MESSAGE = "no active turn to interrupt";
 type CodexAppServerCompactOptions = {
+  bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
   clientFactory?: CodexAppServerClientFactory;
   allowNonManualNativeRequest?: boolean;
@@ -360,7 +360,7 @@ async function waitForCodexNativeCompactionQueue(
  */
 export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedAgentSessionParams,
-  options: CodexAppServerCompactOptions = {},
+  options: CodexAppServerCompactOptions,
 ): Promise<EmbeddedAgentCompactResult | undefined> {
   warnIfIgnoringOpenClawCompactionOverrides(params);
   // Codex owns automatic context-pressure compaction for Codex runtime sessions.
@@ -470,7 +470,7 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
 
 async function compactCodexNativeThread(
   params: CompactEmbeddedAgentSessionParams,
-  options: CodexAppServerCompactOptions = {},
+  options: CodexAppServerCompactOptions,
 ): Promise<EmbeddedAgentCompactResult | undefined> {
   if (params.trigger !== "manual" && !options.allowNonManualNativeRequest) {
     embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
@@ -505,9 +505,13 @@ async function compactCodexNativeThread(
     return { ok: false, compacted: false, reason: nativeExecutionBlock };
   }
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
-  const initialBinding = await readCodexAppServerBinding(params.sessionFile, {
+  const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
     config: params.config,
   });
+  const initialBinding = await options.bindingStore.read(bindingIdentity);
   if (!initialBinding?.threadId) {
     return failedCodexThreadBindingCompactionResult(params, {
       reason: "no codex app-server thread binding",
@@ -526,18 +530,18 @@ async function compactCodexNativeThread(
     return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
   }
   const shouldReleaseDefaultLease = !options.clientFactory;
-  const clientFactory = options.clientFactory ?? defaultLeasedCodexAppServerClientFactory;
+  const clientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
   try {
     return await runExclusiveCodexNativeCompaction(
       binding.threadId,
       params.abortSignal,
       async () => {
-        const client = await clientFactory(
-          appServer.start,
-          requestedAuthProfileId ?? binding.authProfileId,
-          params.agentDir,
-          params.config,
-        );
+        const client = await clientFactory({
+          startOptions: appServer.start,
+          authProfileId: requestedAuthProfileId ?? binding.authProfileId,
+          agentDir: params.agentDir,
+          config: params.config,
+        });
         const completionWatch = watchCodexNativeCompactionCompletion({
           client,
           threadId: binding.threadId,
@@ -561,17 +565,14 @@ async function compactCodexNativeThread(
             // Closing a WebSocket proves only that the connection ended, not
             // that its remote turn stopped. Detach this exact thread before
             // allowing future work to acquire the session lifecycle fence.
-            const bindingCleared = await clearCodexAppServerBindingForThread(
-              params.sessionFile,
-              binding.threadId,
-              { config: params.config },
-            );
+            const bindingCleared = await options.bindingStore.mutate(bindingIdentity, {
+              kind: "clear",
+              threadId: binding.threadId,
+            });
             if (bindingCleared) {
               return;
             }
-            const currentBinding = await readCodexAppServerBinding(params.sessionFile, {
-              config: params.config,
-            });
+            const currentBinding = await options.bindingStore.read(bindingIdentity);
             if (currentBinding?.threadId !== binding.threadId) {
               return;
             }
@@ -600,12 +601,10 @@ async function compactCodexNativeThread(
         };
         try {
           if (options.allowNonManualNativeRequest) {
-            const guardedResult = await withCodexAppServerBindingLock(
-              params.sessionFile,
+            const guardedResult = await options.bindingStore.withLease(
+              bindingIdentity,
               async () => {
-                const currentBinding = await readCodexAppServerBinding(params.sessionFile, {
-                  config: params.config,
-                });
+                const currentBinding = await options.bindingStore.read(bindingIdentity);
                 if (params.abortSignal?.aborted) {
                   return {
                     started: false as const,
@@ -640,9 +639,9 @@ async function compactCodexNativeThread(
                 binding = currentBinding;
                 await clearContextEngineProjectionBeforeNativeCompaction({
                   sessionId: params.sessionId,
-                  sessionFile: params.sessionFile,
+                  bindingStore: options.bindingStore,
+                  identity: bindingIdentity,
                   binding,
-                  config: params.config,
                 });
                 try {
                   await beginNativeCompactionRequest(
@@ -653,6 +652,10 @@ async function compactCodexNativeThread(
                   );
                   return { started: true as const, accepted: true as const };
                 } catch (error) {
+                  await options.bindingStore.mutate(bindingIdentity, {
+                    kind: "set",
+                    binding,
+                  });
                   // Retire outside the binding lock: remote detach acquires this
                   // same lock and would otherwise deadlock the failure path.
                   return { started: true as const, accepted: false as const, error };
@@ -815,9 +818,9 @@ function failedCodexThreadBindingCompactionResult(
 
 async function clearContextEngineProjectionBeforeNativeCompaction(params: {
   sessionId: string;
-  sessionFile: string;
+  bindingStore: CodexAppServerBindingStore;
+  identity: CodexAppServerBindingIdentity;
   binding: CodexAppServerThreadBinding;
-  config: CompactEmbeddedAgentSessionParams["config"];
 }): Promise<void> {
   const contextEngineBinding = params.binding.contextEngine;
   if (!contextEngineBinding?.projection) {
@@ -825,18 +828,16 @@ async function clearContextEngineProjectionBeforeNativeCompaction(params: {
   }
   // Native Codex compaction mutates the thread history outside the projection
   // guard. Clear only the projection marker so the next turn reprojects context.
-  await writeCodexAppServerBinding(
-    params.sessionFile,
-    {
-      ...params.binding,
+  await params.bindingStore.mutate(params.identity, {
+    kind: "patch",
+    threadId: params.binding.threadId,
+    patch: {
       contextEngine: {
         ...contextEngineBinding,
         projection: undefined,
       },
-      createdAt: params.binding.createdAt,
     },
-    { config: params.config },
-  );
+  });
   embeddedAgentLog.info("cleared codex context-engine projection before native compaction", {
     sessionId: params.sessionId,
     threadId: params.binding.threadId,

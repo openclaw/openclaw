@@ -1,10 +1,12 @@
 /** Extension that safeguards compaction with structured summaries and quality repair. */
+
 import fs from "node:fs";
 import path from "node:path";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getCompactionProvider,
@@ -345,15 +347,10 @@ async function resolveModelAuth(
       reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
     };
   }
-  if (!requestAuth.apiKey && !requestAuth.headers) {
-    log.warn(
-      "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
-    );
-    return {
-      ok: false,
-      reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
-    };
-  }
+  // `ok: true` is the registry's authoritative success signal; it already returns
+  // `ok: false` when auth cannot resolve. Do not re-derive failure from absent
+  // key/headers. SDK-managed modes (aws-sdk, oauth) sign the request later and
+  // legitimately carry neither, so gating on them wedges compaction forever.
   return { ok: true, apiKey: requestAuth.apiKey, headers: requestAuth.headers };
 }
 
@@ -404,7 +401,7 @@ function truncateFailureText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, Math.max(0, maxChars - 3))}...`;
+  return `${truncateUtf16Safe(text, Math.max(0, maxChars - 3))}...`;
 }
 
 function formatToolFailureMeta(details: unknown): string | undefined {
@@ -568,9 +565,9 @@ function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY
   const budget = Math.max(0, maxChars - marker.length);
   if (budget <= 0) {
     // Marker cannot fit; keep body prefix instead of a partial marker fragment.
-    return summary.slice(0, maxChars);
+    return truncateUtf16Safe(summary, maxChars);
   }
-  return `${summary.slice(0, budget)}${marker}`;
+  return `${truncateUtf16Safe(summary, budget)}${marker}`;
 }
 
 function capCompactionSummaryPreservingSuffix(
@@ -586,7 +583,7 @@ function capCompactionSummaryPreservingSuffix(
   }
   if (suffix.length >= maxChars) {
     // Preserve tail (workspace rules, diagnostics) over head (preserved turns).
-    return suffix.slice(-maxChars);
+    return sliceUtf16Safe(suffix, -maxChars);
   }
   const bodyBudget = Math.max(0, maxChars - suffix.length);
   const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
@@ -790,7 +787,7 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
       }
       const trimmed =
         rendered.length > MAX_RECENT_TURN_TEXT_CHARS
-          ? `${rendered.slice(0, MAX_RECENT_TURN_TEXT_CHARS)}...`
+          ? `${truncateUtf16Safe(rendered, MAX_RECENT_TURN_TEXT_CHARS)}...`
           : rendered;
       return `- ${roleLabel}: ${trimmed}`;
     })
@@ -884,7 +881,7 @@ async function readWorkspaceContextForSummary(
     const combined = sections.join("\n\n");
     const safeContent =
       combined.length > MAX_SUMMARY_CONTEXT_CHARS
-        ? combined.slice(0, MAX_SUMMARY_CONTEXT_CHARS) + "\n...[truncated]..."
+        ? `${truncateUtf16Safe(combined, MAX_SUMMARY_CONTEXT_CHARS)}\n...[truncated]...`
         : combined;
 
     return `\n\n<workspace-critical-rules>\n${safeContent}\n</workspace-critical-rules>`;

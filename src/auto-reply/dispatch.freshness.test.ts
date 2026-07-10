@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { getReplyPayloadMetadata } from "./reply-payload.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
@@ -64,6 +65,7 @@ function dispatchWithDeliveries(
   dispatcherOptions: {
     beforeDeliver?: ReplyDispatchBeforeDeliver;
     deliver?: (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => Promise<object | void>;
+    onBeforeDeliverCancelled?: (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => void;
     onSettled?: () => object | void | Promise<object | void>;
     onFreshSettledDelivery?: () => object | void | Promise<object | void>;
   } = {},
@@ -94,6 +96,7 @@ describe("foreground reply freshness", () => {
 
   it("suppresses an older foreground final after a newer inbound event starts for the same session target", async () => {
     const deliveries: Delivery[] = [];
+    const cancellationReasons: Array<string | undefined> = [];
     const olderStarted = createDeferred<void>();
     const releaseOlderFinal = createDeferred<void>();
 
@@ -116,6 +119,13 @@ describe("foreground reply freshness", () => {
     const olderDispatch = dispatchWithDeliveries(
       buildForegroundCtx({ MessageSid: "old-message" }),
       deliveries,
+      {
+        onBeforeDeliverCancelled: (payload) => {
+          cancellationReasons.push(
+            getReplyPayloadMetadata(payload)?.foregroundDeliverySuppression?.reason,
+          );
+        },
+      },
     );
     await olderStarted.promise;
 
@@ -136,6 +146,35 @@ describe("foreground reply freshness", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
     expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
+    expect(cancellationReasons).toEqual(["stale-foreground"]);
+  });
+
+  it("leaves configured beforeDeliver cancellations untagged", async () => {
+    const deliveries: Delivery[] = [];
+    const cancellationReasons: Array<string | undefined> = [];
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        params.dispatcher.sendFinalReply({ text: "policy-blocked final" });
+        return queuedFinalResult();
+      },
+    );
+
+    const result = await dispatchWithDeliveries(buildForegroundCtx(), deliveries, {
+      beforeDeliver: () => null,
+      onBeforeDeliverCancelled: (payload) => {
+        cancellationReasons.push(
+          getReplyPayloadMetadata(payload)?.foregroundDeliverySuppression?.reason,
+        );
+      },
+    });
+
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(deliveries).toEqual([]);
+    expect(cancellationReasons).toEqual([undefined]);
   });
 
   it("keeps an older foreground final when a newer inbound has no visible delivery while beforeDeliver is pending", async () => {

@@ -205,12 +205,6 @@ describe("slack web client config", () => {
     expect(options.retryConfig).toEqual(SLACK_WRITE_RETRY_OPTIONS);
   });
 
-  it("serializes write client requests by default", () => {
-    const options = resolveSlackWriteClientOptions();
-
-    expect(options.maxRequestConcurrency).toBe(1);
-  });
-
   it("respects explicit write client concurrency overrides", () => {
     const options = resolveSlackWriteClientOptions({ maxRequestConcurrency: 5 });
 
@@ -224,7 +218,6 @@ describe("slack web client config", () => {
 
     expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
       agent: customAgent,
-      maxRequestConcurrency: 1,
       retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       timeout: 4321,
     });
@@ -240,7 +233,6 @@ describe("slack web client config", () => {
       expect(WebClient).toHaveBeenCalledTimes(1);
       expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
         agent: undefined,
-        maxRequestConcurrency: 1,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       });
     } finally {

@@ -18,7 +18,7 @@ function createPluginIdSet(pluginIds: readonly string[] | undefined): Set<string
 }
 
 /** Lists bundled plugin ids with a non-empty contract contribution in a manifest snapshot. */
-export function listBundledManifestContractPluginIds(params: {
+function listBundledManifestContractPluginIds(params: {
   plugins: readonly PluginManifestRecord[];
   contract: PluginManifestContractListKey;
   onlyPluginIds?: readonly string[];

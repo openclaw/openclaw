@@ -114,4 +114,21 @@ describe("logAnnounceGiveUp", () => {
     );
     logSpy.mockRestore();
   });
+
+  it("keeps bounded delivery errors UTF-16 well-formed", () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const entry = createRunEntry({
+      delivery: {
+        status: "failed",
+        lastError: `${"x".repeat(1_999)}🚀tail`,
+      },
+    });
+
+    logAnnounceGiveUp(entry, "expiry");
+
+    const line = String(logSpy.mock.calls[0]?.[0]);
+    expect(line).toContain(`${"x".repeat(1_999)}…`);
+    expect(line).not.toContain("\uD83D");
+    logSpy.mockRestore();
+  });
 });

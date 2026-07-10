@@ -18,6 +18,8 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
@@ -45,6 +47,7 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
   formatRemoteConnectionHostFooter,
+  sanitizeRenderableText,
   formatTokens,
 } from "./tui-formatters.js";
 import {
@@ -62,7 +65,9 @@ import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
   shouldEnableWindowsGitBashPasteFallback,
+  type TuiSubmitAction,
 } from "./tui-submit.js";
+import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 import type {
   AgentSummary,
   SessionInfo,
@@ -154,7 +159,8 @@ export function resolveLocalAuthSpawnInvocation(params: {
 }
 
 export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
-  const defaultCwd = params.defaultCwd ?? process.cwd();
+  const defaultCwd =
+    params.defaultCwd ?? tryProcessCwd() ?? path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
   const entryArg = params.args[0]?.trim();
   if (!entryArg) {
     return defaultCwd;
@@ -215,10 +221,8 @@ export function resolveInitialTuiAgentId(params: {
     return normalizeAgentId(parsed.agentId);
   }
 
-  const inferredFromWorkspace = resolveAgentIdByWorkspacePath(
-    params.cfg,
-    params.cwd ?? process.cwd(),
-  );
+  const cwd = params.cwd ?? tryProcessCwd();
+  const inferredFromWorkspace = cwd ? resolveAgentIdByWorkspacePath(params.cfg, cwd) : null;
   if (inferredFromWorkspace) {
     return inferredFromWorkspace;
   }
@@ -422,6 +426,7 @@ const TUI_BUSY_ACTIVITY_STATUSES = new Set([
   "streaming",
   "running",
   "finishing context",
+  "starting up",
 ]);
 
 export function isTuiBusyActivityStatus(status: string): boolean {
@@ -527,6 +532,8 @@ function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
+  const fallbackCwd = path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
+  const resolveUsableCwd = () => tryProcessCwd() ?? fallbackCwd;
   const emptySessionInfoDefaults = resolveEmptySessionInfoDefaults(config);
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
@@ -536,7 +543,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     cfg: config,
     fallbackAgentId: agentDefaultId,
     initialSessionInput,
-    cwd: process.cwd(),
   });
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
@@ -608,6 +614,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     set currentAgentId(value) {
       currentAgentId = value;
       pluginApprovals?.sessionChanged();
+      taskSuggestions?.sessionChanged();
     },
     get currentSessionKey() {
       return currentSessionKey;
@@ -615,6 +622,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     set currentSessionKey(value) {
       currentSessionKey = value;
       pluginApprovals?.sessionChanged();
+      taskSuggestions?.sessionChanged();
     },
     get currentSessionId() {
       return currentSessionId;
@@ -815,10 +823,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           local: isLocalMode,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
+          agentRuntime: sessionInfo.agentRuntime?.id,
           thinkingLevels: sessionInfo.thinkingLevels,
           dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
         }),
-        process.cwd(),
+        resolveUsableCwd(),
       ),
     );
   };
@@ -1212,7 +1221,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
                 const invocation = resolveLocalAuthSpawnInvocation({ command, args });
                 const child = spawn(invocation.command, invocation.args, {
-                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: process.cwd() }),
+                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveUsableCwd() }),
                   env: process.env,
                   stdio: "inherit",
                   ...invocation.options,
@@ -1305,7 +1314,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     clearLocalRunIds,
     rememberSessionKey: rememberCurrentSessionKey,
-    emptySessionInfoDefaults,
   });
   const {
     refreshAgents,
@@ -1314,9 +1322,18 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     applySessionMutationResult,
     loadHistory,
     setSession,
-    setEmptySession,
     abortActive,
   } = sessionActions;
+  const taskSuggestions = createTuiTaskSuggestionController({
+    client,
+    chatLog,
+    getAgentId: () => currentAgentId,
+    getSessionKey: () => currentSessionKey,
+    openOverlay,
+    closeOverlay,
+    requestRender: () => tui.requestRender(),
+    onAccepted: setSession,
+  });
 
   const {
     handleChatEvent,
@@ -1366,6 +1383,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
     };
     pluginApprovals?.dispose();
+    taskSuggestions?.dispose();
     const hardExitTimer = setTimeout(
       forceExit,
       resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
@@ -1411,7 +1429,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       applySessionMutationResult,
       loadHistory,
       setSession,
-      setEmptySession,
       refreshAgents,
       abortActive,
       setActivityStatus,
@@ -1445,11 +1462,17 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     addBlockedChatSubmitNotice(chatLog);
     tui.requestRender();
   };
+  const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
+    const message = sanitizeRenderableText(formatErrorMessage(error));
+    chatLog.addSystem(`${action} submit failed: ${message}`);
+    tui.requestRender();
+  };
   const submitHandler = createEditorSubmitHandler({
     editor,
     handleCommand,
     sendMessage,
     handleBangLine: runLocalShellLine,
+    onSubmitError: notifySubmitError,
     canSubmitMessage: canSubmitChatMessage,
     onBlockedMessageSubmit: notifyBlockedChatSubmit,
   });
@@ -1543,6 +1566,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   client.onEvent = (evt) => {
     pluginApprovals?.handleEvent(evt.event, evt.payload);
+    taskSuggestions?.handleEvent(evt.event, evt.payload);
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
     }
@@ -1566,6 +1590,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       reconnectStreamingWatchdog();
     }
     setConnectionStatus(isLocalMode ? "local ready" : "connected");
+    // A reconnect may already have restored a live run's busy status. Only
+    // claim the status line when startup owns it, then release that exact state.
+    if (!isTuiBusyActivityStatus(activityStatus)) {
+      setActivityStatus("starting up");
+    }
     void (async () => {
       try {
         await client.subscribeSessionEvents?.();
@@ -1581,7 +1610,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       } catch (err) {
         chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
       }
+      try {
+        await taskSuggestions?.refresh();
+      } catch (err) {
+        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+      }
       await loadHistory();
+      if (activityStatus === "starting up") {
+        setActivityStatus("idle");
+      }
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
         4000,
@@ -1597,6 +1634,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       tui.requestRender();
     })().catch((err: unknown) => {
       chatLog.addSystem(`startup failed: ${String(err)}`);
+      if (activityStatus === "starting up") {
+        setActivityStatus("idle");
+      }
       setConnectionStatus("startup failed", 5000);
       tui.requestRender();
     });
@@ -1639,6 +1679,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       } catch (err) {
         chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
       }
+      try {
+        await taskSuggestions?.refresh();
+      } catch (err) {
+        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+      }
     })();
     tui.requestRender();
   };
@@ -1666,6 +1711,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   await new Promise<void>((resolve) => {
     const finish = () => {
       pluginApprovals?.dispose();
+      taskSuggestions?.dispose();
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
       }

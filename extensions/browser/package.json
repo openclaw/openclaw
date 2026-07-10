@@ -19,6 +19,9 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "assetScripts": {
+      "copy": "node scripts/copy-chrome-extension.mjs"
+    }
   }
 }

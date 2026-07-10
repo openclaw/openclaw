@@ -38,26 +38,29 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeGlobal: false,
     includeUnknown: false,
     showArchived: false,
-    mainKey: "main",
-    filtersCollapsed: false,
     basePath: "",
     searchQuery: "",
     agentIdentityById: {},
     sortColumn: "updated",
     sortDir: "desc",
+    groupBy: "none",
+    knownCategories: [],
     page: 0,
     pageSize: 10,
     selectedKeys: new Set<string>(),
-    expandedCheckpointKey: null,
+    sessionMenu: null,
+    expandedSessionKey: null,
     checkpointItemsByKey: {},
     checkpointLoadingKey: null,
     checkpointBusyKey: null,
     checkpointErrorByKey: {},
     onFiltersChange: () => undefined,
-    onToggleFiltersCollapsed: () => undefined,
     onClearFilters: () => undefined,
     onSearchChange: () => undefined,
     onSortChange: () => undefined,
+    onGroupByChange: () => undefined,
+    onAssignCategory: () => undefined,
+    onRequestNewCategory: () => undefined,
     onPageChange: () => undefined,
     onPageSizeChange: () => undefined,
     onRefresh: () => undefined,
@@ -67,7 +70,8 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onDeselectPage: () => undefined,
     onDeselectAll: () => undefined,
     onDeleteSelected: () => undefined,
-    onToggleCheckpointDetails: () => undefined,
+    onOpenSessionMenu: () => undefined,
+    onToggleDetails: () => undefined,
     onBranchFromCheckpoint: () => undefined,
     onRestoreCheckpoint: () => undefined,
   };
@@ -86,22 +90,7 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
   return Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim());
 }
 
-const SESSION_TABLE_HEADERS = [
-  "",
-  "Key",
-  "Label",
-  "Kind",
-  "Status",
-  "Runtime",
-  "Updated",
-  "Tokens",
-  "Compaction",
-  "Thinking",
-  "Fast",
-  "Verbose",
-  "Reasoning",
-  "Actions",
-];
+const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
   it("renders an explicit archived-session toggle", async () => {
@@ -133,9 +122,113 @@ describe("sessions view", () => {
     });
   });
 
-  it("offers workboard capture for dashboard sessions", async () => {
+  it("groups sessions by channel with section headers and no pagination", async () => {
     const container = document.createElement("div");
-    const onAddToWorkboard = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 3 },
+            { key: "agent:main:telegram:direct:2", kind: "direct", updatedAt: 2 },
+            { key: "agent:main:discord:channel:3", kind: "group", updatedAt: 1 },
+          ]),
+        ),
+        groupBy: "channel",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const headers = Array.from(container.querySelectorAll(".session-group-row__label")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(headers).toEqual(["discord", "telegram"]);
+    const counts = Array.from(container.querySelectorAll(".session-group-row__count")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(counts).toEqual(["2 sessions", "1 session"]);
+    expect(container.querySelector(".data-table-pagination")).toBeNull();
+  });
+
+  it("keeps the filtered empty state when grouping is active", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([{ key: "agent:main:discord:channel:1", kind: "group", updatedAt: 1 }]),
+        ),
+        groupBy: "category",
+        knownCategories: ["Research"],
+        searchQuery: "no-such-session",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".data-table-empty-state")).not.toBeNull();
+    expect(container.querySelector(".session-group-row")).toBeNull();
+  });
+
+  it("assigns custom groups from the group cell and header drop targets", async () => {
+    const container = document.createElement("div");
+    const onAssignCategory = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 2 },
+            { key: "agent:main:main", kind: "direct", updatedAt: 1, category: "Research" },
+          ]),
+        ),
+        groupBy: "category",
+        knownCategories: ["Research"],
+        onAssignCategory,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const headers = Array.from(container.querySelectorAll(".session-group-row__label")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(headers).toEqual(["Research", "Ungrouped"]);
+
+    // Rows render in group order: Research (agent:main:main) first, then Ungrouped (discord).
+    const select = container.querySelectorAll<HTMLSelectElement>(
+      'select[aria-label="Move session to a group"]',
+    )[1];
+    if (!select) {
+      throw new Error("Expected group select");
+    }
+    select.value = "Research";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onAssignCategory).toHaveBeenCalledWith("agent:main:discord:channel:1", "Research");
+
+    const headerRow = container.querySelector(".session-group-row");
+    if (!headerRow) {
+      throw new Error("Expected group header row");
+    }
+    const dropWithPayload = (types: string[], data: Record<string, string>) => {
+      const drop = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(drop, "dataTransfer", {
+        value: { types, getData: (type: string) => data[type] ?? "" },
+      });
+      headerRow.dispatchEvent(drop);
+    };
+
+    // Generic text drags (e.g. selected page text) must not trigger patches.
+    dropWithPayload(["text/plain"], { "text/plain": "not-a-session" });
+    expect(onAssignCategory).toHaveBeenCalledTimes(1);
+
+    dropWithPayload(["application/x-openclaw-session-key"], {
+      "application/x-openclaw-session-key": "agent:main:main",
+    });
+    expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", "Research");
+  });
+
+  it("opens the session menu from the kebab and row context menu", async () => {
+    const container = document.createElement("div");
+    const onOpenSessionMenu = vi.fn();
     const session = {
       key: "agent:main:dashboard:1",
       kind: "direct",
@@ -144,65 +237,45 @@ describe("sessions view", () => {
     render(
       renderSessions({
         ...buildProps(buildResult(session)),
-        onAddToWorkboard,
+        onOpenSessionMenu,
       }),
       container,
     );
     await Promise.resolve();
 
     const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Add to Workboard"]',
+      'button[aria-label="Open session menu"]',
     );
-    if (!(button instanceof HTMLButtonElement)) {
-      throw new Error("Expected Add to Workboard button");
+    if (!button) {
+      throw new Error("Expected session menu button");
     }
+    expect(button.getAttribute("aria-haspopup")).toBe("menu");
     button.click();
-
-    expect(onAddToWorkboard).toHaveBeenCalledWith(session);
-  });
-
-  it("pins, archives, and restores sessions from row actions", async () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:dashboard:1",
-            kind: "direct",
-            updatedAt: Date.now(),
-            pinned: false,
-            archived: false,
-          }),
-        ),
-        onPatch,
-      }),
-      container,
+    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ key: session.key }),
+      { x: expect.any(Number), y: expect.any(Number) },
+      button,
     );
-    await Promise.resolve();
 
-    container.querySelector<HTMLButtonElement>('button[title="Pin session"]')!.click();
-    container.querySelector<HTMLButtonElement>('button[title="Archive session"]')!.click();
-    expect(onPatch).toHaveBeenNthCalledWith(1, "agent:main:dashboard:1", { pinned: true });
-    expect(onPatch).toHaveBeenNthCalledWith(2, "agent:main:dashboard:1", { archived: true });
-
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:dashboard:1",
-            kind: "direct",
-            updatedAt: Date.now(),
-            archived: true,
-          }),
-        ),
-        onPatch,
-      }),
-      container,
+    const row = container.querySelector(".session-data-row");
+    if (!row) {
+      throw new Error("Expected session row");
+    }
+    const contextMenu = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 123,
+      clientY: 45,
+    });
+    row.dispatchEvent(contextMenu);
+    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ key: session.key }),
+      { x: 123, y: 45 },
+      null,
     );
-    await Promise.resolve();
-    container.querySelector<HTMLButtonElement>('button[title="Restore session"]')!.click();
-    expect(onPatch).toHaveBeenLastCalledWith("agent:main:dashboard:1", { archived: false });
+    expect(contextMenu.defaultPrevented).toBe(true);
   });
 
   it("keeps pinned sessions above newer unpinned sessions", async () => {
@@ -224,27 +297,6 @@ describe("sessions view", () => {
       row.querySelector(".session-key-cell")?.textContent?.trim(),
     );
     expect(keys).toEqual(["pinned", "newer"]);
-  });
-
-  it("marks sessions that already have workboard cards", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:dashboard:1",
-            kind: "direct",
-            updatedAt: Date.now(),
-          }),
-        ),
-        workboardSessionKeys: new Set(["agent:main:dashboard:1"]),
-        onAddToWorkboard: () => undefined,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.querySelector('button[aria-label="Open Workboard card"]')).not.toBeNull();
   });
 
   it("uses the shared tooltip component for session filters", async () => {
@@ -315,29 +367,6 @@ describe("sessions view", () => {
     expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
   });
 
-  it("collapses the whole session filter section from the header", async () => {
-    const container = document.createElement("div");
-    const onToggleFiltersCollapsed = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        filtersCollapsed: true,
-        onToggleFiltersCollapsed,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const toggle = container.querySelector<HTMLButtonElement>(".sessions-filter-panel__toggle");
-    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector(".sessions-filter-bar")).toBeNull();
-
-    expect(toggle).toBeInstanceOf(HTMLButtonElement);
-    toggle!.click();
-
-    expect(onToggleFiltersCollapsed).toHaveBeenCalledTimes(1);
-  });
-
   it("renders and patches provider-owned thinking ids", async () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
@@ -356,6 +385,7 @@ describe("sessions view", () => {
             ],
           }),
         ),
+        expandedSessionKey: "agent:main:main",
         onPatch,
       }),
       container,
@@ -385,8 +415,8 @@ describe("sessions view", () => {
   it("labels inherited thinking with the resolved session default", async () => {
     const container = document.createElement("div");
     render(
-      renderSessions(
-        buildProps(
+      renderSessions({
+        ...buildProps(
           buildResult({
             key: "agent:main:main",
             kind: "direct",
@@ -398,7 +428,8 @@ describe("sessions view", () => {
             ],
           }),
         ),
-      ),
+        expandedSessionKey: "agent:main:main",
+      }),
       container,
     );
     await Promise.resolve();
@@ -416,8 +447,8 @@ describe("sessions view", () => {
   it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
     const container = document.createElement("div");
     render(
-      renderSessions(
-        buildProps(
+      renderSessions({
+        ...buildProps(
           buildResult(
             {
               key: "agent:main:main",
@@ -435,7 +466,8 @@ describe("sessions view", () => {
             },
           ),
         ),
-      ),
+        expandedSessionKey: "agent:main:main",
+      }),
       container,
     );
     await Promise.resolve();
@@ -462,6 +494,7 @@ describe("sessions view", () => {
             thinkingOptions: ["off", "on"],
           }),
         ),
+        expandedSessionKey: "agent:main:main",
         onPatch,
       }),
       container,
@@ -659,7 +692,7 @@ describe("sessions view", () => {
     expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 
-  it("renders and filters the session runtime", async () => {
+  it("filters by agent runtime and surfaces it in the details drawer", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -680,20 +713,22 @@ describe("sessions view", () => {
           ]),
         ),
         searchQuery: "fallback none",
+        expandedSessionKey: "agent:main:claude",
       }),
       container,
     );
     await Promise.resolve();
 
     expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
-    expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
-      "claude-cli (fallback none)",
-    );
+    // The roster no longer has a Runtime column; the drawer carries it.
+    expect(container.querySelector(".session-runtime-cell")).toBeNull();
     const rows = container.querySelectorAll("tbody tr.session-data-row");
     expect(rows).toHaveLength(1);
     expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
       "agent:main:claude",
     );
+    const stats = readSessionDetailStats(container);
+    expect(stats.get("Runtime")).toBe("claude-cli (fallback none)");
   });
 
   it("does not filter terminal sessions as live when active-run flags are stale", async () => {
@@ -751,9 +786,9 @@ describe("sessions view", () => {
     expect(text.trim()).toBe("agent:constructor:telegram:abc123");
   });
 
-  it("expands checkpoint details from row activation when checkpoints exist", async () => {
+  it("opens session details from row activation", async () => {
     const container = document.createElement("div");
-    const onToggleCheckpointDetails = vi.fn();
+    const onToggleDetails = vi.fn();
     render(
       renderSessions({
         ...buildProps(
@@ -771,7 +806,7 @@ describe("sessions view", () => {
             },
           }),
         ),
-        onToggleCheckpointDetails,
+        onToggleDetails,
       }),
       container,
     );
@@ -781,14 +816,14 @@ describe("sessions view", () => {
     expect(row).toBeInstanceOf(HTMLTableRowElement);
     row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+    expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
-    expect(tokenCell?.textContent?.trim()).toBe("123456 / 200000");
+    expect(tokenCell?.textContent?.trim()).toBe("123k / 200k");
   });
 
-  it("renders the checkpoint count as the compaction disclosure", async () => {
+  it("renders the checkpoint count on the details disclosure", async () => {
     const container = document.createElement("div");
-    const onToggleCheckpointDetails = vi.fn();
+    const onToggleDetails = vi.fn();
     render(
       renderSessions({
         ...buildProps(
@@ -804,23 +839,40 @@ describe("sessions view", () => {
             },
           }),
         ),
-        onToggleCheckpointDetails,
+        onToggleDetails,
       }),
       container,
     );
     await Promise.resolve();
 
-    const trigger = container.querySelector<HTMLButtonElement>(".session-compaction-trigger");
-    expect(trigger?.querySelector(".session-compaction-count")?.textContent?.trim()).toBe(
-      "1 Checkpoint",
-    );
-    expect(trigger?.textContent?.trim()).toBe("1 Checkpoint");
+    const trigger = container.querySelector<HTMLButtonElement>(".session-details-toggle");
+    expect(trigger?.querySelector(".session-compaction-count")?.textContent?.trim()).toBe("1");
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector(".session-checkpoint-toggle")).toBeNull();
 
     expect(trigger).toBeInstanceOf(HTMLButtonElement);
     trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+    expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
+  });
+
+  it("omits the checkpoint count pill when a session has no checkpoints", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const trigger = container.querySelector<HTMLButtonElement>(".session-details-toggle");
+    expect(trigger).toBeInstanceOf(HTMLButtonElement);
+    expect(trigger?.querySelector(".session-compaction-count")).toBeNull();
   });
 
   it("renders expanded session details with compaction history", async () => {
@@ -859,7 +911,7 @@ describe("sessions view", () => {
             },
           }),
         ),
-        expandedCheckpointKey: "agent:main:main",
+        expandedSessionKey: "agent:main:main",
         checkpointItemsByKey: {
           "agent:main:main": [
             {
@@ -898,7 +950,8 @@ describe("sessions view", () => {
     expect(stats.get("Status")).toBe("running");
     expect(stats.get("Model")).toBe("gpt-5.5");
     expect(stats.get("Provider")).toBe("openai");
-    expect(stats.get("Runtime")).toBe("2m 5s");
+    expect(stats.get("Runtime")).toBe("pi");
+    expect(stats.get("Run duration")).toBe("2m 5s");
     expect(stats.get("Tokens")).toBe("123456 / 200000");
     expect(stats.get("Compaction")).toBe("1 Checkpoint");
     expect(stats.get("Goal")).toBe(
@@ -906,7 +959,18 @@ describe("sessions view", () => {
     );
     expect(stats.get("Goal note")).toBe("Waiting for owner review");
 
-    const compactionSection = details?.querySelector(".session-details-section");
+    const sections = Array.from(details?.querySelectorAll(".session-details-section") ?? []);
+    expect(sections).toHaveLength(2);
+    const [overridesSection, compactionSection] = sections;
+    expect(
+      overridesSection?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim(),
+    ).toBe("Overrides");
+    expect(
+      Array.from(overridesSection?.querySelectorAll(".session-override-field__label") ?? []).map(
+        (label) => label.textContent?.trim(),
+      ),
+    ).toEqual(["Label", "Thinking", "Fast", "Verbose", "Reasoning"]);
+
     expect(
       compactionSection?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim(),
     ).toBe("Compaction history");
@@ -918,9 +982,9 @@ describe("sessions view", () => {
     ).toBe("123,456 to 38,920 tokens");
   });
 
-  it("does not expand checkpoint details when the row has none or a nested control was used", async () => {
+  it("opens details for sessions without checkpoints but ignores nested control clicks", async () => {
     const container = document.createElement("div");
-    const onToggleCheckpointDetails = vi.fn();
+    const onToggleDetails = vi.fn();
     render(
       renderSessions({
         ...buildProps(
@@ -944,7 +1008,7 @@ describe("sessions view", () => {
             },
           ]),
         ),
-        onToggleCheckpointDetails,
+        onToggleDetails,
       }),
       container,
     );
@@ -955,12 +1019,15 @@ describe("sessions view", () => {
     expect(checkbox).toBeInstanceOf(HTMLInputElement);
     expect(rows[1]).toBeInstanceOf(HTMLTableRowElement);
     if (!(checkbox instanceof HTMLInputElement) || !(rows[1] instanceof HTMLTableRowElement)) {
-      throw new Error("Expected checkpoint toggle row controls");
+      throw new Error("Expected details toggle row controls");
     }
+    // Nested controls (like the select checkbox) must not toggle the drawer.
     checkbox.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleDetails).not.toHaveBeenCalled();
 
-    expect(onToggleCheckpointDetails).not.toHaveBeenCalled();
+    // Sessions without checkpoints still open the drawer for overrides and stats.
+    rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleDetails).toHaveBeenCalledWith("agent:main:no-checkpoint");
   });
 
   it("filters rows by agent identity name", async () => {
@@ -1004,8 +1071,8 @@ describe("sessions view", () => {
   it("keeps session selects stable and deselects only the current page", async () => {
     const container = document.createElement("div");
     render(
-      renderSessions(
-        buildProps(
+      renderSessions({
+        ...buildProps(
           buildResult({
             key: "agent:main:main",
             kind: "direct",
@@ -1015,12 +1082,14 @@ describe("sessions view", () => {
             reasoningLevel: "custom-mode",
           }),
         ),
-      ),
+        expandedSessionKey: "agent:main:main",
+      }),
       container,
     );
     await Promise.resolve();
 
-    const selects = container.querySelectorAll("select");
+    // Scope to drawer selects; the toolbar also renders a group-by select.
+    const selects = container.querySelectorAll("tbody select");
     const fast = selects[1] as HTMLSelectElement | undefined;
     const verbose = selects[2] as HTMLSelectElement | undefined;
     const reasoning = selects[3] as HTMLSelectElement | undefined;
@@ -1132,5 +1201,206 @@ describe("sessions view", () => {
     const emptyCell = container.querySelector(".data-table-empty-cell");
     expect(emptyCell?.textContent?.trim()).toBe("No sessions found.");
     expect(emptyCell?.querySelector("button")).toBeNull();
+  });
+
+  it("summarizes loaded sessions in the overview tiles", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:live",
+              kind: "direct",
+              updatedAt: 2,
+              hasActiveRun: true,
+              status: "running",
+              totalTokens: 1200,
+            },
+            {
+              key: "agent:main:idle",
+              kind: "cron",
+              updatedAt: 1,
+              unread: true,
+              totalTokens: 300,
+            },
+          ]),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const tiles = Array.from(container.querySelectorAll(".sessions-overview__tile"));
+    const readTile = (tile: Element) => [
+      tile.querySelector(".sessions-overview__label")?.textContent?.trim(),
+      tile.querySelector(".sessions-overview__value")?.textContent?.trim(),
+    ];
+    expect(tiles.map(readTile)).toEqual([
+      ["Sessions", "2"],
+      ["Live", "1"],
+      ["Unread", "1"],
+      ["Tokens", "1.5k"],
+    ]);
+    expect(tiles[1]?.classList.contains("sessions-overview__tile--active")).toBe(true);
+    expect(tiles[2]?.classList.contains("sessions-overview__tile--active")).toBe(true);
+  });
+
+  it("renders a context meter with usage tone on the tokens cell", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 180_000,
+            contextTokens: 200_000,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const meter = container.querySelector(".session-context-meter");
+    expect(meter?.classList.contains("session-context-meter--danger")).toBe(true);
+    expect(meter?.getAttribute("aria-label")).toBe(
+      "90% of context used (180,000 / 200,000 tokens)",
+    );
+    expect(container.querySelector<HTMLElement>(".session-context-meter__fill")?.style.width).toBe(
+      "90%",
+    );
+    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe("180k / 200k");
+  });
+
+  it("keeps stale token snapshots out of the warning tones", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 180_000,
+            totalTokensFresh: false,
+            contextTokens: 200_000,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const meter = container.querySelector(".session-context-meter");
+    expect(meter?.classList.contains("session-context-meter--stale")).toBe(true);
+    expect(meter?.classList.contains("session-context-meter--danger")).toBe(false);
+    expect(meter?.getAttribute("aria-label")).toBe(
+      "~90% of context used (180,000 / 200,000 tokens, approximate)",
+    );
+    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe(
+      "~180k / 200k",
+    );
+  });
+
+  it("reports the overview token sum as unavailable or partial when snapshots are missing", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            { key: "agent:main:a", kind: "direct", updatedAt: 2, totalTokens: 1200 },
+            { key: "agent:main:b", kind: "direct", updatedAt: 1 },
+          ]),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const tokensTile = container.querySelector(".sessions-overview__tile--tokens");
+    expect(tokensTile?.querySelector(".sessions-overview__value")?.textContent?.trim()).toBe(
+      "~1.2k",
+    );
+
+    render(
+      renderSessions(
+        buildProps(buildMultiResult([{ key: "agent:main:b", kind: "direct", updatedAt: 1 }])),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      container
+        .querySelector(".sessions-overview__tile--tokens .sessions-overview__value")
+        ?.textContent?.trim(),
+    ).toBe("n/a");
+  });
+
+  it("omits the context meter when a session reports no context window", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 4200,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".session-context-meter")).toBeNull();
+    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe("4.2k");
+  });
+
+  it("renders kind avatars with a live status dot", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:live",
+              kind: "cron",
+              updatedAt: 2,
+              hasActiveRun: true,
+              status: "running",
+            },
+            { key: "agent:main:idle", kind: "direct", updatedAt: 1, hasActiveRun: false },
+          ]),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const avatars = Array.from(container.querySelectorAll(".session-avatar"));
+    expect(avatars.map((avatar) => [...avatar.classList])).toEqual([
+      ["session-avatar", "session-avatar--cron"],
+      ["session-avatar", "session-avatar--direct"],
+    ]);
+    expect(avatars[0]?.querySelector(".session-avatar__status")).not.toBeNull();
+    expect(avatars[1]?.querySelector(".session-avatar__status")).toBeNull();
+  });
+
+  it("shows skeleton rows during the initial load", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({ ...buildProps(buildMultiResult([])), result: null, loading: true }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelectorAll(".session-skeleton-row").length).toBeGreaterThan(0);
+    expect(container.querySelector(".data-table-empty-cell")).toBeNull();
+    expect(container.querySelector(".sessions-overview")).toBeNull();
   });
 });

@@ -1,3 +1,6 @@
+import { isFailoverError } from "./failover-error.js";
+import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
+
 /**
  * Shared agent run termination constants.
  *
@@ -34,9 +37,24 @@ export function createAgentRunRestartAbortError(): Error {
 }
 
 export function isAgentRunRestartAbortReason(value: unknown): boolean {
-  return (
-    value instanceof Error && "code" in value && value.code === AGENT_RUN_RESTART_ABORT_ERROR_CODE
-  );
+  try {
+    return (
+      value instanceof Error && "code" in value && value.code === AGENT_RUN_RESTART_ABORT_ERROR_CODE
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isAgentRunTimeoutAbortReason(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  try {
+    return "name" in value && value.name === "TimeoutError";
+  } catch {
+    return false;
+  }
 }
 
 export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefined): {
@@ -51,15 +69,52 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
   }
   const stopReason = isAgentRunRestartAbortReason(signal.reason)
     ? AGENT_RUN_RESTART_ABORT_STOP_REASON
-    : signal.reason &&
-        typeof signal.reason === "object" &&
-        "name" in signal.reason &&
-        signal.reason.name === "TimeoutError"
+    : isAgentRunTimeoutAbortReason(signal.reason)
       ? "timeout"
       : AGENT_RUN_ABORTED_STOP_REASON;
   return {
     aborted: true,
     stopReason,
+  };
+}
+
+function isProviderTimeoutError(error: unknown): boolean {
+  try {
+    const candidate = isFailoverError(error)
+      ? error
+      : error instanceof Error
+        ? error.cause
+        : undefined;
+    return isFailoverError(candidate) && candidate.reason === "timeout";
+  } catch {
+    // Provider/runtime errors may expose hostile getters. Classification must
+    // not replace the original failure or suppress its terminal event.
+    return false;
+  }
+}
+
+/** Preserve structured provider watchdog timeouts when no abort signal was raised. */
+export function resolveAgentRunErrorLifecycleFields(
+  error: unknown,
+  signal: AbortSignal | undefined,
+): {
+  aborted?: true;
+  stopReason?:
+    | typeof AGENT_RUN_ABORTED_STOP_REASON
+    | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
+    | "timeout";
+  timeoutPhase?: AgentRunTimeoutPhase;
+} {
+  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
+  if (abortFields.aborted) {
+    return abortFields;
+  }
+  if (!isProviderTimeoutError(error)) {
+    return {};
+  }
+  return {
+    stopReason: "timeout",
+    timeoutPhase: "provider",
   };
 }
 

@@ -2,7 +2,19 @@
 
 ## Unreleased
 
-The OpenClaw mascot now comes alive across onboarding and the app headers with the same float, blink, antenna-wiggle, and claw-snap animation as openclaw.ai.
+Shows the localized app version, Git commit, and build date together on the About screen, with real provenance in repository-backed debug builds.
+
+## 2026.7.1 - 2026-07-08
+
+Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.
+
+Upgrades chat with offline recovery, session search and groups, model and agent pickers, voice notes, actions, link previews, code and math rendering.
+
+Adds workspace files, Cron details, terminal access, and Listen playback.
+
+Improves onboarding, reconnects, keyboards, notification filtering, location, canvas safety, and voice reliability.
+
+Thanks @IWhatsskill, @ioridev, and @narcissus0702.
 
 ## 2026.6.11 - 2026-07-01
 

@@ -197,6 +197,7 @@ export async function startGatewayEarlyRuntime(params: {
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         nodeSendToSession: params.nodeSendToSession,
+        enableSkillCurator: true,
         ...(typeof params.mediaCleanupTtlMs === "number"
           ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }
           : {}),

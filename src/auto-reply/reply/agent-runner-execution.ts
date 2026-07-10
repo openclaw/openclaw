@@ -42,6 +42,7 @@ import {
   isRateLimitErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
+import { isPeriodicUsageLimitErrorMessage } from "../../agents/embedded-agent-helpers/failover-matches.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
@@ -54,10 +55,7 @@ import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-p
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isMissingProviderAuthError } from "../../agents/model-auth.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import {
-  isCliRuntimeAliasForProvider,
-  resolveCliRuntimeExecutionProvider,
-} from "../../agents/model-runtime-aliases.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   isCliProvider,
   resolveModelRefFromString,
@@ -68,9 +66,11 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
-  resolveAgentRunAbortLifecycleFields,
+  resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
@@ -427,244 +427,12 @@ export type AgentRunLoopResult =
       directlySentBlockKeys?: Set<string>;
       /** Payloads successfully sent directly during tool flush. */
       directlySentBlockPayloads?: ReplyPayload[];
+      /** Prepared terminal failure, appended only after delivery evidence settles. */
+      terminalFailurePayload?: ReplyPayload;
     }
   | { kind: "final"; payload: ReplyPayload };
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
-
-type FallbackSelectionState = Pick<
-  SessionEntry,
-  | "providerOverride"
-  | "modelOverride"
-  | "modelOverrideSource"
-  | "modelOverrideFallbackOriginProvider"
-  | "modelOverrideFallbackOriginModel"
-  | "authProfileOverride"
-  | "authProfileOverrideSource"
-  | "authProfileOverrideCompactionCount"
->;
-
-const FALLBACK_SELECTION_STATE_KEYS = [
-  "providerOverride",
-  "modelOverride",
-  "modelOverrideSource",
-  "modelOverrideFallbackOriginProvider",
-  "modelOverrideFallbackOriginModel",
-  "authProfileOverride",
-  "authProfileOverrideSource",
-  "authProfileOverrideCompactionCount",
-] as const satisfies ReadonlyArray<keyof FallbackSelectionState>;
-
-function setFallbackSelectionStateField(
-  entry: SessionEntry,
-  key: keyof FallbackSelectionState,
-  value: FallbackSelectionState[keyof FallbackSelectionState],
-): boolean {
-  switch (key) {
-    case "providerOverride":
-      if (entry.providerOverride !== value) {
-        entry.providerOverride = value as SessionEntry["providerOverride"];
-        return true;
-      }
-      return false;
-    case "modelOverride":
-      if (entry.modelOverride !== value) {
-        entry.modelOverride = value as SessionEntry["modelOverride"];
-        return true;
-      }
-      return false;
-    case "modelOverrideSource":
-      if (entry.modelOverrideSource !== value) {
-        entry.modelOverrideSource = value as SessionEntry["modelOverrideSource"];
-        return true;
-      }
-      return false;
-    case "modelOverrideFallbackOriginProvider":
-      if (entry.modelOverrideFallbackOriginProvider !== value) {
-        entry.modelOverrideFallbackOriginProvider =
-          value as SessionEntry["modelOverrideFallbackOriginProvider"];
-        return true;
-      }
-      return false;
-    case "modelOverrideFallbackOriginModel":
-      if (entry.modelOverrideFallbackOriginModel !== value) {
-        entry.modelOverrideFallbackOriginModel =
-          value as SessionEntry["modelOverrideFallbackOriginModel"];
-        return true;
-      }
-      return false;
-    case "authProfileOverride":
-      if (entry.authProfileOverride !== value) {
-        entry.authProfileOverride = value as SessionEntry["authProfileOverride"];
-        return true;
-      }
-      return false;
-    case "authProfileOverrideSource":
-      if (entry.authProfileOverrideSource !== value) {
-        entry.authProfileOverrideSource = value as SessionEntry["authProfileOverrideSource"];
-        return true;
-      }
-      return false;
-    case "authProfileOverrideCompactionCount":
-      if (entry.authProfileOverrideCompactionCount !== value) {
-        entry.authProfileOverrideCompactionCount =
-          value as SessionEntry["authProfileOverrideCompactionCount"];
-        return true;
-      }
-      return false;
-  }
-  throw new Error("Unsupported fallback selection state key");
-}
-
-function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionState {
-  return {
-    providerOverride: entry.providerOverride,
-    modelOverride: entry.modelOverride,
-    modelOverrideSource: entry.modelOverrideSource,
-    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
-    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
-    authProfileOverride: entry.authProfileOverride,
-    authProfileOverrideSource: entry.authProfileOverrideSource,
-    authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
-  };
-}
-
-function buildFallbackSelectionStatePatch(entry: SessionEntry): Partial<SessionEntry> {
-  return {
-    ...snapshotFallbackSelectionState(entry),
-    updatedAt: entry.updatedAt,
-  };
-}
-
-function buildFallbackSelectionState(params: {
-  provider: string;
-  model: string;
-  originProvider: string;
-  originModel: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-}): FallbackSelectionState {
-  return {
-    providerOverride: params.provider,
-    modelOverride: params.model,
-    modelOverrideSource: "auto",
-    modelOverrideFallbackOriginProvider: params.originProvider,
-    modelOverrideFallbackOriginModel: params.originModel,
-    authProfileOverride: params.authProfileId,
-    authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
-    authProfileOverrideCompactionCount: undefined,
-  };
-}
-
-function resolveFallbackSelectionOrigin(params: { entry: SessionEntry; run: FollowupRun["run"] }): {
-  provider: string;
-  model: string;
-} {
-  if (
-    params.entry.modelOverrideSource === "auto" ||
-    (params.entry.modelOverrideSource === undefined &&
-      hasSessionAutoModelFallbackProvenance(params.entry))
-  ) {
-    const persistedOriginProvider = normalizeOptionalString(
-      params.entry.modelOverrideFallbackOriginProvider,
-    );
-    const persistedOriginModel = normalizeOptionalString(
-      params.entry.modelOverrideFallbackOriginModel,
-    );
-    if (persistedOriginProvider && persistedOriginModel) {
-      return { provider: persistedOriginProvider, model: persistedOriginModel };
-    }
-  }
-  return { provider: params.run.provider, model: params.run.model };
-}
-
-/** Persists the fallback candidate selection onto a session entry. */
-export function applyFallbackCandidateSelectionToEntry(params: {
-  entry: SessionEntry;
-  run: FollowupRun["run"];
-  provider: string;
-  model: string;
-  origin?: { provider: string; model: string };
-  force?: boolean;
-  now?: number;
-}): { updated: boolean; nextState?: FallbackSelectionState } {
-  if (
-    !params.force &&
-    params.provider === params.run.provider &&
-    params.model === params.run.model
-  ) {
-    return { updated: false };
-  }
-  const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
-  const origin =
-    params.origin ?? resolveFallbackSelectionOrigin({ entry: params.entry, run: params.run });
-  const nextState = buildFallbackSelectionState({
-    provider: params.provider,
-    model: params.model,
-    originProvider: origin.provider,
-    originModel: origin.model,
-    authProfileId: scopedAuthProfile.authProfileId,
-    authProfileIdSource: scopedAuthProfile.authProfileIdSource,
-  });
-  return {
-    updated: applyFallbackSelectionState(params.entry, nextState, params.now),
-    nextState,
-  };
-}
-
-function applyFallbackSelectionState(
-  entry: SessionEntry,
-  nextState: FallbackSelectionState,
-  now = Date.now(),
-): boolean {
-  let updated = false;
-  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
-    const nextValue = nextState[key];
-    if (nextValue === undefined) {
-      if (Object.hasOwn(entry, key)) {
-        delete entry[key];
-        updated = true;
-      }
-      continue;
-    }
-    if (entry[key] !== nextValue) {
-      updated = setFallbackSelectionStateField(entry, key, nextValue) || updated;
-    }
-  }
-  if (updated) {
-    entry.updatedAt = now;
-  }
-  return updated;
-}
-
-function rollbackFallbackSelectionStateIfUnchanged(
-  entry: SessionEntry,
-  expectedState: FallbackSelectionState,
-  previousState: FallbackSelectionState,
-  now = Date.now(),
-): boolean {
-  let updated = false;
-  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
-    if (entry[key] !== expectedState[key]) {
-      continue;
-    }
-    const previousValue = previousState[key];
-    if (previousValue === undefined) {
-      if (Object.hasOwn(entry, key)) {
-        delete entry[key];
-        updated = true;
-      }
-      continue;
-    }
-    if (entry[key] !== previousValue) {
-      updated = setFallbackSelectionStateField(entry, key, previousValue) || updated;
-    }
-  }
-  if (updated) {
-    entry.updatedAt = now;
-  }
-  return updated;
-}
 
 /**
  * Build a human-friendly rate-limit message from a FallbackSummaryError.
@@ -683,6 +451,10 @@ function buildRateLimitCooldownMessage(err: unknown): string {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (!isFallbackSummaryError(err)) {
+    if (isPeriodicUsageLimitErrorMessage(message)) {
+      const providerMessage = sanitizeUserFacingText(message, { errorContext: true });
+      return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
+    }
     return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
   }
   const expiry = err.soonestCooldownExpiry;
@@ -804,7 +576,12 @@ type ExternalRunFailureReply = {
 
 type ExternalRunFailureInput = string | { message: string; error?: unknown };
 
-function isNonDirectConversationContext(ctx: TemplateContext): boolean {
+type ExternalFailureConversationContext = Pick<
+  TemplateContext,
+  "ChatType" | "Provider" | "SessionKey" | "Surface"
+>;
+
+function isNonDirectConversationContext(ctx: ExternalFailureConversationContext): boolean {
   const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
   return chatType === "group" || chatType === "channel";
 }
@@ -815,7 +592,7 @@ function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): boolean
 
 function resolveExternalRunFailureTextForConversation(params: {
   text: string;
-  sessionCtx: TemplateContext;
+  sessionCtx: ExternalFailureConversationContext;
   isGenericRunnerFailure: boolean;
   cfg?: OpenClawConfig;
 }): string {
@@ -945,7 +722,7 @@ function formatForwardedExternalRunFailureText(message: string): string {
   }
   const detail =
     sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-      ? `${sanitized.slice(0, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
       : sanitized;
   const suffix = /[.!?]$/u.test(detail) ? "" : ".";
   return `⚠️ Agent failed before reply: ${detail}${suffix} Please try again, or use /new to start a fresh session.`;
@@ -974,6 +751,11 @@ function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  // OAuth refresh failure is classified before the generic provider-auth check:
+  // a FailoverError with reason:"auth" and status:401 (e.g. from the claude-cli
+  // subprocess when its stored OAuth token has expired) would otherwise match
+  // classifyProviderRequestError and surface the generic provider-auth copy
+  // instead of the targeted re-auth command for the affected provider.
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
@@ -1045,6 +827,57 @@ function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T 
   return marked;
 }
 
+export function buildTerminalAgentRunFailureReplyPayload(params: {
+  isHeartbeat?: boolean;
+  sessionCtx: ExternalFailureConversationContext;
+  cfg?: OpenClawConfig;
+}): ReplyPayload {
+  return markAgentRunFailureReplyPayload({
+    text: resolveExternalRunFailureTextForConversation({
+      text: params.isHeartbeat
+        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      sessionCtx: params.sessionCtx,
+      isGenericRunnerFailure: true,
+      cfg: params.cfg,
+    }),
+  });
+}
+
+export function buildEmptyInteractiveReplyPayload(params: {
+  isInteractive: boolean;
+  isHeartbeat?: boolean;
+  silentExpected?: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  isMessageToolOnly: boolean;
+  hasPendingContinuation: boolean;
+  hasExplicitSilentReply: boolean;
+  hasCommittedDelivery: boolean;
+  sessionCtx: ExternalFailureConversationContext;
+  cfg?: OpenClawConfig;
+}): ReplyPayload | undefined {
+  if (
+    !params.isInteractive ||
+    params.isHeartbeat === true ||
+    params.silentExpected === true ||
+    params.allowEmptyAssistantReplyAsSilent === true ||
+    params.isMessageToolOnly ||
+    params.hasPendingContinuation ||
+    params.hasExplicitSilentReply ||
+    params.hasCommittedDelivery
+  ) {
+    return undefined;
+  }
+  return markAgentRunFailureReplyPayload({
+    text: resolveExternalRunFailureTextForConversation({
+      text: "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.",
+      sessionCtx: params.sessionCtx,
+      isGenericRunnerFailure: true,
+      cfg: params.cfg,
+    }),
+  });
+}
+
 /** Converts known agent-run failures into user-facing reply payloads. */
 export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
@@ -1087,13 +920,22 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const isPureTransientSummary = isFallbackSummary
     ? isPureTransientRateLimitSummary(params.err)
     : false;
-  const isRateLimit = isFallbackSummary ? isPureTransientSummary : isRateLimitErrorMessage(message);
+  const failoverReason =
+    !isFallbackSummary && isFailoverError(params.err) ? params.err.reason : undefined;
+  const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
+  const isRateLimit = isFallbackSummary
+    ? isPureTransientSummary
+    : failoverReason
+      ? failoverReason === "rate_limit" || failoverReason === "overloaded"
+      : isRateLimitErrorMessage(message);
   const rateLimitOrOverloadedCopy =
     !isFallbackSummary || isPureTransientSummary
-      ? formatRateLimitOrOverloadedErrorCopy(message)
+      ? formatRateLimitOrOverloadedErrorCopy(
+          failoverReason === "overloaded" ? "overloaded" : message,
+        )
       : undefined;
 
-  if (isRateLimit && !isOverloadedErrorMessage(message)) {
+  if (isRateLimit && !isOverloaded) {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
         text: buildRateLimitCooldownMessage(params.err),
@@ -1514,26 +1356,6 @@ function emitModelFallbackStepLifecycle(params: {
   });
 }
 
-/** Resolves runtime provider override stored on the session entry. */
-export function resolveSessionRuntimeOverrideForProvider(params: {
-  provider: string;
-  entry?: Pick<SessionEntry, "agentRuntimeOverride">;
-  cfg?: OpenClawConfig;
-}): string | undefined {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const runtime = normalizeLowercaseStringOrEmpty(params.entry?.agentRuntimeOverride);
-  if (!runtime || runtime === "auto" || runtime === "default") {
-    return undefined;
-  }
-  if (provider === "openai" && runtime === "codex") {
-    return "codex";
-  }
-  if (isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg })) {
-    return runtime;
-  }
-  return undefined;
-}
-
 /** Decides whether to retry after rechecking auto-fallback primary probe state. */
 export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   run: FollowupRun["run"];
@@ -1691,6 +1513,7 @@ async function runAgentTurnWithFallbackInternal(
     }
     return effectiveRun;
   };
+  let liveModelSwitchRuntimeEntry: Pick<SessionEntry, "agentRuntimeOverride"> | undefined;
   const applyLiveModelSwitchToRun = (
     run: FollowupRun["run"],
     err: LiveSessionModelSwitchError,
@@ -1700,6 +1523,9 @@ async function runAgentTurnWithFallbackInternal(
     run.authProfileId = err.authProfileId;
     run.authProfileIdSource = err.authProfileId ? err.authProfileIdSource : undefined;
     run.autoFallbackPrimaryProbe = undefined;
+    // Keep runtime paired with the error's model/auth winner even if the
+    // active in-memory session snapshot lags the persisted directive write.
+    liveModelSwitchRuntimeEntry = { agentRuntimeOverride: err.agentRuntimeOverride };
   };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
@@ -1716,6 +1542,7 @@ async function runAgentTurnWithFallbackInternal(
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       ...(params.followupRun.run.sessionId ? { sessionId: params.followupRun.run.sessionId } : {}),
+      agentId: params.followupRun.run.agentId,
       lifecycleGeneration,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
@@ -1799,12 +1626,12 @@ async function runAgentTurnWithFallbackInternal(
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
+    const deliver = params.opts?.onBlockReply ?? params.onCompactionNoticePayload;
+    if (!deliver) {
+      return;
+    }
     try {
-      if (params.opts?.onBlockReply) {
-        await params.opts.onBlockReply(noticePayload);
-        return;
-      }
-      await params.onCompactionNoticePayload?.(noticePayload);
+      await deliver(noticePayload);
     } catch (err) {
       // Non-critical notice delivery failure should not bubble out of the
       // fire-and-forget event handler.
@@ -1839,6 +1666,7 @@ async function runAgentTurnWithFallbackInternal(
   let attemptedRuntimeModel = fallbackModel;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let fallbackExhausted = false;
+  let terminalRunFailed = false;
   let pendingLifecycleTerminal:
     | {
         provider: string;
@@ -1857,147 +1685,6 @@ async function runAgentTurnWithFallbackInternal(
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
-  let pendingFallbackCandidateRollback:
-    | {
-        provider: string;
-        model: string;
-        rollback: () => Promise<void>;
-      }
-    | undefined;
-  const clearPendingFallbackRollback = (rollback?: () => Promise<void>) => {
-    if (!rollback || pendingFallbackCandidateRollback?.rollback === rollback) {
-      pendingFallbackCandidateRollback = undefined;
-    }
-  };
-  const rollbackClassifiedFallbackCandidateSelection = async (provider: string, model: string) => {
-    const pending = pendingFallbackCandidateRollback;
-    if (!pending || pending.provider !== provider || pending.model !== model) {
-      return;
-    }
-    pendingFallbackCandidateRollback = undefined;
-    try {
-      await pending.rollback();
-    } catch (rollbackError) {
-      logVerbose(
-        `failed to roll back classified fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-      );
-    }
-  };
-  const persistFallbackCandidateSelection = async (
-    provider: string,
-    model: string,
-    candidateRun: FollowupRun["run"],
-  ): Promise<(() => Promise<void>) | undefined> => {
-    if (
-      !params.sessionKey ||
-      !params.activeSessionStore ||
-      preserveUserFacingSessionState ||
-      (provider === effectiveRun.provider && model === effectiveRun.model)
-    ) {
-      return undefined;
-    }
-
-    const activeSessionEntry =
-      params.activeSessionStore[params.sessionKey] ?? params.getActiveSessionEntry();
-    if (!activeSessionEntry) {
-      return undefined;
-    }
-
-    // Don't overwrite a user-initiated model override (e.g. from /models or
-    // /model) with the fallback model.  The user's explicit selection should
-    // survive transient primary-model failures so subsequent messages still
-    // target the model the user chose.  Fallback persistence is only
-    // appropriate when the override was itself set by a previous fallback
-    // ("auto") or when there is no override yet.
-    //
-    // `modelOverrideSource` was added later, so older persisted sessions can
-    // carry a user-selected override without the source field.  Treat any
-    // entry with a `modelOverride` but missing `modelOverrideSource` as legacy
-    // user state, matching the backward-compat treatment in
-    // session-reset-service.
-    const isUserModelOverride =
-      activeSessionEntry.modelOverrideSource === "user" ||
-      (activeSessionEntry.modelOverrideSource === undefined &&
-        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)) &&
-        !hasSessionAutoModelFallbackProvenance(activeSessionEntry));
-    if (isUserModelOverride) {
-      return undefined;
-    }
-
-    const previousState = snapshotFallbackSelectionState(activeSessionEntry);
-    const selectionRun =
-      candidateRun !== effectiveRun && effectiveRun.autoFallbackPrimaryProbe
-        ? {
-            ...candidateRun,
-            provider: candidateRun.provider,
-            model: effectiveRun.model,
-          }
-        : candidateRun;
-    const persistedProvider = resolveOpenAIRuntimeProvider({
-      provider,
-      config: runtimeConfig,
-      workspaceDir: params.followupRun.run.workspaceDir,
-    });
-    const applied = applyFallbackCandidateSelectionToEntry({
-      entry: activeSessionEntry,
-      run: selectionRun,
-      provider: persistedProvider,
-      model,
-      force: candidateRun !== effectiveRun && Boolean(effectiveRun.autoFallbackPrimaryProbe),
-      ...(effectiveRun.autoFallbackPrimaryProbe
-        ? {
-            origin: {
-              provider: effectiveRun.autoFallbackPrimaryProbe.provider,
-              model: effectiveRun.autoFallbackPrimaryProbe.model,
-            },
-          }
-        : {}),
-    });
-    const nextState = applied.nextState;
-    if (!applied.updated || !nextState) {
-      return undefined;
-    }
-    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
-
-    try {
-      if (params.storePath) {
-        await updateSessionEntry(
-          { storePath: params.storePath, sessionKey: params.sessionKey },
-          (persistedEntry) => {
-            applyFallbackSelectionState(persistedEntry, nextState);
-            return buildFallbackSelectionStatePatch(persistedEntry);
-          },
-        );
-      }
-    } catch (error) {
-      rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
-      params.activeSessionStore[params.sessionKey] = activeSessionEntry;
-      throw error;
-    }
-
-    return async () => {
-      const rolledBackInMemory = rollbackFallbackSelectionStateIfUnchanged(
-        activeSessionEntry,
-        nextState,
-        previousState,
-      );
-      if (rolledBackInMemory) {
-        params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
-      }
-      if (!params.storePath || !params.sessionKey) {
-        return;
-      }
-      await updateSessionEntry(
-        { storePath: params.storePath, sessionKey: params.sessionKey },
-        (persistedEntry) => {
-          if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
-            return buildFallbackSelectionStatePatch(persistedEntry);
-          }
-          return null;
-        },
-      );
-    };
-  };
   const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
     provider: string;
     model: string;
@@ -2109,7 +1796,7 @@ async function runAgentTurnWithFallbackInternal(
         }
         return { text: sanitized, skip: false };
       };
-      const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
+      const preparePartialForTyping = (payload: ReplyPayload): string | undefined => {
         if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
           return undefined;
         }
@@ -2117,8 +1804,31 @@ async function runAgentTurnWithFallbackInternal(
         if (skip || !text) {
           return undefined;
         }
+        return text;
+      };
+      const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
+        const text = preparePartialForTyping(payload);
+        if (text === undefined) {
+          return undefined;
+        }
         await params.typingSignals.signalTextDelta(text);
         return text;
+      };
+      const preserveProgressCallbackStartOrder =
+        params.opts?.preserveProgressCallbackStartOrder === true;
+      const startPresentationWhileTyping = async (
+        typingPromise: Promise<void>,
+        startPresentation: () => void | Promise<void>,
+      ) => {
+        let presentationPromise: void | Promise<void>;
+        try {
+          presentationPromise = startPresentation();
+        } catch (err) {
+          // Typing already started; observe a secondary failure if presentation throws inline.
+          void typingPromise.catch(() => undefined);
+          throw err;
+        }
+        await Promise.all([typingPromise, presentationPromise]);
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       // Build the delivery handler once so both onAgentEvent (compaction start
@@ -2134,6 +1844,8 @@ async function runAgentTurnWithFallbackInternal(
             applyReplyToMode: params.applyReplyToMode,
             normalizeMediaPaths: replyMediaContext.normalizePayload,
             typingSignals: params.typingSignals,
+            reasoningPayloadsEnabled: params.opts?.reasoningPayloadsEnabled,
+            commentaryPayloadsEnabled: params.opts?.commentaryPayloadsEnabled,
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
             directlySentBlockKeys,
@@ -2188,7 +1900,7 @@ async function runAgentTurnWithFallbackInternal(
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({
               provider,
-              entry: params.getActiveSessionEntry(),
+              entry: liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry(),
               cfg: runtimeConfig,
             }),
           prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
@@ -2211,8 +1923,8 @@ async function runAgentTurnWithFallbackInternal(
               step,
             });
           },
-          classifyResult: async ({ result, provider, model }) => {
-            const classification = outcomePlan.classifyRunResult({
+          classifyResult: ({ result, provider, model }) =>
+            outcomePlan.classifyRunResult({
               result,
               provider,
               model,
@@ -2220,12 +1932,7 @@ async function runAgentTurnWithFallbackInternal(
               hasBlockReplyPipelineOutput: Boolean(
                 blockReplyPipeline?.hasBuffered() || blockReplyPipeline?.didStream(),
               ),
-            });
-            if (classification) {
-              await rollbackClassifiedFallbackCandidateSelection(provider, model);
-            }
-            return classification;
-          },
+            }),
           mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           run: async (provider, model, runOptions) => {
             attemptedRuntimeProvider = provider;
@@ -2236,6 +1943,15 @@ async function runAgentTurnWithFallbackInternal(
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
             const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateThinkLevel = resolveCandidateThinkingLevel({
+              cfg: runtimeConfig,
+              provider,
+              modelId: model,
+              level: params.followupRun.run.thinkLevel,
+              agentId: params.followupRun.run.agentId,
+              sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+              sessionEntry: params.getActiveSessionEntry(),
+            });
             const candidateFastMode = resolveRunFastModeForFallbackCandidate({
               run: candidateRun,
               config: runtimeConfig,
@@ -2255,33 +1971,14 @@ async function runAgentTurnWithFallbackInternal(
             params.opts?.onModelSelected?.({
               provider,
               model,
-              thinkLevel: params.followupRun.run.thinkLevel,
+              thinkLevel: candidateThinkLevel,
             });
-            let rollbackFallbackCandidateSelection: (() => Promise<void>) | undefined;
-            try {
-              rollbackFallbackCandidateSelection = await agentTurnTiming.measure(
-                "fallback_persist_selection",
-                () => persistFallbackCandidateSelection(provider, model, candidateRun),
-              );
-              if (rollbackFallbackCandidateSelection) {
-                pendingFallbackCandidateRollback = {
-                  provider,
-                  model,
-                  rollback: rollbackFallbackCandidateSelection,
-                };
-              }
-            } catch (error) {
-              logVerbose(
-                `failed to persist fallback candidate selection (non-fatal): ${String(error)}`,
-              );
-            }
-
             const { sessionRuntimeOverride, cliExecutionProvider } = agentTurnTiming.measureSync(
               "fallback_resolve_runtime",
               () => {
                 const resolvedSessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                   provider,
-                  entry: params.getActiveSessionEntry(),
+                  entry: liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry(),
                   cfg: runtimeConfig,
                 });
                 const resolvedSelectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
@@ -2318,8 +2015,8 @@ async function runAgentTurnWithFallbackInternal(
                 sessionKey: params.sessionKey,
                 startedAt: cliLifecycleStartedAt,
                 getLifecycleGeneration: () => lifecycleGeneration,
-                resolveAbortLifecycleFields: () => ({
-                  ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                resolveTerminationFields: (error) => ({
+                  ...resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                   ...(isReplyOperationRestartAbort(params.replyOperation)
                     ? {
                         aborted: true as const,
@@ -2362,31 +2059,70 @@ async function runAgentTurnWithFallbackInternal(
                   emitLifecycleTerminal: false,
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
+                  onActivity: () => params.replyOperation?.recordActivity(),
+                  preserveProgressCallbackStartOrder,
                   onAssistantText: async (text) => {
-                    const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
-                    if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                    if (!preserveProgressCallbackStartOrder) {
+                      const textForTyping = await handlePartialForTyping({
+                        text,
+                      } as ReplyPayload);
+                      if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                        return;
+                      }
+                      await params.opts.onPartialReply({ text: textForTyping });
                       return;
                     }
-                    await params.opts.onPartialReply({ text: textForTyping });
+                    const textForTyping = preparePartialForTyping({ text } as ReplyPayload);
+                    if (textForTyping === undefined) {
+                      return;
+                    }
+                    // Assistant and tool CLI bridges drain independently; stage presentation
+                    // before typing I/O so a later tool cannot overtake this text.
+                    await startPresentationWhileTyping(
+                      params.typingSignals.signalTextDelta(textForTyping),
+                      () => params.opts?.onPartialReply?.({ text: textForTyping }),
+                    );
                   },
                   onReasoningText: createCliReasoningStreamBridge(params.opts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
                     await params.opts?.onReasoningProgress?.(payload);
                   },
                   onToolEvent: async (payload) => {
-                    await cliToolSummaryTracker.noteToolEvent(payload);
+                    if (!preserveProgressCallbackStartOrder) {
+                      await cliToolSummaryTracker.noteToolEvent(payload);
+                      if (payload.phase === "result") {
+                        return;
+                      }
+                      const { name, phase, args } = payload;
+                      await Promise.all([
+                        params.typingSignals.signalToolStart(),
+                        params.opts?.onToolStart?.({
+                          name,
+                          phase,
+                          args,
+                          detailMode: params.toolProgressDetail,
+                        }),
+                      ]);
+                      return;
+                    }
+                    const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {
+                      await summaryPromise;
                       return;
                     }
                     const { name, phase, args } = payload;
+                    // Tool and assistant CLI bridges drain independently. Start channel
+                    // presentation before either bridge can yield and invert source order.
                     await Promise.all([
-                      params.typingSignals.signalToolStart(),
-                      params.opts?.onToolStart?.({
-                        name,
-                        phase,
-                        args,
-                        detailMode: params.toolProgressDetail,
-                      }),
+                      summaryPromise,
+                      startPresentationWhileTyping(params.typingSignals.signalToolStart(), () =>
+                        params.opts?.onToolStart?.({
+                          name,
+                          phase,
+                          args,
+                          detailMode: params.toolProgressDetail,
+                        }),
+                      ),
                     ]);
                   },
                   onCommentaryText:
@@ -2401,19 +2137,6 @@ async function runAgentTurnWithFallbackInternal(
                       : undefined,
                   onFastModeAutoProgress: async (payload) => {
                     await params.opts?.onToolResult?.(payload);
-                  },
-                  onErrorBeforeLifecycle: async () => {
-                    if (!rollbackFallbackCandidateSelection) {
-                      return;
-                    }
-                    try {
-                      await rollbackFallbackCandidateSelection();
-                      clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
-                    } catch (rollbackError) {
-                      logVerbose(
-                        `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                      );
-                    }
                   },
                   transformResult:
                     params.followupRun.currentInboundEventKind === "room_event"
@@ -2449,7 +2172,7 @@ async function runAgentTurnWithFallbackInternal(
                     inputProvenance: params.followupRun.run.inputProvenance,
                     provider: cliExecutionProvider,
                     model,
-                    thinkLevel: params.followupRun.run.thinkLevel,
+                    thinkLevel: candidateThinkLevel,
                     fastMode: candidateFastMode.fastMode,
                     fastModeStartedAtMs,
                     fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
@@ -2461,6 +2184,7 @@ async function runAgentTurnWithFallbackInternal(
                     lane: runLane,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+                    taskSuggestionDeliveryMode: params.followupRun.run.taskSuggestionDeliveryMode,
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                     allowEmptyAssistantReplyAsSilent:
                       params.followupRun.run.allowEmptyAssistantReplyAsSilent,
@@ -2482,6 +2206,7 @@ async function runAgentTurnWithFallbackInternal(
                     skillsSnapshot: params.followupRun.run.skillsSnapshot,
                     messageChannel: params.followupRun.originatingChannel ?? undefined,
                     messageProvider: hookMessageProvider,
+                    clientCaps: params.followupRun.run.clientCaps,
                     currentChannelId:
                       params.followupRun.originatingTo ??
                       params.sessionCtx.OriginatingTo ??
@@ -2520,7 +2245,7 @@ async function runAgentTurnWithFallbackInternal(
             }
             const { embeddedContext, senderContext, runBaseParams } =
               buildEmbeddedRunExecutionParams({
-                run: { ...candidateRun, ...candidateFastMode },
+                run: { ...candidateRun, ...candidateFastMode, thinkLevel: candidateThinkLevel },
                 replyRoute: params.followupRun,
                 sessionCtx: params.sessionCtx,
                 hasRepliedRef: params.opts?.hasRepliedRef,
@@ -2558,8 +2283,8 @@ async function runAgentTurnWithFallbackInternal(
                 runId,
                 sessionKey: params.sessionKey,
                 getLifecycleGeneration: () => lifecycleGeneration,
-                resolveAbortLifecycleFields: () => ({
-                  ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                resolveTerminationFields: (error) => ({
+                  ...resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                   ...(isReplyOperationRestartAbort(params.replyOperation)
                     ? {
                         aborted: true as const,
@@ -2650,19 +2375,43 @@ async function runAgentTurnWithFallbackInternal(
                     onExecutionPhase: signalExecutionPhaseForTyping,
                     blockReplyBreak: params.resolvedBlockStreamingBreak,
                     blockReplyChunking: params.blockReplyChunking,
+                    // Subscriber callbacks are detached. Start channel presentation before
+                    // awaiting typing so later source events cannot overtake state staging.
                     onPartialReply: async (payload) => {
-                      const textForTyping = await handlePartialForTyping(payload);
-                      if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                      if (!preserveProgressCallbackStartOrder) {
+                        const textForTyping = await handlePartialForTyping(payload);
+                        if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                          return;
+                        }
+                        await params.opts.onPartialReply({
+                          text: textForTyping,
+                          mediaUrls: payload.mediaUrls,
+                        });
                         return;
                       }
-                      await params.opts.onPartialReply({
-                        text: textForTyping,
-                        mediaUrls: payload.mediaUrls,
-                      });
+                      const textForTyping = preparePartialForTyping(payload);
+                      if (textForTyping === undefined) {
+                        return;
+                      }
+                      await startPresentationWhileTyping(
+                        params.typingSignals.signalTextDelta(textForTyping),
+                        () =>
+                          params.opts?.onPartialReply?.({
+                            text: textForTyping,
+                            mediaUrls: payload.mediaUrls,
+                          }),
+                      );
                     },
                     onAssistantMessageStart: async () => {
-                      await params.typingSignals.signalMessageStart();
-                      await params.opts?.onAssistantMessageStart?.();
+                      if (!preserveProgressCallbackStartOrder) {
+                        await params.typingSignals.signalMessageStart();
+                        await params.opts?.onAssistantMessageStart?.();
+                        return;
+                      }
+                      await startPresentationWhileTyping(
+                        params.typingSignals.signalMessageStart(),
+                        () => params.opts?.onAssistantMessageStart?.(),
+                      );
                     },
                     onReasoningStream:
                       params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
@@ -2670,14 +2419,28 @@ async function runAgentTurnWithFallbackInternal(
                             if (params.followupRun.run.silentExpected) {
                               return;
                             }
-                            await params.typingSignals.signalReasoningDelta();
-                            await params.opts?.onReasoningStream?.({
-                              text: payload.text,
-                              mediaUrls: payload.mediaUrls,
-                              isReasoningSnapshot: payload.isReasoningSnapshot,
-                              requiresReasoningProgressOptIn:
-                                payload.requiresReasoningProgressOptIn,
-                            });
+                            if (!preserveProgressCallbackStartOrder) {
+                              await params.typingSignals.signalReasoningDelta();
+                              await params.opts?.onReasoningStream?.({
+                                text: payload.text,
+                                mediaUrls: payload.mediaUrls,
+                                isReasoningSnapshot: payload.isReasoningSnapshot,
+                                requiresReasoningProgressOptIn:
+                                  payload.requiresReasoningProgressOptIn,
+                              });
+                              return;
+                            }
+                            await startPresentationWhileTyping(
+                              params.typingSignals.signalReasoningDelta(),
+                              () =>
+                                params.opts?.onReasoningStream?.({
+                                  text: payload.text,
+                                  mediaUrls: payload.mediaUrls,
+                                  isReasoningSnapshot: payload.isReasoningSnapshot,
+                                  requiresReasoningProgressOptIn:
+                                    payload.requiresReasoningProgressOptIn,
+                                }),
+                            );
                           }
                         : undefined,
                     streamReasoningInNonStreamModes: params.opts?.streamReasoningInNonStreamModes,
@@ -2687,6 +2450,7 @@ async function runAgentTurnWithFallbackInternal(
                       const commentaryTextByItem = new Map<string, string>();
                       const lastEmittedCommentaryByItem = new Map<string, string>();
                       return async (evt) => {
+                        params.replyOperation?.recordActivity();
                         lifecycleBackstop.note(evt);
                         // Signal run start only after the embedded agent emits real activity.
                         const hasLifecyclePhase =
@@ -2985,6 +2749,7 @@ async function runAgentTurnWithFallbackInternal(
                           return (payload: ReplyPayload) => {
                             toolResultChain = toolResultChain
                               .then(async () => {
+                                params.replyOperation?.recordActivity();
                                 const { text, skip } = normalizeStreamingText(payload);
                                 if (skip) {
                                   return;
@@ -3019,18 +2784,6 @@ async function runAgentTurnWithFallbackInternal(
                 );
                 attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
                 return result;
-              } catch (err) {
-                if (rollbackFallbackCandidateSelection) {
-                  try {
-                    await rollbackFallbackCandidateSelection();
-                    clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
-                  } catch (rollbackError) {
-                    logVerbose(
-                      `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                    );
-                  }
-                }
-                throw err;
               } finally {
                 autoCompactionCount += attemptCompactionCount;
               }
@@ -3165,6 +2918,7 @@ async function runAgentTurnWithFallbackInternal(
         const exhaustionError = new Error(
           terminalErrorMessage ?? "All model fallback candidates failed",
         );
+        terminalRunFailed = true;
         emitSettledLifecycleError(exhaustionError, {
           ...terminalMetadata,
           fallbackExhaustedFailure: true,
@@ -3173,6 +2927,7 @@ async function runAgentTurnWithFallbackInternal(
         params.replyOperation?.fail("run_failed", exhaustionError);
       } else if (deferredLifecycleError || embeddedError) {
         const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
+        terminalRunFailed = true;
         emitSettledLifecycleError(terminalError, terminalMetadata);
         params.replyOperation?.retainFailureUntilComplete();
         params.replyOperation?.fail("run_failed", terminalError);
@@ -3242,6 +2997,9 @@ async function runAgentTurnWithFallbackInternal(
           : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
+      // OAuth/auth-profile failures must reach buildExternalRunFailureReply so
+      // the targeted re-auth/failover copy is surfaced instead of the generic
+      // provider-auth message.
       const oauthRefreshFailure =
         classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
       const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
@@ -3369,12 +3127,18 @@ async function runAgentTurnWithFallbackInternal(
       const isPureTransientSummary = isFallbackSummary
         ? isPureTransientRateLimitSummary(err)
         : false;
+      const failoverReason = !isFallbackSummary && isFailoverError(err) ? err.reason : undefined;
+      const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
       const isRateLimit = isFallbackSummary
         ? isPureTransientSummary
-        : isRateLimitErrorMessage(message);
+        : failoverReason
+          ? failoverReason === "rate_limit" || failoverReason === "overloaded"
+          : isRateLimitErrorMessage(message);
       const rateLimitOrOverloadedCopy =
         !isFallbackSummary || isPureTransientSummary
-          ? formatRateLimitOrOverloadedErrorCopy(message)
+          ? formatRateLimitOrOverloadedErrorCopy(
+              failoverReason === "overloaded" ? "overloaded" : message,
+            )
           : undefined;
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
@@ -3382,7 +3146,7 @@ async function runAgentTurnWithFallbackInternal(
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const externalRunFailureReply =
         !isBilling &&
-        !(isRateLimit && !isOverloadedErrorMessage(message)) &&
+        !(isRateLimit && !isOverloaded) &&
         !rateLimitOrOverloadedCopy &&
         !isContextOverflow &&
         !shouldSurfaceToControlUi
@@ -3400,7 +3164,7 @@ async function runAgentTurnWithFallbackInternal(
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
       const fallbackText = isBilling
         ? resolveBillingFailureReplyText(err)
-        : isRateLimit && !isOverloadedErrorMessage(message)
+        : isRateLimit && !isOverloaded
           ? buildRateLimitCooldownMessage(err)
           : rateLimitOrOverloadedCopy
             ? rateLimitOrOverloadedCopy
@@ -3422,7 +3186,7 @@ async function runAgentTurnWithFallbackInternal(
             ? params.opts.abortSignal
             : undefined;
       const abortLifecycleFields = {
-        ...resolveAgentRunAbortLifecycleFields(abortedSignal),
+        ...resolveAgentRunErrorLifecycleFields(err, abortedSignal),
         ...(isReplyOperationRestartAbort(params.replyOperation)
           ? {
               aborted: true as const,
@@ -3524,6 +3288,13 @@ async function runAgentTurnWithFallbackInternal(
       }
     }
   }
+  const terminalFailurePayload = terminalRunFailed
+    ? buildTerminalAgentRunFailureReplyPayload({
+        isHeartbeat: params.isHeartbeat,
+        sessionCtx: params.sessionCtx,
+        cfg: params.followupRun.run.config,
+      })
+    : undefined;
 
   return {
     kind: "success",
@@ -3539,6 +3310,7 @@ async function runAgentTurnWithFallbackInternal(
     directlySentBlockPayloads: directlySentBlockPayloads.filter(
       (payload): payload is ReplyPayload => payload !== undefined,
     ),
+    ...(terminalFailurePayload ? { terminalFailurePayload } : {}),
   };
 }
 

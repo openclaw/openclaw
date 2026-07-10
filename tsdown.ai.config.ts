@@ -1,6 +1,6 @@
 // Builds the reusable AI package separately to keep provider bundling out of
 // the already-parallel main package graph.
-import { defineConfig } from "tsdown";
+import type { UserConfig } from "tsdown";
 
 const externalDependencies = [
   "@anthropic-ai/sdk",
@@ -10,7 +10,7 @@ const externalDependencies = [
   "typebox",
 ] as const;
 
-export default defineConfig({
+const config = {
   clean: true,
   dts: process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1" ? false : true,
   entry: {
@@ -22,6 +22,7 @@ export default defineConfig({
     validation: "packages/ai/src/validation.ts",
     "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
     "internal/openai": "packages/ai/src/internal/openai.ts",
+    "internal/retry-after": "packages/ai/src/internal/retry-after.ts",
     "internal/runtime": "packages/ai/src/internal/runtime.ts",
     "internal/shared": "packages/ai/src/internal/shared.ts",
   },
@@ -36,4 +37,6 @@ export default defineConfig({
       );
     },
   },
-});
+} satisfies UserConfig;
+
+export default config;

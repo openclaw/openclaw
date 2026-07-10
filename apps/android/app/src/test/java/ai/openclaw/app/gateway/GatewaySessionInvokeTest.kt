@@ -45,17 +45,19 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   private val tokens = mutableMapOf<String, DeviceAuthEntry>()
 
   override fun loadEntry(
+    gatewayId: String,
     deviceId: String,
     role: String,
-  ): DeviceAuthEntry? = tokens["${deviceId.trim()}|${role.trim()}"]
+  ): DeviceAuthEntry? = tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"]
 
   override fun saveToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
     scopes: List<String>,
   ) {
-    tokens["${deviceId.trim()}|${role.trim()}"] =
+    tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"] =
       DeviceAuthEntry(
         token = token.trim(),
         role = role.trim(),
@@ -65,10 +67,11 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   }
 
   override fun clearToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ) {
-    tokens.remove("${deviceId.trim()}|${role.trim()}")
+    tokens.remove("${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}")
   }
 }
 
@@ -131,7 +134,7 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun disconnectCancelsPendingRpcWithoutWaitingForRequestTimeout() {
+  fun disconnectFailsPendingRpcWithUnknownOutcomeWithoutWaitingForTimeout() {
     runBlocking {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
@@ -173,13 +176,63 @@ class GatewaySessionInvokeTest {
         harness.session.disconnect()
 
         val result = withTimeout(2_000) { requestResult.await() }
-        assertEquals(true, result.exceptionOrNull() is CancellationException)
+        assertEquals(true, result.exceptionOrNull() is GatewayRequestOutcomeUnknown)
         serverWebSocket.get()?.close(1000, "done")
         withTimeoutOrNull(2_000) {
           while (lastDisconnect.get().isEmpty()) delay(10)
         }
       } finally {
         requestJob?.cancelAndJoin()
+        runCatching { serverWebSocket.get()?.close(1000, "done") }
+        delay(100)
+        harness.session.disconnect()
+        harness.sessionJob.cancelAndJoin()
+        server.shutdown()
+      }
+    }
+  }
+
+  @Test
+  fun disconnectReportsUnknownOutcomeForFireAndForgetRpc() {
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val requestSeen = CompletableDeferred<Unit>()
+      val requestError = CompletableDeferred<GatewaySession.ErrorShape>()
+      val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          serverWebSocket.set(webSocket)
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "fire.and.forget" -> requestSeen.complete(Unit)
+          }
+        }
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        harness.session.sendRequestFrame(
+          method = "fire.and.forget",
+          paramsJson = null,
+          timeoutMs = 30_000,
+          onError = { requestError.complete(it) },
+        )
+        withTimeout(TEST_TIMEOUT_MS) { requestSeen.await() }
+
+        harness.session.disconnect()
+
+        val error = withTimeout(2_000) { requestError.await() }
+        assertEquals("UNAVAILABLE", error.code)
+        assertEquals("Gateway disconnected before response", error.message)
+        serverWebSocket.get()?.close(1000, "done")
+      } finally {
         runCatching { serverWebSocket.get()?.close(1000, "done") }
         delay(100)
         harness.session.disconnect()
@@ -315,7 +368,7 @@ class GatewaySessionInvokeTest {
 
       try {
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        harness.deviceAuthStore.saveToken(deviceId, "node", "device-token")
+        harness.deviceAuthStore.saveToken(gatewayIdForPort(server.port), deviceId, "node", "device-token")
 
         connectNodeSession(
           session = harness.session,
@@ -360,6 +413,7 @@ class GatewaySessionInvokeTest {
       try {
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
         harness.deviceAuthStore.saveToken(
+          gatewayId = gatewayIdForPort(server.port),
           deviceId = deviceId,
           role = "operator",
           token = "operator-device-token",
@@ -484,7 +538,6 @@ class GatewaySessionInvokeTest {
                     secondConnectAuth.complete(auth)
                   }
                   webSocket.send(connectResponseFrame(id))
-                  webSocket.close(1000, "done")
                 }
               }
             }
@@ -499,7 +552,7 @@ class GatewaySessionInvokeTest {
 
       try {
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        harness.deviceAuthStore.saveToken(deviceId, "node", "stored-device-token")
+        harness.deviceAuthStore.saveToken(gatewayIdForPort(server.port), deviceId, "node", "stored-device-token")
 
         connectNodeSession(
           session = harness.session,
@@ -557,8 +610,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(deviceId, "node"))
-        assertNull(harness.deviceAuthStore.loadToken(deviceId, "operator"))
+        assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
+        assertNull(harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "operator"))
       } finally {
         shutdownHarness(harness, server)
       }
@@ -602,8 +655,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        val nodeEntry = harness.deviceAuthStore.loadEntry(deviceId, "node")
-        val operatorEntry = harness.deviceAuthStore.loadEntry(deviceId, "operator")
+        val nodeEntry = harness.deviceAuthStore.loadEntry(gatewayIdForPort(server.port), deviceId, "node")
+        val operatorEntry = harness.deviceAuthStore.loadEntry(gatewayIdForPort(server.port), deviceId, "operator")
         assertEquals("bootstrap-node-token", nodeEntry?.token)
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
@@ -654,8 +707,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(deviceId, "node"))
-        assertNull(harness.deviceAuthStore.loadToken(deviceId, "operator"))
+        assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
+        assertNull(harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "operator"))
       } finally {
         shutdownHarness(harness, server)
       }
@@ -761,6 +814,47 @@ class GatewaySessionInvokeTest {
           ?.jsonPrimitive
           ?.content,
       )
+    }
+
+  @Test
+  fun nodeInvokeRequest_doesNotSendResultAfterCancellation() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val invokeStarted = CompletableDeferred<Unit>()
+      val invokeResult = CompletableDeferred<Unit>()
+      val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          serverWebSocket.set(webSocket)
+          when (method) {
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+              webSocket.send(
+                """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-cancelled","nodeId":"node-1","command":"camera.snap","timeoutMs":5000}}""",
+              )
+            }
+            "node.invoke.result" -> invokeResult.complete(Unit)
+          }
+        }
+      val harness =
+        createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) {
+          invokeStarted.complete(Unit)
+          throw CancellationException("cancelled")
+        }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        withTimeout(TEST_TIMEOUT_MS) { invokeStarted.await() }
+
+        assertNull(withTimeoutOrNull(250) { invokeResult.await() })
+      } finally {
+        serverWebSocket.get()?.close(1000, "done")
+        delay(100)
+        shutdownHarness(harness, server)
+      }
     }
 
   @Test
@@ -986,7 +1080,7 @@ class GatewaySessionInvokeTest {
     session.connect(
       endpoint =
         GatewayEndpoint(
-          stableId = "manual|127.0.0.1|$port",
+          stableId = gatewayIdForPort(port),
           name = "test",
           host = "127.0.0.1",
           port = port,
@@ -1017,6 +1111,8 @@ class GatewaySessionInvokeTest {
       tls = null,
     )
   }
+
+  private fun gatewayIdForPort(port: Int): String = "manual|127.0.0.1|$port"
 
   private suspend fun awaitConnectedOrThrow(
     connected: CompletableDeferred<Unit>,

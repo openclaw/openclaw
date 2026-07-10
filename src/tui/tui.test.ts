@@ -188,6 +188,10 @@ describe("isTuiBusyActivityStatus", () => {
   it("treats finishing context as a visible busy status", () => {
     expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
   });
+
+  it("treats post-connect initialization as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("starting up")).toBe(true);
+  });
 });
 
 describe("resolveTuiToolsToggleActivityStatus", () => {
@@ -337,6 +341,18 @@ describe("resolveInitialTuiAgentId", () => {
         cwd: "/var/tmp/unrelated",
       }),
     ).toBe("main");
+  });
+
+  it("falls back when the working directory was deleted", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+
+    try {
+      expect(resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main" })).toBe("main");
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });
 

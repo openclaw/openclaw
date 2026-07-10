@@ -24,6 +24,7 @@ import {
   type ConfigScopedRuntimeCache,
 } from "./plugin-cache-primitives.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 type CapabilityProviderRegistryKey =
@@ -219,11 +220,30 @@ function findProviderById<K extends CapabilityProviderRegistryKey>(
   entries: PluginRegistry[K],
   providerId: string,
 ): CapabilityProviderForKey<K> | undefined {
+  const normalizedProviderId = normalizeCapabilityProviderId(providerId);
+  if (!normalizedProviderId) {
+    return undefined;
+  }
   const providerEntries = entries as unknown as Array<{
-    provider: CapabilityProviderForKey<K> & { id?: unknown };
+    provider: CapabilityProviderForKey<K> & { id?: unknown; aliases?: unknown };
   }>;
   for (const entry of providerEntries) {
-    if (entry.provider.id === providerId) {
+    if (
+      typeof entry.provider.id === "string" &&
+      normalizeCapabilityProviderId(entry.provider.id) === normalizedProviderId
+    ) {
+      return entry.provider;
+    }
+  }
+  for (const entry of providerEntries) {
+    const aliases = Array.isArray(entry.provider.aliases) ? entry.provider.aliases : [];
+    if (
+      aliases.some(
+        (alias) =>
+          typeof alias === "string" &&
+          normalizeCapabilityProviderId(alias) === normalizedProviderId,
+      )
+    ) {
       return entry.provider;
     }
   }
@@ -523,13 +543,19 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
     return activeProvider;
   }
 
-  const pluginIds = resolveCapabilityPluginIds({
+  let pluginIds = resolveCapabilityPluginIds({
     key: params.key,
     cfg: params.cfg,
     providerId: params.providerId,
   });
   if (pluginIds.runtimePluginIds.length === 0) {
-    return undefined;
+    // Manifest contracts index canonical provider ids, while runtime providers
+    // may expose aliases. Fall back to the capability owners so a configured
+    // alias can still resolve when its provider is absent from the active registry.
+    pluginIds = resolveCapabilityPluginIds({ key: params.key, cfg: params.cfg });
+    if (pluginIds.runtimePluginIds.length === 0) {
+      return undefined;
+    }
   }
 
   const compatConfig = resolveCapabilityProviderConfig({

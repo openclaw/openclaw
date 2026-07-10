@@ -22,6 +22,7 @@ function readUiCss(): string {
     "ui/src/styles/base.css",
     "ui/src/styles/components.css",
     "ui/src/styles/config.css",
+    "ui/src/styles/layout.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/layout.css",
   ];
@@ -31,10 +32,13 @@ function readUiCss(): string {
 function controlsHtml() {
   return `
     <main>
-      <label class="field"><input value="field input" /></label>
+      <label class="field"><input type="text" value="field input" /></label>
       <label class="field"><textarea>field textarea</textarea></label>
       <label class="field"><select><option>field select</option></select></label>
+      <label class="field checkbox"><input type="checkbox" /><span>field checkbox</span></label>
+      <label class="field checkbox"><input type="radio" /><span>field radio</span></label>
       <input class="config-search__input" value="search" />
+      <input class="settings-sidebar__search-input" value="settings search" />
       <input class="settings-theme-import__input" value="theme" />
       <label class="config-raw-field"><textarea>raw config</textarea></label>
       <input class="cfg-input" value="config input" />
@@ -91,6 +95,7 @@ describeBrowserLayout("touch-primary form controls", () => {
           ".field textarea",
           ".field select",
           ".config-search__input",
+          ".settings-sidebar__search-input",
           ".settings-theme-import__input",
           ".config-raw-field textarea",
           ".cfg-input",
@@ -153,6 +158,70 @@ describeBrowserLayout("touch-primary form controls", () => {
       }
     } finally {
       await closeMobileFixture(fixture);
+    }
+  });
+
+  it("aligns text controls without stretching checkbox and radio inputs", async () => {
+    const fixture = await openMobileFixture();
+    const { page } = fixture;
+    try {
+      const dimensions = await page.evaluate(() => {
+        const height = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing control ${selector}`);
+          }
+          return node.getBoundingClientRect().height;
+        };
+        return {
+          checkbox: height('.field input[type="checkbox"]'),
+          radio: height('.field input[type="radio"]'),
+          select: height(".field select"),
+          text: height('.field input[type="text"]'),
+        };
+      });
+
+      expect(dimensions.text).toBe(38);
+      expect(dimensions.select).toBe(38);
+      expect(dimensions.checkbox).toBeLessThan(38);
+      expect(dimensions.radio).toBeLessThan(38);
+    } finally {
+      await closeMobileFixture(fixture);
+    }
+  });
+});
+
+describeBrowserLayout("mount fallback cursor", () => {
+  it("uses the default cursor for its controls and the pointer for its real link", async () => {
+    const browser = await chromium.launch({
+      executablePath: chromiumExecutablePath,
+      headless: true,
+    });
+    try {
+      const page = await browser.newPage();
+      await page.setContent(readStyleSheet("ui/index.html"));
+      const cursors = await page.evaluate(() => {
+        const cursor = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing cursor fixture ${selector}`);
+          }
+          return getComputedStyle(node).cursor;
+        };
+        return {
+          retry: cursor("#openclaw-mount-retry"),
+          wait: cursor("#openclaw-mount-wait"),
+          docs: cursor('.mount-fallback__panel a[href^="https://"]'),
+        };
+      });
+
+      expect(cursors).toEqual({
+        retry: "default",
+        wait: "default",
+        docs: "pointer",
+      });
+    } finally {
+      await browser.close().catch(() => {});
     }
   });
 });

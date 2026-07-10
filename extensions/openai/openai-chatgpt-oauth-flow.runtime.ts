@@ -11,6 +11,7 @@ import {
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
@@ -39,6 +40,7 @@ const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 const SCOPE = "openid profile email offline_access";
+const OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
 type TokenFailure = { type: "failed"; message: string; status?: number };
@@ -178,8 +180,17 @@ async function postTokenForm(
     auditContext: "openai-chatgpt-oauth-token",
   });
   try {
-    const responseBody = await response.arrayBuffer();
-    return new Response(responseBody, {
+    const responseBody = await readResponseWithLimit(
+      response,
+      OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES,
+      {
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(
+            `OpenAI Codex OAuth token response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+          ),
+      },
+    );
+    return new Response(new Uint8Array(responseBody), {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,

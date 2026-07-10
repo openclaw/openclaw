@@ -26,7 +26,10 @@ import {
   createSqliteSchemaShapeFromSql,
 } from "./sqlite-schema-shape.test-support.js";
 
-type StateDbTestDatabase = Pick<OpenClawStateKyselyDatabase, "diagnostic_events" | "schema_meta">;
+type StateDbTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "diagnostic_events" | "schema_meta" | "skill_curator_state" | "skill_lifecycle" | "skill_usage"
+>;
 
 const stateDbTempDirs: string[] = [];
 
@@ -88,6 +91,102 @@ describe("openclaw state database", () => {
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
+  it("creates the bounded skill curator tables", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    const kysely = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+
+    executeSqliteQuerySync(
+      database.db,
+      kysely.insertInto("skill_usage").values({
+        skill_file: "/skills/daily-brief/SKILL.md",
+        skill_key: "daily-brief",
+        skill_name: "Daily Brief",
+        skill_source: "workspace",
+        first_used_at_ms: 1,
+        last_used_at_ms: 2,
+        use_count: 3,
+        last_agent_id: "main",
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      kysely.insertInto("skill_usage").values({
+        skill_file: "/other-workspace/skills/daily-brief/SKILL.md",
+        skill_key: "daily-brief",
+        skill_name: "Daily Brief",
+        skill_source: "workspace",
+        first_used_at_ms: 4,
+        last_used_at_ms: 5,
+        use_count: 1,
+        last_agent_id: "other",
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      kysely.insertInto("skill_lifecycle").values({
+        skill_key: "daily-brief",
+        skill_name: "Daily Brief",
+        skill_file: "/skills/daily-brief/SKILL.md",
+        state: "active",
+        pinned: 0,
+        state_changed_at_ms: 2,
+        created_at_ms: 1,
+        archived_reason: null,
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      kysely.insertInto("skill_lifecycle").values({
+        skill_key: "daily-brief",
+        skill_name: "Daily Brief",
+        skill_file: "/other-workspace/skills/daily-brief/SKILL.md",
+        state: "active",
+        pinned: 0,
+        state_changed_at_ms: 2,
+        created_at_ms: 1,
+        archived_reason: null,
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      kysely.insertInto("skill_curator_state").values({
+        id: 1,
+        last_attempt_at_ms: 2,
+        last_success_at_ms: 2,
+        last_error: null,
+        last_result_json: "{}",
+      }),
+    );
+
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        kysely
+          .selectFrom("skill_usage")
+          .select(["skill_file", "use_count"])
+          .where("skill_key", "=", "daily-brief")
+          .orderBy("skill_file", "asc"),
+      ).rows,
+    ).toEqual([
+      { skill_file: "/other-workspace/skills/daily-brief/SKILL.md", use_count: 1 },
+      { skill_file: "/skills/daily-brief/SKILL.md", use_count: 3 },
+    ]);
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        kysely
+          .selectFrom("skill_lifecycle")
+          .select("skill_file")
+          .where("skill_key", "=", "daily-brief")
+          .orderBy("skill_file", "asc"),
+      ).rows,
+    ).toEqual([
+      { skill_file: "/other-workspace/skills/daily-brief/SKILL.md" },
+      { skill_file: "/skills/daily-brief/SKILL.md" },
+    ]);
+  });
+
   it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
     const databasePath = path.join(createTempStateDir(), "openclaw.sqlite");
     fs.writeFileSync(databasePath, "not a sqlite database");
@@ -96,6 +195,29 @@ describe("openclaw state database", () => {
       "file is not a database",
     );
     expect(listOpenFileDescriptorsForPath(databasePath)).toEqual([]);
+  });
+
+  it("adds gateway boot lifecycle startup markers to existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE gateway_boot_lifecycle DROP COLUMN startup_reason");
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(gateway_boot_lifecycle)")
+      .all() as Array<{ name?: unknown }>;
+
+    expect(columns.map((column) => column.name)).toContain("startup_reason");
   });
 
   it("migrates requester and executor attribution for existing cross-agent tasks", () => {
@@ -263,6 +385,44 @@ describe("openclaw state database", () => {
     });
   });
 
+  it("adds hosted catalog snapshot trust columns to existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_mode;
+      ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_key_id;
+      ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_signature_count;
+      ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_threshold;
+      ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_verified_at;
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(official_external_plugin_catalog_snapshots)")
+      .all() as Array<{ name?: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "trust_mode",
+        "trust_key_id",
+        "trust_signature_count",
+        "trust_threshold",
+        "trust_verified_at",
+      ]),
+    );
+    closeOpenClawStateDatabaseForTest();
+  });
+
   it("rolls back the requester attribution column when its backfill fails", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
@@ -376,10 +536,15 @@ describe("openclaw state database", () => {
       },
       failureAlert: { mode: "announce", channel: "discord", to: "ops", after: 2 },
     });
+    const projectedJobJson = JSON.stringify({ delivery: { threadId: 1008013 } });
     db.exec(`
       CREATE TABLE cron_jobs (
         store_key TEXT NOT NULL,
         job_id TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        schedule_kind TEXT NOT NULL DEFAULT 'manual',
+        payload_kind TEXT NOT NULL DEFAULT 'message',
+        delivery_thread_id TEXT,
         job_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (store_key, job_id)
@@ -389,6 +554,20 @@ describe("openclaw state database", () => {
       `INSERT INTO cron_jobs (store_key, job_id, job_json, updated_at)
          VALUES (?, ?, ?, ?)`,
     ).run(path.join(stateDir, "cron", "jobs.json"), "legacy-job", jobJson, 456);
+    db.prepare(
+      `INSERT INTO cron_jobs (
+         store_key, job_id, name, schedule_kind, payload_kind, delivery_thread_id, job_json, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      path.join(stateDir, "cron", "jobs.json"),
+      "already-projected-job",
+      "Already projected",
+      "every",
+      "agentTurn",
+      null,
+      projectedJobJson,
+      456,
+    );
     db.close();
 
     const database = openOpenClawStateDatabase({
@@ -438,6 +617,15 @@ describe("openclaw state database", () => {
       failure_delivery_mode: null,
       failure_delivery_to: "https://example.invalid/hook",
     });
+    expect(
+      database.db
+        .prepare(
+          `SELECT delivery_thread_id, delivery_thread_id_type
+             FROM cron_jobs
+            WHERE job_id = ?`,
+        )
+        .get("already-projected-job"),
+    ).toEqual({ delivery_thread_id: "1008013", delivery_thread_id_type: "number" });
   });
 
   it("opens databases with early cron run-log tables before creating cron indexes", () => {

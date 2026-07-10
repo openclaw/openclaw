@@ -1,0 +1,189 @@
+openclaw-chat-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-split-view__drop-container {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view {
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chat-split-view__column {
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  min-height: 0;
+}
+
+/* One cell = pane header + pane; the header lives in-flow with its pane, so
+   split geometry needs no mirrored toolbar layer. */
+.chat-split-view__cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 200px;
+  overflow: hidden;
+}
+
+.chat-split-view__cell--active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.chat-split-view__pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view--narrow .chat-split-view__cell {
+  min-height: 0;
+}
+
+/* Narrow mode shows only the active pane; a focus ring is pure noise there. */
+.chat-split-view--narrow .chat-split-view__cell--active {
+  box-shadow: none;
+}
+
+.chat-split-view__drop-indicator {
+  position: absolute;
+  z-index: 20;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.chat-split-view__drop-indicator--center {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.chat-split-view__drop-indicator-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-split-view__drop-indicator {
+    animation: chat-drop-indicator-in 0.12s ease;
+    transition:
+      left 0.14s ease,
+      top 0.14s ease,
+      width 0.14s ease,
+      height 0.14s ease,
+      opacity 0.12s ease;
+  }
+
+  .chat-split-view openclaw-chat-pane {
+    animation: chat-pane-in 0.16s ease;
+  }
+
+  @keyframes chat-drop-indicator-in {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes chat-pane-in {
+    from {
+      opacity: 0;
+      transform: scale(0.985);
+    }
+  }
+}
+
+.chat-pane__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
+}
+
+.chat-pane__header--active {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.chat-pane__session-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-pane__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.chat-pane__actions .btn--icon,
+.chat-open-split-view.btn--icon {
+  width: 28px;
+  /* .btn--icon's min-width: 36px otherwise wins over width and stretches
+     these into 36x28 pills. */
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 5px;
+}
+
+.chat-open-split-view {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 12;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+@media (max-width: 1099px) {
+  .chat-open-split-view {
+    display: none;
+  }
+}

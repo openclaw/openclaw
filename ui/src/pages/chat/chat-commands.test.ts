@@ -26,6 +26,16 @@ function expectRecordFields(value: unknown, label: string, expected: Record<stri
 }
 
 describe("refreshSlashCommands", () => {
+  it("exposes /learn through the browser fallback registry", () => {
+    expectRecordFields(requireCommandByName("learn"), "learn command", {
+      description: "Draft a reusable skill from recent work or named sources.",
+      args: "[request]",
+      category: "tools",
+      executeLocal: false,
+      tier: "standard",
+    });
+  });
+
   it("refreshes runtime commands from commands.list", async () => {
     const request = vi.fn().mockImplementation(async (method: string) => {
       expect(method).toBe("commands.list");

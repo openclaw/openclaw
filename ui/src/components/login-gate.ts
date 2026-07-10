@@ -1,5 +1,5 @@
 // Control UI component renders the login gate.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
@@ -12,6 +12,7 @@ import {
   shouldShowInsecureContextHint,
 } from "../lib/overview-hints.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
 
@@ -25,7 +26,7 @@ type LoginFailureKind =
   | "protocol-mismatch"
   | "network";
 
-export type LoginFailureFeedback = {
+type LoginFailureFeedback = {
   kind: LoginFailureKind;
   title: string;
   summary: string;
@@ -35,7 +36,7 @@ export type LoginFailureFeedback = {
   rawError: string;
 };
 
-export type LoginGateProps = {
+type LoginGateProps = {
   basePath: string;
   connected: boolean;
   lastError: string | null;
@@ -73,7 +74,8 @@ function resolveDocsLabel(href: string): string {
   return t("login.failure.docsAuth");
 }
 
-function redactLoginFailureError(value: string): string {
+// Shared with the connection banner so no offline surface prints credentials.
+export function redactLoginFailureError(value: string): string {
   return value
     .replace(
       /([?#&])(?:access_token|auth|deviceToken|password|refresh_token|token)=([^&#\s]+)/gi,
@@ -107,7 +109,7 @@ function buildFeedback(params: {
   };
 }
 
-export function resolveLoginFailureFeedback(
+function resolveLoginFailureFeedback(
   params: LoginFailureFeedbackParams,
 ): LoginFailureFeedback | null {
   if (params.connected || !params.lastError) {
@@ -313,9 +315,20 @@ function renderLoginGate(props: LoginGateProps) {
           <label class="field">
             <span>${t("overview.access.wsUrl")}</span>
             <input
+              inputmode="url"
+              autocapitalize="none"
+              autocorrect="off"
+              autocomplete="off"
+              spellcheck="false"
+              enterkeyhint="go"
               .value=${props.gatewayUrl}
               @input=${(e: Event) => {
                 props.onGatewayUrlChange((e.target as HTMLInputElement).value);
+              }}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter") {
+                  props.onConnect();
+                }
               }}
               placeholder="ws://127.0.0.1:18789"
             />
@@ -327,6 +340,7 @@ function renderLoginGate(props: LoginGateProps) {
                 type=${props.showGatewayToken ? "text" : "password"}
                 autocomplete="off"
                 spellcheck="false"
+                enterkeyhint="go"
                 .value=${props.token}
                 @input=${(e: Event) => {
                   props.onTokenChange((e.target as HTMLInputElement).value);
@@ -360,6 +374,7 @@ function renderLoginGate(props: LoginGateProps) {
                 type=${props.showGatewayPassword ? "text" : "password"}
                 autocomplete="off"
                 spellcheck="false"
+                enterkeyhint="go"
                 .value=${props.password}
                 @input=${(e: Event) => {
                   props.onPasswordChange((e.target as HTMLInputElement).value);
@@ -393,8 +408,8 @@ function renderLoginGate(props: LoginGateProps) {
           </button>
         </div>
         ${failure ? renderLoginFailure(failure) : ""}
-        <div class="login-gate__help">
-          <div class="login-gate__help-title">${t("overview.connection.title")}</div>
+        <details class="login-gate__help">
+          <summary class="login-gate__help-title">${t("overview.connection.title")}</summary>
           <ol class="login-gate__steps">
             <li>
               ${t("overview.connection.step1")}${renderConnectCommand("openclaw gateway run")}
@@ -411,23 +426,14 @@ function renderLoginGate(props: LoginGateProps) {
               >${t("overview.connection.docsLink")}</a
             >
           </div>
-        </div>
+        </details>
       </div>
     </div>
   `;
 }
 
-export class LoginGate extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class LoginGate extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: LoginGateProps;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-  }
 
   override render() {
     return this.props ? renderLoginGate(this.props) : nothing;

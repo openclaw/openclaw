@@ -7,7 +7,7 @@
 "NSContactsUsageDescription" = "OpenClaw använder dina kontakter så att du kan söka efter och hänvisa till personer när du använder assistenten.";
 "NSLocationWhenInUseUsageDescription" = "OpenClaw använder din plats när du tillåter platsdelning.";
 "NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw kan dela din plats i bakgrunden när du aktiverar Alltid.";
-"NSMicrophoneUsageDescription" = "OpenClaw använder mikrofonen för realtidschatt, röstaktivering och tryck-och-prata.";
+"NSMicrophoneUsageDescription" = "OpenClaw använder mikrofonen för realtidschatt, röstaktivering, tryck-och-prata och röstmeddelanden.";
 "NSMotionUsageDescription" = "OpenClaw kan använda rörelsedata för att stödja enhetsmedvetna interaktioner och automatiseringar.";
 "NSPhotoLibraryUsageDescription" = "OpenClaw låter din assistent läsa bilder som du tillåter och låter dig välja bilder att dela.";
 "NSRemindersFullAccessUsageDescription" = "OpenClaw använder dina påminnelser för att lista, lägga till och slutföra uppgifter när du aktiverar åtkomst till påminnelser.";

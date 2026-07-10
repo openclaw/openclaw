@@ -177,7 +177,11 @@ export async function detectSignalApiMode(
 export async function signalRpcRequest<T = unknown>(
   method: string,
   params: Record<string, unknown> | undefined,
-  opts: SignalRpcOptions & { accountId?: string; apiMode?: SignalApiMode },
+  opts: SignalRpcOptions & {
+    accountId?: string;
+    apiMode?: SignalApiMode;
+    maxAttachmentBytes?: number;
+  },
 ): Promise<T> {
   const mode = await resolveApiModeForOperation({
     baseUrl: opts.baseUrl,

@@ -45,12 +45,28 @@ export type MockGatewayRequest = {
 export type ControlUiMockGatewayScenario = {
   assistantAgentId?: string;
   assistantName?: string;
+  controlUiTabs?: Array<{
+    group?: string;
+    icon?: string;
+    id: string;
+    label: string;
+    pluginId: string;
+  }>;
   defaultAgentId?: string;
   deferredMethods?: string[];
+  deviceToken?: string;
+  featureMethods?: string[];
   historyMessages?: unknown[];
   methodResponses?: Record<string, unknown>;
-  models?: Array<{ id: string; name: string; provider: string }>;
+  models?: Array<{
+    id: string;
+    name: string;
+    provider: string;
+    available?: boolean;
+  }>;
   sessionKey?: string;
+  terminalEnabled?: boolean;
+  workspaceGit?: boolean;
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
@@ -74,6 +90,7 @@ export type MockGatewayControls = {
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
   ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
+  setOnline: (online: boolean) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   waitForRequest: (method: string) => Promise<MockGatewayRequest>;
 };
@@ -128,7 +145,12 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     clearScreen: false,
     configFile: false,
     define: {
-      OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify("e2e"),
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
+        version: "2026.7.10",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        builtAt: "2026-07-10T12:34:56.000Z",
+        buildId: "e2e",
+      }),
     },
     logLevel: "error",
     optimizeDeps: {
@@ -200,12 +222,17 @@ function normalizeScenario(
   return {
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
+    controlUiTabs: scenario.controlUiTabs ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
+    deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
+    featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     sessionKey,
+    terminalEnabled: scenario.terminalEnabled ?? false,
+    workspaceGit: scenario.workspaceGit ?? false,
   };
 }
 
@@ -220,6 +247,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     embedSandbox: "scripts",
     localMediaPreviewRoots: [],
     serverVersion: "e2e",
+    terminalEnabled: normalizedScenario.terminalEnabled,
   };
 }
 
@@ -270,6 +298,7 @@ function installControlUiMockGateway(input: {
     ) => void;
     requests: BrowserRequest[];
     resolveDeferred: (method: string, payload?: unknown) => void;
+    setOnline: (online: boolean) => void;
     setHistoryMessages: (messages: unknown[]) => void;
     socketCount: () => number;
     socketUrls: () => string[];
@@ -283,7 +312,15 @@ function installControlUiMockGateway(input: {
   const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
+  const sessionPatches = new Map<string, Record<string, unknown>>();
   const sockets: Array<{ readonly url: string }> = [];
+  const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
+  let online = true;
+  try {
+    online = window.sessionStorage.getItem(offlineStateKey) !== "1";
+  } catch {
+    // Storage-disabled browser contexts still get the in-memory mock default.
+  }
   let seq = 0;
 
   function isRecord(value: unknown): value is Record<string, unknown> {
@@ -351,6 +388,35 @@ function installControlUiMockGateway(input: {
     return { found: true, value: matchingCase.response };
   }
 
+  function recordSessionPatch(params: unknown): void {
+    if (!isRecord(params) || typeof params.key !== "string") {
+      return;
+    }
+    const patch = { ...sessionPatches.get(params.key) };
+    for (const key of ["model", "thinkingLevel", "fastMode", "category", "pinned"] as const) {
+      if (hasOwn(params, key)) {
+        patch[key] = params[key];
+      }
+    }
+    sessionPatches.set(params.key, patch);
+  }
+
+  function applySessionPatches(response: unknown): unknown {
+    if (!isRecord(response) || !Array.isArray(response.sessions)) {
+      return response;
+    }
+    return {
+      ...response,
+      sessions: response.sessions.map((row) => {
+        if (!isRecord(row) || typeof row.key !== "string") {
+          return row;
+        }
+        const patch = sessionPatches.get(row.key);
+        return patch ? { ...row, ...patch } : row;
+      }),
+    };
+  }
+
   function sessionRow() {
     return {
       contextTokens: null,
@@ -368,15 +434,18 @@ function installControlUiMockGateway(input: {
   }
 
   function buildResponse(method: string, params: unknown): unknown {
+    if (method === "sessions.patch") {
+      recordSessionPatch(params);
+    }
     const configured = configuredResponse(method, params);
     if (configured.found) {
-      return configured.value;
+      return method === "sessions.list" ? applySessionPatches(configured.value) : configured.value;
     }
     switch (method) {
       case "connect":
         return {
           auth: {
-            deviceToken: "e2e-device-token",
+            deviceToken: scenario.deviceToken,
             role: "operator",
             scopes: [
               "operator.admin",
@@ -386,7 +455,8 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: ["chat.metadata", "chat.startup"] },
+          features: { events: [], methods: scenario.featureMethods },
+          controlUiTabs: scenario.controlUiTabs,
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
@@ -413,6 +483,7 @@ function installControlUiMockGateway(input: {
               id: scenario.defaultAgentId,
               identity: { name: scenario.assistantName },
               name: scenario.assistantName,
+              workspaceGit: scenario.workspaceGit,
             },
           ],
           defaultId: scenario.defaultAgentId,
@@ -461,6 +532,7 @@ function installControlUiMockGateway(input: {
                 id: scenario.defaultAgentId,
                 identity: { name: scenario.assistantName },
                 name: scenario.assistantName,
+                workspaceGit: scenario.workspaceGit,
               },
             ],
             defaultId: scenario.defaultAgentId,
@@ -487,6 +559,8 @@ function installControlUiMockGateway(input: {
               : "control-ui-e2e-run",
           status: "started",
         };
+      case "chat.abort":
+        return { aborted: true };
       case "commands.list":
         return { commands: [] };
       case "health":
@@ -502,7 +576,7 @@ function installControlUiMockGateway(input: {
       case "models.list":
         return { models: scenario.models };
       case "sessions.list":
-        return {
+        return applySessionPatches({
           count: 1,
           defaults: {
             contextTokens: null,
@@ -512,7 +586,7 @@ function installControlUiMockGateway(input: {
           path: "",
           sessions: [sessionRow()],
           ts: Date.now(),
-        };
+        });
       case "sessions.subscribe":
         return { ok: true };
       default:
@@ -565,17 +639,21 @@ function installControlUiMockGateway(input: {
       MockWebSocket.latest = this;
       sockets.push(this);
       window.setTimeout(() => {
-        if (this.readyState !== MockWebSocket.CONNECTING) {
-          return;
-        }
-        this.readyState = MockWebSocket.OPEN;
-        this.dispatchEvent(new Event("open"));
-        this.deliver({
-          event: "connect.challenge",
-          payload: { nonce: "control-ui-e2e-nonce" },
-          type: "event",
-        });
+        this.openConnection();
       }, 0);
+    }
+
+    openConnection(): void {
+      if (!online || this.readyState !== MockWebSocket.CONNECTING) {
+        return;
+      }
+      this.readyState = MockWebSocket.OPEN;
+      this.dispatchEvent(new Event("open"));
+      this.deliver({
+        event: "connect.challenge",
+        payload: { nonce: "control-ui-e2e-nonce" },
+        type: "event",
+      });
     }
 
     override dispatchEvent(event: Event): boolean {
@@ -622,6 +700,23 @@ function installControlUiMockGateway(input: {
           payload: buildResponse(method, frame.params),
           type: "res",
         });
+        if (
+          method === "chat.abort" &&
+          isRecord(frame.params) &&
+          typeof frame.params.runId === "string" &&
+          typeof frame.params.sessionKey === "string"
+        ) {
+          this.deliver({
+            event: "chat",
+            payload: {
+              runId: frame.params.runId,
+              sessionKey: frame.params.sessionKey,
+              state: "aborted",
+            },
+            seq: ++seq,
+            type: "event",
+          });
+        }
       }, 0);
     }
 
@@ -686,8 +781,29 @@ function installControlUiMockGateway(input: {
         type: "res",
       });
     },
+    setOnline(nextOnline) {
+      online = nextOnline;
+      try {
+        if (online) {
+          window.sessionStorage.removeItem(offlineStateKey);
+        } else {
+          window.sessionStorage.setItem(offlineStateKey, "1");
+        }
+      } catch {
+        // The current document can still toggle the in-memory mock.
+      }
+      if (!online) {
+        MockWebSocket.latest?.close(1006, "mock offline");
+        return;
+      }
+      MockWebSocket.latest?.openConnection();
+    },
     setHistoryMessages(messages) {
       scenario.historyMessages = Array.isArray(messages) ? messages : [];
+      const configuredHistory = scenario.methodResponses["chat.history"];
+      if (isRecord(configuredHistory) && !responseCases(configuredHistory)) {
+        configuredHistory.messages = scenario.historyMessages;
+      }
     },
     socketCount() {
       return sockets.length;
@@ -881,6 +997,21 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         },
         { targetMethod: method, responsePayload: payload },
       );
+    },
+    async setOnline(online) {
+      await page.evaluate((nextOnline) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              setOnline: (online: boolean) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setOnline(nextOnline);
+      }, online);
     },
     async setHistoryMessages(messages) {
       await page.evaluate((nextMessages) => {

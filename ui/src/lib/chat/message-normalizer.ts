@@ -12,6 +12,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
+import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 
 export function normalizeRoleForGrouping(role: string): string {
@@ -40,6 +41,20 @@ export function isToolResultMessage(message: unknown): boolean {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   return role === "toolresult" || role === "tool_result";
+}
+
+export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
+  return (
+    role === "tool" ||
+    typeof m.toolCallId === "string" ||
+    typeof m.tool_call_id === "string" ||
+    typeof m.toolUseId === "string" ||
+    typeof m.tool_use_id === "string" ||
+    typeof m.toolName === "string" ||
+    typeof m.tool_name === "string"
+  );
 }
 
 function isTextContentBlock(
@@ -82,6 +97,9 @@ function coerceCanvasPreview(
     ...(typeof preview.viewId === "string" ? { viewId: preview.viewId } : {}),
     ...(typeof preview.className === "string" ? { className: preview.className } : {}),
     ...(typeof preview.style === "string" ? { style: preview.style } : {}),
+    ...(preview.sandbox === "strict" || preview.sandbox === "scripts"
+      ? { sandbox: preview.sandbox }
+      : {}),
   };
 }
 
@@ -130,6 +148,7 @@ const MIME_BY_EXT: Record<string, string> = {
   aac: "audio/aac",
   opus: "audio/opus",
   m4a: "audio/mp4",
+  m2a: "audio/mpeg",
   mp4: "video/mp4",
   mov: "video/quicktime",
   pdf: "application/pdf",
@@ -140,26 +159,8 @@ const MIME_BY_EXT: Record<string, string> = {
   zip: "application/zip",
 };
 
-function getFileExtension(url: string): string | undefined {
-  const trimmed = url.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const source = (() => {
-    try {
-      if (/^https?:\/\//i.test(trimmed)) {
-        return new URL(trimmed).pathname;
-      }
-    } catch {}
-    return trimmed;
-  })();
-  const fileName = source.split(/[\\/]/).pop() ?? source;
-  const match = /\.([a-zA-Z0-9]+)$/.exec(fileName);
-  return match?.[1]?.toLowerCase();
-}
-
 function mimeTypeFromUrl(url: string): string | undefined {
-  const ext = getFileExtension(url);
+  const ext = getMediaFileExtension(url);
   return ext ? MIME_BY_EXT[ext] : undefined;
 }
 
@@ -349,7 +350,11 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   // Detect tool messages by common gateway shapes.
   // Some tool events come through as assistant role with tool_* items in the content array.
-  const hasToolId = typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";
+  const hasToolId =
+    typeof m.toolCallId === "string" ||
+    typeof m.tool_call_id === "string" ||
+    typeof m.toolUseId === "string" ||
+    typeof m.tool_use_id === "string";
 
   const contentRaw = m.content;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;

@@ -25,6 +25,14 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("skills.skillCard");
   });
 
+  it("advertises Control UI GitHub previews", () => {
+    expect(listGatewayMethods()).toContain("controlUi.githubPreview");
+  });
+
+  it("advertises Control UI session pull request detection", () => {
+    expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");
@@ -49,6 +57,7 @@ describe("listGatewayMethods", () => {
       "exec.approvals.node.set",
       "exec.approval.get",
     ]);
+    expect(methods).toContain("tts.speak");
   });
 
   it("advertises the versioned Talk session RPCs", () => {

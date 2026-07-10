@@ -6,6 +6,7 @@ import { cancel, isCancel } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
@@ -48,10 +49,10 @@ export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
 
 /** Handles Clack cancellation by exiting through the runtime. */
-export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
+export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
-    runtime.exit(0);
+    runtime.exit(exitCode);
     throw new Error("unreachable");
   }
   return value;
@@ -410,8 +411,10 @@ function summarizeError(err: unknown): string {
       .split("\n")
       .map((s) => s.trim())
       .find(Boolean) ?? raw;
-  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+  return line.length > 120 ? `${truncateUtf16Safe(line, 119)}…` : line;
 }
+
+export const testing = { summarizeError };
 
 /** Default workspace path shown by onboarding prompts. */
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;

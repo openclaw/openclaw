@@ -805,6 +805,24 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
+  it("reads steered inbound audio when the message action runs", async () => {
+    mockSendResult();
+    let hasCurrentInboundAudio = false;
+    const tool = createMessageTool({
+      currentInboundAudio: false,
+      hasCurrentInboundAudio: () => hasCurrentInboundAudio,
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "whatsapp",
+      agentSessionKey: "agent:main:whatsapp:direct:123456789",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+    hasCurrentInboundAudio = true;
+
+    await tool.execute("call1", { action: "send", message: "hi" });
+
+    expect(lastRunMessageActionInput()?.inboundAudio).toBe(true);
+  });
+
   it("adds a current-run idempotency key when the model omits one", async () => {
     mockSendResult();
 
@@ -1855,10 +1873,22 @@ describe("message tool schema scoping", () => {
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
       const presentationSchemaJson = JSON.stringify(properties.presentation);
+      const presentationBlockItemSchema = (
+        properties.presentation as {
+          properties?: { blocks?: { items?: Record<string, unknown> } };
+        }
+      ).properties?.blocks?.items;
 
       expect(properties).toHaveProperty("presentation");
       expect(presentationSchemaJson).toContain('"action"');
       expect(presentationSchemaJson).toContain('"command"');
+      expect(presentationSchemaJson).toContain('"chartType"');
+      expect(presentationSchemaJson).toContain('"pie"');
+      expect(presentationSchemaJson).not.toContain('"maxItems"');
+      expect(presentationSchemaJson).not.toContain('"maxLength"');
+      expect(presentationSchemaJson).not.toContain('"exclusiveMinimum"');
+      expect(presentationBlockItemSchema).toMatchObject({ type: "object" });
+      expect(presentationBlockItemSchema).not.toHaveProperty("anyOf");
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();
@@ -2290,6 +2320,17 @@ describe("message tool description", () => {
     expect(target?.description).toContain("Telegram chat id/@username");
   });
 
+  it("describes userId as required directly for member-info, not via target", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+    const properties = getToolProperties(tool);
+    const userId = properties.userId as { description?: string } | undefined;
+
+    expect(userId?.description).toMatch(/member-info/i);
+    expect(userId?.description).toMatch(/not.*`target`|does not accept.*target/i);
+  });
+
   it("hides iMessage group actions for DM targets", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
@@ -2601,6 +2642,20 @@ describe("message tool reasoning tag sanitization", () => {
                 },
               ],
             },
+            {
+              type: "chart",
+              chartType: "line",
+              title: "<think>chart rationale</think>Latency",
+              categories: ["<think>category rationale</think>Monday"],
+              series: [
+                {
+                  name: "<think>series rationale</think>p95",
+                  values: [250],
+                },
+              ],
+              xLabel: "<think>axis rationale</think>Day",
+              yLabel: "<think>axis rationale</think>Milliseconds",
+            },
           ],
         },
       },
@@ -2624,6 +2679,15 @@ describe("message tool reasoning tag sanitization", () => {
           type: "select",
           placeholder: "Pick a lane",
           options: [{ label: "Main", value: "main" }],
+        },
+        {
+          type: "chart",
+          chartType: "line",
+          title: "Latency",
+          categories: ["Monday"],
+          series: [{ name: "p95", values: [250] }],
+          xLabel: "Day",
+          yLabel: "Milliseconds",
         },
       ],
     });

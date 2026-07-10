@@ -49,8 +49,11 @@ export default definePluginEntry({
 });
 ```
 
-Handlers run sequentially in descending `priority`; same-priority handlers
-keep registration order.
+Handlers that can return decisions or modifications run sequentially in
+descending `priority`; same-priority handlers keep registration order.
+Observation-only handlers run in parallel, and fire-and-forget observation
+dispatches can overlap with later events. Do not use priority to order
+observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
@@ -128,15 +131,16 @@ observation-only.
 
 **Messages and delivery**
 
-| Hook                        | Purpose                                                           |
-| --------------------------- | ----------------------------------------------------------------- |
-| **`inbound_claim`**         | Claim an inbound message before agent routing (synthetic replies) |
-| `message_received`          | Observe inbound content, sender, thread, and metadata             |
-| **`message_sending`**       | Rewrite outbound content or cancel delivery                       |
-| **`reply_payload_sending`** | Mutate or cancel normalized reply payloads before delivery        |
-| `message_sent`              | Observe outbound delivery success or failure                      |
-| **`before_dispatch`**       | Inspect or rewrite an outbound dispatch before channel handoff    |
-| **`reply_dispatch`**        | Participate in the final reply-dispatch pipeline                  |
+| Hook                            | Purpose                                                           |
+| ------------------------------- | ----------------------------------------------------------------- |
+| **`inbound_claim`**             | Claim an inbound message before agent routing (synthetic replies) |
+| **`channel_pairing_requested`** | Observe newly created DM pairing requests                         |
+| `message_received`              | Observe inbound content, sender, thread, and metadata             |
+| **`message_sending`**           | Rewrite outbound content or cancel delivery                       |
+| **`reply_payload_sending`**     | Mutate or cancel normalized reply payloads before delivery        |
+| `message_sent`                  | Observe outbound delivery success or failure                      |
+| **`before_dispatch`**           | Inspect or rewrite an outbound dispatch before channel handoff    |
+| **`reply_dispatch`**            | Participate in the final reply-dispatch pipeline                  |
 
 **Sessions and compaction**
 
@@ -162,6 +166,28 @@ observation-only.
 | `deactivate`                     | Deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins                 |
 | `cron_changed`                   | Observe Gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled) |
 | **`before_install`**             | Inspect staged skill or plugin install material from a loaded plugin runtime                         |
+
+### Channel pairing requests
+
+Use `channel_pairing_requested` when a plugin needs to notify an operator or
+write an audit record after an unpaired DM sender creates a pending pairing
+request. The hook is dispatched when the request is created; channel delivery of
+the pairing reply is not delayed by slow or failing hook handlers.
+
+```typescript
+api.on("channel_pairing_requested", async (event) => {
+  await notifyOperator({
+    text: `New ${event.channel} pairing request from ${event.senderId}: ${event.code}`,
+  });
+});
+```
+
+The hook is observation-only. It does not approve, reject, suppress, or rewrite
+the pairing reply. The payload includes the channel, optional `accountId`,
+channel-scoped `senderId`, pairing `code`, and channel metadata. Treat the
+pairing code as a live single-use approval credential and deliver it only to a
+trusted operator sink. Treat `metadata` as untrusted sender-supplied identity
+text. The hook does not include the inbound message body or media.
 
 ## Debug runtime hooks
 
@@ -405,6 +431,8 @@ final assistant answer. It is not the `/stop` cancellation path and does not
 run when the user aborts a turn. Return `{ action: "revise", reason }` to ask
 the harness for one more model pass before finalization, `{ action:
 "finalize", reason? }` to force finalization, or omit a result to continue.
+Handlers have a 15s default budget; on timeout, OpenClaw logs the failure and
+continues with the original final answer.
 Codex native `Stop` hooks are relayed into this hook as OpenClaw
 `before_agent_finalize` decisions.
 
@@ -560,9 +588,16 @@ snapshot (including `state.nextRunAtMs`, `state.lastRunStatus`, and
 `state.lastError` when present) plus a `PluginHookGatewayCronDeliveryStatus`
 of `not-requested` | `delivered` | `not-delivered` | `unknown`. Removed events
 still carry the deleted job snapshot so external schedulers can reconcile
-state. Use `ctx.getCron?.()` and `ctx.config` from the runtime context when
-syncing external wake schedulers, and keep OpenClaw as the source of truth
-for due checks and execution.
+state.
+
+A `scheduled` event is post-commit: it fires only after a successful durable
+write changes an existing job's effective `nextRunAtMs`, excluding that job's
+explicit `added`, `updated`, or `removed` lifecycle event. The top-level
+`event.nextRunAtMs` is the committed next wake; when it is absent, the job has
+no next wake. Treat these events as reconciliation hints, not an ordered delta
+log. Use `ctx.getCron?.()` and `ctx.config` from the runtime context when
+syncing external wake schedulers, and keep OpenClaw as the source of truth for
+due checks and execution.
 
 ## Upcoming deprecations
 

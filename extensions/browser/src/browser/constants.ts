@@ -16,6 +16,8 @@ export const DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME = "openclaw";
 export const DEFAULT_BROWSER_DEFAULT_PROFILE_NAME = "openclaw";
 /** Default timeout for browser action execution. */
 export const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 60_000;
+/** Default timeout for browser download capture. */
+export const DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS = 120_000;
 /** Default launch readiness window for managed local Chrome. */
 export const DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS = 15_000;
 /** Default CDP readiness window after managed Chrome launch. */

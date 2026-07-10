@@ -11,7 +11,7 @@ import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
-export function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
+function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
   return normalizeWhatsAppPayloadTextPreservingIndentation(text);
 }
 

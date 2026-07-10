@@ -1,6 +1,10 @@
 // Server chat agent-event tests protect event fanout, heartbeat visibility,
 // session lifecycle persistence, and subscriber registry behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../agents/internal-runtime-context.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 
@@ -97,6 +101,8 @@ describe("agent event handler", () => {
     markTrackedRunTerminalPersisted?: AgentEventHandlerOptions["markTrackedRunTerminalPersisted"];
     trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
     resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
+    updateRunToolErrorSummary?: AgentEventHandlerOptions["updateRunToolErrorSummary"];
+    resolveSessionActiveRunState?: AgentEventHandlerOptions["resolveSessionActiveRunState"];
   }) {
     const nowSpy =
       params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -130,6 +136,8 @@ describe("agent event handler", () => {
       markTrackedRunTerminalPersisted: params?.markTrackedRunTerminalPersisted,
       trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
       resolveActiveLifecycleGenerationForRun: params?.resolveActiveLifecycleGenerationForRun,
+      updateRunToolErrorSummary: params?.updateRunToolErrorSummary,
+      resolveSessionActiveRunState: params?.resolveSessionActiveRunState,
     });
 
     return {
@@ -151,6 +159,7 @@ describe("agent event handler", () => {
   function emitRun1AssistantText(
     harness: ReturnType<typeof createHarness>,
     text: string,
+    field: "text" | "delta" = "text",
   ): ReturnType<typeof createHarness> {
     harness.chatRunState.registry.add("run-1", {
       sessionKey: "session-1",
@@ -161,7 +170,7 @@ describe("agent event handler", () => {
       seq: 1,
       stream: "assistant",
       ts: Date.now(),
-      data: { text },
+      data: { [field]: text },
     });
     return harness;
   }
@@ -177,6 +186,72 @@ describe("agent event handler", () => {
   function sessionChatCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
   }
+
+  it("carries prepared validation diagnostics into active run state", () => {
+    const updateRunToolErrorSummary = vi.fn();
+    const { chatRunState, handler } = createHarness({ updateRunToolErrorSummary });
+    chatRunState.registry.add("provider-run", {
+      sessionKey: "session-1",
+      clientRunId: "client-run",
+    });
+
+    handler({
+      runId: "provider-run",
+      seq: 1,
+      stream: "tool",
+      ts: 1_000,
+      data: {
+        phase: "result",
+        name: "edit",
+        isError: true,
+        toolErrorSummary: "edit tool validation failed: edits: must be an array",
+      },
+    });
+
+    expect(updateRunToolErrorSummary).toHaveBeenCalledWith({
+      runId: "provider-run",
+      clientRunId: "client-run",
+      summary: "edit tool validation failed: edits: must be an array",
+    });
+  });
+
+  it.each([
+    { stream: "assistant", data: { text: "Recovered" } },
+    { stream: "tool", data: { phase: "start", name: "read" } },
+  ] as const)("clears stale validation diagnostics on $stream progress", (progressEvent) => {
+    const updateRunToolErrorSummary = vi.fn();
+    const { chatRunState, handler } = createHarness({ updateRunToolErrorSummary });
+    chatRunState.registry.add("provider-run", {
+      sessionKey: "session-1",
+      clientRunId: "client-run",
+    });
+
+    handler({
+      runId: "provider-run",
+      seq: 1,
+      stream: "tool",
+      ts: 1_000,
+      data: {
+        phase: "result",
+        name: "edit",
+        isError: true,
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    handler({
+      runId: "provider-run",
+      seq: 2,
+      stream: progressEvent.stream,
+      ts: 1_100,
+      data: progressEvent.data,
+    });
+
+    expect(updateRunToolErrorSummary).toHaveBeenLastCalledWith({
+      runId: "provider-run",
+      clientRunId: "client-run",
+      summary: undefined,
+    });
+  });
 
   function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
@@ -411,10 +486,11 @@ describe("agent event handler", () => {
     expect("isHeartbeat" in normalNodeSend).toBe(false);
   });
 
-  it("emits chat delta for assistant text-only events", () => {
+  it.each(["text", "delta"] as const)("emits chat delta for assistant %s-only events", (field) => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
       "Hello world",
+      field,
     );
     const chatCalls = chatBroadcastCalls(broadcast);
     expect(chatCalls).toHaveLength(1);
@@ -427,6 +503,40 @@ describe("agent event handler", () => {
     expect(payload.deltaText).toBe("Hello world");
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("keeps internal context private when it spans delta-only events", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-split-context", {
+      sessionKey: "session-split-context",
+      clientRunId: "client-split-context",
+    });
+
+    const deltas = [
+      `Visible\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`,
+      "private runtime detail\n",
+      `${INTERNAL_RUNTIME_CONTEXT_END}\nAfter`,
+    ];
+    deltas.forEach((delta, index) => {
+      handler({
+        runId: "run-split-context",
+        seq: index + 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { delta },
+      });
+    });
+    emitLifecycleEnd(handler, "run-split-context", 4);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(JSON.stringify(chatCalls)).not.toContain("private runtime detail");
+    const finalPayload = chatCalls.at(-1)?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content?.[0]?.text).toBe("Visible\n\nAfter");
     nowSpy?.mockRestore();
   });
 
@@ -1955,8 +2065,13 @@ describe("agent event handler", () => {
       runtimeMs: 800,
       abortedLastRun: false,
     });
+    const resolveSessionActiveRunState = vi
+      .fn<NonNullable<AgentEventHandlerOptions["resolveSessionActiveRunState"]>>()
+      .mockReturnValueOnce({ active: true, runIds: ["run-finished"] })
+      .mockReturnValue({ active: false, runIds: [] });
     const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-finished",
+      resolveSessionActiveRunState,
     });
 
     sessionEventSubscribers.subscribe("conn-session");
@@ -1996,15 +2111,27 @@ describe("agent event handler", () => {
       ([event]) => event === "sessions.changed",
     );
     expect(sessionsChangedCalls).toHaveLength(2);
+    expectPayloadFields(sessionsChangedCalls[0]?.[1], {
+      sessionKey: "session-finished",
+      phase: "start",
+      hasActiveRun: true,
+      activeRunIds: ["run-finished"],
+    });
     expectPayloadFields(sessionsChangedCalls[1]?.[1], {
       sessionKey: "session-finished",
       phase: "end",
+      hasActiveRun: false,
+      activeRunIds: [],
       status: "done",
       startedAt: 900,
       endedAt: 1_700,
       runtimeMs: 800,
       updatedAt: 1_700,
       abortedLastRun: false,
+    });
+    expect(resolveSessionActiveRunState).toHaveBeenCalledWith({
+      requestedKey: "session-finished",
+      canonicalKey: "session-finished",
     });
     const persistParams = requireRecord(
       persistGatewaySessionLifecycleEventMock.mock.calls
@@ -2803,6 +2930,119 @@ describe("agent event handler", () => {
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
   });
 
+  it("projects lifecycle self-aborts with their validation diagnostic", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("provider-validation-loop", {
+      sessionKey: "session-validation-loop",
+      clientRunId: "client-validation-loop",
+    });
+
+    handler({
+      runId: "provider-validation-loop",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_500,
+      data: {
+        phase: "end",
+        aborted: true,
+        toolErrorSummary: "edit tool validation failed: edits: must be an array",
+      },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    expect(chatCalls[0][1]).toMatchObject({
+      runId: "client-validation-loop",
+      sessionKey: "session-validation-loop",
+      seq: 2,
+      state: "aborted",
+      stopReason: "aborted",
+      errorMessage: "edit tool validation failed: edits: must be an array",
+    });
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(chatRunState.registry.peek("provider-validation-loop")).toBeUndefined();
+  });
+
+  it.each([
+    { stopReason: "rpc", expectedState: "aborted" },
+    { stopReason: "timeout", expectedState: "error" },
+  ])("preserves $stopReason lifecycle abort classification", ({ stopReason, expectedState }) => {
+    const { broadcast, chatRunState, handler } = createHarness();
+    chatRunState.registry.add(`provider-${stopReason}`, {
+      sessionKey: `session-${stopReason}`,
+      clientRunId: `client-${stopReason}`,
+    });
+
+    handler({
+      runId: `provider-${stopReason}`,
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_500,
+      data: { phase: "end", aborted: true, stopReason },
+    });
+
+    expect(chatBroadcastCalls(broadcast)[0][1]).toMatchObject({
+      runId: `client-${stopReason}`,
+      state: expectedState,
+      stopReason,
+    });
+  });
+
+  it("does not forward unsafe lifecycle abort diagnostics", () => {
+    const { broadcast, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("provider-unsafe-abort", {
+      sessionKey: "session-unsafe-abort",
+      clientRunId: "client-unsafe-abort",
+    });
+
+    handler({
+      runId: "provider-unsafe-abort",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_500,
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "aborted",
+        toolErrorSummary: "browser failed\nsecret output",
+      },
+    });
+
+    const payload = chatBroadcastCalls(broadcast)[0][1] as Record<string, unknown>;
+    expect(payload.state).toBe("aborted");
+    expect(payload).not.toHaveProperty("errorMessage");
+  });
+
+  it("preserves timeout terminal precedence for abort-marked lifecycle events", () => {
+    const { broadcast, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("provider-timeout", {
+      sessionKey: "session-timeout",
+      clientRunId: "client-timeout",
+    });
+
+    handler({
+      runId: "provider-timeout",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_500,
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "agent provider timeout",
+      },
+    });
+
+    expect(chatBroadcastCalls(broadcast)[0][1]).toMatchObject({
+      runId: "client-timeout",
+      state: "error",
+      stopReason: "timeout",
+      errorMessage: "agent provider timeout",
+    });
+  });
+
   it.each([
     {
       name: "older timestamp",
@@ -3171,6 +3411,32 @@ describe("agent event handler", () => {
       }),
       new Set(["conn-1"]),
       { dropIfSlow: true },
+    );
+  });
+
+  it("logs when start session persistence fails", async () => {
+    const { chatRunState, handler, sessionEventSubscribers } = createHarness();
+    sessionEventSubscribers.subscribe("conn-1");
+    chatRunState.registry.add("run-global-work", {
+      sessionKey: "global",
+      agentId: "work",
+      clientRunId: "client-global-work",
+    });
+    persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(new Error("start disk full"));
+
+    handler({
+      runId: "run-global-work",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "start" },
+    });
+
+    await vi.waitFor(() => {
+      expect(logErrorMock).toHaveBeenCalledTimes(1);
+    });
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "gateway: start session persistence failed session=global run=run-global-work error=Error: start disk full",
     );
   });
 

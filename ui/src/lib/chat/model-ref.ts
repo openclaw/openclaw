@@ -1,6 +1,8 @@
 // Chat model reference normalization.
 import type { ModelCatalogEntry } from "../../api/types.ts";
 
+const LEGACY_OPENAI_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
+
 export type ChatModelOverride =
   | {
       kind: "qualified";
@@ -10,6 +12,11 @@ export type ChatModelOverride =
       kind: "raw";
       value: string;
     };
+
+export function normalizeChatModelProviderId(provider: string): string {
+  const normalized = provider.trim().toLowerCase();
+  return LEGACY_OPENAI_PROVIDER_IDS.has(normalized) ? "openai" : normalized;
+}
 
 export function buildQualifiedChatModelValue(model: string, provider?: string | null): string {
   const trimmedModel = model.trim();
@@ -141,18 +148,32 @@ export function resolvePreferredServerChatModelValue(
       : resolveServerChatModelValue(trimmedModel, trimmedProvider);
   }
 
+  const qualifiedServerValue = buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
+  const normalizedModel = trimmedModel.toLowerCase();
+  const normalizedProvider = normalizeChatModelProviderId(trimmedProvider);
+  const serverProviderOwnsRawModelId = catalog.some(
+    (entry) =>
+      entry.id.trim().toLowerCase() === normalizedModel &&
+      normalizeChatModelProviderId(entry.provider) === normalizedProvider,
+  );
+
+  // Session model/provider fields form one server-owned pair. Prefer the provider-qualified
+  // route only when the catalog confirms that provider owns this raw nested model id.
+  if (serverProviderOwnsRawModelId && hasCatalogQualifiedValue(catalog, qualifiedServerValue)) {
+    return qualifiedServerValue;
+  }
+
   if (hasCatalogQualifiedValue(catalog, trimmedModel)) {
     return trimmedModel;
+  }
+
+  if (hasCatalogQualifiedValue(catalog, qualifiedServerValue)) {
+    return qualifiedServerValue;
   }
 
   const matchedCatalogValue = resolveUniqueCatalogValueById(trimmedModel, catalog);
   if (matchedCatalogValue) {
     return matchedCatalogValue;
-  }
-
-  const qualifiedServerValue = buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
-  if (hasCatalogQualifiedValue(catalog, qualifiedServerValue)) {
-    return qualifiedServerValue;
   }
 
   // Without catalog confirmation, preserve slash-containing server values as-is.
@@ -190,7 +211,7 @@ function createNameProviderKey(name: string, provider?: string | null): string {
   return `${name.toLowerCase()}\u0000${provider?.trim().toLowerCase() ?? ""}`;
 }
 
-export type ChatModelDisplayLookup = ReadonlyMap<string, string>;
+type ChatModelDisplayLookup = ReadonlyMap<string, string>;
 
 export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<string, string> {
   const nameToValues = new Map<string, Set<string>>();
@@ -242,7 +263,7 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
   return displayLookup;
 }
 
-export function formatCatalogEntryDisplay(
+function formatCatalogEntryDisplay(
   entry: ModelCatalogEntry,
   displayLookup: ChatModelDisplayLookup,
 ): string {

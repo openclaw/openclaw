@@ -10,6 +10,7 @@ import {
   errorShape,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   normalizeInheritedToolAllowlist,
@@ -23,6 +24,7 @@ import {
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -51,7 +53,7 @@ import {
 } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
+import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -155,6 +157,26 @@ export async function projectSessionsPatchEntry(params: {
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
+  const resolveThinkingRuntime = (
+    provider: string,
+    model: string,
+    entry?: SessionEntry,
+  ): string => {
+    // ACP metadata can own canonical agent keys (for example agent:main:main),
+    // so key shape alone cannot identify the runtime that validates thinking.
+    const acpMeta = readAcpSessionMetaForEntry({ sessionKey: storeKey, entry });
+    return (
+      acpMeta?.backend ??
+      resolveEffectiveAgentRuntime({
+        cfg,
+        provider,
+        modelId: model,
+        agentId: sessionAgentId,
+        sessionKey: storeKey,
+        sessionEntry: entry,
+      })
+    );
+  };
   let loadedModelCatalog: ModelCatalogEntry[] | undefined;
   const loadModelCatalogForPatch = async () => {
     if (loadedModelCatalog) {
@@ -183,6 +205,7 @@ export async function projectSessionsPatchEntry(params: {
       };
   if (existing && !existing.sessionId) {
     delete next.label;
+    delete next.category;
     delete next.displayName;
   }
 
@@ -369,6 +392,23 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("category" in patch) {
+    const raw = patch.category;
+    if (raw === null) {
+      delete next.category;
+    } else if (raw !== undefined) {
+      // Categories are shared organization buckets, so duplicates are expected (unlike labels).
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid category: empty");
+      }
+      if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
+        return invalid(`invalid category: too long (max ${SESSION_LABEL_MAX_LENGTH})`);
+      }
+      next.category = trimmed;
+    }
+  }
+
   if ("archived" in patch) {
     if (patch.archived === true) {
       // Archived sessions leave the active quick-access set in the same write.
@@ -390,6 +430,15 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("unread" in patch) {
+    if (patch.unread === true) {
+      next.markedUnreadAt = now;
+    } else {
+      next.lastReadAt = now;
+      delete next.markedUnreadAt;
+    }
+  }
+
   if ("thinkingLevel" in patch) {
     const raw = patch.thinkingLevel;
     if (raw === null) {
@@ -402,8 +451,9 @@ export async function projectSessionsPatchEntry(params: {
           normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
         const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
         const thinkingCatalog = await loadModelCatalogForPatch();
+        const thinkingRuntime = resolveThinkingRuntime(hintProvider, hintModel, existing);
         return invalid(
-          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog)})`,
+          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog, thinkingRuntime)})`,
         );
       }
       next.thinkingLevel = normalized;
@@ -605,32 +655,37 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  if (next.thinkingLevel) {
+  if (next.thinkingLevel && ("thinkingLevel" in patch || "model" in patch)) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
     const thinkingCatalog = await loadModelCatalogForPatch();
     if (!thinkingLevel) {
       delete next.thinkingLevel;
-    } else if (
-      !isThinkingLevelSupported({
-        provider: effectiveProvider,
-        model: effectiveModel,
-        level: thinkingLevel,
-        catalog: thinkingCatalog,
-      })
-    ) {
-      if ("thinkingLevel" in patch) {
-        return invalid(
-          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog)})`,
-        );
+    } else {
+      const thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
+      if (
+        !isThinkingLevelSupported({
+          provider: effectiveProvider,
+          model: effectiveModel,
+          level: thinkingLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
+        })
+      ) {
+        if ("thinkingLevel" in patch) {
+          return invalid(
+            `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog, thinkingRuntime)})`,
+          );
+        }
+        next.thinkingLevel = resolveSupportedThinkingLevel({
+          provider: effectiveProvider,
+          model: effectiveModel,
+          level: thinkingLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
+        });
       }
-      next.thinkingLevel = resolveSupportedThinkingLevel({
-        provider: effectiveProvider,
-        model: effectiveModel,
-        level: thinkingLevel,
-        catalog: thinkingCatalog,
-      });
     }
   }
 

@@ -36,10 +36,16 @@ export type SessionTranscriptAppendResult =
     };
 
 export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
-export type SessionTranscriptDeliveryMirror = {
-  kind: "channel-final";
-  sourceMessageId?: string;
-};
+export type SessionTranscriptDeliveryMirror =
+  | {
+      kind: "channel-final";
+      sourceMessageId?: string;
+    }
+  | {
+      kind: "channel-final-suppressed";
+      reason: "stale-foreground";
+      sourceMessageId?: string;
+    };
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -468,11 +474,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         reason: "blocked by before_message_write",
       };
     }
-    const identifiedChannelFinal =
-      Boolean(explicitIdempotencyKey) && isChannelFinalDeliveryMirror(params.message);
+    const identifiedDeliveryMirror =
+      Boolean(explicitIdempotencyKey) && isIdentifiedDeliveryMirror(params.message);
     let latestEquivalentAssistantId: string | undefined;
-    // Unidentified delivery mirrors dedupe by latest text. Identified channel finals use their
-    // idempotency key so repeated replies on separate user turns remain distinct.
+    // Identified delivery mirrors, including suppressed finals, dedupe only by
+    // key so same-text markers from different source ids remain separate rows.
     const turn = await persistSessionTranscriptTurn(
       {
         sessionId: currentEntry.sessionId,
@@ -508,7 +514,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
               : {}),
             shouldAppend: async (target) => {
               latestEquivalentAssistantId =
-                isRedundantDeliveryMirror(params.message) && !identifiedChannelFinal
+                isRedundantDeliveryMirror(params.message) && !identifiedDeliveryMirror
                   ? await findLatestEquivalentAssistantMessageId(
                       target.sessionFile,
                       preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
@@ -577,10 +583,13 @@ function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): 
   );
 }
 
-function isChannelFinalDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
+function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
   const marker = (message as { openclawDeliveryMirror?: SessionTranscriptDeliveryMirror })
     .openclawDeliveryMirror;
-  return isRedundantDeliveryMirror(message) && marker?.kind === "channel-final";
+  return (
+    isRedundantDeliveryMirror(message) &&
+    (marker?.kind === "channel-final" || marker?.kind === "channel-final-suppressed")
+  );
 }
 
 function extractAssistantMessageText(message: SessionTranscriptAssistantMessage): string | null {

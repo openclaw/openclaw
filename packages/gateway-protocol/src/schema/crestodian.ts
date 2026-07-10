@@ -37,3 +37,102 @@ export const CrestodianChatResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+/**
+ * Structured first-run inference setup for GUI clients: detect reusable AI
+ * access (CLI logins, env keys, existing config), then activate one choice.
+ * Activation live-tests the candidate and persists it only on success, so a
+ * client can walk the ladder candidate-by-candidate without ever leaving a
+ * broken default model behind.
+ */
+export const CrestodianSetupDetectParamsSchema = Type.Object({}, { additionalProperties: false });
+
+const SetupInferenceKind = Type.Union([
+  Type.Literal("existing-model"),
+  Type.Literal("openai-api-key"),
+  Type.Literal("anthropic-api-key"),
+  Type.Literal("claude-cli"),
+  Type.Literal("codex-cli"),
+  Type.Literal("gemini-cli"),
+]);
+
+export const CrestodianSetupDetectResultSchema = Type.Object(
+  {
+    candidates: Type.Array(
+      Type.Object(
+        {
+          kind: SetupInferenceKind,
+          label: NonEmptyString,
+          detail: Type.String(),
+          modelRef: NonEmptyString,
+          recommended: Type.Boolean(),
+          /** true: verified; false: definitively logged out; absent: unknown. */
+          credentials: Type.Optional(Type.Boolean()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    /** Text-inference key/token methods exposed by the Gateway provider registry. */
+    manualProviders: Type.Array(
+      Type.Object(
+        {
+          /** Opaque provider-auth choice sent back during activation. */
+          id: NonEmptyString,
+          label: NonEmptyString,
+          hint: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    workspace: NonEmptyString,
+    configuredModel: Type.Optional(Type.String()),
+    setupComplete: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+
+export const CrestodianSetupActivateParamsSchema = Type.Object(
+  {
+    kind: Type.Union([
+      Type.Literal("existing-model"),
+      Type.Literal("openai-api-key"),
+      Type.Literal("anthropic-api-key"),
+      Type.Literal("claude-cli"),
+      Type.Literal("codex-cli"),
+      Type.Literal("gemini-cli"),
+      Type.Literal("api-key"),
+    ]),
+    /** Manual step only: opaque provider-auth choice returned by detection. */
+    authChoice: Type.Optional(Type.String()),
+    /** Manual step only: the pasted API key or token; masked by clients, never echoed. */
+    apiKey: Type.Optional(Type.String()),
+    workspace: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const CrestodianSetupActivateResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+    /** Present on success: the model ref that answered the live test. */
+    modelRef: Type.Optional(Type.String()),
+    latencyMs: Type.Optional(Type.Number()),
+    /** Human-readable setup summary lines (workspace, model, gateway). */
+    lines: Type.Optional(Type.Array(Type.String())),
+    /** Present on failure: coarse bucket for client copy + docs links. */
+    status: Type.Optional(
+      Type.Union([
+        Type.Literal("ok"),
+        Type.Literal("auth"),
+        Type.Literal("rate_limit"),
+        Type.Literal("billing"),
+        Type.Literal("timeout"),
+        Type.Literal("format"),
+        Type.Literal("unavailable"),
+        Type.Literal("unknown"),
+      ]),
+    ),
+    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);

@@ -426,7 +426,7 @@ function compareStringArrays(left: string[], right: string[]) {
   return left.every((value, index) => value === right[index]);
 }
 
-export type PlaceholderMismatch = {
+type PlaceholderMismatch = {
   key: string;
   locale: string;
   sourcePlaceholders: string[];
@@ -1497,7 +1497,7 @@ async function translateBatch(
   throw lastError ?? new Error("translation failed");
 }
 
-export type NativeTranslationEntry = {
+type NativeTranslationEntry = {
   id: string;
   source: string;
   sourcePath: string;

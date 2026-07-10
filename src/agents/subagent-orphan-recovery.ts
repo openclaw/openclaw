@@ -23,6 +23,8 @@ import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
 import {
   evaluateSubagentRecoveryGate,
@@ -72,7 +74,8 @@ function reclassifyLegacyRestartInterruptedRun(runRecord: SubagentRunRecord): vo
  */
 function buildResumeMessage(task: string, lastHumanMessage?: string): string {
   const maxTaskLen = 2000;
-  const truncatedTask = task.length > maxTaskLen ? `${task.slice(0, maxTaskLen)}...` : task;
+  const truncatedTask =
+    task.length > maxTaskLen ? `${truncateUtf16Safe(task, maxTaskLen)}...` : task;
 
   let message =
     `[System] Your previous turn was interrupted by a gateway reload. ` +
@@ -435,49 +438,48 @@ export function scheduleOrphanRecovery(params: {
   const resumedSessionKeys = new Set<string>();
   const attemptRecovery = (attempt: number, delay: number) => {
     setTimeout(() => {
-      void recoverOrphanedSubagentSessions({
-        ...params,
-        resumedSessionKeys,
-      })
-        .then((result) => {
-          if (result.failed > 0 && attempt < maxRetries) {
-            const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
-            log.info(
-              `orphan recovery had ${result.failed} failure(s); retrying in ${nextDelay}ms (attempt ${attempt + 1}/${maxRetries})`,
-            );
-            attemptRecovery(attempt + 1, nextDelay);
-            return;
-          }
-          if (result.failedRuns.length === 0) {
-            return;
-          }
-          const attempts = attempt + 1;
-          void Promise.allSettled(
-            result.failedRuns.map((run) =>
-              finalizeInterruptedSubagentRun({
-                runId: run.runId,
-                childSessionKey: run.childSessionKey,
-                error: buildRecoveryFailureMessage({
-                  attempts,
-                  error: run.error,
-                }),
-              }),
-            ),
-          );
-        })
-        .catch((err: unknown) => {
-          if (attempt < maxRetries) {
-            const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
-            log.warn(
-              `scheduled orphan recovery failed: ${String(err)}; retrying in ${nextDelay}ms (attempt ${attempt + 1}/${maxRetries})`,
-            );
-            attemptRecovery(attempt + 1, nextDelay);
-          } else {
-            log.warn(
-              `scheduled orphan recovery failed after ${maxRetries} retries: ${String(err)}`,
-            );
-          }
+      // Every delayed/retry scan owns a fresh root lease. Keep terminal
+      // mutation in the same lease so suspension cannot become ready mid-attempt.
+      void runWithGatewayIndependentRootWorkAdmission(async () => {
+        const result = await recoverOrphanedSubagentSessions({
+          ...params,
+          resumedSessionKeys,
         });
+        if (result.failed > 0 && attempt < maxRetries) {
+          const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
+          log.info(
+            `orphan recovery had ${result.failed} failure(s); retrying in ${nextDelay}ms (attempt ${attempt + 1}/${maxRetries})`,
+          );
+          attemptRecovery(attempt + 1, nextDelay);
+          return;
+        }
+        if (result.failedRuns.length === 0) {
+          return;
+        }
+        const attempts = attempt + 1;
+        await Promise.allSettled(
+          result.failedRuns.map((run) =>
+            finalizeInterruptedSubagentRun({
+              runId: run.runId,
+              childSessionKey: run.childSessionKey,
+              error: buildRecoveryFailureMessage({
+                attempts,
+                error: run.error,
+              }),
+            }),
+          ),
+        );
+      }).catch((err: unknown) => {
+        if (attempt < maxRetries) {
+          const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
+          log.warn(
+            `scheduled orphan recovery failed: ${String(err)}; retrying in ${nextDelay}ms (attempt ${attempt + 1}/${maxRetries})`,
+          );
+          attemptRecovery(attempt + 1, nextDelay);
+        } else {
+          log.warn(`scheduled orphan recovery failed after ${maxRetries} retries: ${String(err)}`);
+        }
+      });
     }, delay).unref?.();
   };
 

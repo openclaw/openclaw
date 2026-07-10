@@ -34,6 +34,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
+import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
@@ -86,7 +87,7 @@ export type VoiceMessageMetadata = {
 /**
  * Get audio duration using ffprobe
  */
-export async function getAudioDuration(filePath: string): Promise<number> {
+async function getAudioDuration(filePath: string): Promise<number> {
   try {
     const stdout = await runFfprobe([
       "-v",
@@ -112,7 +113,7 @@ export async function getAudioDuration(filePath: string): Promise<number> {
  * Generate waveform data from audio file using ffmpeg
  * Returns base64 encoded byte array of amplitude samples (0-255)
  */
-export async function generateWaveform(filePath: string): Promise<string> {
+async function generateWaveform(filePath: string): Promise<string> {
   try {
     // Extract raw PCM and sample amplitude values
     return await generateWaveformFromPcm(filePath);
@@ -348,6 +349,9 @@ async function requestVoiceUploadUrl(params: {
   const { response: res, release } = await fetchWithSsrFGuard({
     url,
     init: uploadUrlInit,
+    // Keep control-plane negotiation on the REST budget; the binary upload below
+    // needs the longer attachment-transfer budget.
+    timeoutMs: params.rest.options.timeout,
     policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
     auditContext: "discord.voice.upload-url",
   });
@@ -374,6 +378,7 @@ async function uploadVoiceAttachment(params: {
       },
       body: new Uint8Array(params.audioBuffer),
     },
+    timeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
     policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
     auditContext: "discord.voice.attachment-upload",
   });

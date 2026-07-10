@@ -35,7 +35,6 @@ import {
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
-import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { __testing as agentJobTesting, waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -823,6 +822,28 @@ describe("injectTimestamp", () => {
 });
 
 describe("sanitizeChatHistoryMessages", () => {
+  it("truncates display text without splitting surrogate pairs", () => {
+    const prefix = "a".repeat(7);
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: `${prefix}😀tail` }],
+          timestamp: 1,
+        },
+      ],
+      8,
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `${prefix}\n...(truncated)...` }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("redacts base64 audio content blocks from chat history", () => {
     const data = Buffer.from("voice-bytes").toString("base64");
     const result = sanitizeChatHistoryMessages([
@@ -1411,6 +1432,7 @@ describe("projectRecentChatDisplayMessages", () => {
             args: { action: "send", message: "visible via message tool" },
           },
         ],
+        __openclaw: { seq: 1 },
         timestamp: 1,
       },
       {
@@ -1421,6 +1443,7 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { seq: 2 },
         timestamp: 2,
       },
       {
@@ -1428,6 +1451,7 @@ describe("projectRecentChatDisplayMessages", () => {
         toolName: "message",
         toolCallId: "call-message",
         content: JSON.stringify({ ok: true }),
+        details: { sourceReplySink: "internal-ui" },
         timestamp: 3,
       },
       {
@@ -1448,6 +1472,7 @@ describe("projectRecentChatDisplayMessages", () => {
             args: { action: "send", message: "visible via message tool" },
           },
         ],
+        __openclaw: { seq: 1 },
         timestamp: 1,
       },
       {
@@ -1459,6 +1484,7 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { seq: 2 },
         timestamp: 2,
       },
       {
@@ -1474,6 +1500,8 @@ describe("projectRecentChatDisplayMessages", () => {
         openclawMessageToolMirror: {
           toolName: "message",
           toolCallId: "call-message",
+          sourceReplySink: "internal-ui",
+          sourceMessageSeq: 1,
         },
         timestamp: 1,
       },
@@ -2569,28 +2597,6 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
         content: "Zm9v",
       },
     ]);
-  });
-});
-
-describe("sanitizeChatSendMessageInput", () => {
-  it.each([
-    {
-      name: "rejects null bytes",
-      input: "before\u0000after",
-      expected: { ok: false as const, error: "message must not contain null bytes" },
-    },
-    {
-      name: "strips unsafe control characters while preserving tab/newline/carriage return",
-      input: "a\u0001b\tc\nd\re\u0007f\u007f",
-      expected: { ok: true as const, message: "ab\tc\nd\ref" },
-    },
-    {
-      name: "normalizes unicode to NFC",
-      input: "Cafe\u0301",
-      expected: { ok: true as const, message: "Café" },
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
   });
 });
 
@@ -4893,6 +4899,154 @@ describe("gateway healthHandlers.health cache freshness", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("merges live dead-lettered delivery queue counts into cached health responses", async () => {
+    const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-cached-dq-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpStateDir;
+    try {
+      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
+        await import("../../infra/delivery-queue-sqlite.js");
+      // The cached snapshot was built before this delivery dead-lettered.
+      const cached = {
+        ok: true,
+        ts: Date.now(),
+        durationMs: 1,
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        heartbeatSeconds: 0,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      };
+      upsertDeliveryQueueEntry({
+        queueName: "outbound",
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+      });
+      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+
+      const respond = vi.fn();
+      const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+      await healthHandlers.health({
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      });
+
+      const payload = mockCallArg(respond, 0, 1) as
+        | {
+            deliveryQueues?: {
+              failed?: Array<{ queueName?: string; count?: number; oldestFailedAt?: number }>;
+            };
+          }
+        | undefined;
+      expect(payload?.deliveryQueues?.failed).toHaveLength(1);
+      expect(payload?.deliveryQueues?.failed?.[0]).toMatchObject({
+        queueName: "outbound",
+        count: 1,
+      });
+      expect(typeof payload?.deliveryQueues?.failed?.[0]?.oldestFailedAt).toBe("number");
+      expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tmpStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges a live disabled config hot-reload status into cached health responses", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      configReload: { hotReloadStatus: "active" },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+    const getConfigReloaderHotReloadStatus = vi.fn(() => "disabled" as const);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        getConfigReloaderHotReloadStatus,
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | { configReload?: { hotReloadStatus?: string } }
+      | undefined;
+    // The cache-hit merge must reflect the live "disabled" flip immediately,
+    // not the stale "active" value from the cached snapshot — otherwise
+    // operators wait up to HEALTH_REFRESH_INTERVAL_MS to see a watcher that
+    // has already permanently given up.
+    expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+  });
+
+  it("preserves the cached config hot-reload status when no live accessor is available", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      configReload: { hotReloadStatus: "disabled" },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | { configReload?: { hotReloadStatus?: string } }
+      | undefined;
+    expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {

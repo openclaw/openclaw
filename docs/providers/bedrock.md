@@ -308,9 +308,9 @@ openclaw models list
     ```
 
     Valid values are `default`, `flex`, `priority`, and `reserved`. Claude
-    Fable 5 only supports the `default` tier; OpenClaw warns and ignores
-    `flex`, `priority`, or `reserved` requested for that model. For other
-    models, not every model supports every tier -- an unsupported tier
+    Fable 5 and Sonnet 5 only support the `default` tier; OpenClaw warns and
+    ignores `flex`, `priority`, or `reserved` requested for those models. For
+    other models, not every model supports every tier -- an unsupported tier
     returns a Bedrock validation error, and the error message can be
     misleading (for example "The provided model identifier is invalid"
     rather than naming the tier as the problem). If you see this error, check
@@ -344,6 +344,36 @@ openclaw models list
     retained for up to 30 days for trust and safety. Review and configure
     [Bedrock data retention](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html)
     before enabling the model.
+
+  </Accordion>
+
+  <Accordion title="Claude Mythos 5">
+    Claude Mythos 5 is available through Bedrock only for accounts with the
+    required limited-access approval. OpenClaw recognizes the foundation model
+    `anthropic.claude-mythos-5` and regional or global inference profiles such
+    as `us.anthropic.claude-mythos-5`.
+
+    OpenClaw applies the 1,000,000-token context window, 128,000-token output
+    limit, image input, prompt caching, refusal-safe streaming, and native
+    effort levels. Adaptive thinking is always enabled: `/think off` and
+    `/think minimal` map to `low`, while `xhigh` and `max` remain available.
+    Custom sampling and forced tool choice values are omitted.
+
+  </Accordion>
+
+  <Accordion title="Claude Sonnet 5">
+    AWS documents Sonnet 5 for both the
+    [`bedrock-runtime` and `bedrock-mantle` endpoints](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html).
+    OpenClaw recognizes the Bedrock foundation model
+    `anthropic.claude-sonnet-5` and regional or global inference profiles such
+    as `us.anthropic.claude-sonnet-5`. It applies the 1,000,000-token context
+    window, 128,000-token output limit, image input, native effort levels,
+    prompt caching, and refusal-safe streaming.
+
+    Bedrock keeps adaptive thinking enabled for Sonnet 5. OpenClaw defaults to
+    `high`; `/think off` and `/think minimal` map to `low` because this route
+    cannot disable thinking. Custom temperature and forced tool choice values
+    are omitted while adaptive thinking is active.
 
   </Accordion>
 

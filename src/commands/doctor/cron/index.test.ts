@@ -543,6 +543,88 @@ describe("maybeRepairLegacyCronStore", () => {
     });
   });
 
+  describe("chronic failure advisory", () => {
+    it("warns about repeatedly failing jobs without touching the store", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          id: "failing-job",
+          state: { lastRunStatus: "error", consecutiveErrors: 5, lastError: "boom" },
+        }),
+      ]);
+      const prompter = makePrompter(true);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter,
+      });
+
+      expectNoteContaining("1 cron job has failed 3+ runs in a row", "Cron");
+      expectNoteContaining("re-fires it on error backoff", "Cron");
+      expectNoteContaining("resets on the next successful run", "Cron");
+      expectNoteContaining("interrupted by a gateway restart", "Cron");
+      expectNoteContaining("openclaw cron show <id>", "Cron");
+
+      // Observer-only: no repair prompt and the failure counters stay untouched.
+      expect(prompter.confirm).not.toHaveBeenCalled();
+      const jobs = await readPersistedJobs(storePath);
+      const state = requireRecord(requirePersistedJob(jobs, 0).state, "cron state");
+      expect(state.consecutiveErrors).toBe(5);
+    });
+
+    it("pluralizes and only counts enabled jobs at or above the threshold", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          id: "failing-a",
+          state: { lastRunStatus: "error", consecutiveErrors: 3 },
+        }),
+        createCurrentCronJob({
+          id: "failing-b",
+          state: { lastRunStatus: "error", consecutiveErrors: 12 },
+        }),
+        createCurrentCronJob({
+          id: "recovering",
+          state: { lastRunStatus: "error", consecutiveErrors: 2 },
+        }),
+        // Exhausted one-shot jobs get disabled with their error state retained;
+        // they no longer re-fire, so the advisory must not count them.
+        createCurrentCronJob({
+          id: "disabled-exhausted",
+          enabled: false,
+          state: { lastRunStatus: "error", consecutiveErrors: 9 },
+        }),
+      ]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoteContaining("2 cron jobs have failed 3+ runs in a row", "Cron");
+    });
+
+    it("stays silent when failure streaks are below the threshold", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          id: "single-failure",
+          state: { lastRunStatus: "error", consecutiveErrors: 2 },
+        }),
+      ]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoNoteContaining("runs in a row", "Cron");
+    });
+  });
+
   it("repairs legacy cron store fields and migrates notify fallback to webhook delivery", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [createLegacyCronJob()]);

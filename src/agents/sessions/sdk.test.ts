@@ -3,6 +3,10 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
+import {
+  createUserTurnTranscriptRecorder,
+  takeRuntimeUserTurnTranscriptContext,
+} from "../../sessions/user-turn-transcript.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
@@ -185,6 +189,39 @@ describe("AgentSession getLastAssistantText", () => {
     const session = await createSessionFromManager(sessionManager);
 
     expect(session.getLastAssistantText()).toBe("previous answer");
+  });
+});
+
+describe("AgentSession queued user turns", () => {
+  it("carries prepared transcript context on the exact steered message", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "visible group prompt",
+        sender: { id: "user-42", name: "Ada" },
+      },
+      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+    });
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+
+    await session.steer("runtime group prompt", undefined, recorder);
+
+    const runtimeMessage = steer.mock.calls[0]?.[0];
+    expect(runtimeMessage).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "runtime group prompt" }],
+    });
+    if (!runtimeMessage) {
+      throw new Error("expected queued runtime message");
+    }
+    expect(takeRuntimeUserTurnTranscriptContext(runtimeMessage)).toMatchObject({
+      message: {
+        role: "user",
+        content: "visible group prompt",
+        __openclaw: { senderId: "user-42", senderName: "Ada" },
+      },
+      recorder,
+    });
   });
 });
 

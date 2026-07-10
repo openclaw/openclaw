@@ -255,7 +255,25 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes live command retry helper changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/ci-live-command-retry.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-live-command-retry.test.ts"],
+    });
+  });
+
   it("routes release wrapper changes through their owner tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/apple-release-source-check.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/apple-release-source-check.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan(["scripts/ios-release-prepare.sh"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/ios-release-prepare.test.ts",
+        "test/scripts/ios-release-wrapper-args.test.ts",
+      ],
+    });
     expect(resolveChangedTestTargetPlan(["scripts/android-release.sh"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/android-release-wrapper-args.test.ts"],
@@ -263,6 +281,19 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(resolveChangedTestTargetPlan(["scripts/android-release-upload.sh"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/android-release-wrapper-args.test.ts"],
+    });
+    expect(
+      resolveChangedTestTargetPlan(["apps/android/scripts/build-release-artifacts.ts"]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/android-release-artifacts.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan([".github/workflows/android-release.yml"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
     });
     expect(resolveChangedTestTargetPlan(["scripts/release-fast-pretag-check.sh"])).toEqual({
       mode: "targets",
@@ -461,6 +492,13 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps shared PR worktree helper edits on the full tooling owner suite", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/pr-lib/worktree.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/vitest/vitest.tooling.config.ts"],
+    });
+  });
+
   it("routes nested e2e shell helpers through their sourced owner tests", () => {
     const expectedTargets = new Map([
       [
@@ -484,7 +522,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
-        ["test/scripts/docker-build-helper.test.ts"],
+        [
+          "test/scripts/codex-install-assertions.test.ts",
+          "test/scripts/docker-build-helper.test.ts",
+        ],
       ],
       [
         "scripts/e2e/lib/codex-install-utils.mjs",
@@ -1163,20 +1204,24 @@ describe("scripts/test-projects changed-target routing", () => {
     ]) {
       expect(resolveChangedTestTargetPlan([fixturePath]), fixturePath).toEqual({
         mode: "targets",
-        targets: ["test/scripts/docs-i18n-behavior.test.ts"],
+        targets: ["test/scripts/docs-i18n.test.ts"],
       });
     }
   });
 
-  it("keeps docs i18n Go module edits on Go module tests", () => {
-    for (const modulePath of [
-      "scripts/docs-i18n/main.go",
-      "scripts/docs-i18n/main_test.go",
-      "scripts/docs-i18n/go.mod",
-    ]) {
+  it("keeps docs i18n Go edits on their module and workflow guards", () => {
+    const cases = [
+      ["scripts/docs-i18n/main.go", ["test/scripts/docs-i18n.test.ts"]],
+      ["scripts/docs-i18n/main_test.go", ["test/scripts/docs-i18n.test.ts"]],
+      [
+        "scripts/docs-i18n/go.mod",
+        ["test/scripts/docs-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+      ],
+    ] as const;
+    for (const [modulePath, targets] of cases) {
       expect(resolveChangedTestTargetPlan([modulePath]), modulePath).toEqual({
         mode: "targets",
-        targets: ["test/scripts/docs-i18n.test.ts"],
+        targets,
       });
     }
   });
@@ -1189,10 +1234,15 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps Crabbox runner script edits on their regression tests", () => {
-    expect(resolveChangedTestTargetPlan(["scripts/crabbox-wrapper.mjs"])).toEqual({
-      mode: "targets",
-      targets: ["test/scripts/crabbox-wrapper.test.ts"],
-    });
+    for (const scriptPath of [
+      "scripts/crabbox-wrapper.mjs",
+      "scripts/crabbox-wrapper-providers.mjs",
+    ]) {
+      expect(resolveChangedTestTargetPlan([scriptPath]), scriptPath).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/crabbox-wrapper.test.ts"],
+      });
+    }
   });
 
   it("keeps build stamp script edits on the build stamp regression test", () => {
@@ -1220,6 +1270,22 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/verify-pr-hosted-gates.test.ts",
       ],
+    });
+  });
+
+  it("keeps generated locale publisher and inventory edits on workflow guards", () => {
+    for (const actionPath of [
+      ".github/actions/create-generated-pr-tokens/action.yml",
+      ".github/actions/publish-generated-pr/action.yml",
+    ]) {
+      expect(resolveChangedTestTargetPlan([actionPath])).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/ci-workflow-guards.test.ts"],
+      });
+    }
+    expect(resolveChangedTestTargetPlan(["scripts/native-app-i18n.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/native-app-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
     });
   });
 
@@ -1282,6 +1348,14 @@ describe("scripts/test-projects changed-target routing", () => {
         ".github/workflows/mantis-telegram-desktop-proof.yml",
         [
           "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+      [
+        ".github/workflows/mantis-web-ui-chat-proof.yml",
+        [
+          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
         ],
@@ -1449,10 +1523,21 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts"],
       ],
       ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
+      ["scripts/ios-write-version-xcconfig.sh", ["test/scripts/ios-version.test.ts"]],
       ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
       ["scripts/make_appcast.sh", ["test/scripts/make-appcast.test.ts"]],
       ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
       ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
+      [
+        "scripts/lib/build-metadata.sh",
+        [
+          "src/docker-setup.e2e.test.ts",
+          "test/scripts/apple-release-source-check.test.ts",
+          "test/scripts/ios-version.test.ts",
+          "test/scripts/package-mac-app.test.ts",
+          "test/scripts/test-install-sh-docker.test.ts",
+        ],
+      ],
       [
         "scripts/lib/swift-toolchain.sh",
         ["test/scripts/package-mac-app.test.ts", "test/scripts/package-mac-dist.test.ts"],
@@ -1547,7 +1632,12 @@ describe("scripts/test-projects changed-target routing", () => {
     const expectedTargets = new Map([
       ["scripts/committer", ["test/scripts/committer.test.ts"]],
       ["scripts/gh-read", ["test/scripts/gh-read.test.ts"]],
-      ["scripts/pr", ["test/scripts/pr-wrappers.test.ts"]],
+      [
+        "scripts/pr",
+        ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"],
+      ],
+      ["scripts/pr-lib/operation-lock.sh", ["test/scripts/pr-operation-lock.test.ts"]],
+      ["scripts/pr-lib/process-group-runner.mjs", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-merge", ["test/scripts/pr-wrappers.test.ts"]],
       ["scripts/pr-prepare", ["test/scripts/pr-wrappers.test.ts"]],
       ["scripts/pr-review", ["test/scripts/pr-wrappers.test.ts"]],
@@ -1941,6 +2031,16 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/check-openclaw-package-tarball.test.ts",
           "test/scripts/postinstall-bundled-plugins.test.ts",
           "test/release-check.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/build-metadata.sh",
+        [
+          "src/docker-setup.e2e.test.ts",
+          "test/scripts/apple-release-source-check.test.ts",
+          "test/scripts/ios-version.test.ts",
+          "test/scripts/package-mac-app.test.ts",
+          "test/scripts/test-install-sh-docker.test.ts",
         ],
       ],
       [
@@ -2611,13 +2711,22 @@ describe("scripts/test-projects changed-target routing", () => {
       ["ui/src", "test/vitest/vitest.ui.config.ts"],
     ] as const;
 
+    const plansByConfig = new Map(
+      buildVitestRunPlans(
+        cases.map(([target]) => target),
+        process.cwd(),
+      ).map((plan) => [plan.config, plan]),
+    );
     for (const [target, config] of cases) {
-      expect(buildVitestRunPlans([target], process.cwd()).at(-1)).toEqual({
+      const plan = plansByConfig.get(config);
+      expect(plan).toMatchObject({
         config,
         forwardedArgs: [],
-        includePatterns: [`${target}/**/*.test.ts`],
         watchMode: false,
       });
+      expect(plan?.includePatterns?.filter((pattern) => pattern.endsWith("/**/*.test.ts"))).toEqual(
+        [`${target}/**/*.test.ts`],
+      );
     }
 
     expect(buildVitestRunPlans(["src/plugin-sdk"], process.cwd())).toEqual([
@@ -3386,6 +3495,19 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(spec?.includeFilePath).not.toMatch(new RegExp(`${process.pid}-\\d+-0\\.json$`, "u"));
   });
 
+  it("preflights targeted UI E2E specs with Playwright browser assets", () => {
+    const [spec] = createVitestRunSpecs(["ui/src/pages/tasks/tasks.e2e.test.ts"], {
+      baseEnv: {},
+    });
+
+    expect(spec?.config).toBe("test/vitest/vitest.ui-e2e.config.ts");
+    expect(spec?.preflightPnpmArgs).toEqual([
+      "exec",
+      "node",
+      "scripts/ensure-playwright-chromium.mjs",
+    ]);
+  });
+
   it("routes explicit commands light tests to the lighter commands lane", () => {
     const plans = buildVitestRunPlans(["src/commands/status-json-runtime.test.ts"], process.cwd());
 
@@ -3820,7 +3942,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     ]);
   });
 
-  it("uses the large host-aware local profile on roomy local hosts", () => {
+  it("uses the global host worker budget for roomy local hosts", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
         61,
@@ -3831,7 +3953,7 @@ describe("scripts/test-projects full-suite sharding", () => {
           totalMemoryBytes: 48 * 1024 ** 3,
         },
       ),
-    ).toBe(10);
+    ).toBe(6);
   });
 
   it("keeps CI full-suite runs serial even on roomy hosts", () => {
@@ -4130,19 +4252,23 @@ describe("scripts/test-projects full-suite sharding", () => {
 
   it("can expand full-suite shards to project configs for perf experiments", () => {
     const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
+    const toolingConfig = "test/vitest/vitest.tooling.config.ts";
+    const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
     const plans = leafShardPlans;
+    const toolingPlans = plans.filter((plan) => plan.config === toolingConfig);
+    const unitFastPlans = plans.filter((plan) => plan.config === unitFastConfig);
 
     if (leafShardHasGitGatewayListing) {
       expect(leafShardGatewayTreeReads).toEqual([]);
     }
     expect(leafShardPlans.map((plan) => plan.config)).toEqual([
-      "test/vitest/vitest.unit-fast.config.ts",
+      ...unitFastPlans.map(() => unitFastConfig),
       "test/vitest/vitest.unit-fast-fake-timers.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
       "test/vitest/vitest.unit-security.config.ts",
       "test/vitest/vitest.unit-support.config.ts",
       "test/vitest/vitest.boundary.config.ts",
-      "test/vitest/vitest.tooling.config.ts",
+      ...toolingPlans.map(() => toolingConfig),
       "test/vitest/vitest.tooling-docker.config.ts",
       "test/vitest/vitest.tooling-isolated.config.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
@@ -4235,9 +4361,36 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
     expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
     expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
-    expect(plans.filter((plan) => plan.config !== gatewayServerConfig)).toEqual(
+    const unitFastTargets = unitFastPlans.flatMap((plan) => plan.forwardedArgs);
+    expect(unitFastPlans.length).toBeGreaterThan(10);
+    expect(unitFastPlans.every((plan) => plan.forwardedArgs.length <= 70)).toBe(true);
+    expect(unitFastTargets.length).toBeGreaterThan(1_000);
+    expect(new Set(unitFastTargets).size).toBe(unitFastTargets.length);
+    expect(unitFastTargets).toContain("extensions/canvas/src/host/server.state-dir.test.ts");
+    expect(unitFastTargets).not.toContain("src/utils.test.ts");
+    const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
+    expect(toolingPlans.length).toBeGreaterThan(1);
+    expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+    expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
+    expect(toolingTargets).toContain("test/scripts/test-group-report.test.ts");
+    expect(toolingTargets).toContain("src/scripts/control-ui-i18n-report.test.ts");
+    expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
+    expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
+    expect(
+      plans.filter(
+        (plan) =>
+          plan.config !== gatewayServerConfig &&
+          plan.config !== toolingConfig &&
+          plan.config !== unitFastConfig,
+      ),
+    ).toEqual(
       plans
-        .filter((plan) => plan.config !== gatewayServerConfig)
+        .filter(
+          (plan) =>
+            plan.config !== gatewayServerConfig &&
+            plan.config !== toolingConfig &&
+            plan.config !== unitFastConfig,
+        )
         .map((plan) => ({
           config: plan.config,
           forwardedArgs: [],

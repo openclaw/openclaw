@@ -29,7 +29,12 @@ import {
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
-import type { ProviderAuthMethod, ProviderAuthOptionBag, ProviderPlugin } from "./types.js";
+import type {
+  ProviderAuthMethod,
+  ProviderAuthOptionBag,
+  ProviderAuthResult,
+  ProviderPlugin,
+} from "./types.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
@@ -255,6 +260,67 @@ export const testing = {
   },
 } as const;
 
+export async function runProviderPluginAuthMethodUnpersisted(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  runtime: RuntimeEnv;
+  prompter: WizardPrompter;
+  method: ProviderAuthMethod;
+  agentDir: string;
+  workspaceDir: string;
+  secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
+  allowSecretRefPrompt?: boolean;
+  opts?: Partial<ProviderAuthOptionBag>;
+}): Promise<ProviderAuthResult> {
+  return await params.method.run({
+    config: params.config,
+    env: params.env,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    prompter: params.prompter,
+    runtime: params.runtime,
+    opts: params.opts,
+    secretInputMode: params.secretInputMode,
+    allowSecretRefPrompt: params.allowSecretRefPrompt,
+    isRemote: isRemoteEnvironment(),
+    openUrl: async (url) => {
+      await openUrl(url);
+    },
+    oauth: {
+      createVpsAwareHandlers: (opts) => createVpsAwareOAuthHandlers(opts),
+    },
+  });
+}
+
+export function applyProviderPluginAuthMethodResultConfig(params: {
+  config: OpenClawConfig;
+  result: ProviderAuthResult;
+}): OpenClawConfig {
+  const { result } = params;
+  let nextConfig = params.config;
+
+  if (result.configPatch) {
+    nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch, {
+      replaceDefaultModels: result.replaceDefaultModels,
+    });
+  }
+
+  for (const profile of result.profiles) {
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: profile.profileId,
+      provider: profile.credential.provider,
+      mode: profile.credential.type === "token" ? "token" : profile.credential.type,
+      ...("email" in profile.credential && profile.credential.email
+        ? { email: profile.credential.email }
+        : {}),
+      ...("displayName" in profile.credential && profile.credential.displayName
+        ? { displayName: profile.credential.displayName }
+        : {}),
+    });
+  }
+  return nextConfig;
+}
+
 export async function runProviderPluginAuthMethod(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -275,32 +341,18 @@ export async function runProviderPluginAuthMethod(params: {
     params.workspaceDir ??
     resolveAgentWorkspaceDir(params.config, agentId) ??
     resolveDefaultAgentWorkspaceDir();
-
-  const result = await params.method.run({
+  const result = await runProviderPluginAuthMethodUnpersisted({
     config: params.config,
     env: params.env,
+    runtime: params.runtime,
+    prompter: params.prompter,
+    method: params.method,
     agentDir,
     workspaceDir,
-    prompter: params.prompter,
-    runtime: params.runtime,
-    opts: params.opts,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
-    isRemote: isRemoteEnvironment(),
-    openUrl: async (url) => {
-      await openUrl(url);
-    },
-    oauth: {
-      createVpsAwareHandlers: (opts) => createVpsAwareOAuthHandlers(opts),
-    },
+    opts: params.opts,
   });
-
-  let nextConfig = params.config;
-  if (result.configPatch) {
-    nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch, {
-      replaceDefaultModels: result.replaceDefaultModels,
-    });
-  }
 
   for (const profile of result.profiles) {
     await upsertAuthProfileWithLockOrThrow({
@@ -308,19 +360,12 @@ export async function runProviderPluginAuthMethod(params: {
       credential: profile.credential,
       agentDir,
     });
-
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: profile.profileId,
-      provider: profile.credential.provider,
-      mode: profile.credential.type === "token" ? "token" : profile.credential.type,
-      ...("email" in profile.credential && profile.credential.email
-        ? { email: profile.credential.email }
-        : {}),
-      ...("displayName" in profile.credential && profile.credential.displayName
-        ? { displayName: profile.credential.displayName }
-        : {}),
-    });
   }
+
+  const nextConfig = applyProviderPluginAuthMethodResultConfig({
+    config: params.config,
+    result,
+  });
 
   if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");

@@ -357,7 +357,7 @@ surfaces:
             description: '`health` and `status` RPCs.'
           - name: Identity and presence APIs
             coverageIds: [gateway.identity-and-presence-apis]
-            description: '`gateway.identity.get`, `system-presence`, `system-event`, and heartbeat RPCs.'
+            description: '`gateway.identity.get`, `system.info`, `system-presence`, `system-event`, and heartbeat RPCs.'
           - name: Model APIs
             coverageIds: [gateway.model-apis]
             description: '`models.list` RPCs.'
@@ -1612,10 +1612,13 @@ surfaces:
           - name: Runtime Assembly
             coverageIds: [agents.openclaw-harness, models.codex-cli, workspace.planning]
             description: Covers Runtime Assembly across context-engine selection, registry, host compatibility, legacy fallback, assemble/ingest/after-turn/compact lifecycle, runtime context projection, and the boundary between OpenClaw context assembly and native harness history.
+          - name: Goal continuance
+            coverageIds: [goals.context-injection, goals.continuance]
+            description: Active session goals remain visible in current-turn context and drive concrete followthrough across later turns and compaction.
         docs:
           - docs/concepts/context.md
           - docs/concepts/context-engine.md
-          - docs/plan/codex-context-engine-harness.md
+          - docs/tools/goal.md
         search_anchors:
           - Context Engine
           - Runtime Assembly
@@ -1870,10 +1873,10 @@ surfaces:
         id: inbound-access-and-identity-gates
         features:
           - name: DM pairing
-            coverageIds: [security.dm-pairing]
+            coverageIds: [security.dm-pairing, channels.pairing-gate]
             description: DM pairing and allowFrom sender controls
           - name: Group/channel allowlists
-            coverageIds: [channels.group-channel-allowlists]
+            coverageIds: [channels.access-policy, channels.allowlist-hot-reload, channels.group-channel-allowlists]
             description: Group/channel allowlists and sender allowlists
           - name: Access group expansion
             coverageIds: [channels.access-group-expansion]
@@ -1926,7 +1929,7 @@ surfaces:
         id: outbound-delivery-and-reply-pipeline
         features:
           - name: Automatic final reply delivery
-            coverageIds: [agents.subagents, channels.dedup, channels.direct-visible-replies, channels.dm, channels.group-visible-replies, channels.qa-channel, channels.reconnect, channels.streaming, channels.threads, commitments.heartbeat-target-none, commitments.scope, personal.channel-replies, runtime.delivery, runtime.fallback-delivery, runtime.gateway-restart, runtime.restart-recovery, tools.message]
+            coverageIds: [agents.subagents, channels.dedup, channels.direct-visible-replies, channels.dm, channels.group-visible-replies, channels.qa-channel, channels.reconnect, channels.restart-resume, channels.streaming, channels.threads, commitments.heartbeat-target-none, commitments.scope, personal.channel-replies, runtime.delivery, runtime.fallback-delivery, runtime.gateway-restart, runtime.restart-recovery, tools.message]
             description: Automatic final reply delivery and strict message-tool-only visible delivery
           - name: Durable outbound send orchestration
             coverageIds: [channels.dedup, channels.reconnect, runtime.delivery]

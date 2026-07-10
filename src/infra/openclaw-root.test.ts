@@ -149,6 +149,25 @@ describe("resolveOpenClawPackageRoot", () => {
       },
     },
     {
+      name: "prefers a symlink target nested under another openclaw package",
+      setup: () => {
+        const sourceRoot = fx("nested-symlink-scenario");
+        const bin = path.join(sourceRoot, ".artifacts", "prefix", "bin", "openclaw");
+        const installedRoot = path.join(
+          sourceRoot,
+          ".artifacts",
+          "prefix",
+          "lib",
+          "node_modules",
+          "openclaw",
+        );
+        state.realpaths.set(abs(bin), abs(path.join(installedRoot, "openclaw.mjs")));
+        setPackageRoot(sourceRoot);
+        setPackageRoot(installedRoot);
+        return { opts: { argv1: bin }, expected: installedRoot };
+      },
+    },
+    {
       name: "falls back when argv1 realpath throws",
       setup: () => {
         const project = fx("realpath-throw-scenario");

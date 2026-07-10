@@ -13,10 +13,67 @@ const CHANNEL_LABELS: Record<string, string> = {
   sms: "SMS",
 };
 
+/** Human channel label for group headers and name fallbacks. */
+export function channelDisplayLabel(channel: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(channel);
+  return CHANNEL_LABELS[normalized] ?? capitalize(normalized || channel);
+}
+
+/** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
+function shortenPeerId(identifier: string): string {
+  const trimmed = identifier.trim();
+  return trimmed.length <= 10 ? trimmed : `…${trimmed.slice(-6)}`;
+}
+
+const WORKTREE_BRANCH_PREFIX = "openclaw/";
+
+const CHANNEL_SESSION_KEY_RE = /^agent:[^:]+:([^:]+)(?::[^:]+)?:(?:direct|group|channel|thread):/;
+const PEER_SESSION_KEY_RE = /:(?:direct|group|channel|thread):/;
+
+/**
+ * Classifies channel-originated sessions for the sidebar's built-in channel
+ * sections. Agent main and dashboard sessions stay out even when they carry
+ * channel routing metadata (dmScope=main keeps Main as the anchor chat).
+ */
+export function resolveChannelSessionInfo(
+  key: string,
+  rowChannel?: string,
+): { channel?: string; channelSession: boolean } {
+  if (!PEER_SESSION_KEY_RE.test(key)) {
+    return { channelSession: false };
+  }
+  const keyChannel = key.match(CHANNEL_SESSION_KEY_RE)?.[1];
+  const channel =
+    normalizeOptionalString(keyChannel && keyChannel !== "direct" ? keyChannel : undefined) ??
+    normalizeOptionalString(rowChannel);
+  return { channel, channelSession: Boolean(channel) };
+}
+
+type SessionWorktreeDisplayRow = {
+  worktree?: { branch?: string; repoRoot?: string };
+  execNode?: string;
+};
+
+/** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
+export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
+  const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
+  const branch = normalizeOptionalString(row.worktree?.branch);
+  const node = normalizeOptionalString(row.execNode);
+  const repoName = repoRoot ? (repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot) : undefined;
+  const shortBranch = branch?.startsWith(WORKTREE_BRANCH_PREFIX)
+    ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
+    : branch;
+  const checkout = repoName ? (shortBranch ? `${repoName} ⎇ ${shortBranch}` : repoName) : undefined;
+  if (checkout && node) {
+    return `${node} · ${checkout}`;
+  }
+  return checkout ?? node;
+}
+
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
 
 /** Parsed type / context extracted from a session key. */
-export type SessionKeyInfo = {
+type SessionKeyInfo = {
   /** Prefix for typed sessions (Subagent:/Cron:). Empty for others. */
   prefix: string;
   /** Human-readable fallback when no label / displayName is available. */
@@ -26,7 +83,7 @@ export type SessionKeyInfo = {
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
-};
+} & SessionWorktreeDisplayRow;
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -36,7 +93,7 @@ function capitalize(s: string): string {
  * Parse a session key to extract type information and a human-readable
  * fallback display name. Exported for testing.
  */
-export function parseSessionKey(key: string): SessionKeyInfo {
+function parseSessionKey(key: string): SessionKeyInfo {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   // Main session.
@@ -54,13 +111,14 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     return { prefix: "Cron:", fallbackName: "Cron Job:" };
   }
 
-  // Direct chat: agent:<x>:<channel>:direct:<id>.
+  // Direct chat: agent:<x>:<channel>:direct:<id>. Never render the raw peer
+  // id; the gateway sends origin-derived names, so this is a last resort.
   const directMatch = key.match(/^agent:[^:]+:([^:]+):direct:(.+)$/);
   if (directMatch) {
     const channel = directMatch[1];
     const identifier = directMatch[2];
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} · ${identifier}` };
+    return { prefix: "", fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}` };
   }
 
   // Group chat: agent:<x>:<channel>:group:<id>.
@@ -76,6 +134,12 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     if (key === ch || key.startsWith(`${ch}:`)) {
       return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
     }
+  }
+
+  // Dashboard sessions get generated titles asynchronously; the opaque uuid key
+  // must not flash in the sidebar while that title is pending.
+  if (/^agent:[^:]+:dashboard:/.test(key)) {
+    return { prefix: "", fallbackName: "New session" };
   }
 
   // Unknown: return key as-is.
@@ -100,6 +164,11 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
   }
   if (displayName && displayName !== key) {
     return applyTypedPrefix(displayName);
+  }
+  // Unnamed work sessions read as their checkout instead of an opaque key.
+  const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
+  if (workSubtitle && row?.worktree) {
+    return applyTypedPrefix(workSubtitle);
   }
   return fallbackName;
 }

@@ -66,6 +66,15 @@ Only declare capabilities the native transport actually preserves. Cover
 each declared send, receipt, live-preview, and receive-ack capability with
 the contract helpers exported from this subpath.
 
+## Delivery Evidence
+
+A `MessageReceipt` records the result returned by a channel adapter. Concrete
+platform message identifiers show that the platform send path accepted the
+message; they do not prove that a recipient's device displayed or read it.
+Receipts without platform message identifiers are local receipt metadata only.
+Channels with read receipts or device-delivery state should track those facts
+through a separate channel-specific path.
+
 ## Existing outbound adapters
 
 If the channel already has a compatible `outbound` adapter, derive the
@@ -97,16 +106,38 @@ Runtime send helpers also live on `channel-outbound`:
 
 `sendDurableMessageBatch(...)` returns one explicit outcome:
 
-| Outcome          | Meaning                                                                                  |
-| ---------------- | ---------------------------------------------------------------------------------------- |
-| `sent`           | at least one visible platform message was delivered                                      |
-| `suppressed`     | no platform message should be treated as missing                                         |
-| `partial_failed` | at least one platform message was delivered before a later payload or side effect failed |
-| `failed`         | no platform receipt was produced                                                         |
+| Outcome          | Meaning                                                                                 |
+| ---------------- | --------------------------------------------------------------------------------------- |
+| `sent`           | at least one visible platform message was accepted by the platform send path            |
+| `suppressed`     | no platform message should be treated as missing                                        |
+| `partial_failed` | at least one platform message was accepted before a later payload or side effect failed |
+| `failed`         | no platform receipt was produced                                                        |
 
 Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy
 direct-delivery result.
+
+## Deferred delivery admission
+
+Use `message.durableFinal.admitDeferredDelivery(...)` when a resolved account
+cannot safely accept core-managed outbound or deferred delivery. Core calls
+this hook synchronously before live outbound work, including paths that skip
+queue persistence, and again before replaying a recovered intent. The context
+includes `cfg`, `channel`, `to`, `accountId`, and a `phase` of `live` or
+`recovery`.
+
+Return `{ status: "allowed" }` to continue. Return
+`{ status: "permanent_rejection", reason }` when the delivery must not be
+persisted, sent directly, or replayed. A live rejection fails before queue
+creation, message hooks, or platform work. A recovery rejection marks the
+queued record failed and skips reconciliation and replay. Omitting the hook
+means allowed.
+
+The hook is a synchronous admission decision, not a send path. Read only
+already-loaded config or runtime state; do not perform network, filesystem, or
+other asynchronous I/O. Contract tests should exercise both phases and both
+result variants through `ChannelMessageDurableFinalAdapter` from
+`openclaw/plugin-sdk/channel-outbound`.
 
 ## Compatibility dispatch
 
