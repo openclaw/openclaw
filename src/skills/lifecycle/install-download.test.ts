@@ -286,6 +286,118 @@ describe("installDownloadSpec extraction safety", () => {
   );
 });
 
+describe("installDownloadSpec download byte limit (#103236)", () => {
+  const CHUNK_KIB = 64;
+  const CHUNK_BYTES = CHUNK_KIB * 1024;
+  const LIMIT_MIB = 100;
+  const LIMIT_BYTES = LIMIT_MIB * 1024 * 1024;
+  // ~103 MiB — enough to exceed the 100 MiB limit in ~3 chunks after hitting it.
+  const CHUNKS = Math.ceil((LIMIT_BYTES + CHUNK_BYTES * 3) / CHUNK_BYTES);
+
+  function createStreamingBody(): Readable {
+    return Readable.from(
+      (async function* () {
+        const chunk = Buffer.allocUnsafe(CHUNK_BYTES);
+        for (let i = 0; i < CHUNKS; i++) {
+          yield chunk;
+        }
+      })(),
+    );
+  }
+
+  it("aborts an oversized download mid-stream and cleans up staging", async () => {
+    const entry = buildEntry("oversized-dl");
+    let destroyed = false;
+    let streamedChunks = 0;
+
+    const body = new Readable({
+      read() {
+        streamedChunks++;
+        this.push(Buffer.allocUnsafe(CHUNK_BYTES));
+      },
+    });
+
+    let released = false;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body,
+      },
+      release: async () => {
+        released = true;
+      },
+    });
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "oversized",
+        url: "https://example.invalid/oversized.bin",
+        extract: false,
+        targetDir: ".",
+      },
+      timeoutMs: 60_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("exceeds");
+    expect(result.message).toContain("bytes");
+    // The stream should have been aborted well before all chunks were emitted.
+    expect(streamedChunks).toBeLessThan(CHUNKS);
+    // Staging .tmp file must be cleaned up.
+    const stagingDir = path.join(resolveSkillToolsRootDir(entry), ".openclaw-download-staging");
+    let tmpFiles: string[] = [];
+    try {
+      const dirents = await fs.readdir(stagingDir);
+      tmpFiles = dirents.filter((f) => f.endsWith(".tmp"));
+    } catch {
+      // dir missing is ok
+    }
+    expect(tmpFiles).toHaveLength(0);
+    // Guarded response must be released.
+    expect(released).toBe(true);
+    // Verify the body stream was destroyed (pipeline teardown).
+    expect(body.destroyed).toBe(true);
+  }, 30_000);
+
+  it("allows a small download to complete normally", async () => {
+    const entry = buildEntry("small-dl");
+    let released = false;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: Readable.from([Buffer.alloc(4096)]),
+      },
+      release: async () => {
+        released = true;
+      },
+    });
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "small",
+        url: "https://example.invalid/small.bin",
+        extract: false,
+        targetDir: ".",
+      },
+      timeoutMs: 30_000,
+    });
+
+    // Small download should complete (ok depends on extract/copy steps,
+    // but it must NOT be aborted by the size limit).
+    expect(result.message ?? "").not.toContain("exceeds");
+    expect(result.message ?? "").not.toContain(`${LIMIT_MIB}`);
+    expect(released).toBe(true);
+  }, 15_000);
+});
+
 describe("installDownloadSpec extraction safety (tar.bz2)", () => {
   it("handles tar.bz2 extraction safety edge-cases", async () => {
     for (const testCase of [
