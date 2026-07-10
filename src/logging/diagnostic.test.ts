@@ -569,6 +569,12 @@ describe("stuck session diagnostics threshold", () => {
           }),
         },
       );
+      // Keep diagnostic work "open" throughout so this exercises the plain
+      // cooldown throttle, not the idle-liveness sustained-stall escalation
+      // path (covered separately below) — that path forces an extra,
+      // earlier emission once the streak crosses its own threshold, which
+      // would otherwise change the counts asserted here.
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
 
       vi.advanceTimersByTime(30_000);
       vi.advanceTimersByTime(90_000);
@@ -608,16 +614,23 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(30_000);
     expect(warnSpy).not.toHaveBeenCalled();
 
-    // The stall keeps breaching thresholds tick after tick with zero open
-    // diagnostic work — no cron/skill/task, nothing "active" — exactly the
-    // background/internal event-loop-block signature reported in #34. Once
-    // it has persisted for enough consecutive ticks, the next emitted
-    // liveness report (still subject to the 120s cooldown) must escalate to
-    // a warning so it is visible in production logs, not just debug.
-    vi.advanceTimersByTime(120_000);
+    // Second tick: still below the 3-tick escalation threshold, and the
+    // normal 120s cooldown (started by tick 1's debug sample) has not
+    // elapsed yet either, so nothing new is reported.
+    vi.advanceTimersByTime(30_000);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    // Third tick: the streak has now persisted for exactly the configured
+    // DEFAULT_LIVENESS_IDLE_STALL_ESCALATE_TICKS (3) — the moment it first
+    // becomes "sustained" per #34's signature. This must be visible
+    // immediately, not delayed until the unrelated 120s cooldown clock
+    // (started by the first debug-level sample) happens to elapse — that
+    // gap was the bug: the escalation was only ever observable ~150s in,
+    // not at the documented 90s / 3-tick mark.
+    vi.advanceTimersByTime(30_000);
 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("sustainedIdleStallTicks=5"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("sustainedIdleStallTicks=3"));
     expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
       expect.objectContaining({
         type: "diagnostic.liveness.warning",
@@ -627,6 +640,41 @@ describe("stuck session diagnostics threshold", () => {
         queued: 0,
       }),
     );
+  });
+
+  it("counts a single very-delayed heartbeat tick as multiple stall ticks (#34)", () => {
+    // If the event loop itself is blocked, the 30s heartbeat interval can't
+    // fire on schedule either — it resumes once, late, with a large
+    // intervalMs. A stall long enough to blow past the escalation window in
+    // one shot must be recognized immediately rather than only counting as
+    // a single tick (which would then reset before ever reaching the
+    // threshold once the process recovers).
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay", "cpu"],
+          // A block lasting 4x the nominal 30s tick surfaces as a single
+          // heartbeat callback firing 120s late.
+          intervalMs: 120_000,
+          eventLoopDelayP99Ms: 15_000,
+          eventLoopDelayMaxMs: 20_000,
+          cpuCoreRatio: 0.98,
+        }),
+      },
+    );
+
+    vi.advanceTimersByTime(30_000);
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("sustainedIdleStallTicks=4"));
   });
 
   it("does not start the heartbeat when diagnostics are disabled by config", () => {

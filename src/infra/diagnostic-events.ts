@@ -227,8 +227,10 @@ export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
    * across ticks with nothing "active" is exactly the signature of a
    * background/internal event-loop block and is escalated to warning
    * severity even though no diagnostic session was in flight. See #34.
+   * Optional so manually-synthesized events (e.g. test/otel emitters that
+   * predate this field) remain valid without claiming a sustained stall.
    */
-  sustainedIdleStall: boolean;
+  sustainedIdleStall?: boolean;
 };
 
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
