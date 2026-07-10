@@ -356,10 +356,14 @@ describe("OpenClaw performance workflow", () => {
     expect(publisher?.env?.PERFORMANCE_PUBLISHER_HELPER).toContain(
       "scripts/lib/kova-report-publish-files.mjs",
     );
+    expect(publisher?.env?.PERFORMANCE_REPORT_SELECTOR).toContain(
+      "scripts/lib/kova-report-selector.mjs",
+    );
     expect(helper.with).toMatchObject({
       ref: "${{ github.sha }}",
       path: ".artifacts/performance-publisher",
-      "sparse-checkout": "scripts/lib/kova-report-publish-files.mjs",
+      "sparse-checkout":
+        "scripts/lib/kova-report-publish-files.mjs\nscripts/lib/kova-report-selector.mjs\n",
       "sparse-checkout-cone-mode": false,
       "persist-credentials": false,
     });
@@ -709,6 +713,20 @@ esac
     expect(run).toContain('--model "$PERFORMANCE_MODEL_ID"');
   });
 
+  it("selects exactly one full Kova report across producer and publisher paths", () => {
+    const runKova = findStep("Run Kova");
+    const validate = findStep("Validate Kova evidence");
+    const publish = findStep("Prepare clawgrit report commit", "publish");
+
+    expect(runKova.run).toContain('kova-report-selector.mjs" --report-dir "$REPORT_DIR"');
+    expect(validate.run).toContain('kova-report-selector.mjs" --report-dir "$REPORT_DIR"');
+    expect(publish.run).toContain(
+      'node "$PERFORMANCE_REPORT_SELECTOR" --report-dir "${report_dirs[0]}"',
+    );
+    expect(runKova.run).not.toContain("tail -n 1");
+    expect(publish.run).not.toContain("report_jsons");
+  });
+
   it("installs local workspace packages beside the OCM root tarball", () => {
     const configure = findStep("Configure OCM local workspace dependencies");
 
@@ -743,7 +761,7 @@ esac
 
     expect(validateEvidence.if).toContain("always()");
     expect(validateEvidence.if).toContain("steps.lane.outputs.run == 'true'");
-    expect(validateEvidence.run).toContain('"$REPORT_DIR" -maxdepth 1 -type f -name');
+    expect(validateEvidence.run).toContain('kova-report-selector.mjs" --report-dir "$REPORT_DIR"');
     expect(validateEvidence.run).toContain('"$BUNDLE_DIR/bundle.json"');
     expect(validateEvidence.run).toContain('"$SUMMARY_DIR/${LANE_ID}.md"');
     expect(validateEvidence.run).toContain("exit 1");

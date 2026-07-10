@@ -519,11 +519,7 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
 
-          report_json="$(find "$REPORT_DIR" -maxdepth 1 -type f -name '*.json' -print | sort | tail -n 1)"
-          if [[ -z "$report_json" ]]; then
-            echo "Kova did not write a JSON report." >&2
-            exit 1
-          fi
+          report_json="$(node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-selector.mjs" --report-dir "$REPORT_DIR")"
           report_md="${report_json%.json}.md"
           node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-workflow-evidence.mjs" \
             --plan "$KOVA_PLAN_JSON" \
@@ -586,8 +582,8 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          if ! find "$REPORT_DIR" -maxdepth 1 -type f -name '*.json' -size +0c -print -quit | grep -q .; then
-            echo "::error::Kova JSON report is missing for ${LANE_ID}."
+          if ! node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-selector.mjs" --report-dir "$REPORT_DIR" >/dev/null; then
+            echo "::error::Exactly one full Kova JSON report is required for ${LANE_ID}."
             missing=1
           fi
           if [[ ! -s "$BUNDLE_DIR/bundle.json" ]]; then
@@ -802,6 +798,7 @@ jobs:
     env:
       LANE_ID: ${{ matrix.lane }}
       PERFORMANCE_PUBLISHER_HELPER: ${{ github.workspace }}/.artifacts/performance-publisher/scripts/lib/kova-report-publish-files.mjs
+      PERFORMANCE_REPORT_SELECTOR: ${{ github.workspace }}/.artifacts/performance-publisher/scripts/lib/kova-report-selector.mjs
       PUBLISHED_REPORT_MAX_FILE_BYTES: "50000000"
       REPORT_PUBLISH_REQUIRED: ${{ github.event_name == 'schedule' || inputs.profile == 'release' }}
     steps:
@@ -825,7 +822,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: .artifacts/performance-publisher
-          sparse-checkout: scripts/lib/kova-report-publish-files.mjs
+          sparse-checkout: |
+            scripts/lib/kova-report-publish-files.mjs
+            scripts/lib/kova-report-selector.mjs
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -913,12 +912,16 @@ jobs:
             exit 1
           fi
 
-          mapfile -d '' report_jsons < <(find "$input_root" -type f -path "*/kova/reports/${LANE_ID}/*.json" -print0)
-          if [[ "${#report_jsons[@]}" != "1" ]]; then
-            echo "::${annotation}::Expected exactly one Kova JSON report for ${LANE_ID}; found ${#report_jsons[@]}."
+          mapfile -d '' report_dirs < <(find "$input_root" -type d -path "*/kova/reports/${LANE_ID}" -print0)
+          if [[ "${#report_dirs[@]}" != "1" ]]; then
+            echo "::${annotation}::Expected exactly one Kova report directory for ${LANE_ID}; found ${#report_dirs[@]}."
             exit 1
           fi
-          report_json="$(realpath "${report_jsons[0]}")"
+          if ! report_json="$(node "$PERFORMANCE_REPORT_SELECTOR" --report-dir "${report_dirs[0]}")"; then
+            echo "::${annotation}::Exactly one full Kova JSON report is required for ${LANE_ID}."
+            exit 1
+          fi
+          report_json="$(realpath "$report_json")"
           if [[ "$report_json" != "$input_root/"* || ! -s "$report_json" ]]; then
             echo "::${annotation}::Kova JSON report is outside the downloaded artifact or empty."
             exit 1
