@@ -1017,7 +1017,7 @@ describe("subagent-orphan-recovery", () => {
       expect(typeof sessionEntry.subagentRecovery?.wedgedAt).toBe("number");
       expect(sessionEntry.subagentRecovery?.wedgedReason).toMatch(/across boots/);
       expect(sessionEntry.sessionId).toBe("session-budget-exceeded");
-      expect(result.failedRuns.some((r) => /across boots/.test(r.error ?? ""))).toBe(true);
+      expect(result.failedRuns.some((r) => (r.error ?? "").includes("across boots"))).toBe(true);
     });
 
     it("does not double-charge the budget when re-running count on settled snapshot", async () => {
