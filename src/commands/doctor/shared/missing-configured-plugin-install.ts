@@ -62,11 +62,13 @@ import {
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
 } from "../../../plugins/official-external-plugin-catalog.js";
+import { safeRealpathSync } from "../../../plugins/path-safety.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { buildPluginDependencyStatus } from "../../../plugins/status-dependencies-core.js";
 import {
   isClawHubTrustSkippedOutcome,
+  isPluginInstallRecordUpdateSource,
   updateNpmInstalledPlugins,
 } from "../../../plugins/update.js";
 import {
@@ -663,19 +665,44 @@ function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
   return pluginIds;
 }
 
+function activePluginMatchesRepairableInstallRecord(params: {
+  rootDir: string;
+  record: PluginInstallRecord | undefined;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  if (!isPluginInstallRecordUpdateSource(params.record)) {
+    return false;
+  }
+  const installPath = resolveRecordInstallPath(params.record, params.env);
+  if (!installPath) {
+    return false;
+  }
+  const pluginRoot = resolveUserPath(params.rootDir, params.env);
+  const canonicalPluginRoot = safeRealpathSync(pluginRoot) ?? path.resolve(pluginRoot);
+  const canonicalInstallPath = safeRealpathSync(installPath) ?? path.resolve(installPath);
+  return canonicalPluginRoot === canonicalInstallPath;
+}
+
 /**
  * Managed installs can end up with a package payload whose declared required
  * dependencies are absent from the dependency tree (for example an interrupted
  * npm install); the plugin then loads at startup but dies at import time.
- * Maps each record-backed installed plugin to its missing required packages.
+ * Maps each active, in-place-repairable installed plugin to its missing required packages.
  */
 function collectInstalledPluginMissingRequiredDependencies(params: {
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
+  env: NodeJS.ProcessEnv;
 }): Map<string, string[]> {
   const missingByPluginId = new Map<string, string[]>();
   for (const plugin of params.snapshot.plugins) {
-    if (!Object.hasOwn(params.installRecords, plugin.id)) {
+    if (
+      !activePluginMatchesRepairableInstallRecord({
+        rootDir: plugin.rootDir,
+        record: params.installRecords[plugin.id],
+        env: params.env,
+      })
+    ) {
       continue;
     }
     const dependencyStatus = buildPluginDependencyStatus({
@@ -1510,6 +1537,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
   const missingRequiredDependenciesByPluginId = collectInstalledPluginMissingRequiredDependencies({
     snapshot,
     installRecords: records,
+    env,
   });
   const missingRequiredDependencyPluginIds = new Set(missingRequiredDependenciesByPluginId.keys());
   const staleVersionBoundRuntimePluginIds =
@@ -1980,6 +2008,7 @@ async function repairMissingPluginInstalls(params: {
     collectInstalledPluginMissingRequiredDependencies({
       snapshot,
       installRecords: records,
+      env,
     }).keys(),
   );
   const installedPluginIdsWithStaleVersionBoundRuntimePackages =
