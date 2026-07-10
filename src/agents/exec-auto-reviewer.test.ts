@@ -313,6 +313,53 @@ describe("createModelExecAutoReviewer", () => {
     expect(complete).toHaveBeenCalledTimes(2);
   });
 
+  it("does not memoize human-review fallback decisions", async () => {
+    const prepare = vi.fn(async () => ({
+      selection: {
+        provider: "openrouter",
+        modelId: "anthropic/claude-sonnet-4-6",
+        agentDir: "/agent",
+      },
+      model: { provider: "openrouter", id: "anthropic/claude-sonnet-4-6", api: "openai" },
+      auth: { apiKey: "key", mode: "env" },
+    }));
+    const complete = vi.fn(async () => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            decision: "ask",
+            risk: "medium",
+            rationale: "needs human review",
+          }),
+        },
+      ],
+    }));
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      deps: {
+        prepareSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      },
+    });
+
+    await expect(reviewer(input)).resolves.toEqual({
+      decision: "ask",
+      risk: "medium",
+      rationale: "needs human review",
+    });
+    await expect(reviewer({ ...input, argv: ["git", "status"] })).resolves.toEqual({
+      decision: "ask",
+      risk: "medium",
+      rationale: "needs human review",
+    });
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
   it("defers to human approval when command text tries to instruct the reviewer", async () => {
     // Command content is adversarial input to the reviewer. Prompt-injection
     // attempts force human review even if the model returns a low-risk allow.

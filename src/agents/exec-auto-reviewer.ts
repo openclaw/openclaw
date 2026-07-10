@@ -96,9 +96,9 @@ function buildReviewerMemoKey(input: ExecAutoReviewInput): string {
 }
 
 function rememberReviewerDecision(
-  memo: Map<string, Promise<ExecAutoReviewDecision>>,
+  memo: Map<string, ExecAutoReviewDecision>,
   key: string,
-  decision: Promise<ExecAutoReviewDecision>,
+  decision: ExecAutoReviewDecision,
 ): void {
   if (!memo.has(key) && memo.size >= EXEC_REVIEWER_MEMO_MAX_ENTRIES) {
     const oldestKey = memo.keys().next().value;
@@ -107,6 +107,10 @@ function rememberReviewerDecision(
     }
   }
   memo.set(key, decision);
+}
+
+function shouldMemoizeReviewerDecision(decision: ExecAutoReviewDecision): boolean {
+  return decision.decision === "allow-once" && decision.risk === "low";
 }
 
 function normalizeRationale(value: unknown, fallback: string): string {
@@ -307,7 +311,7 @@ export function createModelExecAutoReviewer(params: {
     completeWithPreparedSimpleCompletionModel;
   const modelRef = resolveReviewerModelRef(params.reviewer);
   const timeoutMs = resolveExecReviewerTimeoutMs(params.reviewer);
-  const reviewMemo = new Map<string, Promise<ExecAutoReviewDecision>>();
+  const reviewMemo = new Map<string, ExecAutoReviewDecision>();
   const runReview = async (input: ExecAutoReviewInput): Promise<ExecAutoReviewDecision> => {
     let completionController: AbortController | undefined;
     try {
@@ -395,8 +399,10 @@ export function createModelExecAutoReviewer(params: {
     if (cachedDecision) {
       return cachedDecision;
     }
-    const decision = runReview(input);
-    rememberReviewerDecision(reviewMemo, memoKey, decision);
+    const decision = await runReview(input);
+    if (shouldMemoizeReviewerDecision(decision)) {
+      rememberReviewerDecision(reviewMemo, memoKey, decision);
+    }
     return decision;
   };
 }
