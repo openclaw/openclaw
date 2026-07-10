@@ -482,6 +482,8 @@ if (typeof updateStep.command !== "string" || !updateStep.command.includes(expec
   throw new Error(`global update step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
 }
 const doctorStep = steps.find((step) => step?.name === "openclaw doctor");
+// Every baseline that passes verify_installed_cli implements this contract;
+// the sole earlier npm artifact has no CLI and cannot reach this parser.
 if (!doctorStep) {
   throw new Error("missing openclaw doctor step in update JSON");
 }
