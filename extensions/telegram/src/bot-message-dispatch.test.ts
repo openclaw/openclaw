@@ -6392,7 +6392,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         }
       | undefined;
     let deliverQueuedRoomEvent:
-      | ((payload: { text: string }, info: { kind: "final" }) => Promise<void> | void)
+      | DispatchReplyWithBufferedBlockDispatcherArgs["dispatcherOptions"]["deliver"]
       | undefined;
     let adoptionStarted: (() => void) | undefined;
     const adoptionStartGate = new Promise<void>((resolve) => {
