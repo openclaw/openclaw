@@ -1,6 +1,5 @@
 // Resolves and packages install sources for plugin installs.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -9,6 +8,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 
 /** Metadata npm reports when resolving a registry spec or packed archive. */
@@ -139,7 +139,7 @@ export async function withTempDir<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
 ): Promise<T> {
-  return await withTempWorkspace({ rootDir: os.tmpdir(), prefix }, async (tmp) => fn(tmp.dir));
+  return await withTempWorkspace({ rootDir: resolvePreferredOpenClawTmpDir(), prefix }, async (tmp) => fn(tmp.dir));
 }
 
 /** Resolves and validates a user-supplied archive path before extraction. */
