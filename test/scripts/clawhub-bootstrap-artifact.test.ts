@@ -83,6 +83,10 @@ function writeTarField(header: Buffer, offset: number, length: number, value: st
   bytes.copy(header, offset);
 }
 
+function writeTarOctal(header: Buffer, offset: number, length: number, value: number) {
+  writeTarField(header, offset, length, `${value.toString(8).padStart(length - 2, "0")} \0`);
+}
+
 function tarEntry(
   name: string,
   prefix: string,
@@ -92,11 +96,23 @@ function tarEntry(
   const bytes = Buffer.from(contents);
   const header = Buffer.alloc(512);
   writeTarField(header, 0, 100, name);
-  writeTarField(header, 124, 12, `${bytes.byteLength.toString(8).padStart(11, "0")}\0`);
+  writeTarOctal(header, 100, 8, type === "5" ? 0o755 : 0o644);
+  writeTarOctal(header, 108, 8, 0);
+  writeTarOctal(header, 116, 8, 0);
+  writeTarOctal(header, 124, 12, bytes.byteLength);
+  writeTarOctal(header, 136, 12, 0);
+  header.fill(0x20, 148, 156);
   header[156] = type.charCodeAt(0);
-  writeTarField(header, 257, 6, "ustar");
+  writeTarField(header, 257, 6, "ustar\0");
   writeTarField(header, 263, 2, "00");
+  writeTarOctal(header, 329, 8, 0);
+  writeTarOctal(header, 337, 8, 0);
   writeTarField(header, 345, 155, prefix);
+  let checksum = 0;
+  for (const byte of header) {
+    checksum += byte;
+  }
+  writeTarOctal(header, 148, 8, checksum);
   const padding = Buffer.alloc((512 - (bytes.byteLength % 512)) % 512);
   return Buffer.concat([header, bytes, padding]);
 }
@@ -202,23 +218,30 @@ describe("ClawHub bootstrap artifact manifest", () => {
 
 describe("ClawHub packed artifact identity", () => {
   const expectedIdentity = {
-    expectedName: "@openclaw/meta",
+    expectedDir: "extensions/meta",
+    expectedName: "@openclaw/meta-provider",
     expectedVersion: "2026.7.1-beta.3",
   };
 
-  it("matches clawhub 0.23.1 USTAR trimming for a single manifest path", async () => {
+  it("accepts one canonical package identity and plugin manifest", async () => {
     const pack = writeClawPack([
       {
-        name: " package.json ",
-        prefix: " package ",
+        name: "package.json",
+        prefix: "package",
         contents: JSON.stringify({
-          name: " @openclaw/meta ",
-          version: " 2026.7.1-beta.3 ",
+          name: "@openclaw/meta-provider",
+          version: "2026.7.1-beta.3",
+          openclaw: {
+            release: {
+              publishToClawHub: true,
+              publishToNpm: true,
+            },
+          },
         }),
       },
       {
-        name: " openclaw.plugin.json ",
-        prefix: " package ",
+        name: "openclaw.plugin.json",
+        prefix: "package",
         contents: JSON.stringify({ id: "meta" }),
       },
     ]);
@@ -228,11 +251,12 @@ describe("ClawHub packed artifact identity", () => {
         artifactPath: pack.artifactPath,
         expectedSha256: pack.sha256,
         expectedSize: String(pack.bytes.byteLength),
-        expectedName: "@openclaw/meta",
+        expectedDir: "extensions/meta",
+        expectedName: "@openclaw/meta-provider",
         expectedVersion: "2026.7.1-beta.3",
       }),
     ).resolves.toMatchObject({
-      packageName: "@openclaw/meta",
+      packageName: "@openclaw/meta-provider",
       packageVersion: "2026.7.1-beta.3",
       sha256: pack.sha256,
       size: pack.bytes.byteLength,
@@ -245,7 +269,7 @@ describe("ClawHub packed artifact identity", () => {
         name: " package.json ",
         prefix: " package ",
         contents: JSON.stringify({
-          name: "@openclaw/meta",
+          name: "@openclaw/meta-provider",
           version: "2026.7.1-beta.3",
         }),
       },
@@ -267,10 +291,40 @@ describe("ClawHub packed artifact identity", () => {
         artifactPath: pack.artifactPath,
         expectedSha256: pack.sha256,
         expectedSize: String(pack.bytes.byteLength),
-        expectedName: "@openclaw/meta",
+        expectedDir: "extensions/meta",
+        expectedName: "@openclaw/meta-provider",
         expectedVersion: "2026.7.1-beta.3",
       }),
-    ).rejects.toThrow("duplicate normalized path: package.json");
+    ).rejects.toThrow("changes under the pinned ClawHub path normalization");
+  });
+
+  it("rejects a whitespace-bearing alias after a canonical package.json", async () => {
+    const pack = writeClawPack([
+      {
+        name: "package/package.json",
+        contents: JSON.stringify({
+          name: "@openclaw/meta-provider",
+          version: "2026.7.1-beta.3",
+        }),
+      },
+      {
+        name: " package.json ",
+        prefix: " package ",
+        contents: JSON.stringify({
+          name: "@openclaw/other",
+          version: "9.9.9",
+        }),
+      },
+    ]);
+
+    await expect(
+      verifyClawHubPackedArtifactIdentity({
+        artifactPath: pack.artifactPath,
+        expectedSha256: pack.sha256,
+        expectedSize: String(pack.bytes.byteLength),
+        ...expectedIdentity,
+      }),
+    ).rejects.toThrow("changes under the pinned ClawHub path normalization");
   });
 
   it("rejects a compressed artifact above the ClawHub package limit before reading it", async () => {

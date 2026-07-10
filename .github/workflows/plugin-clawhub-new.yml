@@ -311,6 +311,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
+      actions: read
       contents: read
     outputs:
       artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
@@ -318,6 +319,7 @@ jobs:
       artifact_name: ${{ steps.artifact.outputs.name }}
       artifact_run_attempt: ${{ github.run_attempt }}
       artifact_run_id: ${{ github.run_id }}
+      artifact_size: ${{ steps.upload_binding.outputs.size }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -426,10 +428,48 @@ jobs:
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
+          archive: true
           name: ${{ steps.artifact.outputs.name }}
           path: ${{ runner.temp }}/clawhub-bootstrap-artifact
           if-no-files-found: error
           compression-level: 0
+
+      - name: Bind uploaded artifact size
+        id: upload_binding
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_NAME: ${{ steps.artifact.outputs.name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_json=""
+          for attempt in 1 2 3 4 5; do
+            if artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"; then
+              break
+            fi
+            [[ "${attempt}" -lt 5 ]] || exit 1
+            sleep 2
+          done
+          size="$(
+            jq -er \
+              --arg digest "sha256:${ARTIFACT_DIGEST}" \
+              --arg id "${ARTIFACT_ID}" \
+              --arg name "${ARTIFACT_NAME}" \
+              --arg run_id "${GITHUB_RUN_ID}" \
+              --arg workflow_sha "${GITHUB_SHA}" \
+              'select(
+                 (.id | tostring) == $id and
+                 .name == $name and
+                 .expired == false and
+                 .digest == $digest and
+                 (.workflow_run.id | tostring) == $run_id and
+                 .workflow_run.head_sha == $workflow_sha
+               ) | .size_in_bytes' \
+              <<< "${artifact_json}"
+          )"
+          [[ "${size}" =~ ^[1-9][0-9]*$ ]] || exit 1
+          echo "size=${size}" >> "${GITHUB_OUTPUT}"
 
   validate_bootstrap_artifact:
     name: Validate immutable bootstrap handoff
@@ -472,54 +512,30 @@ jobs:
           test -x "${cli_root}/node_modules/.bin/clawhub"
           echo "${cli_root}/node_modules/.bin" >> "${GITHUB_PATH}"
 
-      - name: Validate immutable ClawHub bootstrap artifact binding
+      - name: Download and verify immutable ClawHub bootstrap artifact
         env:
           ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
           ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
           ARTIFACT_NAME: ${{ needs.pack_bootstrap_plugins.outputs.artifact_name }}
           ARTIFACT_RUN_ATTEMPT: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_attempt }}
           ARTIFACT_RUN_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}
+          ARTIFACT_SIZE: ${{ needs.pack_bootstrap_plugins.outputs.artifact_size }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
-          [[ "${ARTIFACT_DIGEST}" =~ ^[a-f0-9]{64}$ ]] || exit 1
-          [[ "${ARTIFACT_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
-          [[ "${ARTIFACT_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]] || exit 1
-          expected_name="clawhub-bootstrap-${TARGET_SHA:0:12}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
-          [[ "${ARTIFACT_NAME}" == "${expected_name}" ]] || {
-            echo "ClawHub bootstrap artifact name does not bind the target and run attempt." >&2
-            exit 1
-          }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "${ARTIFACT_ID}" \
-            --arg name "${ARTIFACT_NAME}" \
-            --arg run_id "${ARTIFACT_RUN_ID}" \
-            '(.id | tostring) == $id and .name == $name and .expired == false and
-             .digest == $digest and (.workflow_run.id | tostring) == $run_id' \
-            <<< "${artifact_json}" >/dev/null
-          attempt_json="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "${ARTIFACT_RUN_ATTEMPT}" \
-            --arg run_id "${ARTIFACT_RUN_ID}" \
-            --arg workflow_sha "${WORKFLOW_SHA}" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt and
-             .head_sha == $workflow_sha and .head_branch == "main" and .event == "workflow_dispatch"' \
-            <<< "${attempt_json}" >/dev/null
-
-      - name: Download exact ClawHub bootstrap artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
-          path: ${{ runner.temp }}/clawhub-bootstrap-artifact
-          run-id: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}
-          github-token: ${{ github.token }}
+          node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs download \
+            --artifact-digest "${ARTIFACT_DIGEST}" \
+            --artifact-id "${ARTIFACT_ID}" \
+            --artifact-name "${ARTIFACT_NAME}" \
+            --artifact-size "${ARTIFACT_SIZE}" \
+            --output-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
+            --run-id "${ARTIFACT_RUN_ID}" \
+            --target-sha "${TARGET_SHA}" \
+            --workflow-sha "${WORKFLOW_SHA}"
 
       - name: Rehash immutable ClawHub bootstrap artifacts
         env:
@@ -631,54 +647,30 @@ jobs:
           test -x "${cli_root}/node_modules/.bin/clawhub"
           echo "${cli_root}/node_modules/.bin" >> "${GITHUB_PATH}"
 
-      - name: Validate immutable ClawHub bootstrap artifact binding
+      - name: Download and verify immutable ClawHub bootstrap artifact
         env:
           ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
           ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
           ARTIFACT_NAME: ${{ needs.pack_bootstrap_plugins.outputs.artifact_name }}
           ARTIFACT_RUN_ATTEMPT: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_attempt }}
           ARTIFACT_RUN_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}
+          ARTIFACT_SIZE: ${{ needs.pack_bootstrap_plugins.outputs.artifact_size }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
-          [[ "${ARTIFACT_DIGEST}" =~ ^[a-f0-9]{64}$ ]] || exit 1
-          [[ "${ARTIFACT_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
-          [[ "${ARTIFACT_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]] || exit 1
-          expected_name="clawhub-bootstrap-${TARGET_SHA:0:12}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
-          [[ "${ARTIFACT_NAME}" == "${expected_name}" ]] || {
-            echo "ClawHub bootstrap artifact name does not bind the target and run attempt." >&2
-            exit 1
-          }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "${ARTIFACT_ID}" \
-            --arg name "${ARTIFACT_NAME}" \
-            --arg run_id "${ARTIFACT_RUN_ID}" \
-            '(.id | tostring) == $id and .name == $name and .expired == false and
-             .digest == $digest and (.workflow_run.id | tostring) == $run_id' \
-            <<< "${artifact_json}" >/dev/null
-          attempt_json="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "${ARTIFACT_RUN_ATTEMPT}" \
-            --arg run_id "${ARTIFACT_RUN_ID}" \
-            --arg workflow_sha "${WORKFLOW_SHA}" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt and
-             .head_sha == $workflow_sha and .head_branch == "main" and .event == "workflow_dispatch"' \
-            <<< "${attempt_json}" >/dev/null
-
-      - name: Download exact ClawHub bootstrap artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
-          path: ${{ runner.temp }}/clawhub-bootstrap-artifact
-          run-id: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}
-          github-token: ${{ github.token }}
+          node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs download \
+            --artifact-digest "${ARTIFACT_DIGEST}" \
+            --artifact-id "${ARTIFACT_ID}" \
+            --artifact-name "${ARTIFACT_NAME}" \
+            --artifact-size "${ARTIFACT_SIZE}" \
+            --output-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
+            --run-id "${ARTIFACT_RUN_ID}" \
+            --target-sha "${TARGET_SHA}" \
+            --workflow-sha "${WORKFLOW_SHA}"
 
       - name: Rehash immutable ClawHub bootstrap artifacts
         env:

@@ -8,7 +8,7 @@ type Step = {
   name?: string;
   run?: string;
   uses?: string;
-  with?: Record<string, string>;
+  with?: Record<string, boolean | string>;
 };
 
 type Job = {
@@ -60,7 +60,7 @@ describe("Plugin ClawHub New workflow", () => {
   it("packs target code only in the secretless producer", () => {
     const pack = job("pack_bootstrap_plugins");
     expect(pack.environment).toBeUndefined();
-    expect(pack.permissions).toEqual({ contents: "read" });
+    expect(pack.permissions).toEqual({ actions: "read", contents: "read" });
     const serialized = JSON.stringify(pack);
     expect(serialized).not.toContain("secrets.");
     expect(pack.outputs).toMatchObject({
@@ -69,8 +69,10 @@ describe("Plugin ClawHub New workflow", () => {
       artifact_name: "${{ steps.artifact.outputs.name }}",
       artifact_run_attempt: "${{ github.run_attempt }}",
       artifact_run_id: "${{ github.run_id }}",
+      artifact_size: "${{ steps.upload_binding.outputs.size }}",
     });
     expect(step(pack, "Upload immutable ClawHub bootstrap artifact").with).toMatchObject({
+      archive: true,
       name: "${{ steps.artifact.outputs.name }}",
       path: "${{ runner.temp }}/clawhub-bootstrap-artifact",
     });
@@ -87,16 +89,10 @@ describe("Plugin ClawHub New workflow", () => {
     expect(JSON.stringify(validate)).not.toContain("secrets.");
     expect(validate["timeout-minutes"]).toBe(45);
     const binding =
-      step(validate, "Validate immutable ClawHub bootstrap artifact binding").run ?? "";
-    expect(binding).toContain("actions/artifacts/${ARTIFACT_ID}");
-    expect(binding).toContain(".digest == $digest");
-    expect(binding).toContain("(.workflow_run.id | tostring) == $run_id");
-    expect(binding).toContain('.head_branch == "main"');
-    expect(step(validate, "Download exact ClawHub bootstrap artifact").with).toMatchObject({
-      "artifact-ids": "${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}",
-      "run-id": "${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}",
-      "github-token": "${{ github.token }}",
-    });
+      step(validate, "Download and verify immutable ClawHub bootstrap artifact").run ?? "";
+    expect(binding).toContain("clawhub-bootstrap-artifact.mjs download");
+    expect(binding).toContain('--artifact-size "${ARTIFACT_SIZE}"');
+    expect(binding).toContain('--run-attempt "${ARTIFACT_RUN_ATTEMPT}"');
     expect(step(validate, "Validate packed ClawHub package identities").run).toContain(
       "--validate-packed",
     );
@@ -129,22 +125,14 @@ describe("Plugin ClawHub New workflow", () => {
     expect(uses).toEqual([
       "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
       "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
-      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
       "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]);
 
     const binding =
-      step(publish, "Validate immutable ClawHub bootstrap artifact binding").run ?? "";
-    expect(binding).toContain("actions/artifacts/${ARTIFACT_ID}");
-    expect(binding).toContain(".digest == $digest");
-    expect(binding).toContain("(.workflow_run.id | tostring) == $run_id");
-    expect(binding).toContain('.head_branch == "main"');
-    const download = step(publish, "Download exact ClawHub bootstrap artifact");
-    expect(download.with).toMatchObject({
-      "artifact-ids": "${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}",
-      "run-id": "${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}",
-      "github-token": "${{ github.token }}",
-    });
+      step(publish, "Download and verify immutable ClawHub bootstrap artifact").run ?? "";
+    expect(binding).toContain("clawhub-bootstrap-artifact.mjs download");
+    expect(binding).toContain('--artifact-size "${ARTIFACT_SIZE}"');
+    expect(binding).toContain('--run-attempt "${ARTIFACT_RUN_ATTEMPT}"');
   });
 
   it("rehashes and validates tgz identity before exposing the token", () => {

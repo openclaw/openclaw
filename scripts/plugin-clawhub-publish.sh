@@ -210,6 +210,7 @@ verify_packed_identity() {
     --path "${clawpack_path}" \
     --expected-sha256 "${expected_sha}" \
     --expected-size "${expected_size}" \
+    --expected-dir "${package_dir}" \
     --expected-name "${package_name}" \
     --expected-version "${package_version}"
 }

@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { gunzipSync } from "node:zlib";
+import {
+  readBoundedRegularFile,
+  readPublicationArtifactArchive,
+} from "./actions-artifact-archive.mjs";
+import {
+  CLAWHUB_PUBLICATION_TAR_LIMITS,
+  inspectPackageTarballBytes,
+  validatePluginPackageManifest,
+} from "../plugin-publication-artifact.mjs";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
@@ -12,14 +20,12 @@ const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/u;
 const PACKAGE_NAME_PATTERN = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 const PACKAGE_DIR_PATTERN = /^extensions\/[a-z0-9][a-z0-9._-]*$/u;
 const TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u;
-const TAR_BLOCK_SIZE = 512;
+const MAX_BOOTSTRAP_ARCHIVE_BYTES = 256 * 1024 * 1024;
+const MAX_BOOTSTRAP_ARCHIVE_FILES = 128;
+const MAX_BOOTSTRAP_MANIFEST_BYTES = 2 * 1024 * 1024;
 // The compressed and total-payload limits match ClawHub's ClawPack contract.
 // The expanded TAR and entry-count ceilings bound this credential-job parser.
-const MAX_CLAWPACK_BYTES = 120 * 1024 * 1024;
-const MAX_EXPANDED_TAR_BYTES = 64 * 1024 * 1024;
-const MAX_TOTAL_FILE_BYTES = 50 * 1024 * 1024;
-const MAX_FILE_BYTES = MAX_TOTAL_FILE_BYTES;
-const MAX_FILE_COUNT = 10_000;
+const MAX_CLAWPACK_BYTES = CLAWHUB_PUBLICATION_TAR_LIMITS.maxArchiveBytes;
 
 function fail(message) {
   throw new Error(message);
@@ -64,140 +70,6 @@ function parsePlugins(value) {
 
 function packageSlug(packageName) {
   return packageName.slice("@openclaw/".length);
-}
-
-function textFromBytes(bytes) {
-  return new TextDecoder().decode(bytes);
-}
-
-// Match clawhub@0.23.1 path canonicalization before applying stricter
-// duplicate-path rejection so the credential job cannot select ambiguous bytes.
-function readTarString(block, offset, length) {
-  const slice = block.subarray(offset, offset + length);
-  const end = slice.indexOf(0);
-  return textFromBytes(end === -1 ? slice : slice.subarray(0, end)).trim();
-}
-
-function readTarSize(block) {
-  const raw = readTarString(block, 124, 12).split("\0").join("").trim();
-  if (!raw) {
-    return 0;
-  }
-  const size = Number.parseInt(raw, 8);
-  if (!Number.isFinite(size) || size < 0) {
-    fail("Invalid tar entry size.");
-  }
-  return size;
-}
-
-function normalizeTarPath(path) {
-  const normalized = path.replaceAll("\\", "/").replace(/^\.\/+/u, "");
-  if (!normalized || normalized.startsWith("/") || normalized.includes("\0")) {
-    return undefined;
-  }
-  const segments = normalized.split("/").filter(Boolean);
-  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
-    return undefined;
-  }
-  return segments.join("/");
-}
-
-function nextTarOffset(offset, size) {
-  return offset + Math.ceil(size / TAR_BLOCK_SIZE) * TAR_BLOCK_SIZE;
-}
-
-function parseClawHubPackedEntries(bytes) {
-  let tarBytes;
-  try {
-    tarBytes = gunzipSync(bytes, { maxOutputLength: MAX_EXPANDED_TAR_BYTES });
-  } catch (error) {
-    if (error?.code === "ERR_BUFFER_TOO_LARGE") {
-      fail(`ClawPack expands beyond ${MAX_EXPANDED_TAR_BYTES} bytes.`);
-    }
-    fail("ClawPack must be a gzip-compressed npm pack tarball.");
-  }
-
-  const entries = [];
-  const paths = new Set();
-  let totalFileBytes = 0;
-  let tarEntryCount = 0;
-  let offset = 0;
-  while (offset + TAR_BLOCK_SIZE <= tarBytes.byteLength) {
-    const header = tarBytes.subarray(offset, offset + TAR_BLOCK_SIZE);
-    if (header.every((byte) => byte === 0)) {
-      break;
-    }
-    tarEntryCount += 1;
-    if (tarEntryCount > MAX_FILE_COUNT) {
-      fail(`ClawPack contains more than ${MAX_FILE_COUNT} TAR entries.`);
-    }
-
-    const name = readTarString(header, 0, 100);
-    const prefix = readTarString(header, 345, 155);
-    const path = normalizeTarPath(prefix ? `${prefix}/${name}` : name);
-    if (!path) {
-      fail("ClawPack contains an unsafe tar path.");
-    }
-
-    const size = readTarSize(header);
-    if (size > MAX_FILE_BYTES) {
-      fail(`ClawPack entry ${path} exceeds ${MAX_FILE_BYTES} bytes.`);
-    }
-    const payloadOffset = offset + TAR_BLOCK_SIZE;
-    const payloadEnd = payloadOffset + size;
-    if (payloadEnd > tarBytes.byteLength) {
-      fail("ClawPack tar entry is truncated.");
-    }
-
-    const typeflag = String.fromCharCode(header[156] ?? 0).replace("\0", "");
-    if (typeflag === "" || typeflag === "0") {
-      if (!path.startsWith("package/")) {
-        fail("ClawPack entries must be rooted under package/.");
-      }
-      const relativePath = path.slice("package/".length);
-      if (relativePath && !relativePath.endsWith("/")) {
-        if (paths.has(relativePath)) {
-          fail(`ClawPack contains duplicate normalized path: ${relativePath}.`);
-        }
-        const nextTotalFileBytes = totalFileBytes + size;
-        if (nextTotalFileBytes > MAX_TOTAL_FILE_BYTES) {
-          fail(`ClawPack file payload exceeds ${MAX_TOTAL_FILE_BYTES} bytes.`);
-        }
-        totalFileBytes = nextTotalFileBytes;
-        paths.add(relativePath);
-        entries.push({
-          path: relativePath,
-          bytes: Uint8Array.from(tarBytes.subarray(payloadOffset, payloadEnd)),
-        });
-      }
-    } else if (typeflag !== "5") {
-      fail("ClawPack may only contain regular files and directories.");
-    }
-
-    offset = nextTarOffset(payloadOffset, size);
-  }
-
-  if (entries.length === 0) {
-    fail("ClawPack contains no files.");
-  }
-  return entries;
-}
-
-function parsePackedJson(entries, path, label) {
-  const entry = entries.find((candidate) => candidate.path === path);
-  if (!entry) {
-    fail(`ClawPack must contain package/${path}.`);
-  }
-  let value;
-  try {
-    value = JSON.parse(textFromBytes(entry.bytes));
-  } catch {
-    fail(`ClawPack ${label} is invalid JSON.`);
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    fail(`ClawPack ${label} must be an object.`);
-  }
-  return value;
 }
 
 function normalizePlanEntry(value, index) {
@@ -245,7 +117,12 @@ function hashBytes(bytes) {
 }
 
 async function hashFile(path) {
-  return hashBytes(await readFile(path));
+  return hashBytes(
+    readBoundedRegularFile(path, {
+      label: "Packed ClawHub artifact",
+      maxBytes: MAX_CLAWPACK_BYTES,
+    }),
+  );
 }
 
 export async function verifyClawHubPackedArtifactIdentity(options) {
@@ -258,6 +135,7 @@ export async function verifyClawHubPackedArtifactIdentity(options) {
   );
   const expectedName = requirePattern(options.expectedName, PACKAGE_NAME_PATTERN, "expectedName");
   const expectedVersion = requireString(options.expectedVersion, "expectedVersion");
+  const expectedDir = requirePattern(options.expectedDir, PACKAGE_DIR_PATTERN, "expectedDir");
 
   const artifactStat = await lstat(artifactPath);
   if (!artifactStat.isFile() || artifactStat.isSymbolicLink()) {
@@ -269,31 +147,27 @@ export async function verifyClawHubPackedArtifactIdentity(options) {
   if (String(artifactStat.size) !== expectedSize) {
     fail("Packed ClawHub artifact hash or size mismatch.");
   }
-  const bytes = await readFile(artifactPath);
-  if (bytes.byteLength > MAX_CLAWPACK_BYTES) {
-    fail(`Packed ClawHub artifact exceeds ${MAX_CLAWPACK_BYTES} bytes.`);
-  }
+  const bytes = readBoundedRegularFile(artifactPath, {
+    label: "Packed ClawHub artifact",
+    maxBytes: MAX_CLAWPACK_BYTES,
+  });
   const identity = hashBytes(bytes);
   if (identity.sha256 !== expectedSha256 || String(identity.size) !== expectedSize) {
     fail("Packed ClawHub artifact hash or size mismatch.");
   }
 
-  const entries = parseClawHubPackedEntries(bytes);
-  const packageJson = parsePackedJson(entries, "package.json", "package.json");
-  parsePackedJson(entries, "openclaw.plugin.json", "openclaw.plugin.json");
-  const packageName = typeof packageJson.name === "string" ? packageJson.name.trim() : "";
-  const packageVersion = typeof packageJson.version === "string" ? packageJson.version.trim() : "";
-  if (!packageName) {
-    fail("ClawPack package.json must declare a name.");
-  }
-  if (!packageVersion) {
-    fail("ClawPack package.json must declare a version.");
-  }
-  if (packageName !== expectedName || packageVersion !== expectedVersion) {
-    fail(
-      `Packed ClawHub identity mismatch: expected ${expectedName}@${expectedVersion}, found ${packageName}@${packageVersion}.`,
-    );
-  }
+  const inspection = inspectPackageTarballBytes(bytes, CLAWHUB_PUBLICATION_TAR_LIMITS);
+  validatePluginPackageManifest(
+    {
+      packageDir: expectedDir,
+      packageName: expectedName,
+      route: "clawhub-token-bootstrap",
+      version: expectedVersion,
+    },
+    inspection.packageManifest,
+  );
+  const packageName = inspection.packageManifest.name;
+  const packageVersion = inspection.packageManifest.version;
   return { ...identity, packageName, packageVersion };
 }
 
@@ -316,6 +190,123 @@ async function listFiles(root) {
   }
   await visit(root);
   return result.toSorted((a, b) => a.localeCompare(b));
+}
+
+function readPositiveInteger(value, label) {
+  const raw = requirePattern(value, POSITIVE_INTEGER_PATTERN, label);
+  const result = Number(raw);
+  if (!Number.isSafeInteger(result)) {
+    fail(`${label} is outside the supported range.`);
+  }
+  return result;
+}
+
+function validateBootstrapArchiveInventory(files) {
+  const manifestBytes = files.get("manifest.json");
+  if (!manifestBytes || manifestBytes.byteLength > MAX_BOOTSTRAP_MANIFEST_BYTES) {
+    fail("Bootstrap Actions artifact must contain one bounded manifest.json.");
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes));
+  } catch {
+    fail("Bootstrap Actions artifact manifest.json is invalid JSON.");
+  }
+  if (!manifest || typeof manifest !== "object" || !Array.isArray(manifest.entries)) {
+    fail("Bootstrap Actions artifact manifest.json has an invalid shape.");
+  }
+  const expected = new Set(["manifest.json"]);
+  for (const entry of manifest.entries) {
+    const artifactPath =
+      entry && typeof entry === "object" ? requireString(entry.artifactPath, "artifactPath") : "";
+    if (!/^packages\/[a-z0-9][a-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/u.test(artifactPath)) {
+      fail(`Bootstrap Actions artifact path is invalid: ${artifactPath}`);
+    }
+    if (expected.has(artifactPath)) {
+      fail(`Bootstrap Actions artifact path is duplicated: ${artifactPath}`);
+    }
+    expected.add(artifactPath);
+  }
+  const actual = new Set(files.keys());
+  if (
+    actual.size !== expected.size ||
+    [...actual].some((path) => !expected.has(path))
+  ) {
+    fail(
+      `Bootstrap Actions artifact inventory mismatch: expected ${[...expected].toSorted().join(",")}, found ${[...actual].toSorted().join(",")}.`,
+    );
+  }
+}
+
+export async function downloadClawHubBootstrapArtifact(options) {
+  const artifactId = readPositiveInteger(options.artifactId, "artifactId");
+  const artifactSizeBytes = readPositiveInteger(options.artifactSize, "artifactSize");
+  const runId = readPositiveInteger(options.runId, "runId");
+  const runAttempt = readPositiveInteger(options.runAttempt, "runAttempt");
+  const targetSha = requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha");
+  const workflowSha = requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha");
+  const artifactDigest = requirePattern(
+    options.artifactDigest,
+    SHA256_PATTERN,
+    "artifactDigest",
+  );
+  const artifactName = requireString(options.artifactName, "artifactName");
+  const expectedName = `clawhub-bootstrap-${targetSha.slice(0, 12)}-${runId}-${runAttempt}`;
+  if (artifactName !== expectedName) {
+    fail("ClawHub bootstrap artifact name does not bind the target and producer attempt.");
+  }
+  const outputRoot = resolve(requireString(options.outputRoot, "outputRoot"));
+  await mkdir(outputRoot, { mode: 0o700, recursive: true });
+  if ((await readdir(outputRoot)).length !== 0) {
+    fail("ClawHub bootstrap artifact output directory must be empty.");
+  }
+
+  const result = await readPublicationArtifactArchive({
+    archivePolicy: {
+      minEntries: 2,
+      maxEntries: MAX_BOOTSTRAP_ARCHIVE_FILES,
+      maxArchiveBytes: MAX_BOOTSTRAP_ARCHIVE_BYTES,
+      maxExpandedBytes: MAX_BOOTSTRAP_ARCHIVE_BYTES,
+      allowPath: (path) =>
+        path === "manifest.json" ||
+        /^packages\/[a-z0-9][a-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/u.test(path),
+      maxCompressedEntryBytes: (path) =>
+        path === "manifest.json" ? MAX_BOOTSTRAP_MANIFEST_BYTES : MAX_CLAWPACK_BYTES,
+      maxEntryBytes: (path) =>
+        path === "manifest.json" ? MAX_BOOTSTRAP_MANIFEST_BYTES : MAX_CLAWPACK_BYTES,
+    },
+    expected: {
+      artifactDigest: `sha256:${artifactDigest}`,
+      artifactId,
+      artifactName,
+      artifactSizeBytes,
+      repository: requireString(options.repository, "repository"),
+      runStatePolicy: "same-run-in-progress",
+      runAttempt,
+      runId,
+      workflowEvent: "workflow_dispatch",
+      workflowHeadBranch: "main",
+      workflowPath: ".github/workflows/plugin-clawhub-new.yml",
+      workflowSha,
+    },
+    maxArchiveBytes: MAX_BOOTSTRAP_ARCHIVE_BYTES,
+    token: requireString(options.token, "token"),
+  });
+  validateBootstrapArchiveInventory(result.files);
+  for (const [path, bytes] of result.files) {
+    const destination = join(outputRoot, path);
+    await mkdir(dirname(destination), { mode: 0o700, recursive: true });
+    await writeFile(destination, bytes, { flag: "wx", mode: 0o600 });
+  }
+  return {
+    artifactDigest,
+    artifactId,
+    artifactName,
+    artifactSizeBytes,
+    inventory: [...result.files.keys()].toSorted(),
+    runAttempt,
+    runId,
+  };
 }
 
 async function resolveRegularArtifactFile(root, artifactPath) {
@@ -485,9 +476,27 @@ function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.command === "download") {
+    const result = await downloadClawHubBootstrapArtifact({
+      artifactDigest: args.artifact_digest,
+      artifactId: args.artifact_id,
+      artifactName: args.artifact_name,
+      artifactSize: args.artifact_size,
+      outputRoot: args.output_root,
+      repository: args.repository,
+      runAttempt: args.run_attempt,
+      runId: args.run_id,
+      targetSha: args.target_sha,
+      token: process.env.GH_TOKEN,
+      workflowSha: args.workflow_sha,
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
   if (args.command === "verify-packed") {
     const identity = await verifyClawHubPackedArtifactIdentity({
       artifactPath: args.path,
+      expectedDir: args.expected_dir,
       expectedSha256: args.expected_sha256,
       expectedSize: args.expected_size,
       expectedName: args.expected_name,
@@ -527,7 +536,9 @@ async function main() {
     }
     return;
   }
-  fail("Usage: clawhub-bootstrap-artifact.mjs <create|verify|verify-packed> [options]");
+  fail(
+    "Usage: clawhub-bootstrap-artifact.mjs <create|download|verify|verify-packed> [options]",
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
