@@ -648,6 +648,25 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun terminalSuccessAckWithoutRunIdRemovesTheRow() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      chat.sendMessageAwaitAcceptance(message = "completed ack", thinkingLevel = "off", attachments = emptyList())
+
+      gateway.online = true
+      gateway.sendResponse = { _ -> """{"status":"ok"}""" }
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("completed ack"), gateway.sentMessages)
+      assertTrue(chat.outboxItems.value.isEmpty())
+    }
+
+  @Test
   fun definitiveGatewayRejectionUsesTheRetryBudget() =
     runTest {
       val gateway = FakeGateway()

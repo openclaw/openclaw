@@ -1641,8 +1641,9 @@ class ChatController internal constructor(
         }
       val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params.toString()))
       when (ack.normalizedStatus) {
+        "ok" -> OutboxSendResult.Accepted
         "timeout", "error" -> OutboxSendResult.Rejected("Chat failed before the run started")
-        "", "started", "in_flight", "ok" ->
+        "", "started", "in_flight" ->
           if (ack.runId.isNullOrBlank()) OutboxSendResult.DeliveryUnconfirmed else OutboxSendResult.Accepted
         else -> OutboxSendResult.DeliveryUnconfirmed
       }
