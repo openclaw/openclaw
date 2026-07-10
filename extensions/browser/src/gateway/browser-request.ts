@@ -53,7 +53,7 @@ function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | 
   if (!q) {
     return null;
   }
-  const nodeId = resolveNodeIdFromList(nodes, q, false);
+  const nodeId = resolveNodeIdFromList(nodes, q, false, { allowCompactDisplayName: true });
   return nodes.find((node) => node.nodeId === nodeId) ?? null;
 }
 

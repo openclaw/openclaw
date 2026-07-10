@@ -148,13 +148,19 @@ describe("shared/node-match", () => {
       { nodeId: "cafe-compact", displayName: "Cafe\u0301 01" },
       { nodeId: "cafe-exact", displayName: "Cafe\u030101" },
     ];
-    expect(resolveNodeIdFromCandidates(nodes, "MacStudio")).toBe("mac-exact");
-    expect(resolveNodeIdFromCandidates([nodes[0]!, nodes[2]!], "MacStudio")).toBe(
+    expect(resolveNodeIdFromCandidates(nodes, "MacStudio", true)).toBe("mac-exact");
+    expect(resolveNodeIdFromCandidates([nodes[0]!, nodes[2]!], "MacStudio", true)).toBe(
       "mac-compact",
     );
-    expect(resolveNodeIdFromCandidates([nodes[2]!, nodes[3]!], "Café01")).toBe(
-      "cafe-exact",
+    expect(resolveNodeIdFromCandidates([nodes[2]!, nodes[3]!], "Café01", true)).toBe("cafe-exact");
+    expect(resolveNodeIdFromCandidates([nodes[2]!], "Café01", true)).toBe("cafe-compact");
+  });
+
+  it("requires callers to opt in to compact display-name selectors", () => {
+    const nodes = [{ nodeId: "mac-compact", displayName: "Mac Studio" }];
+    expect(() => resolveNodeIdFromCandidates(nodes, "MacStudio")).toThrow(
+      /unknown node: MacStudio/,
     );
-    expect(resolveNodeIdFromCandidates([nodes[2]!], "Café01")).toBe("cafe-compact");
+    expect(resolveNodeIdFromCandidates(nodes, "MacStudio", true)).toBe("mac-compact");
   });
 });

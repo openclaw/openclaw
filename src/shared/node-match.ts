@@ -43,8 +43,8 @@ export function normalizeNodeKey(value: string) {
     .replace(/-+$/, "");
 }
 
-function normalizeCompactNodeKey(value: string) {
-  return normalizeNodeKey(value).replace(/-/g, "");
+function compactNormalizedNodeKey(value: string) {
+  return value.replace(/-/g, "");
 }
 
 function listKnownNodes(nodes: NodeMatchCandidate[]): string {
@@ -94,6 +94,7 @@ function resolveMatchScore(
   node: NodeMatchCandidate,
   query: string,
   queryNormalized: string,
+  allowCompactDisplayName: boolean,
 ): number {
   // Match class outranks selection heuristics: exact ids beat IPs, names, and id prefixes.
   if (node.nodeId === query) {
@@ -107,7 +108,11 @@ function resolveMatchScore(
   if (nameNormalized && nameNormalized === queryNormalized) {
     return 2_000;
   }
-  if (nameNormalized && normalizeCompactNodeKey(name) === normalizeCompactNodeKey(query)) {
+  if (
+    allowCompactDisplayName &&
+    nameNormalized &&
+    compactNormalizedNodeKey(nameNormalized) === compactNormalizedNodeKey(queryNormalized)
+  ) {
     return 1_900;
   }
   if (query.length >= 6 && node.nodeId.startsWith(query)) {
@@ -129,7 +134,11 @@ function scoreNodeCandidate(node: NodeMatchCandidate, matchScore: number): numbe
   return score;
 }
 
-function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): ScoredNodeMatch[] {
+function resolveScoredMatches(
+  nodes: NodeMatchCandidate[],
+  query: string,
+  allowCompactDisplayName: boolean,
+): ScoredNodeMatch[] {
   const trimmed = normalizeOptionalString(query);
   if (!trimmed) {
     return [];
@@ -137,7 +146,7 @@ function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): Score
   const normalized = normalizeNodeKey(trimmed);
   return nodes
     .map((node) => {
-      const matchScore = resolveMatchScore(node, trimmed, normalized);
+      const matchScore = resolveMatchScore(node, trimmed, normalized, allowCompactDisplayName);
       if (matchScore === 0) {
         return null;
       }
@@ -151,13 +160,17 @@ function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): Score
 }
 
 /** Resolves a single node id or throws an operator-readable unknown/ambiguous-node error. */
-export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: string): string {
+export function resolveNodeIdFromCandidates(
+  nodes: NodeMatchCandidate[],
+  query: string,
+  allowCompactDisplayName = false,
+): string {
   const q = query.trim();
   if (!q) {
     throw new Error("node required");
   }
 
-  const rawMatches = resolveScoredMatches(nodes, q);
+  const rawMatches = resolveScoredMatches(nodes, q, allowCompactDisplayName);
   if (rawMatches.length === 1) {
     return rawMatches[0]?.node.nodeId ?? "";
   }

@@ -145,7 +145,7 @@ describe("browser.request profile selection", () => {
       [
         {
           nodeId: "cafe-node",
-          displayName: "Café 01",
+          displayName: "Cafe\u0301 01",
           caps: ["browser"],
           commands: ["browser.proxy"],
           platform: "linux",
