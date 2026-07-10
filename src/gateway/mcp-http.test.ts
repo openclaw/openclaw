@@ -930,9 +930,51 @@ describe("buildMcpToolSchema", () => {
     }
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "mcp_message_send_rebuild.action", keeping the first variant',
-      'mcp loopback: conflicting schema definitions for "mcp_message_send_rebuild.callId", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_message_send_rebuild.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_message_send_rebuild.callId", keeping the first variant',
     ]);
+  });
+
+  it("does not warn for structurally identical union property schemas", () => {
+    const tool = makeMockTool({
+      name: "lark_doc_read",
+      parameters: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              doc_token: {
+                type: "string",
+                description: "Lark document token",
+                minLength: 1,
+              },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              doc_token: {
+                minLength: 1,
+                description: "Lark document token",
+                type: "string",
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(buildMockMcpToolSchema([tool])[0]?.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        doc_token: {
+          type: "string",
+          description: "Lark document token",
+          minLength: 1,
+        },
+      },
+    });
+    expect(logWarnMock).not.toHaveBeenCalled();
   });
 
   it("warns per tool for the same conflicting field name across different tools", () => {
@@ -956,8 +998,8 @@ describe("buildMcpToolSchema", () => {
     buildMockMcpToolSchema([messageTool, calendarTool]);
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "mcp_message_send_per_tool.action", keeping the first variant',
-      'mcp loopback: conflicting schema definitions for "mcp_calendar_create_per_tool.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_message_send_per_tool.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_calendar_create_per_tool.action", keeping the first variant',
     ]);
   });
 
@@ -976,7 +1018,7 @@ describe("buildMcpToolSchema", () => {
     buildMockMcpToolSchema([tool]);
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: malformed schema definition for "mcp_message_send_malformed.action", ignoring that variant',
+      'mcp-loopback: malformed schema definition for "mcp_message_send_malformed.action", ignoring that variant',
     ]);
   });
 });
