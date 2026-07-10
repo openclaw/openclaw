@@ -16,7 +16,7 @@ function hasChannelApiCredentials(account: ReturnType<typeof resolveQQBotAccount
  * channel APIs. Agents learn endpoint details from the skill docs and
  * send requests through this proxy.
  */
-export function registerChannelTool(api: OpenClawPluginApi): void {
+export function registerChannelTool(api: Pick<OpenClawPluginApi, "config" | "registerTool">): void {
   const cfg = api.config;
   if (!cfg) {
     return;

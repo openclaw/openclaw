@@ -25,7 +25,7 @@ function resolveChannelTool(params: {
   agentAccountId?: string;
 }): ChannelTool {
   const registerTool = vi.fn();
-  registerChannelTool({ config: params.config, registerTool } as OpenClawPluginApi);
+  registerChannelTool({ config: params.config, registerTool });
   const registration = registerTool.mock.calls[0]?.[0] as (ctx: {
     agentAccountId?: string;
   }) => ChannelTool;
