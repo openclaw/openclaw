@@ -113,10 +113,10 @@ class ChatControllerOutboxTest {
       }
     }
 
-    override suspend fun requeueSendingAfterRestart() {
+    override suspend fun failSendingAfterRestart() {
       for ((id, item) in rows) {
         if (item.status == ChatOutboxStatus.Sending) {
-          rows[id] = item.copy(status = ChatOutboxStatus.Queued)
+          rows[id] = item.copy(status = ChatOutboxStatus.Failed, lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
         }
       }
     }
@@ -586,7 +586,7 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun sendingRowsRecoverToQueuedOnControllerStartup() =
+  fun sendingRowsBecomeDeliveryUnconfirmedOnControllerStartup() =
     runTest {
       val gateway = FakeGateway()
       val outbox = FakeCommandOutbox()
@@ -596,7 +596,7 @@ class ChatControllerOutboxTest {
           sessionKey = "main",
           text = "crashed mid-send",
           thinkingLevel = "off",
-          // Recent timestamp: the startup expiry sweep must not expire the recovered row.
+          // Recent timestamp: startup recovery must surface this row before any retry decision.
           createdAtMs = System.currentTimeMillis(),
           status = ChatOutboxStatus.Sending,
           retryCount = 1,
@@ -608,7 +608,8 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       val recovered = chat.outboxItems.value.single()
-      assertEquals(ChatOutboxStatus.Queued, recovered.status)
+      assertEquals(ChatOutboxStatus.Failed, recovered.status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, recovered.lastError)
       assertEquals(1, recovered.retryCount)
     }
 

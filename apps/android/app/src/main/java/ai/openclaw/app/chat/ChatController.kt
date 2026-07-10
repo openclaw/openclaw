@@ -194,9 +194,9 @@ class ChatController internal constructor(
   init {
     if (commandOutbox != null) {
       scope.launch {
-        // Crash safety: a process killed mid-flush leaves rows in 'sending'; requeue them so
-        // they are retried instead of being stuck invisible to the flush loop forever.
-        runCatching { commandOutbox.requeueSendingAfterRestart() }
+        // A killed process can lose the local delete after the gateway accepted a command.
+        // Keep that delivery ambiguous and user-visible instead of replaying it automatically.
+        runCatching { commandOutbox.failSendingAfterRestart() }
         currentCacheScope()?.let { outboxScope ->
           runCatching { commandOutbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
         }

@@ -23,6 +23,9 @@ internal const val OUTBOX_RETRY_BACKOFF_MS = 2_000L
 /** lastError marker for items expired by [OUTBOX_EXPIRY_MS]; also shown in the UI row. */
 internal const val OUTBOX_EXPIRED_ERROR = "expired"
 
+/** Delivery is ambiguous after a process crash, so a retry must require explicit user intent. */
+internal const val OUTBOX_DELIVERY_UNCONFIRMED_ERROR = "delivery unconfirmed after app restart; retry manually"
+
 enum class ChatOutboxStatus(
   internal val dbValue: String,
 ) {
@@ -113,8 +116,8 @@ interface ChatCommandOutbox {
   /** Drops every queued command owned by one gateway identity. */
   suspend fun clearGateway(gatewayId: String)
 
-  /** Crash safety: rows stuck in 'sending' from a killed process become 'queued' again. */
-  suspend fun requeueSendingAfterRestart()
+  /** Crash safety: rows stuck in 'sending' after a killed process become visible failed rows. */
+  suspend fun failSendingAfterRestart()
 
   /** Expires queued rows older than [OUTBOX_EXPIRY_MS] to 'failed' instead of sending stale commands. */
   suspend fun expireStale(
@@ -159,10 +162,11 @@ internal interface ChatOutboxDao {
     lastError: String?,
   ): Int
 
-  @Query("UPDATE outbox_commands SET status = :toStatus WHERE status = :fromStatus")
-  suspend fun updateAllWithStatus(
-    fromStatus: String,
-    toStatus: String,
+  @Query("UPDATE outbox_commands SET status = :failedStatus, lastError = :error WHERE status = :sendingStatus")
+  suspend fun failAllSending(
+    sendingStatus: String,
+    failedStatus: String,
+    error: String,
   )
 
   @Query(
@@ -312,11 +316,13 @@ class RoomChatCommandOutbox internal constructor(
     database.outboxDao().deleteGateway(gateway)
   }
 
-  override suspend fun requeueSendingAfterRestart() {
-    // Deliberately unscoped: interrupted sends must recover even before a gateway is resolved.
-    database.outboxDao().updateAllWithStatus(
-      fromStatus = ChatOutboxStatus.Sending.dbValue,
-      toStatus = ChatOutboxStatus.Queued.dbValue,
+  override suspend fun failSendingAfterRestart() {
+    // Deliberately unscoped: recovery happens before a gateway is resolved, but a crash leaves
+    // delivery ambiguous and must not silently replay an already accepted command.
+    database.outboxDao().failAllSending(
+      sendingStatus = ChatOutboxStatus.Sending.dbValue,
+      failedStatus = ChatOutboxStatus.Failed.dbValue,
+      error = OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
     )
   }
 
