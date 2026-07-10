@@ -5,9 +5,8 @@ import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuChatSchema, type FeishuChatParams } from "./chat-schema.js";
-import { createFeishuClient } from "./client.js";
 import { formatFeishuApiError } from "./comment-shared.js";
-import { resolveToolsConfig } from "./tools-config.js";
+import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 
 function readChatPageSize(params: Record<string, unknown>): number | undefined {
   return readPositiveIntegerParam(params, "page_size", {
@@ -134,58 +133,65 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const firstAccount = accounts[0];
-  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
   if (!toolsCfg.chat) {
     return;
   }
 
-  const getClient = () => createFeishuClient(firstAccount);
+  type FeishuChatExecuteParams = FeishuChatParams & { accountId?: string };
 
   api.registerTool(
-    {
-      name: "feishu_chat",
-      label: "Feishu Chat",
-      description: "Feishu chat operations. Actions: members, info, member_info",
-      parameters: FeishuChatSchema,
-      async execute(_toolCallId, params) {
-        const rawParams = params as Record<string, unknown>;
-        const p = params as FeishuChatParams;
-        try {
-          const client = getClient();
-          switch (p.action) {
-            case "members":
-              if (!p.chat_id) {
-                return json({ error: "chat_id is required for action members" });
-              }
-              return json(
-                await getChatMembers(
-                  client,
-                  p.chat_id,
-                  readChatPageSize(rawParams),
-                  p.page_token,
-                  p.member_id_type,
-                ),
-              );
-            case "info":
-              if (!p.chat_id) {
-                return json({ error: "chat_id is required for action info" });
-              }
-              return json(await getChatInfo(client, p.chat_id));
-            case "member_info":
-              if (!p.member_id) {
-                return json({ error: "member_id is required for action member_info" });
-              }
-              return json(
-                await getFeishuMemberInfo(client, p.member_id, p.member_id_type ?? "open_id"),
-              );
-            default:
-              return json({ error: `Unknown action: ${String(p.action)}` });
+    (ctx) => {
+      const defaultAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_chat",
+        label: "Feishu Chat",
+        description: "Feishu chat operations. Actions: members, info, member_info",
+        parameters: FeishuChatSchema,
+        async execute(_toolCallId, params) {
+          const rawParams = params as Record<string, unknown>;
+          const p = params as FeishuChatExecuteParams;
+          try {
+            const client = createFeishuToolClient({
+              api,
+              executeParams: p,
+              defaultAccountId,
+              requiredTool: { family: "chat", label: "Chat" },
+            });
+            switch (p.action) {
+              case "members":
+                if (!p.chat_id) {
+                  return json({ error: "chat_id is required for action members" });
+                }
+                return json(
+                  await getChatMembers(
+                    client,
+                    p.chat_id,
+                    readChatPageSize(rawParams),
+                    p.page_token,
+                    p.member_id_type,
+                  ),
+                );
+              case "info":
+                if (!p.chat_id) {
+                  return json({ error: "chat_id is required for action info" });
+                }
+                return json(await getChatInfo(client, p.chat_id));
+              case "member_info":
+                if (!p.member_id) {
+                  return json({ error: "member_id is required for action member_info" });
+                }
+                return json(
+                  await getFeishuMemberInfo(client, p.member_id, p.member_id_type ?? "open_id"),
+                );
+              default:
+                return json({ error: `Unknown action: ${String(p.action)}` });
+            }
+          } catch (err) {
+            return json({ error: formatFeishuApiError(err, { includeNestedErrorLogId: true }) });
           }
-        } catch (err) {
-          return json({ error: formatFeishuApiError(err, { includeNestedErrorLogId: true }) });
-        }
-      },
+        },
+      };
     },
     { name: "feishu_chat" },
   );
