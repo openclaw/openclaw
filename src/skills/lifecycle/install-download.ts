@@ -19,8 +19,10 @@ import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
 
-/** Maximum bytes accepted for a single skill artifact download. */
-const SKILL_DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024;
+/** Maximum bytes accepted for a single skill artifact download.
+ *  Matches the ClawHub archive ceiling (256 MiB) so bundled artifacts
+ *  such as the Sherpa ONNX TTS model (~110 MiB) remain installable. */
+const SKILL_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024;
 
 const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
 

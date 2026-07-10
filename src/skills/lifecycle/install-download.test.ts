@@ -289,9 +289,9 @@ describe("installDownloadSpec extraction safety", () => {
 describe("installDownloadSpec download byte limit (#103236)", () => {
   const CHUNK_KIB = 64;
   const CHUNK_BYTES = CHUNK_KIB * 1024;
-  const LIMIT_MIB = 100;
+  const LIMIT_MIB = 256;
   const LIMIT_BYTES = LIMIT_MIB * 1024 * 1024;
-  // ~103 MiB — enough to exceed the 100 MiB limit in ~3 chunks after hitting it.
+  // ~259 MiB — enough to exceed the 256 MiB limit in ~3 chunks after hitting it.
   const CHUNKS = Math.ceil((LIMIT_BYTES + CHUNK_BYTES * 3) / CHUNK_BYTES);
 
   it("aborts an oversized download mid-stream and cleans up staging", async () => {
@@ -384,11 +384,7 @@ describe("installDownloadSpec download byte limit (#103236)", () => {
     expect(result.message ?? "").not.toContain("exceeds");
     expect(result.message ?? "").not.toContain(`${LIMIT_MIB}`);
     expect(released).toBe(true);
-    expect(
-      await fileExists(
-        path.join(resolveSkillToolsRootDir(entry), "small.bin"),
-      ),
-    ).toBe(true);
+    expect(await fileExists(path.join(resolveSkillToolsRootDir(entry), "small.bin"))).toBe(true);
   }, 15_000);
 });
 
