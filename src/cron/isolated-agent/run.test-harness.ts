@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
@@ -115,7 +114,7 @@ const getSkillsSnapshotVersionMock = createMock();
 export const loadModelCatalogMock = createMock();
 const getRemoteSkillEligibilityMock = createMock();
 
-vi.mock("./run.runtime.js", () => ({
+vi.mock("./run.runtime.js", async () => ({
   resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
@@ -126,7 +125,11 @@ vi.mock("./run.runtime.js", () => ({
   isCliProvider: isCliProviderMock,
   resolveThinkingDefault: resolveThinkingDefaultMock,
   resolveEffectiveAgentRuntime: resolveEffectiveAgentRuntimeMock,
-  resolveSessionRuntimeOverrideForProvider,
+  resolveSessionRuntimeOverrideForProvider: (
+    await vi.importActual<typeof import("../../agents/session-runtime-compat.js")>(
+      "../../agents/session-runtime-compat.js",
+    )
+  ).resolveSessionRuntimeOverrideForProvider,
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   resolveAgentTimeoutMs: resolveAgentTimeoutMsMock,
