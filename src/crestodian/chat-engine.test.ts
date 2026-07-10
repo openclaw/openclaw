@@ -516,6 +516,7 @@ describe("CrestodianChatEngine", () => {
       workspace: "/tmp/new-work",
       surface: "cli",
       runtime: expect.any(Object),
+      recordSetupAudit: false,
     });
   });
 
