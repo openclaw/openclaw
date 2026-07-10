@@ -28,6 +28,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { Type } from "typebox";
 import type {
   ChannelMessageActionName,
@@ -484,6 +485,7 @@ const msteamsChannelOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   pollMaxOptions: 12,
   deliveryCapabilities: {
     durableFinal: {

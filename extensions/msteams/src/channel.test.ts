@@ -55,6 +55,22 @@ describe("msteamsPlugin", () => {
     expect(looksLikeId?.("a:1bfPersonalChat")).toBe(true);
     expect(looksLikeId?.("user:Jane Doe")).toBe(false);
   });
+  it("advertises sanitizeText that strips internal tool-trace banners from outbound text", () => {
+    const sanitizeText = msteamsPlugin.outbound?.sanitizeText;
+    expect(sanitizeText).toBeDefined();
+
+    const text = "Done.\n⚠️ 🛠️ `search repos (agent)` failed";
+    expect(sanitizeText!({ text, payload: { text } })).toBe("Done.");
+
+    const prose = "The pipeline has 3 open deals.";
+    expect(sanitizeText!({ text: prose, payload: { text: prose } })).toBe(prose);
+  });
+
+  it("sanitizeText returns empty string for trace-only replies", () => {
+    const sanitizeText = msteamsPlugin.outbound?.sanitizeText;
+    const traceOnly = "⚠️ 🛠️ `search repos (agent)` failed";
+    expect(sanitizeText!({ text: traceOnly, payload: { text: traceOnly } })).toBe("");
+  });
 });
 
 describe("msteams config schema", () => {
