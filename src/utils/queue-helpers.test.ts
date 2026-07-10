@@ -196,7 +196,7 @@ describe("drainNextQueueItem", () => {
     ) {}
 
     expect(delivered).toEqual(["m1", "m6", "m7", "m8"]);
-    expect(dropped).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+    expect(dropped).toEqual(["m2", "m3", "m4", "m5"]);
     expect(queue.items).toEqual([]);
   });
 });
