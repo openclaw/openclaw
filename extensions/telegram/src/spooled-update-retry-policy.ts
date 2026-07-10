@@ -7,7 +7,7 @@ import {
 import type { BackoffPolicy } from "openclaw/plugin-sdk/runtime-env";
 import { computeBackoff } from "openclaw/plugin-sdk/runtime-env";
 import { isTelegramMessageDispatchReplayForgetError } from "./message-dispatch-dedupe.js";
-import type { TelegramSpooledUpdate } from "./telegram-ingress-spool.js";
+import type { TelegramSpooledUpdate } from "./telegram-ingress-spool.types.js";
 
 export const TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS = 8;
 export const TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;

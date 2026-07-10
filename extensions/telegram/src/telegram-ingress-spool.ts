@@ -15,6 +15,16 @@ import { getTelegramRuntime } from "./runtime.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./spooled-update-retry-policy.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
+import type {
+  ClaimedTelegramSpooledUpdate,
+  TelegramSpooledUpdate,
+  TelegramSpooledUpdateClaimOwner,
+} from "./telegram-ingress-spool.types.js";
+
+export type {
+  ClaimedTelegramSpooledUpdate,
+  TelegramSpooledUpdate,
+} from "./telegram-ingress-spool.types.js";
 
 const SPOOL_VERSION = 1;
 const TELEGRAM_INGRESS_SPOOL_PREFIX = "ingress-spool-";
@@ -26,33 +36,11 @@ const TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES = 1000;
 const TELEGRAM_SPOOLED_UPDATE_PROCESS_ID = `${process.pid}:${randomUUID()}`;
 
-type TelegramSpooledUpdateClaimOwner = {
-  processId: string;
-  processPid: number;
-  claimedAt: number;
-  claimToken?: string;
-};
-
 type TelegramSpooledUpdatePayload = {
   version: number;
   updateId: number;
   receivedAt: number;
   update: unknown;
-};
-
-export type TelegramSpooledUpdate = {
-  updateId: number;
-  path: string;
-  update: unknown;
-  receivedAt: number;
-  attempts?: number;
-  lastAttemptAt?: number;
-  lastError?: string;
-  claim?: TelegramSpooledUpdateClaimOwner;
-};
-
-export type ClaimedTelegramSpooledUpdate = TelegramSpooledUpdate & {
-  pendingPath: string;
 };
 
 export class TelegramSpooledUpdateCompletionOwnershipError extends Error {
