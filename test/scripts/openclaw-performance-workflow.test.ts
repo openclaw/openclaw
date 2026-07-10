@@ -88,16 +88,30 @@ describe("OpenClaw performance workflow", () => {
 
     expect(workflow).toContain(`default: ${kovaRef}`);
     expect(workflow).toContain(`inputs.kova_ref || '${kovaRef}'`);
+    expect(workflow).toContain("PERFORMANCE_MODEL_ID: gpt-5.6");
+    expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
+  });
+
+  it("validates Kova's CLI-only dependency contract after installation", () => {
+    const install = findStep("Install OCM and Kova");
+    const installRun = install.run ?? "";
+
     expect(installRun).toContain(
       'npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund',
     );
-    expect(installRun).toContain('for (const dependency of ["mock-ai-provider", "zod"])');
-    expect(installRun).toContain("require.resolve(dependency, { paths: [root] })");
+    expect(installRun).toContain(
+      'require.resolve("mock-ai-provider/package.json", { paths: [root] })',
+    );
+    expect(installRun).not.toContain('require.resolve("mock-ai-provider", { paths: [root] })');
+    expect(installRun).toContain('require.resolve("zod", { paths: [root] })');
+    expect(installRun).toContain(
+      'mock_provider_bin="$KOVA_SRC/node_modules/.bin/mock-ai-provider"',
+    );
+    expect(installRun).toContain('[[ ! -x "$mock_provider_bin" ]]');
+    expect(installRun).toContain('"$mock_provider_bin" --version');
     expect(
       installRun.indexOf('npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund'),
     ).toBeLessThan(installRun.indexOf('cat > "$HOME/.local/bin/kova"'));
-    expect(workflow).toContain("PERFORMANCE_MODEL_ID: gpt-5.6");
-    expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
   });
 
   it("resolves each target once before benchmark and publication fan out", () => {

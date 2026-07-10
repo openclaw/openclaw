@@ -289,10 +289,15 @@ jobs:
           npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund
           node - "$KOVA_SRC" <<'NODE'
           const root = process.argv[2];
-          for (const dependency of ["mock-ai-provider", "zod"]) {
-            require.resolve(dependency, { paths: [root] });
-          }
+          require.resolve("mock-ai-provider/package.json", { paths: [root] });
+          require.resolve("zod", { paths: [root] });
           NODE
+          mock_provider_bin="$KOVA_SRC/node_modules/.bin/mock-ai-provider"
+          if [[ ! -x "$mock_provider_bin" ]]; then
+            echo "Kova dependency mock-ai-provider did not install its CLI executable." >&2
+            exit 1
+          fi
+          "$mock_provider_bin" --version
           cat > "$HOME/.local/bin/kova" <<EOF
           #!/usr/bin/env bash
           export KOVA_HOME="${KOVA_HOME}"
