@@ -3040,10 +3040,10 @@ export async function runCodexAppServerAttempt(
         clientClosedAbort,
         formatError: formatErrorMessage,
       });
-      codexModelCallDiagnostics.emitError(
-        turnStartErrorMessage,
-        turnStartFailureKind ? { failureKind: turnStartFailureKind } : {},
-      );
+      codexModelCallDiagnostics.emitError(turnStartErrorMessage, {
+        ...(turnStartFailureKind ? { failureKind: turnStartFailureKind } : {}),
+        contextOverflowDetected: isCodexContextWindowError(turnStartError),
+      });
       const turnStartFailureMessages = [
         ...historyMessages,
         buildCodexUserPromptMessage({ ...params, prompt: codexTurnPromptText }),
@@ -3450,10 +3450,15 @@ export async function runCodexAppServerAttempt(
         finalPromptError ?? "codex app-server attempt interrupted",
         {
           failureKind: modelCallFailureKind,
+          result,
+          contextOverflowDetected: isCodexContextWindowError(finalPromptError),
         },
       );
     } else if (finalPromptError) {
-      codexModelCallDiagnostics.emitError(finalPromptError);
+      codexModelCallDiagnostics.emitError(finalPromptError, {
+        result,
+        contextOverflowDetected: isCodexContextWindowError(finalPromptError),
+      });
     } else {
       codexModelCallDiagnostics.emitCompleted(result);
     }

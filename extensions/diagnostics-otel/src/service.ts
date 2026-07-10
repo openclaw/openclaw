@@ -565,12 +565,27 @@ function positiveFiniteNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function nonNegativeFiniteNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function assignPositiveNumberAttr(
   attrs: Record<string, string | number | boolean>,
   key: string,
   value: number | undefined,
 ): void {
   const normalized = positiveFiniteNumber(value);
+  if (normalized !== undefined) {
+    attrs[key] = normalized;
+  }
+}
+
+function assignNonNegativeNumberAttr(
+  attrs: Record<string, string | number | boolean>,
+  key: string,
+  value: number | undefined,
+): void {
+  const normalized = nonNegativeFiniteNumber(value);
   if (normalized !== undefined) {
     attrs[key] = normalized;
   }
@@ -609,14 +624,17 @@ function modelCallPromptTokens(usage: {
   cacheRead?: number;
   cacheWrite?: number;
 }): number | undefined {
-  if (typeof usage.promptTokens === "number" && Number.isFinite(usage.promptTokens)) {
-    return usage.promptTokens;
+  const promptTokens = nonNegativeFiniteNumber(usage.promptTokens);
+  if (promptTokens !== undefined) {
+    return promptTokens;
   }
-  const input = usage.input ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
-  const total = input + cacheRead + cacheWrite;
-  return total > 0 ? total : undefined;
+  const input = nonNegativeFiniteNumber(usage.input);
+  const cacheRead = nonNegativeFiniteNumber(usage.cacheRead);
+  const cacheWrite = nonNegativeFiniteNumber(usage.cacheWrite);
+  if (input === undefined && cacheRead === undefined && cacheWrite === undefined) {
+    return undefined;
+  }
+  return (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
 }
 
 function assignModelCallPromptStatsAttrs(
@@ -661,7 +679,38 @@ function assignModelCallUsageAttrs(
     ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
     ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
   ] as const) {
-    assignPositiveNumberAttr(attrs, key, value);
+    assignNonNegativeNumberAttr(attrs, key, value);
+  }
+}
+
+function assignModelCallTerminalAttrs(
+  attrs: Record<string, string | number | boolean>,
+  evt: Pick<
+    ModelCallLifecycleDiagnosticEvent,
+    | "contextOverflowDetected"
+    | "contextTokenBudget"
+    | "outputContentBlocks"
+    | "outputToolCalls"
+    | "stopReason"
+    | "usage"
+  >,
+): void {
+  if (evt.stopReason) {
+    attrs["openclaw.model_call.stop_reason"] = lowCardinalityAttr(evt.stopReason, "other");
+  }
+  assignNonNegativeNumberAttr(
+    attrs,
+    "openclaw.model_call.output.content_blocks",
+    evt.outputContentBlocks,
+  );
+  assignNonNegativeNumberAttr(attrs, "openclaw.model_call.output.tool_calls", evt.outputToolCalls);
+  if (typeof evt.contextOverflowDetected === "boolean") {
+    attrs["openclaw.model_call.context.overflow_detected"] = evt.contextOverflowDetected;
+  }
+  const promptTokens = evt.usage ? modelCallPromptTokens(evt.usage) : undefined;
+  const contextTokenBudget = positiveFiniteNumber(evt.contextTokenBudget);
+  if (promptTokens !== undefined && contextTokenBudget !== undefined) {
+    attrs["openclaw.model_call.context.prompt_utilization"] = promptTokens / contextTokenBudget;
   }
 }
 
@@ -2684,9 +2733,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (!tracesEnabled) {
           return;
         }
-        const genAiInputTokens =
-          usage.promptTokens ??
-          (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+        const genAiInputTokens = modelCallPromptTokens(usage);
         const spanAttrs: Record<string, string | number> = {
           ...attrs,
           "openclaw.tokens.input": usage.input ?? 0,
@@ -2696,14 +2743,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.total": usage.total ?? 0,
         };
         assignGenAiSpanIdentityAttrs(spanAttrs, evt);
-        assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.input_tokens", genAiInputTokens);
-        assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.output_tokens", usage.output);
-        assignPositiveNumberAttr(
+        assignNonNegativeNumberAttr(spanAttrs, "gen_ai.usage.input_tokens", genAiInputTokens);
+        assignNonNegativeNumberAttr(spanAttrs, "gen_ai.usage.output_tokens", usage.output);
+        assignNonNegativeNumberAttr(
           spanAttrs,
           "gen_ai.usage.cache_read.input_tokens",
           usage.cacheRead,
         );
-        assignPositiveNumberAttr(
+        assignNonNegativeNumberAttr(
           spanAttrs,
           "gen_ai.usage.cache_creation.input_tokens",
           usage.cacheWrite,
@@ -3537,6 +3584,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
         assignModelCallPromptStatsAttrs(spanAttrs, evt);
         assignModelCallUsageAttrs(spanAttrs, evt);
+        assignModelCallTerminalAttrs(spanAttrs, evt);
         assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
@@ -3591,6 +3639,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
         assignModelCallPromptStatsAttrs(spanAttrs, evt);
         assignModelCallUsageAttrs(spanAttrs, evt);
+        assignModelCallTerminalAttrs(spanAttrs, evt);
         assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??

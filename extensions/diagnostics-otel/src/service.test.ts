@@ -2548,6 +2548,52 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("preserves explicit zero output usage on model usage spans", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: {
+        input: 99,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        promptTokens: 99,
+        total: 99,
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const attributes = startedSpanOptions("openclaw.model.usage")?.attributes;
+    expect(attributes?.["gen_ai.usage.output_tokens"]).toBe(0);
+    expect(attributes?.["gen_ai.usage.cache_read.input_tokens"]).toBe(0);
+    expect(attributes?.["gen_ai.usage.cache_creation.input_tokens"]).toBe(0);
+    await service.stop?.(ctx);
+  });
+
+  test("does not synthesize absent aggregate input usage as zero", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { output: 5 },
+    });
+    await flushDiagnosticEvents();
+
+    const attributes = startedSpanOptions("openclaw.model.usage")?.attributes;
+    expect(attributes?.["gen_ai.usage.output_tokens"]).toBe(5);
+    expect(attributes).not.toHaveProperty("gen_ai.usage.input_tokens");
+    await service.stop?.(ctx);
+  });
+
   test("exports GenAI client operation duration histogram without diagnostic identifiers", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
@@ -2866,6 +2912,45 @@ describe("diagnostics-otel service", () => {
     });
     expect(firstSpanEndTime("openclaw.tool.execution")).toBeTypeOf("number");
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    await service.stop?.(ctx);
+  });
+
+  test("preserves zero model-call usage and exports terminal context facts", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-zero-output",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      contextTokenBudget: 100,
+      stopReason: "length",
+      outputContentBlocks: 0,
+      outputToolCalls: 0,
+      contextOverflowDetected: true,
+      usage: {
+        input: 99,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        promptTokens: 99,
+        total: 99,
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const attributes = firstSpanAttributes("openclaw.model.call");
+    expect(attributes["openclaw.model_call.usage.output_tokens"]).toBe(0);
+    expect(attributes["gen_ai.usage.output_tokens"]).toBe(0);
+    expect(attributes["openclaw.model_call.stop_reason"]).toBe("length");
+    expect(attributes["openclaw.model_call.output.content_blocks"]).toBe(0);
+    expect(attributes["openclaw.model_call.output.tool_calls"]).toBe(0);
+    expect(attributes["openclaw.model_call.context.prompt_utilization"]).toBe(0.99);
+    expect(attributes["openclaw.model_call.context.overflow_detected"]).toBe(true);
     await service.stop?.(ctx);
   });
 

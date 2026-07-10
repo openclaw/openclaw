@@ -342,7 +342,10 @@ Liveness warnings also emit:
   - `openclaw.errorCategory`, `error.type`, and optional `openclaw.failureKind` on errors
   - `openclaw.model_call.request_bytes`, `openclaw.model_call.response_bytes`, `openclaw.model_call.time_to_first_byte_ms`
   - `openclaw.model_call.prompt.input_messages_count`, `openclaw.model_call.prompt.input_messages_chars`, `openclaw.model_call.prompt.system_prompt_chars`, `openclaw.model_call.prompt.tool_definitions_count`, `openclaw.model_call.prompt.tool_definitions_chars`, `openclaw.model_call.prompt.total_chars` (safe component sizes only, no prompt text)
-  - `openclaw.model_call.usage.*` and `gen_ai.usage.*` when the model-call result carries provider usage for that individual call
+  - `openclaw.model_call.usage.*` and `gen_ai.usage.*` when the model-call result carries provider usage for that individual call; explicit zero values remain present
+  - `openclaw.model_call.stop_reason`, `openclaw.model_call.output.content_blocks`, and `openclaw.model_call.output.tool_calls` from the normalized terminal assistant message
+  - `openclaw.model_call.context.prompt_utilization` as prompt tokens divided by the context token budget; values can exceed `1` when a provider reports usage beyond the configured budget
+  - `openclaw.model_call.context.overflow_detected`, using the same overflow classifier as model-call recovery
   - Span event `openclaw.provider.request` with attribute `openclaw.upstreamRequestIdHash` (bounded, hash-based) when the upstream provider result exposes a request id; raw ids are never exported
   - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, model-call spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}` and `CLIENT` span kind instead of `openclaw.model.call`.
 - `openclaw.harness.run`

@@ -5,14 +5,16 @@
 import { createHash } from "node:crypto";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
+  type DiagnosticEventPayload,
   type DiagnosticModelCallContent,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type {
-  CodexAppServerRuntimeOptions,
-  resolveCodexPluginsPolicy,
-} from "./config.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./config.js";
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
+type CodexModelCallUsage = NonNullable<
+  Extract<DiagnosticEventPayload, { type: "model.call.completed" }>["usage"]
+>;
 
 /** Reads a tool schema field in either app-server or OpenClaw naming. */
 export function readCodexDiagnosticToolParameters(tool: {
@@ -92,6 +94,18 @@ export function buildCodexPluginThreadConfigEligibilityLogData(params: {
 }
 
 type CodexModelCallFailureKind = "aborted" | "timeout";
+type CodexModelCallTerminalResult = {
+  assistantTexts?: unknown;
+  attemptUsage?: CodexModelCallUsage;
+  lastAssistant?: unknown;
+  toolMetas?: unknown[];
+};
+
+type CodexModelCallErrorFields = {
+  failureKind?: CodexModelCallFailureKind;
+  result?: CodexModelCallTerminalResult;
+  contextOverflowDetected?: boolean;
+};
 
 type CodexModelCallDiagnosticCapture = {
   inputMessages?: boolean;
@@ -106,6 +120,68 @@ type CodexModelCallDiagnosticTool = {
   inputSchema?: unknown;
   parameters?: unknown;
 };
+
+function codexModelCallTerminalFields(result: CodexModelCallTerminalResult | undefined) {
+  const lastAssistant = isRecord(result?.lastAssistant) ? result.lastAssistant : undefined;
+  const content = Array.isArray(lastAssistant?.content) ? lastAssistant.content : undefined;
+  return {
+    ...(typeof lastAssistant?.stopReason === "string"
+      ? { stopReason: lastAssistant.stopReason }
+      : {}),
+    ...(content ? { outputContentBlocks: content.length } : {}),
+    ...(result?.toolMetas ? { outputToolCalls: result.toolMetas.length } : {}),
+  };
+}
+
+function codexModelCallResultFields(
+  result: CodexModelCallTerminalResult | undefined,
+  contextOverflowDetected: boolean | undefined,
+) {
+  return {
+    ...(result?.attemptUsage ? { usage: result.attemptUsage } : {}),
+    ...codexModelCallTerminalFields(result),
+    ...(contextOverflowDetected !== undefined ? { contextOverflowDetected } : {}),
+  };
+}
+
+function nonNegativeFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function completedCodexContextOverflow(
+  result: CodexModelCallTerminalResult,
+  contextTokenBudget: unknown,
+): boolean | undefined {
+  const budget = nonNegativeFiniteNumber(contextTokenBudget);
+  const usage = result.attemptUsage;
+  if (!usage || budget === undefined || budget === 0) {
+    return undefined;
+  }
+  const input = nonNegativeFiniteNumber(usage.input);
+  const cacheRead = nonNegativeFiniteNumber(usage.cacheRead);
+  const promptTokens =
+    nonNegativeFiniteNumber(usage.promptTokens) ??
+    (input !== undefined || cacheRead !== undefined ? (input ?? 0) + (cacheRead ?? 0) : undefined);
+  if (promptTokens === undefined) {
+    return undefined;
+  }
+  const lastAssistant = isRecord(result.lastAssistant) ? result.lastAssistant : undefined;
+  const stopReason =
+    typeof lastAssistant?.stopReason === "string" ? lastAssistant.stopReason : undefined;
+  if (stopReason === "stop") {
+    return promptTokens > budget;
+  }
+  if (stopReason !== undefined && stopReason !== "length") {
+    return false;
+  }
+  const output = nonNegativeFiniteNumber(usage.output);
+  if (stopReason === "length") {
+    return output === undefined ? undefined : output === 0 && promptTokens >= budget * 0.99;
+  }
+  // A completed Codex turn without an assistant item has no stop reason.
+  // Only usage beyond the effective budget is unambiguous in that shape.
+  return promptTokens > budget ? true : undefined;
+}
 
 /**
  * Creates lifecycle emitters for trusted model-call diagnostics with optional
@@ -157,7 +233,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         privateData(buildContent()),
       );
     },
-    emitCompleted(result: { assistantTexts?: unknown; lastAssistant?: unknown }): void {
+    emitCompleted(result: CodexModelCallTerminalResult): void {
       if (!started || terminalEmitted) {
         return;
       }
@@ -168,6 +244,10 @@ export function createCodexModelCallDiagnosticEmitter(params: {
           ...params.baseFields,
           durationMs: Math.max(0, now() - startedAt),
           ...requestPayloadBytesField(),
+          ...codexModelCallResultFields(
+            result,
+            completedCodexContextOverflow(result, params.baseFields.contextTokenBudget),
+          ),
         } as TrustedDiagnosticEventInput,
         privateData({
           ...buildContent(),
@@ -181,7 +261,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         }),
       );
     },
-    emitError(error: unknown, fields: { failureKind?: CodexModelCallFailureKind } = {}): void {
+    emitError(error: unknown, fields: CodexModelCallErrorFields = {}): void {
       if (!started || terminalEmitted) {
         return;
       }
@@ -194,6 +274,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
           errorCategory: fields.failureKind ?? "error",
           ...(fields.failureKind ? { failureKind: fields.failureKind } : {}),
           ...requestPayloadBytesField(),
+          ...codexModelCallResultFields(fields.result, fields.contextOverflowDetected),
         } as TrustedDiagnosticEventInput,
         privateData({
           ...buildContent(),

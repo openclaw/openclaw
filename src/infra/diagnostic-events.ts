@@ -610,26 +610,35 @@ export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.started";
 };
 
-export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
-  type: "model.call.completed";
-  durationMs: number;
-  requestPayloadBytes?: number;
-  responseStreamBytes?: number;
-  timeToFirstByteMs?: number;
-  usage?: DiagnosticModelCallUsage;
+type DiagnosticModelCallTerminalFields = {
+  stopReason?: string;
+  outputContentBlocks?: number;
+  outputToolCalls?: number;
+  contextOverflowDetected?: boolean;
 };
 
-export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
-  type: "model.call.error";
-  durationMs: number;
-  errorCategory: string;
-  failureKind?: "aborted" | "connection_closed" | "connection_reset" | "terminated" | "timeout";
-  memory?: DiagnosticMemoryUsage;
-  requestPayloadBytes?: number;
-  responseStreamBytes?: number;
-  timeToFirstByteMs?: number;
-  usage?: DiagnosticModelCallUsage;
-};
+export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent &
+  DiagnosticModelCallTerminalFields & {
+    type: "model.call.completed";
+    durationMs: number;
+    requestPayloadBytes?: number;
+    responseStreamBytes?: number;
+    timeToFirstByteMs?: number;
+    usage?: DiagnosticModelCallUsage;
+  };
+
+export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent &
+  DiagnosticModelCallTerminalFields & {
+    type: "model.call.error";
+    durationMs: number;
+    errorCategory: string;
+    failureKind?: "aborted" | "connection_closed" | "connection_reset" | "terminated" | "timeout";
+    memory?: DiagnosticMemoryUsage;
+    requestPayloadBytes?: number;
+    responseStreamBytes?: number;
+    timeToFirstByteMs?: number;
+    usage?: DiagnosticModelCallUsage;
+  };
 
 type DiagnosticModelCallPromptStats = Readonly<{
   inputMessagesCount?: number;
