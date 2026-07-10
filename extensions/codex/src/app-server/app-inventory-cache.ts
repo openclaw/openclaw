@@ -298,6 +298,7 @@ async function listAllApps(
   const remainingTargetIds = new Set(targetIds);
   const seenCursors = new Set<string>();
   let cursor: string | null | undefined;
+  let shouldForceRefetch = forceRefetch;
   do {
     const response = await request("app/list", {
       cursor,
@@ -305,8 +306,12 @@ async function listAllApps(
       // Large pages minimize startup latency while pagination still proves an
       // absent target instead of publishing a known-incomplete lookup.
       limit: targetIds.size > 0 ? CODEX_TARGETED_APP_INVENTORY_LIMIT : 100,
-      forceRefetch,
+      forceRefetch: shouldForceRefetch,
     });
+    // Refresh the directory once, then paginate through that refreshed
+    // snapshot. Re-forcing every page makes large catalogs repeat the remote
+    // refresh and can exceed the gateway's stuck-session recovery window.
+    shouldForceRefetch = false;
     apps.push(...response.data);
     for (const app of response.data) {
       remainingTargetIds.delete(app.id);

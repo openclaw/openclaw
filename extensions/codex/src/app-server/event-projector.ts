@@ -1189,7 +1189,7 @@ export class CodexAppServerEventProjector {
         this.pendingRawCommentaryEchoes += 1;
       }
     }
-    this.recordNativeGeneratedMedia(item);
+    await this.recordNativeGeneratedMedia(item);
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
       this.planTextByItem.set(item.id, item.text);
       this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
@@ -1351,7 +1351,7 @@ export class CodexAppServerEventProjector {
         this.rememberAssistantItem(item.id);
         this.assistantTextByItem.set(item.id, item.text);
       }
-      this.recordNativeGeneratedMedia(item);
+      await this.recordNativeGeneratedMedia(item);
       if (item.type === "plan" && typeof item.text === "string" && item.text) {
         this.planTextByItem.set(item.id, item.text);
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
@@ -1572,15 +1572,30 @@ export class CodexAppServerEventProjector {
     this.terminalAssistantCandidateEarlierActiveItemIds.clear();
   }
 
-  private recordNativeGeneratedMedia(item: CodexThreadItem | undefined): void {
+  private async recordNativeGeneratedMedia(item: CodexThreadItem | undefined): Promise<void> {
     if (item?.type !== "imageGeneration") {
       return;
     }
-    const savedPath = readItemString(item, "savedPath")?.trim();
-    if (savedPath) {
-      this.recordNativeGeneratedMediaUrl({
+
+    const result = readItemString(item, "result")?.trim();
+    if (result) {
+      await this.recordGeneratedImageResult({
         itemId: item.id,
-        mediaUrl: savedPath,
+        result,
+        revisedPrompt: readItemString(item, "revisedPrompt"),
+        eventSurface: "typed",
+      });
+      return;
+    }
+
+    if (readItemString(item, "savedPath")?.trim()) {
+      this.nativeGeneratedMediaItemIds.add(item.id);
+      embeddedAgentLog.warn("codex app-server image generation omitted transferable media", {
+        boundary: "remote-app-server-to-gateway",
+        eventSurface: "typed",
+        itemId: item.id,
+        turnId: this.turnId,
+        cause: "typed item contained only an app-server-local savedPath",
       });
     }
   }
@@ -1589,17 +1604,39 @@ export class CodexAppServerEventProjector {
     if (readString(item, "type") !== "image_generation_call") {
       return;
     }
-    const result = readString(item, "result");
+    const result = readString(item, "result")?.trim();
     if (!result) {
       return;
     }
     const itemId = readString(item, "id") ?? `raw-image-${this.nativeGeneratedMediaItemIds.size}`;
+    await this.recordGeneratedImageResult({
+      itemId,
+      result,
+      revisedPrompt: readString(item, "revised_prompt") ?? readString(item, "revisedPrompt"),
+      eventSurface: "raw",
+    });
+  }
+
+  private async recordGeneratedImageResult(params: {
+    itemId: string;
+    result: string;
+    revisedPrompt?: string;
+    eventSurface: "raw" | "typed";
+  }): Promise<void> {
+    if (this.nativeGeneratedMediaUrlsByItemId.has(params.itemId)) {
+      this.nativeGeneratedMediaItemIds.add(params.itemId);
+      return;
+    }
+    const { itemId, result } = params;
     this.nativeGeneratedMediaItemIds.add(itemId);
     const maxBytes = resolveGeneratedImageMaxBytes(this.params.config);
     const estimatedDecodedBytes = estimateBase64DecodedBytes(result);
     if (estimatedDecodedBytes !== undefined && estimatedDecodedBytes > maxBytes) {
-      embeddedAgentLog.warn("codex app-server raw image generation result exceeds media limit", {
+      embeddedAgentLog.warn("codex app-server image generation result exceeds media limit", {
+        boundary: "remote-app-server-to-gateway",
+        eventSurface: params.eventSurface,
         itemId,
+        turnId: this.turnId,
         estimatedDecodedBytes,
         maxBytes,
       });
@@ -1608,11 +1645,18 @@ export class CodexAppServerEventProjector {
     const asset = generatedImageAssetFromBase64({
       base64: result,
       index: this.nativeGeneratedMediaItemIds.size,
-      revisedPrompt: readString(item, "revised_prompt") ?? readString(item, "revisedPrompt"),
+      revisedPrompt: params.revisedPrompt,
       fileNamePrefix: "codex-image-generation",
       sniffMimeType: true,
     });
     if (!asset) {
+      embeddedAgentLog.warn("codex app-server image generation result was not valid media", {
+        boundary: "remote-app-server-to-gateway",
+        eventSurface: params.eventSurface,
+        itemId,
+        turnId: this.turnId,
+        cause: "image result could not be decoded",
+      });
       return;
     }
     try {
@@ -1626,27 +1670,20 @@ export class CodexAppServerEventProjector {
       this.recordNativeGeneratedMediaUrl({
         itemId,
         mediaUrl: saved.path,
-        // The typed savedPath may belong to a remote app-server host. Always
-        // prefer the copy persisted into this gateway's managed media root.
-        replaceExisting: true,
       });
     } catch (error) {
-      embeddedAgentLog.warn("codex app-server raw image generation result save failed", {
+      embeddedAgentLog.warn("codex app-server image generation result save failed", {
+        boundary: "remote-app-server-to-gateway",
+        eventSurface: params.eventSurface,
         itemId,
+        turnId: this.turnId,
         error,
       });
     }
   }
 
-  private recordNativeGeneratedMediaUrl(params: {
-    itemId: string;
-    mediaUrl: string;
-    replaceExisting?: boolean;
-  }): void {
-    if (
-      this.nativeGeneratedMediaUrlsByItemId.has(params.itemId) &&
-      params.replaceExisting !== true
-    ) {
+  private recordNativeGeneratedMediaUrl(params: { itemId: string; mediaUrl: string }): void {
+    if (this.nativeGeneratedMediaUrlsByItemId.has(params.itemId)) {
       this.nativeGeneratedMediaItemIds.add(params.itemId);
       return;
     }

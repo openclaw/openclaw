@@ -145,6 +145,8 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
   web_search: "disabled",
 });
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 async function writeExistingBinding(
   sessionFile: string,
@@ -1128,13 +1130,21 @@ describe("runCodexAppServerAttempt", () => {
   it("scopes Codex developer reply instructions to message-tool-only delivery", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.extraSystemPrompt = "Generic channel guidance: use message for image attachments.";
     params.sourceReplyDeliveryMode = "message_tool_only";
 
-    expect(
-      testing.buildDeveloperInstructions(params, {
-        dynamicTools: [createMessageDynamicTool("Message test tool")],
-      }),
-    ).toContain("Visible source replies are not automatically delivered for this run.");
+    const messageToolInstructions = testing.buildDeveloperInstructions(params, {
+      dynamicTools: [createMessageDynamicTool("Message test tool")],
+    });
+    expect(messageToolInstructions).toContain(
+      "Visible source replies are not automatically delivered for this run.",
+    );
+    expect(messageToolInstructions).toContain(
+      "Codex-native image generation is delivered automatically by OpenClaw",
+    );
+    expect(messageToolInstructions.indexOf("Codex-native image generation")).toBeGreaterThan(
+      messageToolInstructions.indexOf(params.extraSystemPrompt),
+    );
 
     const withoutMessageToolInstructions = testing.buildDeveloperInstructions(params, {
       dynamicTools: [],
@@ -3891,14 +3901,12 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
     params.model = createCodexTestModel("codex", ["text", "image"]);
     params.images = [
       {
         type: "image",
         mimeType: "image/png",
-        data: pngBase64,
+        data: TINY_PNG_BASE64,
       },
     ];
 
@@ -3913,7 +3921,7 @@ describe("runCodexAppServerAttempt", () => {
       | undefined;
     expect(turnStartParams?.input).toEqual([
       { type: "text", text: "hello", text_elements: [] },
-      { type: "image", url: `data:image/png;base64,${pngBase64}` },
+      { type: "image", url: `data:image/png;base64,${TINY_PNG_BASE64}` },
     ]);
   });
 
@@ -4050,12 +4058,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
   });
 
-  it("surfaces Codex-native image generation saved paths as reply media", async () => {
+  it("persists Codex-native image results as gateway-managed reply media", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "state"));
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -4073,8 +4083,8 @@ describe("runCodexAppServerAttempt", () => {
               id: "ig_123",
               status: "completed",
               revisedPrompt: "A tiny blue square",
-              result: "Zm9v",
-              savedPath: "/tmp/codex-home/generated_images/session-1/ig_123.png",
+              result: TINY_PNG_BASE64,
+              savedPath,
             },
           ],
         },
@@ -4082,8 +4092,15 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     const result = await run;
+    const mediaUrl = result.toolMediaUrls?.[0];
+
     expect(result.assistantTexts).toEqual([]);
-    expect(result.toolMediaUrls).toEqual(["/tmp/codex-home/generated_images/session-1/ig_123.png"]);
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(mediaUrl).not.toBe(savedPath);
+    expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
+    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+      Buffer.from(TINY_PNG_BASE64, "base64"),
+    );
   });
 
   it("does not complete on unscoped turn/completed notifications", async () => {

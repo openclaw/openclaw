@@ -1866,8 +1866,13 @@ export function buildDeveloperInstructions(
     buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
     params.extraSystemPrompt,
+    buildNativeGeneratedMediaInstruction(),
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+}
+
+function buildNativeGeneratedMediaInstruction(): string {
+  return "Codex-native image generation is delivered automatically by OpenClaw after the turn completes. After one successful native image generation, do not call `message` to upload or send that image, do not read or copy its `savedPath`, and do not regenerate it to work around attachment delivery. Finish the turn normally so OpenClaw can attach the generated image; use `message` only for media from other sources.";
 }
 
 function buildDeferredDynamicToolManifest(

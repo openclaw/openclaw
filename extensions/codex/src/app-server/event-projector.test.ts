@@ -616,7 +616,10 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "OK from raw" }]);
   });
 
-  it("attaches native Codex image-generation saved paths as reply media", async () => {
+  it("persists typed Codex image-generation results as gateway-managed reply media", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
+    tempDirs.add(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const projector = await createProjector();
     const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
 
@@ -627,7 +630,7 @@ describe("CodexAppServerEventProjector", () => {
           id: "ig_123",
           status: "completed",
           revisedPrompt: "A tiny blue square",
-          result: "Zm9v",
+          result: tinyPngBase64,
           savedPath,
         },
       ]),
@@ -636,11 +639,47 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.assistantTexts).toStrictEqual([]);
-    expect(result.toolMediaUrls).toEqual([savedPath]);
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
+    expect(result.toolMediaUrls?.[0]).toContain(
+      `${path.sep}media${path.sep}tool-image-generation${path.sep}`,
+    );
+    await expect(fs.readFile(result.toolMediaUrls?.[0] ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
     expect(result.replayMetadata).toStrictEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,
     });
+  });
+
+  it("warns instead of treating an app-server savedPath as gateway-local media", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "imageGeneration",
+          id: "ig_remote_path_only",
+          status: "completed",
+          revisedPrompt: "A tiny blue square",
+          result: "",
+          savedPath: "/home/dev-user/.codex/generated_images/session-1/ig_remote_path_only.png",
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMediaUrls).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server image generation omitted transferable media",
+      expect.objectContaining({
+        boundary: "remote-app-server-to-gateway",
+        itemId: "ig_remote_path_only",
+      }),
+    );
   });
 
   it("saves raw Codex image-generation results as reply media", async () => {
@@ -703,7 +742,7 @@ describe("CodexAppServerEventProjector", () => {
       replaySafe: false,
     });
     expect(warn).toHaveBeenCalledWith(
-      "codex app-server raw image generation result exceeds media limit",
+      "codex app-server image generation result exceeds media limit",
       expect.objectContaining({ itemId: "ig_raw_capped" }),
     );
   });

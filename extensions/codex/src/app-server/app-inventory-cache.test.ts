@@ -133,6 +133,30 @@ describe("Codex app inventory cache", () => {
     expect(read.snapshot).toBeUndefined();
   });
 
+  it("forces a remote refresh only on the first inventory page", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async (_method: "app/list", params: v2.AppsListParams) => {
+      const page = params.cursor ? Number(params.cursor) : 1;
+      return {
+        data: [app(`app-${page}`)],
+        nextCursor: page < 3 ? String(page + 1) : null,
+      } satisfies v2.AppsListResponse;
+    });
+
+    const snapshot = await cache.refreshNow({
+      key: "runtime",
+      request,
+      forceRefetch: true,
+    });
+
+    expect(snapshot.apps.map((item) => item.id)).toEqual(["app-1", "app-2", "app-3"]);
+    expect(request.mock.calls.map(([, params]) => params.forceRefetch)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+  });
+
   it("uses stale inventory for the current read while still refreshing asynchronously", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 10 });
     const request = vi.fn(async () => {
