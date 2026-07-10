@@ -9,6 +9,7 @@ import {
   removeSessionTrajectoryArtifacts,
 } from "./cleanup.js";
 import { resolveTrajectoryFilePath, resolveTrajectoryPointerFilePath } from "./paths.js";
+import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 import {
   acquireTrajectoryWriterLease,
   canonicalizeTrajectoryPath,
@@ -378,6 +379,85 @@ describe("trajectory cleanup", () => {
         // The claim was only admitted after delete's unlink fully committed,
         // so it cannot have reactivated or recreated the deleted artifact.
         await expectPathMissing(runtimeFile);
+      } finally {
+        rmSpy.mockRestore();
+      }
+    });
+  });
+
+  it("keeps a queued re-acquisition's fresh runtime and pointer intact against a racing delete's pointer removal", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      const sessionId = "session-8";
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = path.join(dir, `${sessionId}.jsonl`);
+      const runtimeFile = resolveTrajectoryFilePath({ env: {}, sessionFile, sessionId });
+      const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+      await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
+      await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
+
+      const order: string[] = [];
+      const originalRm = nodeFs.promises.rm.bind(nodeFs.promises);
+      let releasePointerRemoval: () => void = () => {};
+      const pointerRemovalGate = new Promise<void>((resolve) => {
+        releasePointerRemoval = resolve;
+      });
+      const rmSpy = vi
+        .spyOn(nodeFs.promises, "rm")
+        .mockImplementation(async (target: nodeFs.PathLike, options?: nodeFs.RmOptions) => {
+          const isPointerTarget = String(target) === pointerPath;
+          if (isPointerTarget) {
+            order.push("pointer-unlink-start");
+            await pointerRemovalGate;
+          }
+          const result = await originalRm(target, options);
+          if (isPointerTarget) {
+            order.push("pointer-unlink-done");
+          }
+          return result;
+        });
+
+      try {
+        const deletePromise = removeSessionTrajectoryArtifacts({
+          sessionId,
+          sessionFile,
+          storePath,
+          restrictToStoreDir: true,
+        });
+
+        // Let delete's locked turn remove the runtime file and reach the
+        // paused pointer removal — still inside the SAME turn once fixed —
+        // before attempting a concurrent re-acquisition for the same
+        // session (ordering (B) from the round-4 finding). The runtime
+        // file's own (unpaused) removal is real disk I/O, so poll rather
+        // than assume a fixed number of ticks.
+        for (let attempt = 0; attempt < 50 && order.length === 0; attempt += 1) {
+          await new Promise<void>((resolve) => {
+            setImmediate(() => resolve());
+          });
+        }
+        expect(order).toEqual(["pointer-unlink-start"]);
+
+        const recorderPromise = createTrajectoryRuntimeRecorder({ sessionId, sessionFile });
+
+        await new Promise<void>((resolve) => {
+          setImmediate(() => resolve());
+        });
+        expect(order).toEqual(["pointer-unlink-start"]);
+
+        releasePointerRemoval();
+        const [, recorder] = await Promise.all([deletePromise, recorderPromise]);
+        if (!recorder) {
+          throw new Error("expected trajectory runtime recorder");
+        }
+        recorder.recordEvent("prompt.submitted", { marker: "post-race-owner" });
+        await recorder.flush();
+
+        const pointerContent = JSON.parse(nodeFs.readFileSync(pointerPath, "utf8")) as {
+          runtimeFile?: string;
+        };
+        expect(pointerContent.runtimeFile).toBe(recorder.filePath);
+        expect(nodeFs.existsSync(recorder.filePath)).toBe(true);
+        expect(nodeFs.readFileSync(recorder.filePath, "utf8")).toContain("post-race-owner");
       } finally {
         rmSpy.mockRestore();
       }
