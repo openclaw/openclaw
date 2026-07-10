@@ -1603,6 +1603,7 @@ platform :ios do
     version_args += ["--build-number", build_number] unless build_number.empty?
 
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
+    sh(shell_join(["bash", File.join(repo_root, "scripts", "prepare-mobile-core.sh")]))
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
     sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
@@ -1636,6 +1637,7 @@ platform :ios do
     version_args += ["--build-number", build_number] unless build_number.empty?
 
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
+    sh(shell_join(["bash", File.join(repo_root, "scripts", "prepare-mobile-core.sh")]))
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
     sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
