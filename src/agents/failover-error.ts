@@ -686,7 +686,7 @@ export function buildProviderReauthCommand(
 function hasControlCharacter(value: string): boolean {
   for (let i = 0; i < value.length; i += 1) {
     const code = value.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) {
+    if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
       return true;
     }
   }
