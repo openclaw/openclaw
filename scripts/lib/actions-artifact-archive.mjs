@@ -143,6 +143,27 @@ export function sha256Digest(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+function compareCodeUnits(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export function describeActionsArtifactFiles(files) {
+  if (!(files instanceof Map)) {
+    throw new Error("Actions artifact files must be a Map.");
+  }
+  return [...files.entries()]
+    .map(([path, bytes]) => {
+      const safePath = assertSafeArchivePath(path, "Actions artifact file path");
+      const content = asBuffer(bytes, `Actions artifact file ${safePath}`);
+      return {
+        path: safePath,
+        sha256: sha256Digest(content).slice("sha256:".length),
+        sizeBytes: content.byteLength,
+      };
+    })
+    .toSorted((left, right) => compareCodeUnits(left.path, right.path));
+}
+
 export function readBoundedRegularFile(path, params) {
   if (!Number.isSafeInteger(params.maxBytes) || params.maxBytes <= 0) {
     throw new Error(`${params.label} byte limit must be a positive safe integer.`);
@@ -466,7 +487,9 @@ function inspectLocalRecords(bytes, centralOffset, records, policy) {
       record.localOffset + 30 > centralOffset ||
       bytes.readUInt32LE(record.localOffset) !== ZIP_LOCAL_HEADER_SIGNATURE
     ) {
-      throw new Error(`Non-contiguous or invalid Actions artifact ZIP local record: ${record.name}`);
+      throw new Error(
+        `Non-contiguous or invalid Actions artifact ZIP local record: ${record.name}`,
+      );
     }
     const localVersionNeeded = bytes.readUInt16LE(record.localOffset + 4);
     const localFlags = bytes.readUInt16LE(record.localOffset + 6);
@@ -583,10 +606,7 @@ export function inspectActionsArtifactZip(bytes, expectedEntries = 2, limits = {
     expectedInventory = expectedEntries;
     expectedCount = expectedEntries.length;
   } else {
-    expectedCount = assertPositiveInteger(
-      expectedEntries,
-      "Expected Actions artifact entry count",
-    );
+    expectedCount = assertPositiveInteger(expectedEntries, "Expected Actions artifact entry count");
   }
   const maxArchiveBytes = boundedLimit(
     limits.maxArchiveBytes,
@@ -642,15 +662,11 @@ function requireExpectedBinding(params) {
     expected.workflowHeadBranch,
     "workflow head branch",
   );
-  const runStatePolicy = assertTrimmedString(
-    expected.runStatePolicy,
-    "workflow run-state policy",
-  );
+  const runStatePolicy = assertTrimmedString(expected.runStatePolicy, "workflow run-state policy");
   if (runStatePolicy !== "completed-success" && runStatePolicy !== "same-run-in-progress") {
     throw new Error(`Unsupported workflow run-state policy: ${runStatePolicy}`);
   }
-  const workflowStatus =
-    runStatePolicy === "completed-success" ? "completed" : "in_progress";
+  const workflowStatus = runStatePolicy === "completed-success" ? "completed" : "in_progress";
   const workflowConclusion = runStatePolicy === "completed-success" ? "success" : null;
   return {
     artifactDigest,
@@ -700,7 +716,8 @@ export function validateActionsArtifactBinding(params) {
     run.path !== expected.workflowPath ||
     run.status !== expected.workflowStatus ||
     run.conclusion !== expected.workflowConclusion ||
-    run.repository?.full_name !== expected.repository
+    run.repository?.full_name !== expected.repository ||
+    run.head_repository?.full_name !== expected.repository
   ) {
     throw new Error("Actions workflow run does not match the immutable publication tuple.");
   }
@@ -715,6 +732,7 @@ async function readBoundedResponseBody(response, params) {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null) {
     if (!/^(?:0|[1-9][0-9]*)$/u.test(contentLength)) {
+      await response.body?.cancel();
       throw new Error(`${params.label} returned an invalid Content-Length.`);
     }
     const declaredBytes = Number(contentLength);
@@ -723,6 +741,7 @@ async function readBoundedResponseBody(response, params) {
       declaredBytes > params.maxBytes ||
       (params.expectedBytes !== undefined && declaredBytes !== params.expectedBytes)
     ) {
+      await response.body?.cancel();
       throw new Error(`${params.label} Content-Length is outside the approved range.`);
     }
   }
@@ -746,6 +765,9 @@ async function readBoundedResponseBody(response, params) {
       }
       chunks.push(Buffer.from(value));
     }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   } finally {
     reader.releaseLock();
   }
@@ -863,14 +885,11 @@ export async function downloadActionsArtifactArchive(params) {
   const archiveBytes = await runBoundedRetry(
     "GitHub Actions artifact download",
     async () => {
-      const response = await fetchImpl(
-        `${apiRoot}/actions/artifacts/${expected.artifactId}/zip`,
-        {
-          headers,
-          redirect: "follow",
-          signal: AbortSignal.timeout(timeoutMs),
-        },
-      );
+      const response = await fetchImpl(`${apiRoot}/actions/artifacts/${expected.artifactId}/zip`, {
+        headers,
+        redirect: "follow",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
       const bytes = await readBoundedResponseBody(response, {
         expectedBytes: expected.artifactSizeBytes,
         label: "GitHub Actions artifact download",
@@ -891,9 +910,6 @@ export async function downloadActionsArtifactArchive(params) {
 
 export async function readPublicationArtifactArchive(params) {
   const downloaded = await downloadActionsArtifactArchive(params);
-  const files = inspectActionsArtifactZipWithPolicy(
-    downloaded.archiveBytes,
-    params.archivePolicy,
-  );
+  const files = inspectActionsArtifactZipWithPolicy(downloaded.archiveBytes, params.archivePolicy);
   return { ...downloaded, files };
 }

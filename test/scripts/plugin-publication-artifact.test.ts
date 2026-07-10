@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { deflateRawSync, gzipSync } from "node:zlib";
@@ -7,6 +15,8 @@ import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createPluginPublicationArtifact,
+  downloadActionsArtifactArchive,
+  inspectActionsArtifactZipWithPolicy,
   verifyPluginPublicationArtifact,
 } from "../../scripts/plugin-publication-artifact.mjs";
 
@@ -24,6 +34,12 @@ const PACKAGE_DIR = "extensions/meta";
 const TARBALL_NAME = "openclaw-meta-provider-2026.7.1-beta.3.tgz";
 const MANUAL_OVERRIDE_REASON =
   "OpenClaw Release Publish run 12345 approved token release for v2026.7.1-beta.3";
+const PUBLICATION_REASON = "First npm publication for the approved beta3 Meta package.";
+const PUBLISHER_POLICY = {
+  policyId: "2026.7.1-beta.3",
+  schema: "openclaw.plugin-npm-publisher-policy/v1",
+  sha256: "6a40c33756ff1016744bb929660c1d9bf271cd478b0b9811fa8e2d8f1f775e95",
+};
 
 const tempDirs: string[] = [];
 
@@ -156,9 +172,21 @@ function crc32(bytes: Buffer): number {
 
 type ZipFile = {
   bytes: Buffer;
+  centralFlags?: number;
   compression?: 0 | 8;
+  compressedBytes?: Buffer;
   declaredExpandedSize?: number;
+  descriptor?: boolean;
+  descriptorCrc?: number;
+  flags?: number;
+  gapAfter?: Buffer;
+  localCrc?: number;
+  localExpandedSize?: number;
+  localFlags?: number;
+  localNameBytes?: Buffer;
+  localCompressedSize?: number;
   name: string;
+  nameBytes?: Buffer;
 };
 
 function createZip(files: ZipFile[]): Buffer {
@@ -166,30 +194,45 @@ function createZip(files: ZipFile[]): Buffer {
   const centralParts: Buffer[] = [];
   let localOffset = 0;
   for (const file of files) {
-    const name = Buffer.from(file.name, "utf8");
+    const name = file.nameBytes ?? Buffer.from(file.name, "utf8");
+    const localName = file.localNameBytes ?? name;
     const compression = file.compression ?? 0;
-    const compressed = compression === 8 ? deflateRawSync(file.bytes) : file.bytes;
+    const compressed =
+      file.compressedBytes ?? (compression === 8 ? deflateRawSync(file.bytes) : file.bytes);
     const expandedSize = file.declaredExpandedSize ?? file.bytes.length;
     const checksum = crc32(file.bytes);
+    const flags = file.flags ?? (file.descriptor ? 0x0008 : 0);
+    const localFlags = file.localFlags ?? flags;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(localFlags, 6);
     local.writeUInt16LE(compression, 8);
     local.writeUInt16LE(0, 10);
     local.writeUInt16LE(0, 12);
-    local.writeUInt32LE(checksum, 14);
-    local.writeUInt32LE(compressed.length, 18);
-    local.writeUInt32LE(expandedSize, 22);
-    local.writeUInt16LE(name.length, 26);
+    local.writeUInt32LE(file.localCrc ?? (file.descriptor ? 0 : checksum), 14);
+    local.writeUInt32LE(file.localCompressedSize ?? (file.descriptor ? 0 : compressed.length), 18);
+    local.writeUInt32LE(file.localExpandedSize ?? (file.descriptor ? 0 : expandedSize), 22);
+    local.writeUInt16LE(localName.length, 26);
     local.writeUInt16LE(0, 28);
-    localParts.push(local, name, compressed);
+    const descriptor = file.descriptor
+      ? (() => {
+          const value = Buffer.alloc(16);
+          value.writeUInt32LE(0x08074b50, 0);
+          value.writeUInt32LE(file.descriptorCrc ?? checksum, 4);
+          value.writeUInt32LE(compressed.length, 8);
+          value.writeUInt32LE(expandedSize, 12);
+          return value;
+        })()
+      : Buffer.alloc(0);
+    const gap = file.gapAfter ?? Buffer.alloc(0);
+    localParts.push(local, localName, compressed, descriptor, gap);
 
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(0x0314, 4);
     central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(file.centralFlags ?? flags, 8);
     central.writeUInt16LE(compression, 10);
     central.writeUInt16LE(0, 12);
     central.writeUInt16LE(0, 14);
@@ -204,7 +247,8 @@ function createZip(files: ZipFile[]): Buffer {
     central.writeUInt32LE((0o100600 * 0x10000) >>> 0, 38);
     central.writeUInt32LE(localOffset, 42);
     centralParts.push(central, name);
-    localOffset += local.length + name.length + compressed.length;
+    localOffset +=
+      local.length + localName.length + compressed.length + descriptor.length + gap.length;
   }
   const centralDirectory = Buffer.concat(centralParts);
   const end = Buffer.alloc(22);
@@ -217,6 +261,29 @@ function createZip(files: ZipFile[]): Buffer {
   end.writeUInt32LE(localOffset, 16);
   end.writeUInt16LE(0, 20);
   return Buffer.concat([...localParts, centralDirectory, end]);
+}
+
+function inspectTestZip(
+  zip: Buffer,
+  overrides: Partial<{
+    maxArchiveBytes: number;
+    maxCompressedEntryBytes: (name: string) => number;
+    maxEntries: number;
+    maxExpandedBytes: number;
+    maxEntryBytes: (name: string) => number;
+    minEntries: number;
+  }> = {},
+) {
+  return inspectActionsArtifactZipWithPolicy(zip, {
+    minEntries: 1,
+    maxEntries: 8,
+    maxArchiveBytes: 1024 * 1024,
+    maxExpandedBytes: 1024 * 1024,
+    allowPath: () => true,
+    maxCompressedEntryBytes: () => 1024 * 1024,
+    maxEntryBytes: () => 1024 * 1024,
+    ...overrides,
+  });
 }
 
 function metaPackageJson(markerPath: string, overrides: Record<string, unknown> = {}): string {
@@ -243,16 +310,24 @@ function metaPackageJson(markerPath: string, overrides: Record<string, unknown> 
 }
 
 function publicationParams(artifactDir: string, overrides: Record<string, unknown> = {}) {
+  const route = typeof overrides.route === "string" ? overrides.route : "npm-token-bootstrap";
+  const npmPolicy = route.startsWith("npm-")
+    ? {
+        publicationReason: PUBLICATION_REASON,
+        publisherPolicy: PUBLISHER_POLICY,
+      }
+    : {};
   return {
     artifactDir,
     artifactName: ARTIFACT_NAME,
     packageDir: PACKAGE_DIR,
     packageName: PACKAGE_NAME,
     publishTag: "beta",
-    route: "npm-token-bootstrap",
+    route,
     sourcePackageJsonSha256: "3".repeat(64),
     targetSha: TARGET_SHA,
     version: PACKAGE_VERSION,
+    ...npmPolicy,
     ...overrides,
   };
 }
@@ -338,6 +413,7 @@ function writeWorkflowRunMetadata(workflowRunPath: string): void {
       status: "completed",
       conclusion: "success",
       repository: { full_name: REPOSITORY },
+      head_repository: { full_name: REPOSITORY },
     })}\n`,
   );
 }
@@ -387,16 +463,73 @@ describe("plugin publication artifact", () => {
         version: PACKAGE_VERSION,
       },
       publication: {
+        authMode: "token-bootstrap",
+        capability: "first-publication",
+        publisherPolicy: PUBLISHER_POLICY,
+        reason: PUBLICATION_REASON,
         route: "npm-token-bootstrap",
         tag: "beta",
       },
       artifact: {
         name: ARTIFACT_NAME,
+        npmIntegrity: `sha512-${createHash("sha512").update(fixture.tarball).digest("base64")}`,
+        npmShasum: createHash("sha1").update(fixture.tarball).digest("hex"),
         sha256: sha256(fixture.tarball),
       },
     });
+    expect(verified).toMatchObject({
+      npmIntegrity: verified.manifest.artifact.npmIntegrity,
+      npmShasum: verified.manifest.artifact.npmShasum,
+      packageJsonSha256: verified.manifest.package.packageJsonSha256,
+      pluginManifestSha256: verified.manifest.package.pluginManifestSha256,
+      sourcePackageJsonSha256: "3".repeat(64),
+      tarballName: TARBALL_NAME,
+    });
     expect(readFileSync(verified.tarballPath)).toEqual(fixture.tarball);
+    expect(verified.tarballInventory).toEqual(verified.manifest.artifact.inventory);
+    expect(verified.tarballSizeBytes).toBe(fixture.tarball.length);
     expect(existsSync(fixture.markerPath)).toBe(false);
+  });
+
+  it("derives the closed npm auth capability and binds placeholder-recovery policy", () => {
+    const fixture = createFixture({
+      publicationOverrides: {
+        route: "npm-token-placeholder-recovery",
+      },
+    });
+    const verified = verifyFixture(fixture);
+
+    expect(verified.manifest.publication).toEqual({
+      authMode: "token-bootstrap",
+      capability: "placeholder-recovery",
+      publisherPolicy: PUBLISHER_POLICY,
+      reason: PUBLICATION_REASON,
+      route: "npm-token-placeholder-recovery",
+      tag: "beta",
+    });
+    expect(() =>
+      verifyFixture(fixture, {
+        authMode: "release-token",
+      }),
+    ).toThrow("auth mode must be token-bootstrap");
+    expect(() =>
+      verifyFixture(fixture, {
+        capability: "first-publication",
+      }),
+    ).toThrow("capability must be placeholder-recovery");
+  });
+
+  it("requires npm publication reason and exact publisher-policy identity", () => {
+    const fixture = createFixture();
+    for (const overrides of [
+      { publicationReason: "" },
+      { publicationReason: "invalid\nreason" },
+      { publisherPolicy: undefined },
+      { publisherPolicy: { ...PUBLISHER_POLICY, sha256: "A".repeat(64) } },
+      { publisherPolicy: { ...PUBLISHER_POLICY, extra: true } },
+    ]) {
+      expect(() => verifyFixture(fixture, overrides)).toThrow();
+    }
   });
 
   it("rejects a publication artifact bound to a different target package.json", () => {
@@ -407,6 +540,49 @@ describe("plugin publication artifact", () => {
         sourcePackageJsonSha256: "4".repeat(64),
       }),
     ).toThrow("source package.json SHA-256 does not match the approved target source");
+  });
+
+  it("binds exact tarball size and canonical inventory", () => {
+    const fixture = createFixture();
+    const expectedInventory = JSON.parse(readFileSync(fixture.created.manifestPath, "utf8"))
+      .artifact.inventory;
+    expect(
+      verifyFixture(fixture, {
+        expectedInventory,
+        expectedTarballSha256: sha256(fixture.tarball),
+        expectedTarballSizeBytes: fixture.tarball.length,
+      }),
+    ).toMatchObject({
+      tarballInventory: expectedInventory,
+      tarballSha256: sha256(fixture.tarball),
+      tarballSizeBytes: fixture.tarball.length,
+    });
+
+    const wrongSizeFixture = createFixture();
+    expect(() =>
+      verifyFixture(wrongSizeFixture, {
+        expectedTarballSizeBytes: wrongSizeFixture.tarball.length + 1,
+      }),
+    ).toThrow("tarball size does not match");
+
+    const wrongInventoryFixture = createFixture();
+    expect(() =>
+      verifyFixture(wrongInventoryFixture, {
+        expectedInventory: expectedInventory.slice(0, -1),
+      }),
+    ).toThrow("tarball inventory does not match");
+  });
+
+  it("requires a fresh non-symlink output directory", () => {
+    const existingFixture = createFixture();
+    mkdirSync(existingFixture.outputDir);
+    expect(() => verifyFixture(existingFixture)).toThrow("must not already exist");
+
+    const symlinkFixture = createFixture();
+    const symlinkTarget = path.join(symlinkFixture.root, "output-target");
+    mkdirSync(symlinkTarget);
+    symlinkSync(symlinkTarget, symlinkFixture.outputDir);
+    expect(() => verifyFixture(symlinkFixture)).toThrow("must not already exist");
   });
 
   it("binds the exact ClawHub token-release manual override reason", () => {
@@ -498,6 +674,112 @@ describe("plugin publication artifact", () => {
     }
   });
 
+  it("binds authoritative workflow status, conclusion, and head repository", () => {
+    const mutations = [
+      (run: Record<string, unknown>) => {
+        run.status = "in_progress";
+      },
+      (run: Record<string, unknown>) => {
+        run.conclusion = "cancelled";
+      },
+      (run: Record<string, unknown>) => {
+        run.head_repository = { full_name: "openclaw/not-openclaw" };
+      },
+    ];
+    for (const mutate of mutations) {
+      const fixture = createFixture();
+      const run = JSON.parse(readFileSync(fixture.workflowRunPath, "utf8"));
+      mutate(run);
+      writeFileSync(fixture.workflowRunPath, `${JSON.stringify(run)}\n`);
+      expect(() => verifyFixture(fixture)).toThrow(
+        /workflow run does not match the immutable publication tuple/u,
+      );
+    }
+  });
+
+  it("retries bounded metadata, attempt, and archive failures against the exact run attempt", async () => {
+    const zip = createZip([{ bytes: Buffer.from("proof"), name: "proof.txt" }]);
+    const artifactMetadata = {
+      id: ARTIFACT_ID,
+      name: ARTIFACT_NAME,
+      expired: false,
+      digest: `sha256:${sha256(zip)}`,
+      size_in_bytes: zip.length,
+      workflow_run: {
+        id: RUN_ID,
+        head_sha: WORKFLOW_SHA,
+      },
+    };
+    const workflowRun = {
+      id: RUN_ID,
+      run_attempt: RUN_ATTEMPT,
+      head_sha: WORKFLOW_SHA,
+      head_branch: "main",
+      event: "workflow_dispatch",
+      path: WORKFLOW_PATH,
+      status: "completed",
+      conclusion: "success",
+      repository: { full_name: REPOSITORY },
+      head_repository: { full_name: REPOSITORY },
+    };
+    const callCounts = { archive: 0, artifact: 0, run: 0 };
+    const urls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}`)) {
+        callCounts.artifact += 1;
+        return callCounts.artifact === 1
+          ? new Response("retry", { status: 503 })
+          : Response.json(artifactMetadata);
+      }
+      if (url.endsWith(`/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}`)) {
+        callCounts.run += 1;
+        return callCounts.run === 1
+          ? new Response("{", { status: 200 })
+          : Response.json(workflowRun);
+      }
+      if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}/zip`)) {
+        callCounts.archive += 1;
+        return callCounts.archive === 1
+          ? new Response("retry", { status: 502 })
+          : new Response(zip, {
+              status: 200,
+              headers: { "content-length": String(zip.length) },
+            });
+      }
+      return new Response("unexpected", { status: 404 });
+    }) as typeof fetch;
+
+    const result = await downloadActionsArtifactArchive({
+      expected: {
+        artifactDigest: `sha256:${sha256(zip)}`,
+        artifactId: ARTIFACT_ID,
+        artifactName: ARTIFACT_NAME,
+        artifactSizeBytes: zip.length,
+        repository: REPOSITORY,
+        runStatePolicy: "completed-success",
+        runAttempt: RUN_ATTEMPT,
+        runId: RUN_ID,
+        workflowEvent: "workflow_dispatch",
+        workflowHeadBranch: "main",
+        workflowPath: WORKFLOW_PATH,
+        workflowSha: WORKFLOW_SHA,
+      },
+      fetchImpl,
+      maxArchiveBytes: 1024 * 1024,
+      retryAttempts: 3,
+      retryDelayMs: 1,
+      token: "test-token",
+    });
+
+    expect(result.archiveBytes).toEqual(zip);
+    expect(callCounts).toEqual({ archive: 2, artifact: 2, run: 2 });
+    expect(urls).toContain(
+      `https://api.github.com/repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}`,
+    );
+  });
+
   it("rejects ZIP traversal, additional files, and byte tampering", () => {
     const fixture = createFixture();
     const manifest = readFileSync(fixture.created.manifestPath);
@@ -513,7 +795,7 @@ describe("plugin publication artifact", () => {
         ],
       },
       {
-        expected: /must contain between 2 and 2 files/u,
+        expected: /must contain between 2 and 2 exact files/u,
         files: [
           { bytes: fixture.tarball, name: TARBALL_NAME },
           { bytes: manifest, name: "plugin-publication-manifest.json" },
@@ -531,6 +813,123 @@ describe("plugin publication artifact", () => {
     tampered[35] ^= 0xff;
     writeFileSync(tamperFixture.zipPath, tampered);
     expect(() => verifyFixture(tamperFixture)).toThrow(/digest/u);
+  });
+
+  it("accepts canonical signed data descriptors and rejects noncanonical ZIP structure", () => {
+    const canonical = createZip([
+      {
+        bytes: Buffer.from("descriptor"),
+        compression: 8,
+        descriptor: true,
+        name: "descriptor.txt",
+      },
+    ]);
+    expect(inspectTestZip(canonical).get("descriptor.txt")?.toString()).toBe("descriptor");
+
+    expect(() => inspectTestZip(Buffer.concat([canonical, Buffer.from("trailing")]))).toThrow(
+      /exact terminal end-of-central-directory/u,
+    );
+    expect(() =>
+      inspectTestZip(
+        createZip([
+          {
+            bytes: Buffer.from("gap"),
+            gapAfter: Buffer.from([0]),
+            name: "gap.txt",
+          },
+        ]),
+      ),
+    ).toThrow(/gap or overlap/u);
+    expect(() =>
+      inspectTestZip(
+        createZip([
+          {
+            bytes: Buffer.from("crc"),
+            localCrc: 0,
+            name: "crc.txt",
+          },
+        ]),
+      ),
+    ).toThrow(/local sizes or CRC/u);
+    expect(() =>
+      inspectTestZip(
+        createZip([
+          {
+            bytes: Buffer.from("descriptor"),
+            descriptor: true,
+            descriptorCrc: 0,
+            name: "descriptor.txt",
+          },
+        ]),
+      ),
+    ).toThrow(/data descriptor/u);
+  });
+
+  it("rejects unsupported flags, invalid names, aliases, and trailing deflate bytes", () => {
+    for (const flags of [0x0040, 0x2000]) {
+      expect(() =>
+        inspectTestZip(createZip([{ bytes: Buffer.from("x"), flags, name: "flags.txt" }])),
+      ).toThrow(/Unsupported Actions artifact ZIP flags/u);
+    }
+
+    expect(() =>
+      inspectTestZip(createZip([{ bytes: Buffer.from("x"), name: "m\u00e9ta.txt" }])),
+    ).toThrow(/must set the UTF-8 language flag/u);
+    expect(
+      inspectTestZip(
+        createZip([{ bytes: Buffer.from("x"), flags: 0x0800, name: "m\u00e9ta.txt" }]),
+      ).has("m\u00e9ta.txt"),
+    ).toBe(true);
+    expect(() =>
+      inspectTestZip(
+        createZip([
+          {
+            bytes: Buffer.from("x"),
+            flags: 0x0800,
+            name: "invalid.txt",
+            nameBytes: Buffer.from([0xff]),
+          },
+        ]),
+      ),
+    ).toThrow(/not valid UTF-8/u);
+    expect(() =>
+      inspectTestZip(
+        createZip([
+          {
+            bytes: Buffer.from("x"),
+            localNameBytes: Buffer.from("other.txt"),
+            name: "central.txt",
+          },
+        ]),
+      ),
+    ).toThrow(/local and central names differ/u);
+    expect(() =>
+      inspectTestZip(
+        createZip([
+          { bytes: Buffer.from("a"), name: "Case.txt" },
+          { bytes: Buffer.from("b"), name: "case.txt" },
+        ]),
+      ),
+    ).toThrow(/duplicate, or aliased/u);
+
+    const content = Buffer.from("deflate");
+    expect(() =>
+      inspectTestZip(
+        createZip([
+          {
+            bytes: content,
+            compressedBytes: Buffer.concat([deflateRawSync(content), Buffer.from([0, 1])]),
+            compression: 8,
+            name: "deflate.txt",
+          },
+        ]),
+      ),
+    ).toThrow(/entry expansion exceeds/u);
+    expect(() =>
+      inspectTestZip(createZip([{ bytes: Buffer.from("compressed"), name: "cap.txt" }]), {
+        maxCompressedEntryBytes: () => 1,
+      }),
+    ).toThrow(/entry is too large/u);
   });
 
   it("caps publication JSON and tarball members before ZIP expansion", () => {
@@ -1056,12 +1455,23 @@ describe("plugin publication artifact", () => {
           content: metaPackageJson(markerPath, { tag: "latest" }),
           path: "package/package.json",
         },
+        { content: '{"id":"meta"}\n', path: "package/openclaw.plugin.json" },
       ]),
     );
 
     expect(() => createPluginPublicationArtifact(publicationParams(artifactDir))).toThrow(
       /must not override the approved publication tag/u,
     );
+  });
+
+  it("rejects publishConfig overrides in packed package metadata", () => {
+    expect(() =>
+      createFixture({
+        packageJson: metaPackageJson(path.join(tempDir(), "marker"), {
+          publishConfig: { tag: "beta" },
+        }),
+      }),
+    ).toThrow(/must not override publication through publishConfig/u);
   });
 
   it("rejects traversal, links, and special entries inside the plugin tarball", () => {
@@ -1121,6 +1531,7 @@ describe("plugin publication artifact", () => {
             content: metaPackageJson(markerPath, testCase.manifestOverrides),
             path: "package/package.json",
           },
+          { content: '{"id":"meta"}\n', path: "package/openclaw.plugin.json" },
         ]),
       );
       expect(

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import {
   downloadActionsArtifactArchive,
+  describeActionsArtifactFiles,
   inspectActionsArtifactZip,
   inspectActionsArtifactZipWithPolicy,
   readBoundedRegularFile,
@@ -18,6 +19,7 @@ import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
 
 export {
   downloadActionsArtifactArchive,
+  describeActionsArtifactFiles,
   inspectActionsArtifactZip,
   inspectActionsArtifactZipWithPolicy,
   readBoundedRegularFile,
@@ -53,11 +55,19 @@ const ARTIFACT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/u;
 const PACKAGE_NAME_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 const VERSION_RE =
   /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
+const NPM_ROUTE_POLICIES = new Map([
+  ["npm-oidc", { authMode: "trusted-publisher", capability: "trusted-publisher" }],
+  ["npm-token-bootstrap", { authMode: "token-bootstrap", capability: "first-publication" }],
+  [
+    "npm-token-placeholder-recovery",
+    { authMode: "token-bootstrap", capability: "placeholder-recovery" },
+  ],
+  ["npm-mirror", { authMode: "release-token", capability: "dist-tag-mirror" }],
+  ["npm-tag-repair", { authMode: "release-token", capability: "dist-tag-repair" }],
+  ["npm-readback", { authMode: "none", capability: "registry-readback" }],
+]);
 const ROUTES = new Set([
-  "npm-oidc",
-  "npm-token-bootstrap",
-  "npm-mirror",
-  "npm-readback",
+  ...NPM_ROUTE_POLICIES.keys(),
   "clawhub-token-release",
   "clawhub-token-bootstrap",
   "clawhub-readback",
@@ -69,6 +79,18 @@ const META_PACKAGE_DIR = "extensions/meta";
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function npmIntegrity(bytes) {
+  return `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+}
+
+function npmShasum(bytes) {
+  return createHash("sha1").update(bytes).digest("hex");
+}
+
+function compareCodeUnits(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function assertString(value, label) {
@@ -130,6 +152,7 @@ function assertSafeArchivePath(value, label) {
     raw.startsWith("/") ||
     raw.includes("\\") ||
     raw.includes("\0") ||
+    raw.normalize("NFC") !== raw ||
     /[\u0000-\u001f\u007f]/u.test(raw)
   ) {
     throw new Error(`Unsafe ${label}: ${JSON.stringify(raw)}`);
@@ -143,6 +166,39 @@ function assertSafeArchivePath(value, label) {
     throw new Error(`Unsafe ${label}: ${JSON.stringify(raw)}`);
   }
   return withoutTrailingSlash;
+}
+
+function normalizePublicationReason(value) {
+  const reason = assertString(value, "publication reason");
+  if (reason.length > 500 || /[\u0000-\u001f\u007f]/u.test(reason)) {
+    throw new Error(
+      "Publication reason must be at most 500 characters and contain no control characters.",
+    );
+  }
+  return reason;
+}
+
+function normalizePublisherPolicy(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Publisher policy must be an object.");
+  }
+  const keys = Object.keys(value).toSorted();
+  if (JSON.stringify(keys) !== JSON.stringify(["policyId", "schema", "sha256"])) {
+    throw new Error("Publisher policy must contain exactly schema, policyId, and sha256.");
+  }
+  const schema = assertString(value.schema, "publisher policy schema");
+  const policyId = assertString(value.policyId, "publisher policy id");
+  const sha256 = assertString(value.sha256, "publisher policy SHA-256");
+  if (
+    schema.length > 200 ||
+    policyId.length > 200 ||
+    /[\u0000-\u001f\u007f]/u.test(schema) ||
+    /[\u0000-\u001f\u007f]/u.test(policyId) ||
+    !SHA256_RE.test(sha256)
+  ) {
+    throw new Error("Publisher policy identity is invalid.");
+  }
+  return { policyId, schema, sha256 };
 }
 
 function boundedTarLimit(value, fallback, label) {
@@ -219,8 +275,7 @@ function decodeConsumerTarPathField(bytes, label) {
 }
 
 function normalizeConsumerTarPath(value, options = {}) {
-  const rawPath =
-    options.directory === true && value.endsWith("/") ? value.slice(0, -1) : value;
+  const rawPath = options.directory === true && value.endsWith("/") ? value.slice(0, -1) : value;
   const normalized = rawPath.replaceAll("\\", "/").replace(/^\.\/+/u, "");
   const segments = normalized.split("/").filter(Boolean);
   const consumerPath = segments.join("/");
@@ -325,18 +380,21 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
   if (!(inputBytes instanceof Uint8Array)) {
     throw new Error("Plugin tarball bytes must be a Uint8Array.");
   }
-  const tarballBytes = Buffer.from(
-    inputBytes.buffer,
-    inputBytes.byteOffset,
-    inputBytes.byteLength,
-  );
+  const tarballBytes = Buffer.from(inputBytes.buffer, inputBytes.byteOffset, inputBytes.byteLength);
   const limits = normalizeTarInspectionOptions(options);
   if (tarballBytes.length === 0 || tarballBytes.length > limits.maxArchiveBytes) {
     throw new Error(`Plugin tarball size is outside the allowed range: ${tarballBytes.length}.`);
   }
   let tarBytes;
   try {
-    tarBytes = gunzipSync(tarballBytes, { maxOutputLength: limits.maxExpandedBytes });
+    const expanded = gunzipSync(tarballBytes, {
+      info: true,
+      maxOutputLength: limits.maxExpandedBytes,
+    });
+    if (expanded.engine.bytesWritten !== tarballBytes.length) {
+      throw new Error("gzip stream does not consume the full plugin tarball");
+    }
+    tarBytes = expanded.buffer;
   } catch (error) {
     throw new Error(
       `Plugin tarball is not canonical gzip or expands beyond ${limits.maxExpandedBytes} bytes.`,
@@ -379,10 +437,7 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
     }
     verifyTarChecksum(header);
     verifyCanonicalTarHeader(header);
-    const headerName = decodeConsumerTarPathField(
-      header.subarray(0, 100),
-      "tar entry name",
-    );
+    const headerName = decodeConsumerTarPathField(header.subarray(0, 100), "tar entry name");
     const headerPrefix =
       header[475] === 0
         ? decodeConsumerTarPathField(header.subarray(345, 475), "tar entry prefix")
@@ -404,7 +459,9 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
       throw new Error(`Directory tar entry ${JSON.stringify(headerPath)} must have size zero.`);
     }
     if (linkPath) {
-      throw new Error(`Plugin tar entries must not carry link targets: ${headerPath} -> ${linkPath}`);
+      throw new Error(
+        `Plugin tar entries must not carry link targets: ${headerPath} -> ${linkPath}`,
+      );
     }
     if (typeFlag !== "5" && headerPath.endsWith("/")) {
       throw new Error(
@@ -445,9 +502,7 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
     }
     totalFileBytes += content.length;
     if (totalFileBytes > limits.maxTotalFileBytes) {
-      throw new Error(
-        `Plugin tarball file payload exceeds ${limits.maxTotalFileBytes} bytes.`,
-      );
+      throw new Error(`Plugin tarball file payload exceeds ${limits.maxTotalFileBytes} bytes.`);
     }
     const entry = {
       path: safePath,
@@ -482,18 +537,16 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
   if (!pluginManifestBytes) {
     throw new Error("Plugin tarball must contain exactly one package/openclaw.plugin.json.");
   }
-  inventory.sort((left, right) => left.path.localeCompare(right.path));
+  inventory.sort((left, right) => compareCodeUnits(left.path, right.path));
   const packageManifest = parsePackedJson(packageManifestBytes, "Packed package.json");
-  const pluginManifest = parsePackedJson(
-    pluginManifestBytes,
-    "Packed openclaw.plugin.json",
-  );
+  const pluginManifest = parsePackedJson(pluginManifestBytes, "Packed openclaw.plugin.json");
   return {
     inventory,
     packageManifest,
     packageManifestSha256: sha256(packageManifestBytes),
     pluginManifest,
     pluginManifestSha256: sha256(pluginManifestBytes),
+    tarballSizeBytes: tarballBytes.byteLength,
     tarballSha256: sha256(tarballBytes),
     totalFileBytes,
   };
@@ -554,6 +607,26 @@ function normalizePublicationParams(params) {
   const route = assertString(params.route, "publication route");
   if (!ROUTES.has(route)) {
     throw new Error(`Unsupported plugin publication route: ${route}`);
+  }
+  const npmRoutePolicy = NPM_ROUTE_POLICIES.get(route);
+  let publicationReason = null;
+  let publisherPolicy = null;
+  if (npmRoutePolicy) {
+    if (params.authMode !== undefined && params.authMode !== npmRoutePolicy.authMode) {
+      throw new Error(`${route} auth mode must be ${npmRoutePolicy.authMode}.`);
+    }
+    if (params.capability !== undefined && params.capability !== npmRoutePolicy.capability) {
+      throw new Error(`${route} capability must be ${npmRoutePolicy.capability}.`);
+    }
+    publicationReason = normalizePublicationReason(params.publicationReason);
+    publisherPolicy = normalizePublisherPolicy(params.publisherPolicy);
+  } else if (
+    params.authMode !== undefined ||
+    params.capability !== undefined ||
+    params.publicationReason !== undefined ||
+    params.publisherPolicy !== undefined
+  ) {
+    throw new Error(`${route} must not carry npm publisher-policy controls.`);
   }
   const publishTag = assertString(params.publishTag, "publish tag");
   const allowedTags = route.startsWith("npm-") ? NPM_TAGS : CLAWHUB_TAGS;
@@ -618,11 +691,15 @@ function normalizePublicationParams(params) {
   }
   return {
     artifactName,
+    authMode: npmRoutePolicy?.authMode ?? null,
     bootstrapMode,
+    capability: npmRoutePolicy?.capability ?? null,
     manualOverrideReason,
     packageDir,
     packageName,
+    publicationReason,
     publishTag,
+    publisherPolicy,
     requiresManualOverride,
     route,
     sourcePackageJsonSha256,
@@ -633,6 +710,22 @@ function normalizePublicationParams(params) {
 
 function buildManifest(params, tarballName, tarballBytes, inspection) {
   validatePluginPackageManifest(params, inspection.packageManifest);
+  const publication = params.authMode
+    ? {
+        route: params.route,
+        authMode: params.authMode,
+        capability: params.capability,
+        reason: params.publicationReason,
+        tag: params.publishTag,
+        publisherPolicy: params.publisherPolicy,
+      }
+    : {
+        route: params.route,
+        tag: params.publishTag,
+        bootstrapMode: params.bootstrapMode,
+        manualOverrideReason: params.manualOverrideReason,
+        requiresManualOverride: params.requiresManualOverride,
+      };
   return {
     schema: MANIFEST_SCHEMA,
     schemaVersion: 1,
@@ -648,16 +741,12 @@ function buildManifest(params, tarballName, tarballBytes, inspection) {
       pluginManifestSha256: inspection.pluginManifestSha256,
       sourcePackageJsonSha256: params.sourcePackageJsonSha256,
     },
-    publication: {
-      route: params.route,
-      tag: params.publishTag,
-      bootstrapMode: params.bootstrapMode,
-      manualOverrideReason: params.manualOverrideReason,
-      requiresManualOverride: params.requiresManualOverride,
-    },
+    publication,
     artifact: {
       name: params.artifactName,
       tarball: tarballName,
+      npmIntegrity: npmIntegrity(tarballBytes),
+      npmShasum: npmShasum(tarballBytes),
       sha256: inspection.tarballSha256,
       sizeBytes: tarballBytes.length,
       inventory: inspection.inventory,
@@ -669,8 +758,78 @@ function tarInspectionOptionsForRoute(route) {
   return route.startsWith("clawhub-") ? CLAWHUB_PUBLICATION_TAR_LIMITS : undefined;
 }
 
+function normalizeExpectedInventory(value) {
+  if (!Array.isArray(value)) {
+    throw new Error("Expected plugin tarball inventory must be an array.");
+  }
+  const paths = new Set();
+  const aliases = new Set();
+  const inventory = value.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error("Expected plugin tarball inventory entries must be objects.");
+    }
+    const expectedKeys =
+      entry.type === "directory"
+        ? ["path", "sizeBytes", "type"]
+        : ["path", "sha256", "sizeBytes", "type"];
+    if (JSON.stringify(Object.keys(entry).toSorted()) !== JSON.stringify(expectedKeys)) {
+      throw new Error("Expected plugin tarball inventory entry shape is invalid.");
+    }
+    const path = assertSafeArchivePath(entry.path, "expected tar entry path");
+    if (path !== entry.path) {
+      throw new Error(`Expected plugin tarball path is not canonical: ${entry.path}`);
+    }
+    const alias = path.toLocaleLowerCase("en-US");
+    if (paths.has(path) || aliases.has(alias)) {
+      throw new Error(`Expected plugin tarball inventory contains an alias: ${path}`);
+    }
+    paths.add(path);
+    aliases.add(alias);
+    if (
+      !Number.isSafeInteger(entry.sizeBytes) ||
+      entry.sizeBytes < 0 ||
+      (entry.type === "directory" && entry.sizeBytes !== 0)
+    ) {
+      throw new Error(`Expected plugin tarball size is invalid for ${path}.`);
+    }
+    if (entry.type === "directory") {
+      return { path, sizeBytes: 0, type: "directory" };
+    }
+    if (
+      entry.type !== "file" ||
+      typeof entry.sha256 !== "string" ||
+      !SHA256_RE.test(entry.sha256)
+    ) {
+      throw new Error(`Expected plugin tarball file identity is invalid for ${path}.`);
+    }
+    return {
+      path,
+      sha256: entry.sha256,
+      sizeBytes: entry.sizeBytes,
+      type: "file",
+    };
+  });
+  return inventory.toSorted((left, right) => compareCodeUnits(left.path, right.path));
+}
+
 function canonicalManifestText(manifest) {
   return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
+function createFreshOutputDirectory(path, label) {
+  try {
+    lstatSync(path);
+    throw new Error(`${label} must not already exist.`);
+  } catch (error) {
+    if (!error || typeof error !== "object" || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  const created = lstatSync(path);
+  if (!created.isDirectory() || created.isSymbolicLink()) {
+    throw new Error(`${label} must be a newly created directory.`);
+  }
 }
 
 export function createPluginPublicationArtifact(params) {
@@ -712,10 +871,12 @@ function parseBoundedJsonFile(path, label, maxBytes = MAX_MANIFEST_BYTES) {
   let value;
   try {
     value = JSON.parse(
-      readBoundedRegularFile(path, {
-        label,
-        maxBytes,
-      }).toString("utf8"),
+      new TextDecoder("utf-8", { fatal: true }).decode(
+        readBoundedRegularFile(path, {
+          label,
+          maxBytes,
+        }),
+      ),
     );
   } catch (error) {
     throw new Error(
@@ -744,23 +905,19 @@ export function verifyPluginPublicationArtifact(params) {
   const normalized = normalizePublicationParams(params);
   let expectedTarballSha256;
   if (params.expectedTarballSha256 !== undefined) {
-    expectedTarballSha256 = assertString(
-      params.expectedTarballSha256,
-      "expected tarball SHA-256",
-    );
+    expectedTarballSha256 = assertString(params.expectedTarballSha256, "expected tarball SHA-256");
     if (!SHA256_RE.test(expectedTarballSha256)) {
       throw new Error("Expected tarball SHA-256 must be 64 lowercase hex characters.");
     }
   }
-  if (
-    params.expectedInventory !== undefined &&
-    (!Array.isArray(params.expectedInventory) ||
-      params.expectedInventory.some(
-        (entry) => !entry || typeof entry !== "object" || Array.isArray(entry),
-      ))
-  ) {
-    throw new Error("Expected plugin tarball inventory must be an array of entries.");
-  }
+  const expectedTarballSizeBytes =
+    params.expectedTarballSizeBytes === undefined
+      ? undefined
+      : assertPositiveInteger(params.expectedTarballSizeBytes, "expected tarball size");
+  const expectedInventory =
+    params.expectedInventory === undefined
+      ? undefined
+      : normalizeExpectedInventory(params.expectedInventory);
   const artifactId = assertPositiveInteger(params.artifactId, "artifact ID");
   const artifactSizeBytes = assertPositiveInteger(params.artifactSizeBytes, "artifact size");
   const runId = assertPositiveInteger(
@@ -779,10 +936,7 @@ export function verifyPluginPublicationArtifact(params) {
   if (!ARTIFACT_DIGEST_RE.test(expectedArtifactDigest)) {
     throw new Error(`Invalid Actions artifact digest: ${expectedArtifactDigest}`);
   }
-  const metadata = parseBoundedJsonFile(
-    params.artifactMetadataPath,
-    "Actions artifact metadata",
-  );
+  const metadata = parseBoundedJsonFile(params.artifactMetadataPath, "Actions artifact metadata");
   const workflowRun = parseBoundedJsonFile(
     params.workflowRunMetadataPath,
     "Actions workflow run metadata",
@@ -833,7 +987,7 @@ export function verifyPluginPublicationArtifact(params) {
   }
   let manifest;
   try {
-    manifest = JSON.parse(manifestBytes.toString("utf8"));
+    manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes));
   } catch (error) {
     throw new Error(
       `Plugin publication manifest is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
@@ -861,14 +1015,17 @@ export function verifyPluginPublicationArtifact(params) {
     tarInspectionOptionsForRoute(normalized.route),
   );
   if (
-    expectedTarballSha256 !== undefined &&
-    inspection.tarballSha256 !== expectedTarballSha256
+    expectedTarballSizeBytes !== undefined &&
+    inspection.tarballSizeBytes !== expectedTarballSizeBytes
   ) {
+    throw new Error("Plugin tarball size does not match the approved publication tuple.");
+  }
+  if (expectedTarballSha256 !== undefined && inspection.tarballSha256 !== expectedTarballSha256) {
     throw new Error("Plugin tarball SHA-256 does not match the approved publication tuple.");
   }
   if (
-    params.expectedInventory !== undefined &&
-    JSON.stringify(inspection.inventory) !== JSON.stringify(params.expectedInventory)
+    expectedInventory !== undefined &&
+    JSON.stringify(inspection.inventory) !== JSON.stringify(expectedInventory)
   ) {
     throw new Error("Plugin tarball inventory does not match the approved publication tuple.");
   }
@@ -889,9 +1046,9 @@ export function verifyPluginPublicationArtifact(params) {
   }
 
   const outputDir = resolve(params.outputDir);
-  mkdirSync(outputDir, { recursive: true, mode: 0o700 });
+  createFreshOutputDirectory(outputDir, "Plugin publication output directory");
   const outputPath = join(outputDir, tarballName);
-  writeFileSync(outputPath, tarballBytes, { mode: 0o600 });
+  writeFileSync(outputPath, tarballBytes, { flag: "wx", mode: 0o600 });
   if (!statSync(outputPath).isFile()) {
     throw new Error(`Verified plugin tarball was not written: ${outputPath}`);
   }
@@ -902,9 +1059,17 @@ export function verifyPluginPublicationArtifact(params) {
     artifactSizeBytes,
     artifactZipSha256: actualArtifactDigest.slice("sha256:".length),
     manifest: expectedManifest,
+    npmIntegrity: expectedManifest.artifact.npmIntegrity,
+    npmShasum: expectedManifest.artifact.npmShasum,
+    packageJsonSha256: expectedManifest.package.packageJsonSha256,
+    pluginManifestSha256: expectedManifest.package.pluginManifestSha256,
     producerRunAttempt: runAttempt,
     producerRunId: runId,
+    sourcePackageJsonSha256: expectedManifest.package.sourcePackageJsonSha256,
+    tarballInventory: inspection.inventory,
+    tarballName,
     tarballPath: outputPath,
+    tarballSizeBytes: inspection.tarballSizeBytes,
     tarballSha256: inspection.tarballSha256,
   };
 }
@@ -945,6 +1110,17 @@ function commonCliParams(values) {
         ? false
         : assertBooleanString(values.requiresManualOverride, "requires-manual-override"),
     route: values.route,
+    publicationReason: values.publicationReason,
+    publisherPolicy:
+      values.publisherPolicySchema === undefined &&
+      values.publisherPolicyId === undefined &&
+      values.publisherPolicySha256 === undefined
+        ? undefined
+        : {
+            policyId: values.publisherPolicyId,
+            schema: values.publisherPolicySchema,
+            sha256: values.publisherPolicySha256,
+          },
     sourcePackageJsonSha256: values.sourcePackageJsonSha256,
     targetSha: values.targetSha,
     version: values.packageVersion,
@@ -975,6 +1151,10 @@ export function main(argv = process.argv.slice(2)) {
     artifactMetadataPath: values.artifactMetadata,
     artifactSizeBytes: Number(values.artifactSizeBytes),
     artifactZipPath: values.artifactZip,
+    expectedTarballSizeBytes:
+      values.expectedTarballSizeBytes === undefined
+        ? undefined
+        : Number(values.expectedTarballSizeBytes),
     expectedTarballSha256: values.expectedTarballSha256,
     outputDir: values.outputDir,
     producerRunAttempt: Number(values.producerRunAttempt),
