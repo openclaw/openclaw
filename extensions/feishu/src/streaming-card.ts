@@ -645,6 +645,8 @@ export class FeishuStreamingSession {
     }
 
     // Close streaming mode
+    // A rejected final write must not advertise content that CardKit never accepted.
+    const acceptedText = this.state.sentText;
     this.state.sequence += 1;
     await fetchWithSsrFGuard({
       url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
@@ -660,7 +662,7 @@ export class FeishuStreamingSession {
         },
         body: JSON.stringify({
           settings: JSON.stringify({
-            config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+            config: { streaming_mode: false, summary: { content: truncateSummary(acceptedText) } },
           }),
           sequence: this.state.sequence,
           uuid: `c_${this.state.cardId}_${this.state.sequence}`,

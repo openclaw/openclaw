@@ -585,6 +585,7 @@ describe("FeishuStreamingSession", () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_900);
     const replaceBodies: string[] = [];
+    const settingsBodies: string[] = [];
     const previous = "> Thinking one\n\n---\n\nanswer";
     const next = "> Thinking two\n\n---\n\nanswer more";
     let sentTextWhenSettingsClosed: string | undefined;
@@ -603,6 +604,7 @@ describe("FeishuStreamingSession", () => {
         return jsonResponse({ code: 19_002, msg: "replacement rejected" });
       }
       if (url.pathname.includes("/settings")) {
+        settingsBodies.push(body);
         sentTextWhenSettingsClosed = (session as unknown as { state: StreamingSessionState }).state
           .sentText;
       }
@@ -632,7 +634,13 @@ describe("FeishuStreamingSession", () => {
     await expect(session.close()).resolves.toBe(true);
 
     expect(replaceBodies).toHaveLength(1);
+    expect(settingsBodies).toHaveLength(1);
     expect(sentTextWhenSettingsClosed).toBe(previous);
+    const settingsPayload = JSON.parse(settingsBodies[0] ?? "{}") as { settings?: string };
+    const settings = JSON.parse(settingsPayload.settings ?? "{}") as {
+      config?: { summary?: { content?: string } };
+    };
+    expect(settings.config?.summary?.content).toBe(previous);
     expect(log).toHaveBeenCalledWith(
       "Final replace failed: Error: Replace card content failed: replacement rejected (code=19002)",
     );
