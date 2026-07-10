@@ -456,6 +456,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       // Removable installs expose a confirm-guarded uninstall that refreshes inventory.
       await calendarRow.getByRole("button", { name: "Remove Calendar Plus" }).click();
       const uninstallCountBefore = (await gateway.getRequests("plugins.uninstall")).length;
+      const listCountBeforeRemove = (await gateway.getRequests("plugins.list")).length;
+      const configCountBeforeRemove = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("plugins.list");
       // Keep the authoritative config refresh on the workboard-enabled snapshot
       // so the conditional sidebar route assertion below stays meaningful.
@@ -467,6 +469,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         uninstallCountBefore,
       );
       expect(requestParams(uninstallRequest)).toEqual({ pluginId: "calendar-plus" });
+      await waitForNextRequest(gateway, "plugins.list", listCountBeforeRemove);
+      await waitForNextRequest(gateway, "config.get", configCountBeforeRemove);
       await gateway.resolveDeferred("plugins.list", uninstalledInventory);
       await gateway.resolveDeferred("config.get", configSnapshot(true));
       await calendarRow.waitFor({ state: "detached" });
