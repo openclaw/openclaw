@@ -20,6 +20,30 @@ function renderEscapedHtml(ir: MarkdownIR): string {
   });
 }
 
+describe("renderMarkdownWithMarkers", () => {
+  it("uses a link text escaper through nested styles", () => {
+    const ir: MarkdownIR = {
+      text: "a&b",
+      styles: [{ start: 0, end: 3, style: "bold" }],
+      links: [{ start: 0, end: 3, href: "a&b" }],
+    };
+
+    const rendered = renderMarkdownWithMarkers(ir, {
+      styleMarkers: { bold: { open: "<b>", close: "</b>" } },
+      escapeText: (text) => text.replace(/&/g, "&amp;"),
+      buildLink: (link) => ({
+        start: link.start,
+        end: link.end,
+        open: "<a>",
+        close: "</a>",
+        escapeText: (text) => text,
+      }),
+    });
+
+    expect(rendered).toBe("<a><b>a&b</b></a>");
+  });
+});
+
 describe("renderMarkdownIRChunksWithinLimit", () => {
   it("prefers word boundaries when escaping shrinks the render budget", () => {
     const ir = markdownToIR("alpha <<");

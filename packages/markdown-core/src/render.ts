@@ -213,7 +213,9 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
       break;
     }
     if (next > pos) {
-      out += (stack[stack.length - 1]?.escapeText ?? options.escapeText)(text.slice(pos, next));
+      const escapeText =
+        stack.findLast((item) => item.escapeText)?.escapeText ?? options.escapeText;
+      out += escapeText(text.slice(pos, next));
     }
   }
 
