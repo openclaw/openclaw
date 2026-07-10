@@ -216,7 +216,7 @@ export function extractChangelogSection(content: string, heading: string): strin
 }
 
 export function renderAndroidReleaseNotes(
-  version: ResolvedAndroidVersion,
+  version: Pick<ResolvedAndroidVersion, "canonicalVersion">,
   changelogContent: string,
 ): string {
   const candidateHeadings = [version.canonicalVersion, "Unreleased"];
