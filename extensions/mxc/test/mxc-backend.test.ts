@@ -42,7 +42,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("../src/binary-resolver.js", () => ({
-  resolveMxcBinaryPath: () => "mxc-test-binary",
+  resolveMxcBinaryPath: (configuredPath?: string) => configuredPath ?? "mxc-test-binary",
 }));
 
 const baseConfig: MxcConfig = {
@@ -428,7 +428,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
 
     expect(decodePayload(spec.argv).options).toEqual({
       debug: false,
-      executablePath: "mxc-test-binary",
+      executablePath: "C:\\Tools\\wxc-exec.exe",
       usePty: false,
     });
   });

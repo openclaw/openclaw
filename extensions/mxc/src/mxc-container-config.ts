@@ -181,6 +181,8 @@ function buildFilesystemConfig(params: {
   }
 
   const protectedSkillPolicyPaths = resolveMxcProtectedSkillPolicyPaths(params.workspace);
+  // ProcessContainer writable-parent grants override nested read-only grants.
+  // Fail closed instead of claiming protected skill overlays are enforceable.
   assertNoMxcReadwriteReadonlyOverlap({
     readwritePaths: resolveExistingFilesystemPaths(readwritePathSpecs, "readwrite"),
     readonlyPaths: protectedSkillPolicyPaths,

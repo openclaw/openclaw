@@ -70,10 +70,12 @@ help stay in sync with plugin runtime validation.
   - `ro`: the isolated sandbox workdir is mounted read-only, plus a distinct
     read-only mount of the real agent workspace whenever it differs from the
     sandbox workdir.
-  - `rw`: the active agent workspace is mounted read-write. Protected
-    OpenClaw skill overlays (`skills`, `.agents/skills`, and the materialized
-    sandbox skills workspace) stay mounted read-only even though the rest of
-    the workspace is writable.
+  - `rw`: the active agent workspace is mounted read-write. If protected
+    OpenClaw skill roots (`skills`, `.agents/skills`, or the materialized
+    sandbox skills workspace) exist beneath it, MXC fails the command before
+    launch because ProcessContainer cannot enforce a nested read-only grant
+    beneath a writable parent. The filesystem bridge also rejects writes to
+    those protected paths.
   - Use policy `filesystem.additionalReadwritePaths` for additional explicit
     writable host paths shared by every MXC sandbox.
 - `scope` workspace selection:
@@ -273,10 +275,10 @@ deterministically in `mxcPolicyPaths` array order:
   policy files.
 - `restrictToProjectDir` remains enabled because the field is hardening-only.
 
-Protected OpenClaw skill overlays stay read-only even when
-`workspaceAccess: "rw"` makes the general workspace writable. If a configured
-read-write path overlaps a read-only path or protected skill root, MXC fails the
-command before launch instead of silently weakening the sandbox.
+The filesystem bridge keeps protected OpenClaw skill overlays read-only. For
+command execution, MXC fails closed before launch when `workspaceAccess: "rw"`
+or a configured read-write path overlaps a protected skill root, because
+ProcessContainer cannot safely enforce the nested read-only grant.
 
 Run the TUI as that agent:
 
