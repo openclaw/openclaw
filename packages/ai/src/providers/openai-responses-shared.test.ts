@@ -284,6 +284,22 @@ describe("convertResponsesTools", () => {
   });
 });
 
+describe("Responses temperature support", () => {
+  it("drops temperature for the GPT-5.6 family that rejects it", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(params, gpt56SolModel, { messages: [] }, { temperature: 0.3 });
+
+    expect(params).not.toHaveProperty("temperature");
+  });
+
+  it("keeps temperature for models that accept it", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(params, nativeOpenAIModel, { messages: [] }, { temperature: 0.3 });
+
+    expect(params).toMatchObject({ temperature: 0.3 });
+  });
+});
+
 describe("Responses reasoning effort", () => {
   it("omits unsupported default-off reasoning for GPT-5.6 Sol", () => {
     const params = {} as never;

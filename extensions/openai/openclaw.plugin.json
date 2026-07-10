@@ -117,7 +117,8 @@
             "thinkingLevelMap": { "off": "none", "xhigh": "xhigh", "max": "max" },
             "compat": {
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"]
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
             }
           },
           {
@@ -131,7 +132,8 @@
             "thinkingLevelMap": { "off": "none", "xhigh": "xhigh", "max": "max" },
             "compat": {
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"]
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
             }
           },
           {
@@ -145,7 +147,8 @@
             "thinkingLevelMap": { "off": "none", "xhigh": "xhigh", "max": "max" },
             "compat": {
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"]
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
             }
           },
           {
@@ -159,7 +162,8 @@
             "thinkingLevelMap": { "off": "none", "xhigh": "xhigh", "max": "max" },
             "compat": {
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"]
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
             }
           },
           {

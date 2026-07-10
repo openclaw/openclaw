@@ -41,6 +41,8 @@ export type ModelCatalogCompatConfig = {
   supportsStore?: boolean;
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
+  /** Whether the model accepts the temperature parameter (GPT-5.6 family rejects it). */
+  supportsTemperature?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";

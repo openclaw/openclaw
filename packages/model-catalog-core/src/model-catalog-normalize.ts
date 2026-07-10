@@ -375,6 +375,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsPromptCacheKey",
     "supportsDeveloperRole",
     "supportsReasoningEffort",
+    "supportsTemperature",
     "supportsUsageInStreaming",
     "supportsTools",
     "supportsStrictMode",
