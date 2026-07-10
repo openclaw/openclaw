@@ -141,7 +141,7 @@ describe("createSmsWebhookHandler", () => {
     });
     const unsignedBody =
       "AccountSid=AC123&From=%2B15550000000&To=%2B15557654321&Body=bad&MessageSid=SM-bad";
-    for (let i = 0; i < 30; i += 1) {
+    for (let i = 0; i < 300; i += 1) {
       const rejected = createResponse();
       await handler(
         createRequest(unsignedBody, "not-a-valid-signature", {

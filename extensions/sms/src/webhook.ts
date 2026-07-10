@@ -15,15 +15,18 @@ import {
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
-// Keep failed-auth request throttling separate from the signed callback quota so
-// invalid traffic cannot spend the budget reserved for validated Twilio messages.
+const PRE_VALIDATION_MAX_REQUESTS = 300;
+const SIGNED_CALLBACK_MAX_REQUESTS = 30;
+
+// Keep failed-auth request throttling separate from the stricter signed callback quota.
+// Invalid traffic is bounded before body/signature work without spending signed quota.
 const preValidationRateLimiter = createFixedWindowRateLimiter({
-  maxRequests: 30,
+  maxRequests: PRE_VALIDATION_MAX_REQUESTS,
   windowMs: 60_000,
   maxTrackedKeys: 5_000,
 });
 const signedRateLimiter = createFixedWindowRateLimiter({
-  maxRequests: 30,
+  maxRequests: SIGNED_CALLBACK_MAX_REQUESTS,
   windowMs: 60_000,
   maxTrackedKeys: 5_000,
 });
