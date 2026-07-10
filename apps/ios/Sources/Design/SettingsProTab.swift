@@ -290,8 +290,11 @@ struct SettingsProTab: View {
                 "QR Scanner Unavailable",
                 isPresented: Binding(
                     get: { self.scannerError != nil },
-                    set: { if !$0 { self.scannerError = nil } }))
-            {
+                    set: {
+                        if !$0 {
+                            self.scannerError = nil
+                        }
+                    })) {
                 Button(role: .cancel) {} label: {
                     Text("OK")
                         .font(OpenClawType.subheadSemiBold)
@@ -329,7 +332,11 @@ struct SettingsProTab: View {
                     "Forget \(self.pendingForgetGateway?.name ?? "gateway")?",
                     isPresented: Binding(
                         get: { self.pendingForgetGateway != nil },
-                        set: { if !$0 { self.pendingForgetGateway = nil } }),
+                        set: {
+                            if !$0 {
+                                self.pendingForgetGateway = nil
+                            }
+                        }),
                     titleVisibility: .visible)
             {
                 Button(role: .destructive) {

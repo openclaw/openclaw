@@ -9891,7 +9891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 296,
+      "line": 299,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "OK",
       "surface": "apple",
@@ -9899,7 +9899,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 303,
+      "line": 306,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Access Level",
       "surface": "apple",
@@ -9907,7 +9907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 311,
+      "line": 314,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "While Using the App",
       "surface": "apple",
@@ -9915,7 +9915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 317,
+      "line": 320,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Always",
       "surface": "apple",
@@ -9923,7 +9923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 325,
+      "line": 328,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Choose when OpenClaw may share this iPhone's location with gateway tools.",
       "surface": "apple",
@@ -9931,7 +9931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 338,
+      "line": 345,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Forget Gateway",
       "surface": "apple",
@@ -9939,7 +9939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 344,
+      "line": 351,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -9947,7 +9947,7 @@
     },
     {
       "kind": "ui-call-concatenated",
-      "line": 348,
+      "line": 355,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "This removes saved credentials, device access, TLS trust, and cached chats for this gateway.",
       "surface": "apple",
@@ -9955,7 +9955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 401,
+      "line": 408,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Enable OpenClaw Hosted Push Relay?",
       "surface": "apple",
@@ -9963,7 +9963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 415,
+      "line": 422,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Continue",
       "surface": "apple",
@@ -9971,7 +9971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 423,
+      "line": 430,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Not Now",
       "surface": "apple",
