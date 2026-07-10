@@ -230,6 +230,37 @@ describe("normalizeMessageActionInput", () => {
     ).toThrow(/requires a target/);
   });
 
+  it("does not inject heartbeat sender sentinel as inferred target", () => {
+    // When the heartbeat runner has no real delivery target, the sentinel
+    // "heartbeat" flows into the turn's From/To. The no-recipient message
+    // send path must not treat this sentinel as a deliverable target.
+    // Instead, the action should fail with "requires a target" since the
+    // only inferred candidate is the non-deliverable sentinel.
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: {},
+        toolContext: {
+          currentChannelId: "heartbeat",
+          currentChannelProvider: "telegram",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
+  it("does not inject heartbeat sentinel from currentMessagingTarget", () => {
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: {},
+        toolContext: {
+          currentMessagingTarget: "heartbeat",
+          currentChannelProvider: "telegram",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
   it("rejects conflicting canonical and plugin delivery targets", () => {
     expect(() =>
       normalizeMessageActionInput({

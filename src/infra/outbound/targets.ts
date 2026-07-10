@@ -1,5 +1,11 @@
 // Outbound target helpers resolve direct send targets, heartbeat destinations,
 // sender context, and session-route aware heartbeat refinements.
+
+// Sentinel used by resolveHeartbeatSenderId when no real delivery target exists.
+// The heartbeat runner injects this as the turn's From/To; downstream paths
+// (message-action normalization) must not treat it as a deliverable target.
+export const HEARTBEAT_SENDER_SENTINEL = "heartbeat";
+
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
@@ -503,7 +509,7 @@ function resolveHeartbeatSenderId(params: {
 
   const allowList = mapAllowFromEntries(allowFrom).filter((entry) => entry && entry !== "*");
   if (allowFrom.includes("*")) {
-    return candidates[0] ?? "heartbeat";
+    return candidates[0] ?? HEARTBEAT_SENDER_SENTINEL;
   }
   if (candidates.length > 0 && allowList.length > 0) {
     const matched = candidates.find((candidate) => allowList.includes(candidate));

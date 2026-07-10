@@ -17,6 +17,8 @@ import {
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
 
+import { HEARTBEAT_SENDER_SENTINEL } from "./targets.js";
+
 /** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
@@ -72,7 +74,11 @@ export function normalizeMessageActionInput(params: {
     const inferredTarget =
       normalizeOptionalString(toolContext?.currentChannelId) ??
       normalizeOptionalString(toolContext?.currentMessagingTarget);
-    if (inferredTarget) {
+    // The heartbeat sender sentinel is a non-deliverable placeholder used when
+    // no real delivery target exists. Injecting it as the message target would
+    // leak heartbeat text (e.g. HEARTBEAT_OK) into the source DM or produce
+    // channel lookup errors (e.g. @heartbeat on Telegram).
+    if (inferredTarget && inferredTarget !== HEARTBEAT_SENDER_SENTINEL) {
       normalizedArgs.target = inferredTarget;
     }
   }
