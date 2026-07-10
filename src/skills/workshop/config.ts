@@ -55,6 +55,25 @@ function readStringList(value: unknown): string[] {
     : [];
 }
 
+/**
+ * Applies the autonomous agents policy: deny always wins, and an empty allow
+ * list admits every agent so unset config keeps the historical allow-all shape.
+ */
+export function isAgentAllowedForAutonomousSkillEvolution(
+  agentId: string | undefined,
+  workshopConfig: SkillWorkshopConfig,
+): boolean {
+  const id = agentId?.trim();
+  const policy = workshopConfig.autonomous.agents;
+  if (id && policy.deny.includes(id)) {
+    return false;
+  }
+  if (policy.allow.length === 0) {
+    return true;
+  }
+  return Boolean(id && policy.allow.includes(id));
+}
+
 export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorkshopConfig {
   const raw = asNullableRecord(config?.skills?.workshop) ?? {};
   const autonomous = asNullableRecord(raw.autonomous) ?? {};

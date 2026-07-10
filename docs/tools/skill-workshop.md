@@ -362,6 +362,11 @@ the exact `allow` or `alsoAllow` change to make. Older runbooks may still use
 `openclaw plugins inspect skill-workshop`; that command now explains that Skill
 Workshop is built in and prints the same policy hint when applicable.
 
+The same check validates `skills.workshop.autonomous.agents`: it warns when an
+`allow` entry names no configured agent (a likely typo that silently never
+matches) and when the combined `allow`/`deny` policy excludes every configured
+agent, which leaves autonomous capture enabled but permanently idle.
+
 ## Related
 
 - [Skills](/tools/skills) for load order, precedence, and visibility

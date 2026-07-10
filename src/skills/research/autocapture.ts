@@ -13,7 +13,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
-import { resolveSkillWorkshopConfig, type SkillWorkshopConfig } from "../workshop/config.js";
+import {
+  isAgentAllowedForAutonomousSkillEvolution,
+  resolveSkillWorkshopConfig,
+  type SkillWorkshopConfig,
+} from "../workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../workshop/frontmatter.js";
 import {
   inspectSkillProposal,
@@ -58,21 +62,6 @@ function buildAutoCaptureUpdateContent(existingSkill: string, capturedContent: s
   );
 }
 
-function isAgentAllowedForSkillResearchAutoCapture(
-  ctx: SkillResearchAgentContext,
-  workshopConfig: SkillWorkshopConfig,
-): boolean {
-  const agentId = ctx.agentId?.trim();
-  const policy = workshopConfig.autonomous.agents;
-  if (agentId && policy.deny.includes(agentId)) {
-    return false;
-  }
-  if (policy.allow.length === 0) {
-    return true;
-  }
-  return Boolean(agentId && policy.allow.includes(agentId));
-}
-
 function isSkillResearchAutoCaptureEligible(
   ctx: SkillResearchAgentContext,
   workshopConfig: SkillWorkshopConfig,
@@ -81,7 +70,7 @@ function isSkillResearchAutoCaptureEligible(
   if (trigger && AUTO_CAPTURE_BLOCKED_TRIGGERS.has(trigger)) {
     return false;
   }
-  if (!isAgentAllowedForSkillResearchAutoCapture(ctx, workshopConfig)) {
+  if (!isAgentAllowedForAutonomousSkillEvolution(ctx.agentId, workshopConfig)) {
     return false;
   }
 
