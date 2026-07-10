@@ -254,7 +254,6 @@ extension SettingsProTab {
             .font(OpenClawType.body)
             .navigationTitle(title(for: route))
             .navigationBarTitleDisplayMode(.inline)
-            .safeAreaPadding(.top, self.destinationTopSafeAreaPadding(for: route))
             .task(id: route) {
                 guard route == .appleWatch else { return }
                 await self.appModel.refreshWatchMessagingStatus()
@@ -272,13 +271,6 @@ extension SettingsProTab {
                 }
             }
         }
-    }
-
-    func destinationTopSafeAreaPadding(for route: SettingsRoute) -> CGFloat {
-        if #available(iOS 26.0, *), route == .privacy {
-            return 16
-        }
-        return 0
     }
 
     var gatewayDestination: some View {
@@ -808,22 +800,33 @@ extension SettingsProTab {
                    let accessLevelText = self.locationSettingsPresentation.accessLevelText
                 {
                     Divider()
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("Access Level")
-                            .font(OpenClawType.body)
-                            .foregroundStyle(.primary)
-                        Spacer(minLength: 8)
-                        Text(accessLevelText)
-                            .font(OpenClawType.subhead)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.trailing)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        self.showLocationAccessDialog = true
+                    } label: {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Access Level")
+                                .font(OpenClawType.body)
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                            Text(accessLevelText)
+                                .font(OpenClawType.subhead)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .disabled(self.isChangingLocationMode)
                     .accessibilityElement(children: .ignore)
                     .accessibilityIdentifier("settings-location-access-level")
                     .accessibilityLabel("Access Level")
                     .accessibilityValue(accessLevelText)
+                    .accessibilityHint("Chooses While Using the App or Always")
                 }
 
                 if let locationPermissionDetailText {

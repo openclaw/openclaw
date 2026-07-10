@@ -29,11 +29,11 @@ import Testing
 
         #expect(whileUsing.accessLevelText == "While Using the App")
         #expect(always.accessLevelText == "Always")
-        #expect(whileUsingWithAlwaysGrant.accessLevelText == "Always")
+        #expect(whileUsingWithAlwaysGrant.accessLevelText == "While Using the App")
         #expect(OpenClawLocationMode.off.locationAccessLevelText == nil)
     }
 
-    @Test func `location sharing control follows effective permission`() {
+    @Test func `location sharing control follows selected mode while permission is pending`() {
         let presentation = LocationSettingsPresentation(
             selectedMode: .whileUsing,
             summary: LocationPermissionSummary(
@@ -42,11 +42,11 @@ import Testing
                 authorizationStatus: .notDetermined,
                 accuracyAuthorization: .fullAccuracy))
 
-        #expect(!presentation.sharingControlIsOn)
-        #expect(!presentation.showsAccessLevel)
-        #expect(presentation.accessLevelText == nil)
+        #expect(presentation.sharingControlIsOn)
+        #expect(presentation.showsAccessLevel)
+        #expect(presentation.accessLevelText == "While Using the App")
         #expect(presentation.statusText == "iOS permission is required to share location.")
-        #expect(presentation.toggleAction() == .setMode(.whileUsing))
+        #expect(presentation.toggleAction() == .setMode(.off))
     }
 
     @Test func `location sharing toggle from off requests while using by default`() {
@@ -63,15 +63,8 @@ import Testing
         #expect(presentation.toggleAction() == .setMode(.whileUsing))
     }
 
-    @Test func `access level remains visible for an ios grant when sharing is off`() {
-        let whileUsing = LocationSettingsPresentation(
-            selectedMode: .off,
-            summary: LocationPermissionSummary(
-                desiredMode: .off,
-                locationServicesEnabled: true,
-                authorizationStatus: .authorizedWhenInUse,
-                accuracyAuthorization: .fullAccuracy))
-        let always = LocationSettingsPresentation(
+    @Test func `access level stays hidden when sharing is off despite retained ios grant`() {
+        let presentation = LocationSettingsPresentation(
             selectedMode: .off,
             summary: LocationPermissionSummary(
                 desiredMode: .off,
@@ -79,18 +72,16 @@ import Testing
                 authorizationStatus: .authorizedAlways,
                 accuracyAuthorization: .fullAccuracy))
 
-        #expect(!whileUsing.sharingControlIsOn)
-        #expect(whileUsing.showsAccessLevel)
-        #expect(whileUsing.accessLevelText == "While Using the App")
-        #expect(always.showsAccessLevel)
-        #expect(always.accessLevelText == "Always")
+        #expect(!presentation.sharingControlIsOn)
+        #expect(!presentation.showsAccessLevel)
+        #expect(presentation.accessLevelText == nil)
     }
 
     @Test func `location sharing toggle opens app settings when denied`() {
         let presentation = LocationSettingsPresentation(
-            selectedMode: .whileUsing,
+            selectedMode: .off,
             summary: LocationPermissionSummary(
-                desiredMode: .whileUsing,
+                desiredMode: .off,
                 locationServicesEnabled: true,
                 authorizationStatus: .denied,
                 accuracyAuthorization: .fullAccuracy))
@@ -102,7 +93,7 @@ import Testing
         #expect(presentation.toggleAction() == .openAppSettings(.whileUsing))
     }
 
-    @Test func `access level reports effective ios grant without redundant guidance`() {
+    @Test func `access level reports selection and warns when ios grant is lower`() {
         let presentation = LocationSettingsPresentation(
             selectedMode: .always,
             summary: LocationPermissionSummary(
@@ -113,8 +104,10 @@ import Testing
 
         #expect(presentation.sharingControlIsOn)
         #expect(presentation.showsAccessLevel)
-        #expect(presentation.accessLevelText == "While Using the App")
-        #expect(presentation.statusText == nil)
+        #expect(presentation.accessLevelText == "Always")
+        #expect(presentation.statusText == "iOS currently allows location only while using the app.")
+        #expect(presentation.accessLevelAction(mode: .always) == .setMode(.always))
+        #expect(presentation.accessLevelAction(mode: .whileUsing) == .setMode(.whileUsing))
         #expect(presentation.toggleAction() == .setMode(.off))
     }
 
@@ -133,16 +126,16 @@ import Testing
 
     @Test func `global location services off opens app settings action`() {
         let presentation = LocationSettingsPresentation(
-            selectedMode: .whileUsing,
+            selectedMode: .off,
             summary: LocationPermissionSummary(
-                desiredMode: .whileUsing,
+                desiredMode: .off,
                 locationServicesEnabled: false,
                 authorizationStatus: .authorizedWhenInUse,
                 accuracyAuthorization: .fullAccuracy))
 
         #expect(!presentation.sharingControlIsOn)
         #expect(!presentation.showsAccessLevel)
-        #expect(presentation.statusText == "Location Services are off in iOS Settings.")
+        #expect(presentation.statusText == nil)
         #expect(presentation.toggleAction() == .openAppSettings(.whileUsing))
     }
 
@@ -155,10 +148,11 @@ import Testing
                 authorizationStatus: .restricted,
                 accuracyAuthorization: .fullAccuracy))
 
-        #expect(!presentation.sharingControlIsOn)
-        #expect(!presentation.showsAccessLevel)
+        #expect(presentation.sharingControlIsOn)
+        #expect(presentation.showsAccessLevel)
         #expect(presentation.statusText == "Location permission is restricted on this device.")
-        #expect(presentation.toggleAction() == .openAppSettings(.whileUsing))
+        #expect(presentation.toggleAction() == .setMode(.off))
+        #expect(presentation.accessLevelAction(mode: .whileUsing) == .openAppSettings(.whileUsing))
     }
 
     @Test func `always desired when in use authorized needs attention`() {

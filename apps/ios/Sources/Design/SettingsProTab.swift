@@ -60,6 +60,7 @@ struct SettingsProTab: View {
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
+    @State var showLocationAccessDialog = false
     @State var pendingLocationMode: OpenClawLocationMode?
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
@@ -297,6 +298,31 @@ struct SettingsProTab: View {
                 }
             } message: {
                 Text(self.scannerError ?? "")
+                    .font(OpenClawType.subhead)
+            }
+            .confirmationDialog(
+                "Access Level",
+                isPresented: self.$showLocationAccessDialog,
+                titleVisibility: .visible)
+            {
+                Button {
+                    self.selectLocationAccessLevel(.whileUsing)
+                } label: {
+                    Text("While Using the App")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button {
+                    self.selectLocationAccessLevel(.always)
+                } label: {
+                    Text("Always")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button(role: .cancel) {} label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            } message: {
+                Text("Choose when OpenClaw may share this iPhone's location with gateway tools.")
                     .font(OpenClawType.subhead)
             }
             .confirmationDialog(

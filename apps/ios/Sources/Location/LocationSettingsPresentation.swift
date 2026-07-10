@@ -12,23 +12,15 @@ struct LocationSettingsPresentation: Equatable {
     var summary: LocationPermissionSummary
 
     var sharingControlIsOn: Bool {
-        self.summary.effectiveMode != .off
+        self.selectedMode != .off
     }
 
     var showsAccessLevel: Bool {
-        self.accessLevelText != nil
+        self.selectedMode != .off
     }
 
     var accessLevelText: String? {
-        guard self.summary.locationServicesEnabled else { return nil }
-        switch self.summary.authorizationStatus {
-        case .authorizedWhenInUse:
-            return OpenClawLocationMode.whileUsing.locationAccessLevelText
-        case .authorizedAlways:
-            return OpenClawLocationMode.always.locationAccessLevelText
-        default:
-            return nil
-        }
+        self.selectedMode.locationAccessLevelText
     }
 
     var statusText: String? {
@@ -43,10 +35,12 @@ struct LocationSettingsPresentation: Equatable {
         case .notDetermined:
             return "iOS permission is required to share location."
         case .denied:
-            return nil
+            return "Location permission is denied in iOS Settings."
         case .restricted:
             return "Location permission is restricted on this device."
-        case .authorizedWhenInUse:
+        case .authorizedWhenInUse where self.selectedMode == .always:
+            return "iOS currently allows location only while using the app."
+        case .authorizedWhenInUse, .authorizedAlways:
             return nil
         default:
             return "OpenClaw cannot determine the current iOS location permission."
@@ -59,6 +53,10 @@ struct LocationSettingsPresentation: Equatable {
         }
         let mode = self.selectedMode == .off ? defaultEnabledMode : self.selectedMode
         return self.enableAction(mode: mode)
+    }
+
+    func accessLevelAction(mode: OpenClawLocationMode) -> LocationSettingsAction {
+        self.enableAction(mode: mode)
     }
 
     private func enableAction(mode: OpenClawLocationMode) -> LocationSettingsAction {

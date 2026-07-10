@@ -629,6 +629,13 @@ extension SettingsProTab {
         self.performLocationSettingsAction(self.locationSettingsPresentation.toggleAction())
     }
 
+    func selectLocationAccessLevel(_ mode: OpenClawLocationMode) {
+        guard mode != .off else { return }
+        guard !self.isChangingLocationMode else { return }
+        let presentation = self.locationSettingsPresentation(selectedMode: mode)
+        self.performLocationSettingsAction(presentation.accessLevelAction(mode: mode))
+    }
+
     func performLocationSettingsAction(_ action: LocationSettingsAction) {
         switch action {
         case let .setMode(mode):
