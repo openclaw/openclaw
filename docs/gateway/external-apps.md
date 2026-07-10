@@ -99,17 +99,22 @@ Resume returns `{"ok":true,"status":"running","resumed":true}`; repeating it
 after a successful resume returns `resumed: false`.
 
 A competing request ID or transient scheduler-resume failure returns retryable
-`UNAVAILABLE` with `retryAfterMs`. A mismatched resume ID returns
-`INVALID_REQUEST`. Prepare shares the Gateway's control-plane write budget of
-three attempts per minute; honor the returned retry delay. WebSocket clients
-are bucketed by device and IP. Admin HTTP controllers are bucketed by resolved
-client IP, so controllers behind one proxy can share a budget.
+`UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,
+and resume all return that error, the Gateway remains not-ready and
+fail-closed, and the host must not freeze or snapshot it. OpenClaw retries the
+scheduler automatically and reopens admission only after recovery succeeds. A
+mismatched resume ID returns `INVALID_REQUEST`. Prepare shares the Gateway's
+control-plane write budget of three attempts per minute; honor the returned
+retry delay. WebSocket clients are bucketed by device and IP. Admin HTTP
+controllers are bucketed by resolved client IP, so controllers behind one
+proxy can share a budget.
 
 Preparation is refuse-only: OpenClaw closes new root/session/command admission,
 pauses automatic cron ticks, and inspects work synchronously. If anything is
-active, it reopens admission before returning `busy`; it does not interrupt or
-drain that work. A ready lease lasts two minutes. Repeating `prepare` with the
-same `requestId` renews it; expiry resumes the scheduler automatically.
+active, it resumes the scheduler and reopens admission before returning
+`busy`; it does not interrupt or drain that work. A ready lease lasts two
+minutes. Repeating `prepare` with the same `requestId` renews it; expiry resumes
+the scheduler before reopening admission.
 Restart emission that becomes due during a ready lease waits until the lease
 resumes; an in-flight restart makes preparation return `busy`.
 

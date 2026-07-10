@@ -1,7 +1,13 @@
 // Every-job firing tests cover repeated schedule execution semantics.
 import { describe, expect, it, vi } from "vitest";
 import {
+  getGatewaySuspendStatus,
+  prepareGatewaySuspend,
+  resetGatewaySuspendCoordinatorForTest,
+} from "../infra/gateway-suspend-coordinator.js";
+import {
   beginGatewayRestartSignalAdmission,
+  isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { CronService } from "./service.js";
@@ -134,6 +140,91 @@ describe("CronService interval/cron jobs fire on time", () => {
 
     cron.stop();
     await store.cleanup();
+  });
+
+  it("rolls a failed scheduler resume back so a retry can rearm cron", async () => {
+    const store = await makeStorePath();
+    const logger = createNoopLogger();
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await cron.start();
+    await cron.add({
+      name: "resume retry check",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 10_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "resume" },
+    });
+    cron.pauseScheduling();
+    logger.debug.mockImplementationOnce(() => {
+      throw new Error("arm failed");
+    });
+
+    expect(() => cron.resumeScheduling()).toThrow("arm failed");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(() => cron.resumeScheduling()).not.toThrow();
+    expect(vi.getTimerCount()).toBe(1);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("keeps admission closed until a real cron scheduler resume retry succeeds", async () => {
+    const store = await makeStorePath();
+    const logger = createNoopLogger();
+    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      storePath: store.storePath,
+      logger,
+    });
+    resetGatewaySuspendCoordinatorForTest();
+    resetGatewayWorkAdmission();
+
+    try {
+      await cron.start();
+      const job = await cron.add({
+        name: "coordinator resume retry check",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 10_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "recovered-tick" },
+      });
+      logger.debug.mockImplementationOnce(() => {
+        throw new Error("arm failed");
+      });
+
+      expect(
+        prepareGatewaySuspend({
+          requestId: "cron-resume-retry",
+          pauseScheduling: () => cron.pauseScheduling(),
+          resumeScheduling: () => cron.resumeScheduling(),
+          inspect: { getQueueSize: () => 1 },
+        }),
+      ).toMatchObject({ status: "recovering" });
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(getGatewaySuspendStatus("stale-id")).toEqual({ status: "running" });
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+
+      const finishedRun = finished.waitForOk(job.id);
+      await vi.advanceTimersByTimeAsync(9_005);
+      await finishedRun;
+      expectMainSystemEvent(enqueueSystemEvent, "recovered-tick", job.id);
+    } finally {
+      cron.stop();
+      resetGatewaySuspendCoordinatorForTest();
+      resetGatewayWorkAdmission();
+      await store.cleanup();
+    }
   });
 
   it("keeps a due timer pending when restart signal admission rolls back", async () => {

@@ -18,6 +18,14 @@ function invalidParams(method: string) {
   return errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${method} params`);
 }
 
+function schedulerRecoveryError(retryAfterMs: number) {
+  return errorShape(ErrorCodes.UNAVAILABLE, "gateway scheduler recovery is pending", {
+    retryable: true,
+    retryAfterMs,
+    details: { reason: "scheduler-resume-failed" },
+  });
+}
+
 export const suspendHandlers: GatewayRequestHandlers = {
   "gateway.suspend.prepare": async ({ respond, params, context }) => {
     if (!validateGatewaySuspendPrepareParams(params)) {
@@ -44,6 +52,10 @@ export const suspendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (result.status === "recovering") {
+      respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
+      return;
+    }
     respond(true, result);
   },
   "gateway.suspend.status": async ({ respond, params }) => {
@@ -65,6 +77,10 @@ export const suspendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (result.status === "recovering") {
+      respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
+      return;
+    }
     respond(true, result);
   },
   "gateway.suspend.resume": async ({ respond, params }) => {
@@ -76,15 +92,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
     const result = resumeGatewaySuspend(suspensionId);
     if (!result.ok) {
       if (result.reason === "scheduler-resume-failed") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, result.message, {
-            retryable: true,
-            retryAfterMs: 1_000,
-            details: { reason: result.reason },
-          }),
-        );
+        respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
         return;
       }
       respond(

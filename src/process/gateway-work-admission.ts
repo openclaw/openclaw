@@ -110,9 +110,12 @@ export function isGatewaySubordinateWorkAdmissionClosed(): boolean {
     return true;
   }
   const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
-  return current && !current.released
-    ? false
-    : GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting";
+  if (current) {
+    // Reset/release retires inherited ALS descendants. They must explicitly
+    // re-enter admission instead of spawning untracked subordinate work.
+    return current.released;
+  }
+  return GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting";
 }
 
 export function getGatewaySuspendAdmissionPhase(): GatewaySuspendAdmissionPhase {

@@ -59,4 +59,15 @@ describe("gateway suspension protocol", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps scheduler recovery on the error frame instead of success results", () => {
+    const recovering = {
+      status: "recovering",
+      reason: "scheduler-resume-failed",
+      retryAfterMs: 1_000,
+    };
+
+    expect(validateGatewaySuspendPrepareResult(recovering)).toBe(false);
+    expect(validateGatewaySuspendStatusResult(recovering)).toBe(false);
+  });
 });

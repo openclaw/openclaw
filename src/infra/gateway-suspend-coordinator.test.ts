@@ -101,8 +101,18 @@ describe("gateway suspend coordinator", () => {
         inspect: inspectors({ getQueueSize: () => 1 }),
       });
 
-      expect(first.status).toBe("busy");
+      expect(first).toEqual({
+        status: "recovering",
+        reason: "scheduler-resume-failed",
+        retryAfterMs: 1_000,
+      });
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(getGatewaySuspendStatus("stale-id")).toEqual(first);
+      expect(resumeGatewaySuspend("stale-id")).toEqual({
+        ok: false,
+        reason: "scheduler-resume-failed",
+        retryAfterMs: 1_000,
+      });
       expect(
         prepareGatewaySuspend({
           requestId: "request-before-scheduler-resume",
@@ -110,11 +120,12 @@ describe("gateway suspend coordinator", () => {
           resumeScheduling,
           inspect: inspectors(),
         }),
-      ).toMatchObject({ status: "busy", reason: "gateway-draining" });
+      ).toEqual(first);
 
       vi.advanceTimersByTime(1_000);
       expect(resumeScheduling).toHaveBeenCalledTimes(2);
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      expect(getGatewaySuspendStatus("stale-id")).toEqual({ status: "running" });
 
       expect(
         prepareGatewaySuspend({
@@ -130,6 +141,62 @@ describe("gateway suspend coordinator", () => {
       });
       vi.advanceTimersByTime(1_000);
       expect(resumeScheduling).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels scheduler recovery when restart supersedes suspension", () => {
+    vi.useFakeTimers();
+    try {
+      const resumeScheduling = vi.fn(() => {
+        throw new Error("timer unavailable");
+      });
+      expect(
+        prepareGatewaySuspend({
+          requestId: "request-recovery-restart",
+          pauseScheduling: vi.fn(),
+          resumeScheduling,
+          inspect: inspectors({ getQueueSize: () => 1 }),
+        }),
+      ).toMatchObject({ status: "recovering" });
+
+      markGatewayRestartDraining();
+      vi.advanceTimersByTime(1_000);
+
+      expect(resumeScheduling).toHaveBeenCalledOnce();
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(getGatewaySuspendStatus("stale-id")).toEqual({ status: "running" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("owns recovery when inspection fails before admission commits", () => {
+    vi.useFakeTimers();
+    try {
+      const resumeScheduling = vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error("timer unavailable");
+        })
+        .mockImplementationOnce(() => {});
+      const result = prepareGatewaySuspend({
+        requestId: "request-inspection-failure",
+        pauseScheduling: vi.fn(),
+        resumeScheduling,
+        inspect: inspectors({
+          getQueueSize: () => {
+            throw new Error("inspection failed");
+          },
+        }),
+      });
+
+      expect(result).toMatchObject({ status: "recovering" });
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      vi.advanceTimersByTime(1_000);
+      expect(resumeScheduling).toHaveBeenCalledTimes(2);
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -213,34 +280,51 @@ describe("gateway suspend coordinator", () => {
     expect(isGatewayWorkAdmissionClosed()).toBe(true);
   });
 
-  it("retains the lease when scheduler resume fails so the caller can retry", () => {
-    const resumeScheduling = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        throw new Error("timer unavailable");
-      })
-      .mockImplementationOnce(() => {});
-    prepareGatewaySuspend({
-      requestId: "request-resume-retry",
-      pauseScheduling: vi.fn(),
-      resumeScheduling,
-      inspect: inspectors(),
-      createSuspensionId: () => "suspension-resume-retry",
-    });
+  it("exposes scheduler recovery after a ready lease cannot resume", () => {
+    vi.useFakeTimers();
+    try {
+      const resumeScheduling = vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error("timer unavailable");
+        })
+        .mockImplementationOnce(() => {});
+      prepareGatewaySuspend({
+        requestId: "request-resume-retry",
+        pauseScheduling: vi.fn(),
+        resumeScheduling,
+        inspect: inspectors(),
+        createSuspensionId: () => "suspension-resume-retry",
+      });
 
-    expect(resumeGatewaySuspend("suspension-resume-retry")).toMatchObject({
-      ok: false,
-      reason: "scheduler-resume-failed",
-    });
-    expect(isGatewayWorkAdmissionClosed()).toBe(true);
-    expect(getGatewaySuspendStatus("suspension-resume-retry").status).toBe("ready");
+      expect(resumeGatewaySuspend("suspension-resume-retry")).toMatchObject({
+        ok: false,
+        reason: "scheduler-resume-failed",
+      });
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(getGatewaySuspendStatus("suspension-resume-retry")).toMatchObject({
+        status: "recovering",
+      });
+      expect(
+        prepareGatewaySuspend({
+          requestId: "request-resume-retry",
+          pauseScheduling: vi.fn(),
+          resumeScheduling,
+          inspect: inspectors(),
+        }),
+      ).toMatchObject({ status: "recovering" });
+      expect(resumeGatewaySuspend("suspension-resume-retry")).toMatchObject({
+        ok: false,
+        reason: "scheduler-resume-failed",
+      });
 
-    expect(resumeGatewaySuspend("suspension-resume-retry")).toEqual({
-      ok: true,
-      status: "running",
-      resumed: true,
-    });
-    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      vi.advanceTimersByTime(1_000);
+      expect(resumeScheduling).toHaveBeenCalledTimes(2);
+      expect(getGatewaySuspendStatus("suspension-resume-retry")).toEqual({ status: "running" });
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("auto-resumes an abandoned ready lease at expiry", () => {
@@ -259,6 +343,40 @@ describe("gateway suspend coordinator", () => {
 
       expect(getGatewaySuspendStatus("suspension-expiry")).toEqual({ status: "running" });
       expect(resumeScheduling).toHaveBeenCalledOnce();
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("enters recovery when lease expiry cannot resume the scheduler", () => {
+    vi.useFakeTimers();
+    try {
+      const resumeScheduling = vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error("timer unavailable");
+        })
+        .mockImplementationOnce(() => {});
+      prepareGatewaySuspend({
+        requestId: "request-expiry-recovery",
+        pauseScheduling: vi.fn(),
+        resumeScheduling,
+        inspect: inspectors(),
+        createSuspensionId: () => "suspension-expiry-recovery",
+      });
+
+      vi.advanceTimersByTime(GATEWAY_SUSPEND_TTL_MS);
+      expect(getGatewaySuspendStatus("suspension-expiry-recovery")).toMatchObject({
+        status: "recovering",
+      });
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+      vi.advanceTimersByTime(1_000);
+      expect(resumeScheduling).toHaveBeenCalledTimes(2);
+      expect(getGatewaySuspendStatus("suspension-expiry-recovery")).toEqual({
+        status: "running",
+      });
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
     } finally {
       vi.useRealTimers();

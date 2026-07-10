@@ -175,11 +175,16 @@ it("retires surviving root records across an in-process reset", async () => {
   await root?.run(async () => {
     resetGatewayWorkAdmission();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(true);
     const nested = tryBeginGatewayRootWorkAdmission();
     expect(nested).not.toBeNull();
     expect(nested?.ownsRoot).toBe(true);
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    await nested?.run(async () => {
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
+    });
     nested?.release();
+    expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(true);
   });
   root?.release();
   expect(getActiveGatewayRootWorkCount()).toBe(0);

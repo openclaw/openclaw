@@ -331,8 +331,17 @@ export function resumeScheduling(state: CronServiceState) {
     return;
   }
   state.schedulingPaused = false;
-  if (state.schedulerStarted) {
+  if (!state.schedulerStarted) {
+    return;
+  }
+  try {
     armTimer(state);
+  } catch (err) {
+    // armTimer can install a timer before a later dependency throws. Roll the
+    // whole transition back so a suspension retry cannot reopen without cron.
+    state.schedulingPaused = true;
+    stopTimer(state);
+    throw err;
   }
 }
 
