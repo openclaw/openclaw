@@ -100,12 +100,7 @@ import { parseInboundMediaUri } from "../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
-import {
-  deleteMediaBuffer,
-  MEDIA_MAX_BYTES,
-  type SavedMedia,
-  saveMediaBuffer,
-} from "../../media/store.js";
+import { deleteMediaBuffer, MEDIA_MAX_BYTES, type SavedMedia } from "../../media/store.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
@@ -684,6 +679,27 @@ type ChatSendOriginatingRoute = {
   explicitDeliverRoute: boolean;
 };
 
+const ACTIVE_CHAT_SEND_DEDUPE_PREFIX = "chat:active-send";
+
+function resolveActiveChatSendRunId(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const runId = (value as { runId?: unknown }).runId;
+  return typeof runId === "string" && runId.trim() ? runId : null;
+}
+
+function clearActiveChatSendDedupeRun(
+  dedupe: GatewayRequestContext["dedupe"],
+  key: string | null,
+  runId: string,
+) {
+  if (!key || resolveActiveChatSendRunId(dedupe.get(key)?.payload) !== runId) {
+    return;
+  }
+  dedupe.delete(key);
+}
+
 function buildAbortedChatSendPayload(params: {
   runId: string;
   endedAt: number;
@@ -696,6 +712,34 @@ function buildAbortedChatSendPayload(params: {
     ...(params.stopReason ? { stopReason: params.stopReason } : {}),
     endedAt: params.endedAt,
   };
+}
+
+function buildActiveChatSendDedupeKey(params: {
+  attachmentCount: number;
+  explicitDeliverRoute: boolean;
+  message: string;
+  originatingChannel: string;
+  sessionKey: string;
+  systemScope?: string;
+}): string | null {
+  const message = params.message.trim();
+  if (
+    !message ||
+    message.startsWith("/") ||
+    params.attachmentCount > 0 ||
+    params.explicitDeliverRoute ||
+    normalizeMessageChannel(params.originatingChannel) !== INTERNAL_MESSAGE_CHANNEL
+  ) {
+    return null;
+  }
+  const dedupeParts = params.systemScope?.trim()
+    ? [params.sessionKey, message, params.systemScope.trim()]
+    : [params.sessionKey, message];
+  const digest = createHash("sha256")
+    .update(JSON.stringify(dedupeParts))
+    .digest("hex")
+    .slice(0, 32);
+  return `${ACTIVE_CHAT_SEND_DEDUPE_PREFIX}:${digest}`;
 }
 
 function validateChatSelectedAgent(params: {
@@ -3802,6 +3846,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     const inboundMessage = sanitizedMessageResult.message;
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
+    const systemDedupeScope =
+      systemInputProvenance || systemProvenanceReceipt
+        ? JSON.stringify([systemProvenanceReceipt ?? null, systemInputProvenance ?? null])
+        : undefined;
     const stopCommand = !suppressCommandInterpretation && isChatStopCommandText(inboundMessage);
     const turnKind =
       !suppressCommandInterpretation && isBtwRequestText(inboundMessage) ? "btw" : "main";
@@ -4041,6 +4089,26 @@ export const chatHandlers: GatewayRequestHandlers = {
       mainKey: cfg.session?.mainKey,
       sessionKey,
     });
+    const activeChatSendDedupeKey = buildActiveChatSendDedupeKey({
+      attachmentCount: normalizedAttachments.length,
+      explicitDeliverRoute: originatingRoute.explicitDeliverRoute,
+      message: rawMessage,
+      originatingChannel: originatingRoute.originatingChannel,
+      sessionKey: activeRunScopeKey,
+      systemScope: systemDedupeScope,
+    });
+    if (activeChatSendDedupeKey) {
+      const activeRunId = resolveActiveChatSendRunId(
+        context.dedupe.get(activeChatSendDedupeKey)?.payload,
+      );
+      if (activeRunId && context.chatAbortControllers.has(activeRunId)) {
+        respond(true, { runId: activeRunId, status: "in_flight" as const }, undefined, {
+          cached: true,
+          runId: activeRunId,
+        });
+        return;
+      }
+    }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const pendingAttemptId = randomUUID();
     const pendingExpiresAtMs = resolveChatRunExpiresAtMs({ now, timeoutMs });
