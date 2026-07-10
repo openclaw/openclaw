@@ -218,7 +218,10 @@ describe("config io write prepare", () => {
             fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
           },
           utilityModel: "google/gemini-3-pro-preview",
-          heartbeat: { model: "google/gemini-3-pro-preview" },
+          heartbeat: {
+            model: "google/gemini-3-pro-preview",
+            fallbacks: ["google/gemini-3-pro-preview"],
+          },
           subagents: {
             model: {
               primary: "google/gemini-3-pro-preview",
@@ -243,7 +246,10 @@ describe("config io write prepare", () => {
               fallbacks: ["google/gemini-3-pro-preview"],
             },
             utilityModel: "google/gemini-3-pro-preview",
-            heartbeat: { model: "google/gemini-3-pro-preview" },
+            heartbeat: {
+              model: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
             subagents: { model: "google/gemini-3-pro-preview" },
             models: {
               "google/gemini-3-pro-preview": {
@@ -263,7 +269,10 @@ describe("config io write prepare", () => {
             fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
           },
           utilityModel: "google/gemini-3.1-pro-preview",
-          heartbeat: { model: "google/gemini-3.1-pro-preview" },
+          heartbeat: {
+            model: "google/gemini-3.1-pro-preview",
+            fallbacks: ["google/gemini-3.1-pro-preview"],
+          },
           subagents: {
             model: {
               primary: "google/gemini-3.1-pro-preview",
@@ -288,7 +297,10 @@ describe("config io write prepare", () => {
               fallbacks: ["google/gemini-3.1-pro-preview"],
             },
             utilityModel: "google/gemini-3.1-pro-preview",
-            heartbeat: { model: "google/gemini-3.1-pro-preview" },
+            heartbeat: {
+              model: "google/gemini-3.1-pro-preview",
+              fallbacks: ["google/gemini-3.1-pro-preview"],
+            },
             subagents: { model: "google/gemini-3.1-pro-preview" },
             models: {
               "google/gemini-3.1-pro-preview": {
@@ -315,6 +327,9 @@ describe("config io write prepare", () => {
     });
     expect(persisted.agents?.defaults?.utilityModel).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.defaults?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.defaults?.heartbeat?.fallbacks).toEqual([
+      "google/gemini-3.1-pro-preview",
+    ]);
     expect(persisted.agents?.defaults?.subagents?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview"],
@@ -334,6 +349,9 @@ describe("config io write prepare", () => {
     });
     expect(persisted.agents?.list?.[0]?.utilityModel).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.list?.[0]?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.list?.[0]?.heartbeat?.fallbacks).toEqual([
+      "google/gemini-3.1-pro-preview",
+    ]);
     expect(persisted.agents?.list?.[0]?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
     expect(persisted.agents?.list?.[0]?.models).toEqual({
       "google/gemini-3.1-pro-preview": {

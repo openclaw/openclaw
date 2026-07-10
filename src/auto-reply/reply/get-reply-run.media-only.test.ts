@@ -364,6 +364,28 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it("keeps model fallback unset for heartbeat runs by default", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.modelFallbacksOverride).toBeUndefined();
+  });
+
+  it("passes configured heartbeat model fallback overrides to the runner", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true, heartbeatFallbacksOverride: [] },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.modelFallbacksOverride).toEqual([]);
+  });
+
   it("propagates non-visible assistant silence for group runs", async () => {
     await runPreparedReply(baseParams());
 

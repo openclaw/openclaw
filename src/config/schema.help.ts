@@ -349,6 +349,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional default working directory for this agent's ACP sessions.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
+  "agents.defaults.heartbeat.fallbacks":
+    "Ordered heartbeat-specific model fallback refs. Leave unset to use normal model fallback behavior; set [] to make heartbeat runs fail fast on their selected model.",
+  "agents.list[].heartbeat.fallbacks":
+    "Per-agent heartbeat-specific model fallback refs. Leave unset to inherit/default normal fallback behavior; set [] to make this agent's heartbeat runs fail fast on their selected model.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":

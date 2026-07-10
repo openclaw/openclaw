@@ -743,6 +743,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list.*.heartbeat.includeSystemPromptSection": "Heartbeat Include System Prompt Section",
   "agents.list[].embeddedAgent": "Agent Embedded OpenClaw",
   "agents.list[].embeddedAgent.executionContract": "Agent Embedded OpenClaw Execution Contract",
+  "agents.defaults.heartbeat.fallbacks": "Heartbeat Model Fallbacks",
+  "agents.list.*.heartbeat.fallbacks": "Heartbeat Model Fallbacks",
   "agents.defaults.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.list.*.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.defaults.heartbeat.suppressToolErrorWarnings": "Heartbeat Suppress Tool Error Warnings",
@@ -1068,6 +1070,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].identity.avatar": "Agent Avatar",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Agent Heartbeat Suppress Tool Error Warnings",
+  "agents.list[].heartbeat.fallbacks": "Agent Heartbeat Model Fallbacks",
   "agents.list[].heartbeat.timeoutSeconds": "Agent Heartbeat Timeout (Seconds)",
   "agents.list[].heartbeat.skipWhenBusy": "Agent Heartbeat Skip When Busy",
   "agents.list[].sandbox.browser.network": "Agent Sandbox Browser Network",

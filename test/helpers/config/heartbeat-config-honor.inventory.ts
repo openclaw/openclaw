@@ -36,6 +36,22 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
     ],
   },
   {
+    key: "fallbacks",
+    schemaPaths: ["agents.defaults.heartbeat.fallbacks", "agents.list.*.heartbeat.fallbacks"],
+    typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
+    mergePaths: ["src/infra/heartbeat-runner.ts"],
+    consumerPaths: [
+      "src/infra/heartbeat-runner.ts",
+      "src/auto-reply/get-reply-options.types.ts",
+      "src/auto-reply/reply/get-reply-run.ts",
+    ],
+    reloadPaths: ["src/gateway/config-reload-plan.ts"],
+    testPaths: [
+      "src/infra/heartbeat-runner.model-override.test.ts",
+      "src/auto-reply/reply/get-reply-run.media-only.test.ts",
+    ],
+  },
+  {
     key: "prompt",
     schemaPaths: ["agents.defaults.heartbeat.prompt", "agents.list.*.heartbeat.prompt"],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],

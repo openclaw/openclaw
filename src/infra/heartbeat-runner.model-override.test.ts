@@ -100,6 +100,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     every?: string;
     defaultTimeoutSeconds?: number;
     model?: string;
+    fallbacks?: string[];
     suppressToolErrorWarnings?: boolean;
     timeoutSeconds?: number;
     lightContext?: boolean;
@@ -115,6 +116,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               every: params.every ?? "5m",
               target: "whatsapp",
               model: params.model,
+              fallbacks: params.fallbacks,
               suppressToolErrorWarnings: params.suppressToolErrorWarnings,
               timeoutSeconds: params.timeoutSeconds,
               lightContext: params.lightContext,
@@ -194,6 +196,14 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       isHeartbeat: true,
       heartbeatModelOverride: "ollama/llama3.2:1b",
       suppressToolErrorWarnings: false,
+    });
+  });
+
+  it("passes heartbeat fallback overrides from defaults heartbeat config", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ fallbacks: [] });
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      heartbeatFallbacksOverride: [],
     });
   });
 
@@ -307,6 +317,16 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       heartbeat: { model: "ollama/llama3.2:1b" },
       expectedOptions: {
         heartbeatModelOverride: "ollama/llama3.2:1b",
+      },
+    });
+  });
+
+  it("passes per-agent heartbeat fallback override after merging defaults", async () => {
+    await expectPerAgentHeartbeatOverride({
+      defaultsHeartbeat: { fallbacks: ["openai/gpt-5.4-mini"] },
+      heartbeat: { fallbacks: [] },
+      expectedOptions: {
+        heartbeatFallbacksOverride: [],
       },
     });
   });

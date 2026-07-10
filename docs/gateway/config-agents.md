@@ -578,6 +578,7 @@ Periodic heartbeat runs.
       heartbeat: {
         every: "30m", // 0m disables
         model: "openai/gpt-5.4-mini",
+        fallbacks: [], // optional heartbeat-specific fallback chain; omit for normal fallback behavior
         includeReasoning: false,
         includeSystemPromptSection: true, // default: true; false omits the Heartbeat section from the system prompt
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
@@ -598,6 +599,7 @@ Periodic heartbeat runs.
 ```
 
 - `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
+- `fallbacks`: optional heartbeat-specific model fallback chain (`provider/model` refs). Leave unset to use normal model fallback behavior; set `[]` to fail fast on the selected heartbeat model instead of falling back.
 - `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt and skips `HEARTBEAT.md` injection into bootstrap context. Default: `true`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.

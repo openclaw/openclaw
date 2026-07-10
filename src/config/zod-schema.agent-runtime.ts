@@ -92,6 +92,7 @@ export const HeartbeatSchema = z
       .strict()
       .optional(),
     model: z.string().optional(),
+    fallbacks: z.array(z.string()).optional(),
     session: z.string().optional(),
     includeReasoning: z.boolean().optional(),
     target: z.string().optional(),
