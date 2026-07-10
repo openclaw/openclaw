@@ -153,6 +153,24 @@ describe("exa web search provider", () => {
     );
   });
 
+  it("partitions Exa cache keys by disabled content options", () => {
+    const base = {
+      endpoint: "https://api.exa.ai/search",
+      type: "auto" as const,
+      query: "openclaw",
+      count: 5,
+    };
+    const defaultKey = testing.buildExaCacheKey(base);
+
+    expect(testing.buildExaCacheKey({ ...base, contents: { highlights: false } })).not.toBe(
+      defaultKey,
+    );
+    expect(testing.buildExaCacheKey({ ...base, contents: { text: false } })).not.toBe(defaultKey);
+    expect(testing.buildExaCacheKey({ ...base, contents: { summary: false } })).not.toBe(
+      defaultKey,
+    );
+  });
+
   it("normalizes Exa result descriptions from highlights before text", () => {
     expect(
       testing.resolveExaDescription({

@@ -453,6 +453,9 @@ function buildExaCacheKey(params: {
   dateBefore?: string;
   contents?: ExaContentsArgs;
 }): string {
+  const serializeContentOption = (value: unknown): string | undefined =>
+    value === undefined ? undefined : JSON.stringify(value);
+
   return buildSearchCacheKey([
     "exa",
     params.endpoint,
@@ -462,9 +465,9 @@ function buildExaCacheKey(params: {
     params.freshness,
     params.dateAfter,
     params.dateBefore,
-    params.contents?.highlights ? JSON.stringify(params.contents.highlights) : undefined,
-    params.contents?.text ? JSON.stringify(params.contents.text) : undefined,
-    params.contents?.summary ? JSON.stringify(params.contents.summary) : undefined,
+    serializeContentOption(params.contents?.highlights),
+    serializeContentOption(params.contents?.text),
+    serializeContentOption(params.contents?.summary),
   ]);
 }
 
