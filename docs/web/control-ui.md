@@ -124,14 +124,14 @@ the Control UI. For example, a base path of `/openclaw` uses
 optional plugin is disabled.
 
 The **Installed** tab shows the full local inventory grouped by category, with
-overview counts, per-plugin enable/disable switches, and a **Remove** action
-for externally installed plugins. It also lists configured
-[MCP servers](/cli/mcp) and supports adding, disabling, and removing them
-inline. The **Discover** tab is the store: featured plugins included with
-OpenClaw, official external plugins, and one-click MCP connectors for popular
-services. The **ClawHub** tab searches
-[ClawHub](https://clawhub.ai/plugins) inline with download counts and
-source-verification badges.
+overview counts. Each row opens a detail view; its overflow (`…`) menu enables
+or disables the plugin and offers **Remove** for externally installed plugins.
+It also lists configured [MCP servers](/cli/mcp) and supports adding, disabling,
+and removing them inline. The **Discover** tab is the store: featured plugins
+included with OpenClaw, official external plugins, and one-click MCP connectors
+for popular services. Typing in the search box queries
+[ClawHub](https://clawhub.ai/plugins) inline and appends a **From ClawHub**
+section with download counts and source-verification badges.
 
 Included plugins are already present on the Gateway and show **Enable** or
 **Disable** instead of **Install**. For example, Workboard is included with

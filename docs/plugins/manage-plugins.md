@@ -23,24 +23,25 @@ verify the plugin's runtime registrations.
 
 Open **Plugins** in the Control UI, or use `/settings/plugins` relative to the
 configured Control UI base path. For example, a base path of `/openclaw` uses
-`/openclaw/settings/plugins`. The page has three tabs:
+`/openclaw/settings/plugins`. The page has two tabs:
 
 - **Installed** shows the full local inventory grouped by category (channels,
-  model providers, memory, tools), with per-plugin enable/disable switches and
-  a **Remove** action for externally installed plugins. The tab also lists the
-  configured [MCP servers](/cli/mcp) with add, enable/disable, and remove
-  actions that edit `mcp.servers` in the Gateway configuration.
+  model providers, memory, tools). Each row opens a detail view; its overflow
+  (`…`) menu enables or disables the plugin and, for externally installed
+  plugins, offers **Remove**. The tab also lists the configured
+  [MCP servers](/cli/mcp) with the same menu-driven enable, disable, and remove
+  actions, editing `mcp.servers` in the Gateway configuration.
 - **Discover** is the store: featured plugins included with OpenClaw, official
   external plugins, and a curated connector shelf. Connector cards either add a
   hosted MCP server in one click (GitHub, Notion, Linear, Sentry,
-  Home Assistant) or jump into a prefilled ClawHub search.
-- **ClawHub** searches [ClawHub](https://clawhub.ai/plugins) inline, showing
-  download counts and source-verification badges for each package.
+  Home Assistant) or jump into a prefilled ClawHub search. Typing in the search
+  box queries [ClawHub](https://clawhub.ai/plugins) inline and appends a **From
+  ClawHub** section with download counts and source-verification badges.
 
-Included plugins do not need a package install. Their action is **Enable** or
-**Disable**. Workboard, for example, is included with OpenClaw and disabled by
-default, so choose **Enable** to turn it on. Bundled plugins cannot be removed,
-only disabled.
+Included plugins do not need a package install. Their menu action is **Enable**
+or **Disable**. Workboard, for example, is included with OpenClaw and disabled
+by default, so choose **Enable** to turn it on. Bundled plugins cannot be
+removed, only disabled.
 
 Catalog and search access require `operator.read`. Install, enable, disable,
 remove, and MCP server changes require `operator.admin`. A ClawHub install is

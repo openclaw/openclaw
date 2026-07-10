@@ -203,6 +203,16 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+async function clickMenuItem(page: TestPluginsPage, pluginSelector: string, label: string) {
+  page.querySelector<HTMLButtonElement>(`${pluginSelector} .plugins-kebab`)?.click();
+  await page.updateComplete;
+  const item = [
+    ...page.querySelectorAll<HTMLButtonElement>(`${pluginSelector} .plugins-menu__item`),
+  ].find((element) => element.textContent?.includes(label));
+  item?.click();
+  await page.updateComplete;
+}
+
 describe("PluginsPage", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
@@ -291,7 +301,7 @@ describe("PluginsPage", () => {
       },
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-clawhub")?.click();
+    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "w";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -343,9 +353,7 @@ describe("PluginsPage", () => {
       },
     );
 
-    const toggle = page.querySelector<HTMLInputElement>('[aria-label="Enable Workboard"]')!;
-    toggle.checked = true;
-    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
 
     await vi.waitFor(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
     await vi.waitFor(() => expect(refreshConfig).toHaveBeenCalledOnce());
@@ -356,7 +364,7 @@ describe("PluginsPage", () => {
     expect(calls).toContainEqual(["config.get", {}]);
   });
 
-  it("restores a switch after a failed enable so the next click retries enable", async () => {
+  it("keeps the enable action retryable after a failed enable", async () => {
     const { client, request } = createClient(async (method) => {
       if (method === "plugins.setEnabled") {
         throw new Error("Enable failed");
@@ -377,14 +385,12 @@ describe("PluginsPage", () => {
       },
     );
 
-    page.querySelector<HTMLInputElement>('[aria-label="Enable Workboard"]')?.click();
+    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
     await vi.waitFor(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("Enable failed"),
     );
-    const restored = page.querySelector<HTMLInputElement>('[aria-label="Enable Workboard"]')!;
-    expect(restored.checked).toBe(false);
 
-    restored.click();
+    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
     await vi.waitFor(() => {
       const calls = request.mock.calls.filter(([method]) => method === "plugins.setEnabled");
       expect(calls).toHaveLength(2);
@@ -420,7 +426,7 @@ describe("PluginsPage", () => {
       },
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-clawhub")?.click();
+    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "calendar";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -468,7 +474,7 @@ describe("PluginsPage", () => {
     page.querySelector<HTMLButtonElement>(".plugins-refresh")?.click();
     await page.updateComplete;
     expect(page.loading).toBe(true);
-    page.querySelector<HTMLInputElement>('[aria-label="Enable Workboard"]')?.click();
+    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
 
     await vi.waitFor(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
     expect(page.loading).toBe(false);
@@ -509,7 +515,7 @@ describe("PluginsPage", () => {
       },
     );
 
-    page.querySelector<HTMLInputElement>('[aria-label="Enable Workboard"]')?.click();
+    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
     await vi.waitFor(() =>
       expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
         "Could not refresh Control UI configuration: config.get failed",
@@ -557,13 +563,13 @@ describe("PluginsPage", () => {
       error: null,
     });
 
-    page.querySelector<HTMLInputElement>('[aria-label="Enable Workboard"]')?.click();
+    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     harness.emit(replacementClient, true);
     await vi.waitFor(() => expect(replacementListCount).toBe(1));
     await page.updateComplete;
-    page.querySelector<HTMLInputElement>('[aria-label="Enable Workboard"]')?.click();
+    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     staleMutation.resolve({ ok: true, plugin: enabledPlugin, restartRequired: false });
@@ -612,10 +618,7 @@ describe("PluginsPage", () => {
       },
     );
 
-    page
-      .querySelector<HTMLButtonElement>('[data-plugin-id="community-thing"] .plugins-remove')
-      ?.click();
-    await page.updateComplete;
+    await clickMenuItem(page, '[data-plugin-id="community-thing"]', "Remove");
     page
       .querySelector<HTMLButtonElement>(
         '[data-plugin-id="community-thing"] .plugins-remove-confirm .btn.danger',
@@ -728,9 +731,8 @@ describe("PluginsPage", () => {
       },
     );
 
-    const mcpRow = page.querySelector<HTMLElement>('[data-mcp-name="github"]');
-    expect(mcpRow).not.toBeNull();
-    mcpRow?.querySelector<HTMLButtonElement>(".plugins-remove")?.click();
+    expect(page.querySelector('[data-mcp-name="github"]')).not.toBeNull();
+    await clickMenuItem(page, '[data-mcp-name="github"]', "Remove");
 
     await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
     const patchArgs = configHarness.runtimeConfig.patch.mock.calls[0][0] as {

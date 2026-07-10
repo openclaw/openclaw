@@ -5,7 +5,6 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import {
-  CLAWHUB_BROWSE_URL,
   type PluginCatalogItem,
   type PluginListResult,
   type PluginMutationResult,
@@ -213,6 +212,12 @@ async function waitForNextRequest(
   throw new Error(`Timed out waiting for the next ${method} request`);
 }
 
+async function clickRowMenuItem(page: Page, rowSelector: string, itemName: string): Promise<void> {
+  const row = page.locator(rowSelector);
+  await row.locator(".plugins-kebab").click();
+  await page.getByRole("menuitem", { name: itemName, exact: true }).click();
+}
+
 async function captureScreenshot(page: Page, name: string): Promise<void> {
   if (!updateScreenshots) {
     return;
@@ -316,14 +321,17 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const workboardCard = page.locator('[data-plugin-id="workboard"]');
       await page.getByRole("heading", { name: "Tools" }).waitFor();
       await page.getByRole("heading", { name: "MCP servers" }).waitFor();
-      expect(await page.getByRole("link", { name: "Browse ClawHub" }).getAttribute("href")).toBe(
-        CLAWHUB_BROWSE_URL,
-      );
-      expect(
-        await workboardCard.getByRole("switch", { name: "Enable Workboard" }).isChecked(),
-      ).toBe(false);
       expect(await workboardCard.textContent()).toContain("Disabled");
       await captureScreenshot(page, "01-installed-desktop.png");
+
+      // Rows open a detail overlay; close it before continuing.
+      await workboardCard.click();
+      const detail = page.locator(".plugins-detail");
+      await detail.waitFor({ state: "visible" });
+      expect(await detail.textContent()).toContain("Workboard");
+      await captureScreenshot(page, "02-detail-desktop.png");
+      await detail.getByRole("button", { name: "Close" }).click();
+      await detail.waitFor({ state: "detached" });
 
       await page.getByRole("tab", { name: /^Discover/u }).click();
       await page.getByRole("heading", { name: "Featured" }).waitFor();
@@ -336,19 +344,20 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         .locator('[data-connector-id="github"]')
         .getByRole("button", { name: "Add", exact: true })
         .waitFor();
-      await captureScreenshot(page, "02-discover-desktop.png");
+      await captureScreenshot(page, "03-discover-desktop.png");
 
-      await page.getByRole("tab", { name: /^ClawHub/u }).click();
+      // Search is unified: results append below the discover shelves.
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
       const searchRequest = await gateway.waitForRequest("plugins.search");
       expect(requestParams(searchRequest)).toEqual({ query: "calendar", limit: 20 });
+      await page.getByRole("heading", { name: "From ClawHub" }).waitFor();
       const searchRow = page.locator('[data-package-name="calendar-plus"]');
       await searchRow.waitFor({ state: "visible" });
       expect(await searchRow.textContent()).toContain("Calendar Plus");
       expect(await searchRow.textContent()).toContain("Verified source");
       expect(await searchRow.textContent()).toContain("1.4K");
       await page.getByRole("searchbox", { name: "Search plugins" }).blur();
-      await captureScreenshot(page, "03-search-desktop.png");
+      await captureScreenshot(page, "04-search-desktop.png");
 
       await gateway.deferNext("plugins.install");
       await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
@@ -410,9 +419,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.resolveDeferred("plugins.list", installedInventory);
       await gateway.resolveDeferred("config.get", configSnapshot(false));
       await expect.poll(() => searchRow.getAttribute("aria-busy")).toBe("false");
-      await searchRow.getByRole("switch", { name: "Disable Calendar Plus" }).waitFor({
-        state: "attached",
-      });
+      // Installed search results swap Install for an enabled state chip + menu.
+      await searchRow.locator(".plugins-state--enabled").waitFor({ state: "attached" });
 
       await page.getByRole("tab", { name: /^Installed/u }).click();
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("");
@@ -422,7 +430,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const enableCountBefore = (await gateway.getRequests("plugins.setEnabled")).length;
       await gateway.deferNext("plugins.list");
       await gateway.deferNext("config.get");
-      await workboardCard.locator(".plugins-switch").click();
+      await clickRowMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
 
       const enableRequest = await waitForNextRequest(
         gateway,
@@ -446,15 +454,13 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.resolveDeferred("config.get", configSnapshot(true));
       await expect.poll(() => workboardCard.getAttribute("aria-busy")).toBe("false");
 
-      await workboardCard.getByRole("switch", { name: "Disable Workboard" }).waitFor({
-        state: "attached",
-      });
+      await workboardCard.locator(".plugins-state--enabled").waitFor({ state: "attached" });
       const calendarRow = page.locator('[data-plugin-id="calendar-plus"]');
       await calendarRow.waitFor({ state: "visible" });
-      await captureScreenshot(page, "04-enabled-installed-desktop.png");
+      await captureScreenshot(page, "05-enabled-installed-desktop.png");
 
-      // Removable installs expose a confirm-guarded uninstall that refreshes inventory.
-      await calendarRow.getByRole("button", { name: "Remove Calendar Plus" }).click();
+      // Removable installs expose a menu-driven, confirm-guarded uninstall.
+      await clickRowMenuItem(page, '[data-plugin-id="calendar-plus"]', "Remove");
       const uninstallCountBefore = (await gateway.getRequests("plugins.uninstall")).length;
       const listCountBeforeRemove = (await gateway.getRequests("plugins.list")).length;
       const configCountBeforeRemove = (await gateway.getRequests("config.get")).length;
@@ -494,7 +500,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         )
         .toBeLessThanOrEqual(0);
       await workboardCard.waitFor({ state: "visible" });
-      await captureScreenshot(page, "05-installed-mobile.png");
+      await captureScreenshot(page, "06-installed-mobile.png");
 
       await page.setViewportSize(desktopViewport);
       const settingsSidebar = page.locator(".settings-sidebar");
@@ -529,11 +535,13 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const workboardCard = page.locator('[data-plugin-id="workboard"]');
       await workboardCard.waitFor({ state: "visible" });
       expect(await page.getByRole("note").textContent()).toContain("operator.admin");
-      expect(
-        await workboardCard.getByRole("switch", { name: "Enable Workboard" }).isDisabled(),
-      ).toBe(true);
+      await workboardCard.locator(".plugins-kebab").click();
+      expect(await page.getByRole("menuitem", { name: "Enable", exact: true }).isDisabled()).toBe(
+        true,
+      );
+      await page.keyboard.press("Escape");
 
-      await page.getByRole("tab", { name: /^ClawHub/u }).click();
+      await page.getByRole("tab", { name: /^Discover/u }).click();
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
       const searchRequest = await gateway.waitForRequest("plugins.search");
       expect(requestParams(searchRequest)).toEqual({ query: "calendar", limit: 20 });
@@ -590,8 +598,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.resolveDeferred("plugins.list", finalInventory);
       await error.waitFor({ state: "detached" });
       await page
-        .locator('[data-plugin-id="workboard"]')
-        .getByRole("switch", { name: "Disable Workboard" })
+        .locator('[data-plugin-id="workboard"] .plugins-state--enabled')
         .waitFor({ state: "attached" });
     } finally {
       await context.close();

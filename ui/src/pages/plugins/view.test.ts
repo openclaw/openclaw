@@ -7,7 +7,6 @@ import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/inde
 import { CONNECTOR_SUGGESTIONS } from "./presentation.ts";
 import {
   clawHubRowKey,
-  connectorRowKey,
   discoverShelves,
   groupInstalledByCategory,
   installedPlugins,
@@ -54,6 +53,8 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     busy: {},
     messages: {},
     pendingRemoval: {},
+    openMenuKey: null,
+    detailPluginId: null,
     canMutate: true,
     mutationBlockedReason: null,
     pageNotice: null,
@@ -66,6 +67,8 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     onQueryChange: () => undefined,
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
+    onToggleMenu: () => undefined,
+    onShowDetails: () => undefined,
     onSetEnabled: () => undefined,
     onInstall: () => undefined,
     onRequestUninstall: () => undefined,
@@ -90,6 +93,14 @@ function mount(props: PluginsViewProps): HTMLDivElement {
 
 function normalizedText(element: Element | null): string {
   return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+}
+
+function menuItem(container: Element, label: string): HTMLButtonElement | null {
+  return (
+    [...container.querySelectorAll<HTMLButtonElement>(".plugins-menu__item")].find((item) =>
+      item.textContent?.includes(label),
+    ) ?? null
+  );
 }
 
 describe("renderPlugins", () => {
@@ -156,9 +167,11 @@ describe("renderPlugins", () => {
     expect(onFilterChange).toHaveBeenCalledWith("issues");
   });
 
-  it("renders switches for installed rows and uninstall controls for removable rows", () => {
+  it("offers enable and remove through the row actions menu", () => {
     const onSetEnabled = vi.fn();
     const onRequestUninstall = vi.fn();
+    const onToggleMenu = vi.fn();
+    const removableKey = pluginRowKey("community-thing");
     const plugins = [
       createPlugin(),
       createPlugin({
@@ -169,25 +182,37 @@ describe("renderPlugins", () => {
         featured: false,
       }),
     ];
-    const container = mount(
-      createProps({ result: createResult(plugins), onSetEnabled, onRequestUninstall }),
+    const closedMenus = mount(createProps({ result: createResult(plugins), onToggleMenu }));
+    const kebab = closedMenus.querySelector<HTMLButtonElement>(
+      '[data-plugin-id="community-thing"] .plugins-kebab',
     );
+    expect(kebab?.getAttribute("aria-expanded")).toBe("false");
+    kebab?.click();
+    expect(onToggleMenu).toHaveBeenCalledWith(removableKey);
 
-    const workboard = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]');
-    const workboardSwitch = workboard?.querySelector<HTMLInputElement>('[role="switch"]');
-    expect(workboard?.dataset.pluginSource).toBe("bundled");
-    expect(workboardSwitch?.getAttribute("aria-label")).toBe("Enable Workboard");
-    expect(workboard?.querySelector(".plugins-remove")).toBeNull();
+    const container = mount(
+      createProps({
+        result: createResult(plugins),
+        openMenuKey: removableKey,
+        onSetEnabled,
+        onRequestUninstall,
+      }),
+    );
+    const row = container.querySelector<HTMLElement>('[data-plugin-id="community-thing"]')!;
+    expect(normalizedText(row.querySelector(".plugins-state"))).toBe("Disabled");
+    menuItem(row, "Enable")?.click();
+    expect(onSetEnabled).toHaveBeenCalledWith("community-thing", true, removableKey);
+    menuItem(row, "Remove")?.click();
+    expect(onRequestUninstall).toHaveBeenCalledWith(removableKey);
 
-    workboardSwitch!.checked = true;
-    workboardSwitch!.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onSetEnabled).toHaveBeenCalledWith("workboard", true, pluginRowKey("workboard"));
-
-    const removable = container.querySelector<HTMLElement>('[data-plugin-id="community-thing"]');
-    const removeButton = removable?.querySelector<HTMLButtonElement>(".plugins-remove");
-    expect(removeButton?.getAttribute("aria-label")).toBe("Remove Community Thing");
-    removeButton?.click();
-    expect(onRequestUninstall).toHaveBeenCalledWith(pluginRowKey("community-thing"));
+    // Bundled plugins expose no Remove item, only enable/disable and details.
+    const bundledMenu = mount(
+      createProps({ result: createResult(plugins), openMenuKey: pluginRowKey("workboard") }),
+    );
+    const bundledRow = bundledMenu.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
+    expect(menuItem(bundledRow, "Remove")).toBeNull();
+    expect(menuItem(bundledRow, "Enable")).not.toBeNull();
+    expect(menuItem(bundledRow, "View details")).not.toBeNull();
   });
 
   it("confirms removal before uninstalling", () => {
@@ -220,13 +245,38 @@ describe("renderPlugins", () => {
     expect(onCancelUninstall).toHaveBeenCalledWith(rowKey);
   });
 
-  it("lists MCP servers with toggle, remove, and add form callbacks", () => {
+  it("opens the detail overlay from a row and renders actions and metadata", () => {
+    const onShowDetails = vi.fn();
+    const clickable = mount(createProps({ onShowDetails }));
+    clickable.querySelector<HTMLElement>('[data-plugin-id="workboard"]')?.click();
+    expect(onShowDetails).toHaveBeenCalledWith("workboard");
+
+    const onSetEnabled = vi.fn();
+    const container = mount(
+      createProps({
+        detailPluginId: "workboard",
+        onShowDetails,
+        onSetEnabled,
+      }),
+    );
+    const detail = container.querySelector<HTMLElement>(".plugins-detail")!;
+    expect(detail.getAttribute("role")).toBe("dialog");
+    expect(normalizedText(detail.querySelector(".plugins-detail__title"))).toContain("Workboard");
+    expect(normalizedText(detail.querySelector(".plugins-detail__meta"))).toContain("workboard");
+    detail.querySelectorAll<HTMLButtonElement>(".plugins-detail__actions button")[0]?.click();
+    expect(onSetEnabled).toHaveBeenCalledWith("workboard", true, pluginRowKey("workboard"));
+    detail.querySelector<HTMLButtonElement>(".plugins-detail__close")?.click();
+    expect(onShowDetails).toHaveBeenCalledWith(null);
+  });
+
+  it("lists MCP servers with menu-driven toggle and remove plus the add form", () => {
     const onMcpToggle = vi.fn();
     const onMcpRemove = vi.fn();
     const onMcpAdd = vi.fn();
     const container = mount(
       createProps({
         mcpFormOpen: true,
+        openMenuKey: "mcp:github",
         mcpServers: [
           {
             name: "github",
@@ -242,16 +292,12 @@ describe("renderPlugins", () => {
       }),
     );
 
-    const row = container.querySelector<HTMLElement>('[data-mcp-name="github"]');
+    const row = container.querySelector<HTMLElement>('[data-mcp-name="github"]')!;
     expect(normalizedText(row)).toContain("github");
     expect(normalizedText(row)).toContain("OAuth");
-
-    const serverSwitch = row?.querySelector<HTMLInputElement>('[role="switch"]');
-    serverSwitch!.checked = false;
-    serverSwitch!.dispatchEvent(new Event("change", { bubbles: true }));
+    menuItem(row, "Disable")?.click();
     expect(onMcpToggle).toHaveBeenCalledWith("github", false);
-
-    row?.querySelector<HTMLButtonElement>(".plugins-remove")?.click();
+    menuItem(row, "Remove")?.click();
     expect(onMcpRemove).toHaveBeenCalledWith("github");
 
     const form = container.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
@@ -323,14 +369,12 @@ describe("renderPlugins", () => {
   });
 
   it("marks already-added MCP connectors instead of offering Add", () => {
-    const onAddConnector = vi.fn();
     const container = mount(
       createProps({
         activeTab: "discover",
         mcpServers: [
           { name: "github", enabled: true, transport: "http", target: "https://x", auth: "oauth" },
         ],
-        onAddConnector,
       }),
     );
 
@@ -339,13 +383,12 @@ describe("renderPlugins", () => {
     expect(github?.querySelector(".plugins-card__footer button")).toBeNull();
   });
 
-  it("routes the global search, tabs, ClawHub install, and external browse link", () => {
+  it("appends live ClawHub results below the discover shelves while searching", () => {
     const onQueryChange = vi.fn();
-    const onTabChange = vi.fn();
     const onInstall = vi.fn();
     const container = mount(
       createProps({
-        activeTab: "clawhub",
+        activeTab: "discover",
         query: "calendar",
         searchResults: [
           {
@@ -364,27 +407,23 @@ describe("renderPlugins", () => {
           },
         ],
         onQueryChange,
-        onTabChange,
         onInstall,
       }),
     );
 
     const search = container.querySelector<HTMLInputElement>('[type="search"]');
-    expect(search?.closest("label")?.textContent).toContain("Search plugins");
     search!.value = "work";
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onQueryChange).toHaveBeenCalledWith("work");
 
-    const installedTab = container.querySelector<HTMLButtonElement>("#plugins-tab-installed");
-    expect(installedTab?.getAttribute("role")).toBe("tab");
-    expect(installedTab?.tabIndex).toBe(-1);
-    installedTab?.click();
-    expect(onTabChange).toHaveBeenCalledWith("installed");
-
-    const browse = container.querySelector<HTMLAnchorElement>(".plugins-clawhub-link");
-    expect(browse?.href).toBe("https://clawhub.ai/plugins");
-    expect(browse?.target).toBe("_blank");
-    expect(browse?.rel.split(/\s+/u)).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
+    const heading = container.querySelector("#plugins-shelf-clawhub");
+    expect(normalizedText(heading)).toBe("From ClawHub");
+    const link = container
+      .querySelector("#plugins-shelf-clawhub")
+      ?.closest(".plugins-group")
+      ?.querySelector<HTMLAnchorElement>(".plugins-group__link");
+    expect(link?.href).toBe("https://clawhub.ai/plugins");
+    expect(link?.target).toBe("_blank");
 
     const result = container.querySelector<HTMLElement>(
       '[data-package-name="@openclaw/calendar-plus"]',
@@ -418,16 +457,20 @@ describe("renderPlugins", () => {
         result: createResult([createPlugin(), available]),
         canMutate: false,
         mutationBlockedReason: "Browsing only. Plugin changes require operator.admin access.",
+        openMenuKey: pluginRowKey("workboard"),
         onInstall,
         onSetEnabled,
       }),
     );
 
     expect(container.querySelector(".plugins-readonly")?.textContent).toContain("operator.admin");
-    expect(container.querySelector<HTMLInputElement>('[role="switch"]')?.disabled).toBe(true);
     expect(
       container.querySelector<HTMLButtonElement>('[aria-label="Install Lobster"]')?.disabled,
     ).toBe(true);
+    const workboardRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
+    const enableItem = menuItem(workboardRow, "Enable");
+    expect(enableItem?.disabled).toBe(true);
+    enableItem?.click();
     expect(onInstall).not.toHaveBeenCalled();
     expect(onSetEnabled).not.toHaveBeenCalled();
   });
@@ -438,7 +481,7 @@ describe("renderPlugins", () => {
     const onInstall = vi.fn();
     const container = mount(
       createProps({
-        activeTab: "clawhub",
+        activeTab: "discover",
         query: "calendar",
         searchResults: [
           {
@@ -492,9 +535,10 @@ describe("renderPlugins", () => {
     const onSetEnabled = vi.fn();
     const container = mount(
       createProps({
-        activeTab: "clawhub",
+        activeTab: "discover",
         query: "calendar",
         result: createResult([installed]),
+        openMenuKey: clawHubRowKey(packageName),
         searchResults: [
           {
             score: 0.9,
@@ -511,10 +555,11 @@ describe("renderPlugins", () => {
       }),
     );
 
-    const row = container.querySelector<HTMLElement>(`[data-package-name="${packageName}"]`);
-    expect(row?.querySelector("h3")?.textContent).toBe("Calendar Plus");
-    expect(row?.querySelector(".plugins-install")).toBeNull();
-    row?.querySelector<HTMLInputElement>('[role="switch"]')?.click();
+    const row = container.querySelector<HTMLElement>(`[data-package-name="${packageName}"]`)!;
+    expect(row.querySelector("h3")?.textContent).toBe("Calendar Plus");
+    expect(row.querySelector(".plugins-install")).toBeNull();
+    expect(normalizedText(row.querySelector(".plugins-state"))).toBe("Enabled");
+    menuItem(row, "Disable")?.click();
     expect(onSetEnabled).toHaveBeenCalledWith(
       "calendar-runtime",
       false,
@@ -527,17 +572,16 @@ describe("renderPlugins", () => {
     const container = mount(createProps({ activeTab: "installed", onTabChange }));
     const installed = container.querySelector<HTMLButtonElement>("#plugins-tab-installed")!;
     const discover = container.querySelector<HTMLButtonElement>("#plugins-tab-discover")!;
-    const clawhub = container.querySelector<HTMLButtonElement>("#plugins-tab-clawhub")!;
 
-    expect([installed.tabIndex, discover.tabIndex, clawhub.tabIndex]).toEqual([0, -1, -1]);
+    expect([installed.tabIndex, discover.tabIndex]).toEqual([0, -1]);
     installed.focus();
     installed.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
     expect(onTabChange).toHaveBeenLastCalledWith("discover");
     expect(document.activeElement).toBe(discover);
 
-    discover.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
-    expect(onTabChange).toHaveBeenLastCalledWith("clawhub");
-    expect(document.activeElement).toBe(clawhub);
+    discover.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    expect(onTabChange).toHaveBeenLastCalledWith("installed");
+    expect(document.activeElement).toBe(installed);
   });
 
   it("does not present an empty catalog alongside an initial list failure", () => {
@@ -573,27 +617,5 @@ describe("renderPlugins", () => {
     );
     expect(fallback?.getAttribute("style")).toContain("--plugins-art-a");
     expect(normalizedText(fallback)).toBe("TU");
-  });
-
-  it("does not transfer a dirty switch state when an installed row disappears", () => {
-    const first = createPlugin({ id: "first", name: "First" });
-    const second = createPlugin({ id: "second", name: "Second", order: 20 });
-    const container = mount(
-      createProps({ activeTab: "installed", result: createResult([first, second]) }),
-    );
-    const switches = container.querySelectorAll<HTMLInputElement>('.plugins-row [role="switch"]');
-    expect(switches).toHaveLength(2);
-    switches[0].checked = true;
-
-    render(
-      renderPlugins(createProps({ activeTab: "installed", result: createResult([second]) })),
-      container,
-    );
-
-    const remaining = container.querySelectorAll<HTMLInputElement>('.plugins-row [role="switch"]');
-    expect(remaining).toHaveLength(1);
-    expect(container.querySelector(".plugins-row h3")?.textContent).toBe("Second");
-    expect(remaining[0].getAttribute("aria-label")).toBe("Enable Second");
-    expect(remaining[0].checked).toBe(false);
   });
 });

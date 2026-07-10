@@ -150,6 +150,8 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private busy: Record<string, boolean> = {};
   @state() private messages: Record<string, PluginRowMessage> = {};
   @state() private pendingRemoval: Record<string, boolean> = {};
+  @state() private openMenuKey: string | null = null;
+  @state() private detailPluginId: string | null = null;
   @state() private pageNotice: PluginRowMessage | null = null;
   @state() private mcpServers: McpServerSummary[] | null = null;
   @state() private mcpMessage: PluginRowMessage | null = null;
@@ -194,12 +196,44 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+  }
+
   override disconnectedCallback() {
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.subscriptions.clear();
     this.clearSearchTimer();
     this.invalidateRequests();
     super.disconnectedCallback();
   }
+
+  private readonly handleDocumentPointerDown = (event: PointerEvent) => {
+    if (!this.openMenuKey) {
+      return;
+    }
+    if (!(event.target as HTMLElement | null)?.closest(".plugins-actions-menu")) {
+      this.openMenuKey = null;
+    }
+  };
+
+  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    if (this.openMenuKey) {
+      this.openMenuKey = null;
+      event.stopPropagation();
+      return;
+    }
+    if (this.detailPluginId) {
+      this.detailPluginId = null;
+      event.stopPropagation();
+    }
+  };
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, sourceChanged: boolean) {
     const connectionChanged = snapshot.connected !== this.connected;
@@ -224,6 +258,8 @@ class PluginsPage extends OpenClawLightDomElement {
         this.error = null;
         this.messages = {};
         this.pendingRemoval = {};
+        this.openMenuKey = null;
+        this.detailPluginId = null;
         this.pageNotice = null;
         this.mcpMessage = null;
       }
@@ -239,7 +275,7 @@ class PluginsPage extends OpenClawLightDomElement {
     if (
       (sourceChanged || connectionChanged || clientChanged) &&
       snapshot.connected &&
-      this.activeTab === "clawhub"
+      this.activeTab === "discover"
     ) {
       this.scheduleSearch();
     }
@@ -368,12 +404,13 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private changeTab(tab: PluginsTab) {
     this.activeTab = tab;
+    this.openMenuKey = null;
     this.clearSearchTimer();
     this.searchRequestGeneration += 1;
     this.searchLoading = false;
     this.searchResults = null;
     this.searchError = null;
-    if (tab === "clawhub") {
+    if (tab === "discover") {
       this.scheduleSearch();
     }
   }
@@ -385,14 +422,14 @@ class PluginsPage extends OpenClawLightDomElement {
     this.searchLoading = false;
     this.searchResults = null;
     this.searchError = null;
-    if (this.activeTab === "clawhub") {
+    if (this.activeTab === "discover") {
       this.scheduleSearch();
     }
   }
 
   private openClawHubSearch(query: string) {
     this.query = query;
-    this.changeTab("clawhub");
+    this.changeTab("discover");
   }
 
   private scheduleSearch() {
@@ -416,7 +453,7 @@ class PluginsPage extends OpenClawLightDomElement {
     const isCurrent = () =>
       this.isCurrentSource(client, sourceGeneration) &&
       requestGeneration === this.searchRequestGeneration &&
-      this.activeTab === "clawhub" &&
+      this.activeTab === "discover" &&
       this.query.trim() === query;
     this.searchLoading = true;
     this.searchError = null;
@@ -814,6 +851,8 @@ class PluginsPage extends OpenClawLightDomElement {
           busy: this.busy,
           messages: this.messages,
           pendingRemoval: this.pendingRemoval,
+          openMenuKey: this.openMenuKey,
+          detailPluginId: this.detailPluginId,
           canMutate: this.canMutate(),
           mutationBlockedReason: blockedReason,
           pageNotice: this.pageNotice,
@@ -828,6 +867,13 @@ class PluginsPage extends OpenClawLightDomElement {
             this.installedFilter = filter;
           },
           onRefresh: () => void this.refreshPage(),
+          onToggleMenu: (key) => {
+            this.openMenuKey = key;
+          },
+          onShowDetails: (pluginId) => {
+            this.openMenuKey = null;
+            this.detailPluginId = pluginId;
+          },
           onSetEnabled: (pluginId, enabled, rowKey) =>
             void this.updateEnabled(pluginId, enabled, rowKey),
           onInstall: (rowKey, request) => void this.install(rowKey, request),

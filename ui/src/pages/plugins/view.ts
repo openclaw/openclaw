@@ -1,4 +1,5 @@
-// Control UI plugins page: installed inventory, discover shelves, and ClawHub search.
+// Control UI plugins page: installed inventory, discover store with inline
+// ClawHub search, plugin detail overlay, and MCP server management.
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -22,7 +23,7 @@ import {
   type ConnectorSuggestion,
 } from "./presentation.ts";
 
-export type PluginsTab = "installed" | "discover" | "clawhub";
+export type PluginsTab = "installed" | "discover";
 
 export type InstalledFilter = "all" | "enabled" | "disabled" | "issues";
 
@@ -59,6 +60,8 @@ export type PluginsViewProps = {
   busy: Readonly<Record<string, boolean>>;
   messages: Readonly<Record<string, PluginRowMessage>>;
   pendingRemoval: Readonly<Record<string, boolean>>;
+  openMenuKey: string | null;
+  detailPluginId: string | null;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   pageNotice: PluginRowMessage | null;
@@ -71,6 +74,8 @@ export type PluginsViewProps = {
   onQueryChange: (query: string) => void;
   onFilterChange: (filter: InstalledFilter) => void;
   onRefresh: () => void;
+  onToggleMenu: (key: string | null) => void;
+  onShowDetails: (pluginId: string | null) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onInstall: (rowKey: string, request: PluginInstallRequest) => void;
   onRequestUninstall: (rowKey: string) => void;
@@ -84,7 +89,7 @@ export type PluginsViewProps = {
   onMcpAdd: (form: McpServerForm) => void;
 };
 
-const PLUGIN_TABS: readonly PluginsTab[] = ["installed", "discover", "clawhub"];
+const PLUGIN_TABS: readonly PluginsTab[] = ["installed", "discover"];
 
 const INSTALLED_FILTERS: readonly InstalledFilter[] = ["all", "enabled", "disabled", "issues"];
 
@@ -94,8 +99,6 @@ function tabLabel(tab: PluginsTab): string {
       return t("pluginsPage.installedTab");
     case "discover":
       return t("pluginsPage.discoverTab");
-    case "clawhub":
-      return t("pluginsPage.clawhubTab");
     default:
       return tab satisfies never;
   }
@@ -371,82 +374,116 @@ function renderRowMessage(
   `;
 }
 
-function renderInstalledSwitch(
-  plugin: PluginCatalogItem,
+/** Ignore activations bubbling from interactive children so rows stay clickable. */
+function fromInteractiveChild(event: Event): boolean {
+  return Boolean(
+    (event.target as HTMLElement | null)?.closest("button, a, input, label, form, [role='menu']"),
+  );
+}
+
+function stateChip(plugin: PluginCatalogItem) {
+  return html`<span class="plugins-state plugins-state--${plugin.state}"
+    >${stateLabel(plugin)}</span
+  >`;
+}
+
+type PluginMenuItem = {
+  key: string;
+  label: string;
+  icon: TemplateResult;
+  danger?: boolean;
+  disabled?: boolean;
+  onSelect: () => void;
+};
+
+function renderActionsMenu(
+  menuKey: string,
+  label: string,
+  items: readonly PluginMenuItem[],
   props: PluginsViewProps,
-  busy: boolean,
-  rowKey = pluginRowKey(plugin.id),
 ) {
-  const blocked = !props.canMutate || busy;
+  const open = props.openMenuKey === menuKey;
   return html`
-    <label class="plugins-switch" title=${props.mutationBlockedReason ?? ""}>
-      <span class="plugins-switch__label">
-        ${plugin.enabled ? t("pluginsPage.enabled") : t("pluginsPage.disabled")}
-      </span>
-      <input
-        type="checkbox"
-        role="switch"
-        aria-label=${t(plugin.enabled ? "pluginsPage.disableNamed" : "pluginsPage.enableNamed", {
-          name: plugin.name,
-        })}
-        .checked=${live(plugin.enabled)}
-        ?disabled=${blocked}
-        @change=${(event: Event) =>
-          props.onSetEnabled(plugin.id, (event.currentTarget as HTMLInputElement).checked, rowKey)}
-      />
-      <span class="plugins-switch__track" aria-hidden="true"></span>
-    </label>
+    <span class="plugins-actions-menu">
+      <button
+        type="button"
+        class="btn btn--sm btn--icon plugins-kebab"
+        aria-label=${label}
+        aria-haspopup="menu"
+        aria-expanded=${open ? "true" : "false"}
+        @click=${(event: Event) => {
+          event.stopPropagation();
+          props.onToggleMenu(open ? null : menuKey);
+        }}
+      >
+        ${icons.moreHorizontal}
+      </button>
+      ${open
+        ? html`
+            <div class="plugins-menu" role="menu" aria-label=${label}>
+              ${items.map(
+                (item) => html`
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="plugins-menu__item ${item.danger ? "plugins-menu__item--danger" : ""}"
+                    ?disabled=${item.disabled}
+                    @click=${(event: Event) => {
+                      event.stopPropagation();
+                      props.onToggleMenu(null);
+                      item.onSelect();
+                    }}
+                  >
+                    <span class="plugins-menu__icon" aria-hidden="true">${item.icon}</span>
+                    ${item.label}
+                  </button>
+                `,
+              )}
+            </div>
+          `
+        : nothing}
+    </span>
   `;
 }
 
-function renderUninstallControls(
+function pluginMenuItems(
   plugin: PluginCatalogItem,
   props: PluginsViewProps,
-  busy: boolean,
   rowKey: string,
-) {
-  if (!plugin.removable) {
-    return nothing;
+  options: { details: boolean },
+): PluginMenuItem[] {
+  const blocked = !props.canMutate || props.busy[rowKey];
+  const items: PluginMenuItem[] = [];
+  if (options.details) {
+    items.push({
+      key: "details",
+      label: t("pluginsPage.menuDetails"),
+      icon: icons.eye,
+      onSelect: () => props.onShowDetails(plugin.id),
+    });
   }
-  if (props.pendingRemoval[rowKey]) {
-    return html`
-      <span
-        class="plugins-remove-confirm"
-        role="alertdialog"
-        aria-label=${t("pluginsPage.removeNamed", { name: plugin.name })}
-      >
-        <span>${t("pluginsPage.removeConfirm")}</span>
-        <button
-          type="button"
-          class="btn btn--sm danger"
-          ?disabled=${busy || !props.canMutate}
-          @click=${() => props.onUninstall(plugin.id, rowKey)}
-        >
-          ${busy ? t("pluginsPage.removing") : t("pluginsPage.remove")}
-        </button>
-        <button
-          type="button"
-          class="btn btn--sm"
-          ?disabled=${busy}
-          @click=${() => props.onCancelUninstall(rowKey)}
-        >
-          ${t("pluginsPage.cancel")}
-        </button>
-      </span>
-    `;
+  items.push({
+    key: "toggle",
+    label: plugin.enabled ? t("pluginsPage.disableAction") : t("pluginsPage.enableAction"),
+    icon: plugin.enabled ? circleIcon() : icons.check,
+    disabled: blocked,
+    onSelect: () => props.onSetEnabled(plugin.id, !plugin.enabled, rowKey),
+  });
+  if (plugin.removable) {
+    items.push({
+      key: "remove",
+      label: t("pluginsPage.remove"),
+      icon: icons.trash,
+      danger: true,
+      disabled: blocked,
+      onSelect: () => props.onRequestUninstall(rowKey),
+    });
   }
-  return html`
-    <button
-      type="button"
-      class="btn btn--sm btn--icon plugins-remove"
-      title=${props.mutationBlockedReason ?? t("pluginsPage.removeNamed", { name: plugin.name })}
-      aria-label=${t("pluginsPage.removeNamed", { name: plugin.name })}
-      ?disabled=${!props.canMutate || busy}
-      @click=${() => props.onRequestUninstall(rowKey)}
-    >
-      ${icons.trash}
-    </button>
-  `;
+  return items;
+}
+
+function circleIcon(): TemplateResult {
+  return icons.circle;
 }
 
 function renderInstallButton(
@@ -463,10 +500,79 @@ function renderInstallButton(
       title=${props.mutationBlockedReason ?? ""}
       aria-label=${t("pluginsPage.installNamed", { name })}
       ?disabled=${!props.canMutate || busy}
-      @click=${() => props.onInstall(key, request)}
+      @click=${(event: Event) => {
+        event.stopPropagation();
+        props.onInstall(key, request);
+      }}
     >
       ${busy ? t("pluginsPage.installing") : t("pluginsPage.install")}
     </button>
+  `;
+}
+
+function renderRemoveConfirm(
+  plugin: PluginCatalogItem,
+  props: PluginsViewProps,
+  busy: boolean,
+  rowKey: string,
+) {
+  return html`
+    <span
+      class="plugins-remove-confirm"
+      role="alertdialog"
+      aria-label=${t("pluginsPage.removeNamed", { name: plugin.name })}
+    >
+      <span>${t("pluginsPage.removeConfirm")}</span>
+      <button
+        type="button"
+        class="btn btn--sm danger"
+        ?disabled=${busy || !props.canMutate}
+        @click=${(event: Event) => {
+          event.stopPropagation();
+          props.onUninstall(plugin.id, rowKey);
+        }}
+      >
+        ${busy ? t("pluginsPage.removing") : t("pluginsPage.remove")}
+      </button>
+      <button
+        type="button"
+        class="btn btn--sm"
+        ?disabled=${busy}
+        @click=${(event: Event) => {
+          event.stopPropagation();
+          props.onCancelUninstall(rowKey);
+        }}
+      >
+        ${t("pluginsPage.cancel")}
+      </button>
+    </span>
+  `;
+}
+
+function renderCatalogActions(
+  plugin: PluginCatalogItem,
+  props: PluginsViewProps,
+  busy: boolean,
+  rowKey: string,
+  options: { details: boolean },
+) {
+  if (props.pendingRemoval[rowKey]) {
+    return renderRemoveConfirm(plugin, props, busy, rowKey);
+  }
+  if (!plugin.installed) {
+    const install = plugin.install;
+    return install
+      ? renderInstallButton(props, busy, rowKey, plugin.name, install)
+      : html`<span class="plugins-action-note">${t("pluginsPage.unavailable")}</span>`;
+  }
+  return html`
+    ${stateChip(plugin)}
+    ${renderActionsMenu(
+      rowKey,
+      t("pluginsPage.menuLabel", { name: plugin.name }),
+      pluginMenuItems(plugin, props, rowKey, options),
+      props,
+    )}
   `;
 }
 
@@ -506,11 +612,16 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
   const busy = props.busy[key];
   return html`
     <article
-      class="plugins-row plugins-row--${plugin.state}"
+      class="plugins-row plugins-row--${plugin.state} plugins-row--clickable"
       data-plugin-id=${plugin.id}
       data-plugin-source=${plugin.origin ?? "unknown"}
       data-plugin-status=${plugin.state}
       aria-busy=${busy ? "true" : "false"}
+      @click=${(event: Event) => {
+        if (!fromInteractiveChild(event)) {
+          props.onShowDetails(plugin.id);
+        }
+      }}
     >
       ${renderArtTile(plugin.id, plugin.name, "tile")}
       <div class="plugins-row__copy">
@@ -532,8 +643,7 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
         </div>
       </div>
       <div class="plugins-row__actions">
-        ${renderUninstallControls(plugin, props, busy, key)}
-        ${renderInstalledSwitch(plugin, props, busy)}
+        ${renderCatalogActions(plugin, props, busy, key, { details: true })}
       </div>
       ${plugin.error
         ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
@@ -543,6 +653,27 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
       ${renderRowMessage(key, props.messages[key], busy, props)}
     </article>
   `;
+}
+
+function mcpMenuItems(server: McpServerSummary, props: PluginsViewProps): PluginMenuItem[] {
+  const blocked = !props.canMutate || props.mcpBusy;
+  return [
+    {
+      key: "toggle",
+      label: server.enabled ? t("pluginsPage.disableAction") : t("pluginsPage.enableAction"),
+      icon: server.enabled ? circleIcon() : icons.check,
+      disabled: blocked,
+      onSelect: () => props.onMcpToggle(server.name, !server.enabled),
+    },
+    {
+      key: "remove",
+      label: t("pluginsPage.remove"),
+      icon: icons.trash,
+      danger: true,
+      disabled: blocked,
+      onSelect: () => props.onMcpRemove(server.name),
+    },
+  ];
 }
 
 function renderMcpSection(props: PluginsViewProps) {
@@ -616,37 +747,15 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
         <div class="plugins-row__meta"><span>${server.transport}</span></div>
       </div>
       <div class="plugins-row__actions">
-        <button
-          type="button"
-          class="btn btn--sm btn--icon plugins-remove"
-          title=${props.mutationBlockedReason ??
-          t("pluginsPage.removeNamed", { name: server.name })}
-          aria-label=${t("pluginsPage.removeNamed", { name: server.name })}
-          ?disabled=${!props.canMutate || props.mcpBusy}
-          @click=${() => props.onMcpRemove(server.name)}
+        <span class="plugins-state ${server.enabled ? "plugins-state--enabled" : ""}"
+          >${server.enabled ? t("pluginsPage.enabled") : t("pluginsPage.disabled")}</span
         >
-          ${icons.trash}
-        </button>
-        <label class="plugins-switch" title=${props.mutationBlockedReason ?? ""}>
-          <span class="plugins-switch__label">
-            ${server.enabled ? t("pluginsPage.enabled") : t("pluginsPage.disabled")}
-          </span>
-          <input
-            type="checkbox"
-            role="switch"
-            aria-label=${t(
-              server.enabled ? "pluginsPage.disableNamed" : "pluginsPage.enableNamed",
-              {
-                name: server.name,
-              },
-            )}
-            .checked=${live(server.enabled)}
-            ?disabled=${!props.canMutate || props.mcpBusy}
-            @change=${(event: Event) =>
-              props.onMcpToggle(server.name, (event.currentTarget as HTMLInputElement).checked)}
-          />
-          <span class="plugins-switch__track" aria-hidden="true"></span>
-        </label>
+        ${renderActionsMenu(
+          `mcp:${server.name}`,
+          t("pluginsPage.menuLabel", { name: server.name }),
+          mcpMenuItems(server, props),
+          props,
+        )}
       </div>
     </article>
   `;
@@ -747,14 +856,18 @@ function renderInstalled(props: PluginsViewProps) {
 function renderCatalogCard(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
   const key = pluginRowKey(plugin.id);
   const busy = props.busy[key];
-  const install = plugin.install;
   return html`
     <article
-      class="plugins-card"
+      class="plugins-card plugins-card--clickable"
       data-plugin-id=${plugin.id}
       data-plugin-source=${plugin.origin ?? "unknown"}
       data-plugin-status=${plugin.state}
       aria-busy=${busy ? "true" : "false"}
+      @click=${(event: Event) => {
+        if (!fromInteractiveChild(event)) {
+          props.onShowDetails(plugin.id);
+        }
+      }}
     >
       ${renderArtTile(plugin.id, plugin.name, "cover")}
       <div class="plugins-card__body">
@@ -766,16 +879,11 @@ function renderCatalogCard(plugin: PluginCatalogItem, props: PluginsViewProps): 
         </div>
         <p>${plugin.description || t("pluginsPage.optionalCapability")}</p>
         <div class="plugins-card__meta">
-          <span class="plugins-state plugins-state--${plugin.state}">${stateLabel(plugin)}</span>
           ${plugin.origin ? html`<span>${originLabel(plugin.origin)}</span>` : nothing}
         </div>
       </div>
       <div class="plugins-card__footer">
-        ${plugin.installed
-          ? renderInstalledSwitch(plugin, props, busy)
-          : install
-            ? renderInstallButton(props, busy, key, plugin.name, install)
-            : html`<span class="plugins-action-note">${t("pluginsPage.unavailable")}</span>`}
+        ${renderCatalogActions(plugin, props, busy, key, { details: true })}
       </div>
       ${plugin.error
         ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
@@ -877,32 +985,6 @@ function renderShelf(
   `;
 }
 
-function renderDiscover(props: PluginsViewProps) {
-  const shelves = discoverShelves(props.result?.plugins ?? [], props.query);
-  const featuredCards = shelves.featured.map((plugin) => renderCatalogCard(plugin, props));
-  const officialCards = shelves.official.map((plugin) => renderCatalogCard(plugin, props));
-  const connectorCards = shelves.connectors.map((connector) =>
-    renderConnectorCard(connector, props),
-  );
-  if (!featuredCards.length && !officialCards.length && !connectorCards.length) {
-    return renderEmpty(t("pluginsPage.noDiscoverMatchTitle"), t("pluginsPage.noMatchBody"));
-  }
-  return html`
-    <div class="plugins-groups">
-      ${renderShelf("featured", t("pluginsPage.featuredGroup"), null, featuredCards)}
-      ${renderShelf("official", t("pluginsPage.officialGroup"), null, officialCards)}
-      ${renderShelf(
-        "connectors",
-        t("pluginsPage.connectorsGroup"),
-        t("pluginsPage.connectorsHint"),
-        connectorCards,
-      )}
-    </div>
-  `;
-}
-
-/* ---------------------------------- clawhub tab ---------------------------------- */
-
 function findInstalledSearchPlugin(
   item: PluginSearchResult,
   plugins: readonly PluginCatalogItem[],
@@ -928,11 +1010,16 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
   const artSlug = pkg.runtimeId ?? pkg.name;
   return html`
     <article
-      class="plugins-row plugins-row--clawhub"
+      class="plugins-row plugins-row--clawhub ${installed ? "plugins-row--clickable" : ""}"
       data-package-name=${pkg.name}
       data-plugin-source="clawhub"
       data-plugin-status=${installed?.state ?? "not-installed"}
       aria-busy=${busy ? "true" : "false"}
+      @click=${(event: Event) => {
+        if (installed && !fromInteractiveChild(event)) {
+          props.onShowDetails(installed.id);
+        }
+      }}
     >
       ${renderArtTile(artSlug, pkg.displayName, "tile")}
       <div class="plugins-row__copy">
@@ -968,7 +1055,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
       </div>
       <div class="plugins-row__actions">
         ${installed
-          ? renderInstalledSwitch(installed, props, busy, key)
+          ? renderCatalogActions(installed, props, busy, key, { details: true })
           : renderInstallButton(props, busy, key, pkg.displayName, {
               source: "clawhub",
               packageName: pkg.name,
@@ -978,6 +1065,213 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
     </article>
   `;
 }
+
+/** Live registry results appended below the curated shelves while searching. */
+function renderClawHubGroup(props: PluginsViewProps) {
+  const query = props.query.trim();
+  if (query.length < 2) {
+    return nothing;
+  }
+  let body: TemplateResult;
+  if (props.searchLoading || (!props.searchResults && !props.searchError)) {
+    body = html`<div class="plugins-search-state" role="status">
+      ${t("pluginsPage.searching")}
+    </div>`;
+  } else if (props.searchError) {
+    body = html`<div class="plugins-search-state plugins-search-state--error" role="alert">
+      ${props.searchError}
+    </div>`;
+  } else if (props.searchResults && props.searchResults.length === 0) {
+    body = html`<div class="plugins-mcp-empty">
+      ${t("pluginsPage.noClawHubResultsBody", { query })}
+    </div>`;
+  } else {
+    body = html`
+      <div class="plugins-rows">
+        ${repeat(
+          props.searchResults ?? [],
+          (item) => item.package.name,
+          (item) => renderClawHubResult(item, props),
+        )}
+      </div>
+    `;
+  }
+  return html`
+    <section class="plugins-group" aria-labelledby="plugins-shelf-clawhub">
+      <div class="plugins-group__heading">
+        <h2 id="plugins-shelf-clawhub">${t("pluginsPage.fromClawHub")}</h2>
+        ${props.searchResults ? html`<span>${props.searchResults.length}</span>` : nothing}
+        <div class="plugins-group__actions">
+          <a
+            class="plugins-group__link"
+            href=${CLAWHUB_BROWSE_URL}
+            target=${EXTERNAL_LINK_TARGET}
+            rel=${buildExternalLinkRel()}
+          >
+            ${t("pluginsPage.browseClawHub")}
+            <span class="plugins-group__link-icon" aria-hidden="true">${icons.externalLink}</span>
+          </a>
+        </div>
+      </div>
+      ${body}
+    </section>
+  `;
+}
+
+function renderDiscover(props: PluginsViewProps) {
+  const shelves = discoverShelves(props.result?.plugins ?? [], props.query);
+  const featuredCards = shelves.featured.map((plugin) => renderCatalogCard(plugin, props));
+  const officialCards = shelves.official.map((plugin) => renderCatalogCard(plugin, props));
+  const connectorCards = shelves.connectors.map((connector) =>
+    renderConnectorCard(connector, props),
+  );
+  const clawHub = renderClawHubGroup(props);
+  if (!featuredCards.length && !officialCards.length && !connectorCards.length) {
+    return html`
+      ${clawHub === nothing
+        ? renderEmpty(t("pluginsPage.noDiscoverMatchTitle"), t("pluginsPage.noMatchBody"))
+        : nothing}
+      ${clawHub}
+    `;
+  }
+  return html`
+    <div class="plugins-groups">
+      ${renderShelf("featured", t("pluginsPage.featuredGroup"), null, featuredCards)}
+      ${renderShelf("official", t("pluginsPage.officialGroup"), null, officialCards)}
+      ${renderShelf(
+        "connectors",
+        t("pluginsPage.connectorsGroup"),
+        t("pluginsPage.connectorsHint"),
+        connectorCards,
+      )}
+      ${clawHub}
+    </div>
+  `;
+}
+
+/* ---------------------------------- detail overlay ---------------------------------- */
+
+function detailMetaRow(label: string, value: string | TemplateResult) {
+  return html`
+    <div class="plugins-detail__meta-row">
+      <span class="plugins-detail__meta-label">${label}</span>
+      <span class="plugins-detail__meta-value">${value}</span>
+    </div>
+  `;
+}
+
+function renderDetailOverlay(props: PluginsViewProps) {
+  const plugin = props.detailPluginId
+    ? props.result?.plugins.find((entry) => entry.id === props.detailPluginId)
+    : undefined;
+  if (!plugin) {
+    return nothing;
+  }
+  const key = pluginRowKey(plugin.id);
+  const busy = props.busy[key];
+  return html`
+    <div
+      class="plugins-detail-backdrop"
+      @click=${(event: Event) => {
+        if (event.target === event.currentTarget) {
+          props.onShowDetails(null);
+        }
+      }}
+    >
+      <section
+        class="plugins-detail"
+        role="dialog"
+        aria-modal="true"
+        aria-label=${plugin.name}
+        data-detail-plugin-id=${plugin.id}
+      >
+        <button
+          type="button"
+          class="btn btn--sm btn--icon plugins-detail__close"
+          aria-label=${t("pluginsPage.detailClose")}
+          @click=${() => props.onShowDetails(null)}
+        >
+          ${icons.x}
+        </button>
+        ${renderArtTile(plugin.id, plugin.name, "cover")}
+        <div class="plugins-detail__body">
+          <div class="plugins-detail__title">
+            <h2>${plugin.name}</h2>
+            ${plugin.version
+              ? html`<span class="plugins-version">v${plugin.version}</span>`
+              : nothing}
+            ${stateChip(plugin)}
+          </div>
+          <p class="plugins-detail__description">
+            ${plugin.description || t("pluginsPage.optionalCapability")}
+          </p>
+          <div class="plugins-detail__actions">
+            ${props.pendingRemoval[key]
+              ? renderRemoveConfirm(plugin, props, busy, key)
+              : html`
+                  ${plugin.installed
+                    ? html`
+                        <button
+                          type="button"
+                          class="btn ${plugin.enabled ? "" : "primary"}"
+                          title=${props.mutationBlockedReason ?? ""}
+                          ?disabled=${!props.canMutate || busy}
+                          @click=${() => props.onSetEnabled(plugin.id, !plugin.enabled, key)}
+                        >
+                          ${busy
+                            ? t("pluginsPage.working")
+                            : plugin.enabled
+                              ? t("pluginsPage.disableAction")
+                              : t("pluginsPage.enableAction")}
+                        </button>
+                      `
+                    : plugin.install
+                      ? renderInstallButton(props, busy, key, plugin.name, plugin.install)
+                      : nothing}
+                  ${plugin.removable
+                    ? html`
+                        <button
+                          type="button"
+                          class="btn plugins-detail__remove"
+                          title=${props.mutationBlockedReason ?? ""}
+                          ?disabled=${!props.canMutate || busy}
+                          @click=${() => props.onRequestUninstall(key)}
+                        >
+                          <span aria-hidden="true">${icons.trash}</span>
+                          ${t("pluginsPage.remove")}
+                        </button>
+                      `
+                    : nothing}
+                `}
+          </div>
+          ${plugin.error
+            ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
+                ${plugin.error}
+              </div>`
+            : nothing}
+          ${renderRowMessage(key, props.messages[key], busy, props)}
+          <div class="plugins-detail__meta">
+            ${plugin.origin
+              ? detailMetaRow(t("pluginsPage.detailOrigin"), originLabel(plugin.origin))
+              : nothing}
+            ${plugin.category
+              ? detailMetaRow(t("pluginsPage.detailCategory"), pluginCategoryLabel(plugin.category))
+              : nothing}
+            ${plugin.packageName
+              ? detailMetaRow(
+                  t("pluginsPage.detailPackage"),
+                  html`<code>${plugin.packageName}</code>`,
+                )
+              : nothing}
+            ${detailMetaRow(t("pluginsPage.detailPluginId"), html`<code>${plugin.id}</code>`)}
+          </div>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+/* ---------------------------------- page shell ---------------------------------- */
 
 function renderEmpty(title: string, body: string) {
   return html`
@@ -989,51 +1283,12 @@ function renderEmpty(title: string, body: string) {
   `;
 }
 
-function renderClawHub(props: PluginsViewProps) {
-  const query = props.query.trim();
-  if (query.length < 2) {
-    return renderEmpty(t("pluginsPage.searchClawHubTitle"), t("pluginsPage.searchClawHubBody"));
-  }
-  if (props.searchLoading) {
-    return html`<div class="plugins-search-state" role="status">
-      ${t("pluginsPage.searching")}
-    </div>`;
-  }
-  if (props.searchError) {
-    return html`<div class="plugins-search-state plugins-search-state--error" role="alert">
-      ${props.searchError}
-    </div>`;
-  }
-  if (!props.searchResults) {
-    return html`<div class="plugins-search-state" role="status">
-      ${t("pluginsPage.preparingSearch")}
-    </div>`;
-  }
-  if (props.searchResults.length === 0) {
-    return renderEmpty(
-      t("pluginsPage.noClawHubResultsTitle"),
-      t("pluginsPage.noClawHubResultsBody", { query }),
-    );
-  }
-  return html`
-    <div class="plugins-rows">
-      ${repeat(
-        props.searchResults,
-        (item) => item.package.name,
-        (item) => renderClawHubResult(item, props),
-      )}
-    </div>
-  `;
-}
-
 function renderActivePanel(props: PluginsViewProps) {
   switch (props.activeTab) {
     case "installed":
       return renderInstalled(props);
     case "discover":
       return renderDiscover(props);
-    case "clawhub":
-      return renderClawHub(props);
     default:
       return props.activeTab satisfies never;
   }
@@ -1054,33 +1309,21 @@ export function renderPlugins(props: PluginsViewProps) {
             type="search"
             autocomplete="off"
             .value=${live(props.query)}
-            placeholder=${props.activeTab === "clawhub"
-              ? t("pluginsPage.clawhubSearchPlaceholder")
-              : t("pluginsPage.searchPlaceholder")}
+            placeholder=${t("pluginsPage.searchPlaceholder")}
             @input=${(event: Event) =>
               props.onQueryChange((event.currentTarget as HTMLInputElement).value)}
           />
         </label>
-        <div class="plugins-toolbar__actions">
-          <a
-            class="btn btn--sm plugins-clawhub-link"
-            href=${CLAWHUB_BROWSE_URL}
-            target=${EXTERNAL_LINK_TARGET}
-            rel=${buildExternalLinkRel()}
-          >
-            ${t("pluginsPage.browseClawHub")}
-            <span aria-hidden="true">${icons.externalLink}</span>
-          </a>
-          <button
-            type="button"
-            class="btn btn--sm plugins-refresh"
-            ?disabled=${props.loading || !props.connected}
-            @click=${props.onRefresh}
-          >
-            <span aria-hidden="true">${icons.refresh}</span>
-            ${t("pluginsPage.refresh")}
-          </button>
-        </div>
+        <button
+          type="button"
+          class="btn btn--sm btn--icon plugins-refresh"
+          aria-label=${t("pluginsPage.refresh")}
+          title=${t("pluginsPage.refresh")}
+          ?disabled=${props.loading || !props.connected}
+          @click=${props.onRefresh}
+        >
+          <span aria-hidden="true">${icons.refresh}</span>
+        </button>
       </div>
 
       ${props.mutationBlockedReason
@@ -1144,6 +1387,7 @@ export function renderPlugins(props: PluginsViewProps) {
               ? renderEmpty(t("pluginsPage.offlineTitle"), t("pluginsPage.offlineBody"))
               : renderActivePanel(props)}
       </div>
+      ${renderDetailOverlay(props)}
     </section>
   `;
 }
