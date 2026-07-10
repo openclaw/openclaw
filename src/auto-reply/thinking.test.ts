@@ -758,6 +758,46 @@ describe("listThinkingLevels", () => {
     ).toBe("low");
   });
 
+  it("treats an empty supportedReasoningEfforts array like an omitted one", () => {
+    const catalog = [
+      {
+        provider: "free",
+        id: "gpt-5.5",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: [] },
+      },
+    ];
+
+    // The profile falls back to the generic base shape because an empty array is
+    // treated as "not provided" by the canonical request resolver. Fallback
+    // clamping still delegates to that resolver, which uses model-id defaults for
+    // a gpt-5.5 id and therefore accepts xhigh.
+    expect(listThinkingLevels("free", "gpt-5.5", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe("medium");
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe("xhigh");
+  });
+
   it("does not let catalog xhigh compat override binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
     const catalog = [

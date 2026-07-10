@@ -126,6 +126,11 @@ function buildOpenAICompatThinkingProfile(params: {
   const supportedEfforts = new Set(
     efforts.filter((value): value is string => typeof value === "string"),
   );
+  if (supportedEfforts.size === 0) {
+    // Empty array is treated as "not provided" by the canonical request resolver,
+    // which then falls back to model-id defaults. Match that parity here.
+    return undefined;
+  }
   const levels = new Map<ThinkLevel, RankedThinkingLevelOption>([
     ["off", { id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
   ]);
