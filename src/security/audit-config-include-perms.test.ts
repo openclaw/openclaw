@@ -44,4 +44,50 @@ describe("security audit config include permissions", () => {
     }
     expect(finding.severity).toBe("critical");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "audits include files under explicitly allowed roots",
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-include-perms-allowed-"));
+      try {
+        const configDir = path.join(tmp, "config");
+        const sharedDir = path.join(tmp, "shared");
+        const sharedIncludePath = path.join(sharedDir, "shared.json5");
+        fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+        fs.mkdirSync(sharedDir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(sharedIncludePath, "{}\n", "utf-8");
+        fs.chmodSync(sharedIncludePath, 0o644);
+
+        const configSnapshot: ConfigFileSnapshot = {
+          path: path.join(configDir, "openclaw.json"),
+          exists: true,
+          raw: `{ "$include": ${JSON.stringify(sharedIncludePath)} }\n`,
+          parsed: { $include: sharedIncludePath },
+          sourceConfig: {} as ConfigFileSnapshot["sourceConfig"],
+          resolved: {} as ConfigFileSnapshot["resolved"],
+          valid: true,
+          runtimeConfig: {} as ConfigFileSnapshot["runtimeConfig"],
+          config: {} as ConfigFileSnapshot["config"],
+          issues: [],
+          warnings: [],
+          legacyIssues: [],
+        };
+
+        const findings = await collectIncludeFilePermFindings({
+          configSnapshot,
+          env: { OPENCLAW_INCLUDE_ROOTS: sharedDir },
+          platform: "linux",
+        });
+
+        expect(findings).toEqual([
+          expect.objectContaining({
+            checkId: "fs.config_include.perms_world_readable",
+            detail: expect.stringContaining(sharedIncludePath),
+          }),
+        ]);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 });
