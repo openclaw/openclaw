@@ -309,6 +309,29 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveFieldValue("MONKEY", "banana")).toBe("banana");
   });
 
+  it("keeps Unicode token hints on valid UTF-16 boundaries", () => {
+    const cases = [
+      {
+        secret: `abcde😀${"x".repeat(9)}wxyz`,
+        expected: "abcde…wxyz",
+      },
+      {
+        secret: `abcdef${"x".repeat(9)}😀abc`,
+        expected: "abcdef…abc",
+      },
+      {
+        secret: `abcd😀${"x".repeat(9)}😀ab`,
+        expected: "abcd😀…😀ab",
+      },
+    ];
+
+    for (const { secret, expected } of cases) {
+      const redacted = redactSensitiveFieldValue("token", secret);
+      expect(redacted).toBe(expected);
+      expect(redacted).not.toMatch(/[\uD800-\uDFFF]/u);
+    }
+  });
+
   it("masks bearer tokens", () => {
     const input = "Authorization: Bearer abcdef1234567890ghij";
     const output = redactSensitiveText(input, { mode: "tools" });
