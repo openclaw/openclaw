@@ -1914,7 +1914,11 @@ describe("exec approvals store helpers", () => {
     ]);
 
     const allowlist = allowlistEntries(dir, "researcher");
-    expect(allowlist.map((entry) => entry.pattern).toSorted()).toEqual([
+    const patterns = allowlist.flatMap((entry) =>
+      typeof entry.pattern === "string" ? [entry.pattern] : [],
+    );
+    expect(patterns).toHaveLength(allowlist.length);
+    expect(patterns.toSorted((left, right) => left.localeCompare(right))).toEqual([
       "/usr/bin/cat",
       "/usr/bin/grep",
     ]);

@@ -260,108 +260,6 @@ final class AppState {
     var execApprovalPolicyLoadState: ExecApprovalsPolicyLoadState
     var execApprovalMutationError: String?
 
-    var execApprovalPolicyAvailable: Bool {
-        self.execApprovalPolicyLoadState.isAvailable
-    }
-
-    var execApprovalLoadError: String? {
-        self.execApprovalPolicyLoadState.errorMessage
-    }
-
-    func updateExecApprovalMode(_ mode: ExecApprovalQuickMode) {
-        guard !self.isPreview else {
-            self.syncExecApprovalMode(mode)
-            return
-        }
-        let result = ExecApprovalsStore.updateDefaults { defaults in
-            defaults.security = mode.security
-            defaults.ask = mode.ask
-        }
-        self.applyExecApprovalModeMutation(mode, result: result)
-    }
-
-    func applyExecApprovalModeMutation(
-        _ mode: ExecApprovalQuickMode,
-        result: Result<Void, ExecApprovalsMutationError>)
-    {
-        switch result {
-        case .success:
-            self.syncExecApprovalMode(mode)
-        case let .failure(error):
-            self.execApprovalMutationError = error.message
-        }
-    }
-
-    func syncExecApprovalMode(_ mode: ExecApprovalQuickMode) {
-        self.execApprovalsReadGeneration += 1
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalsReadRetryTask = nil
-        self.execApprovalMode = mode
-        self.execApprovalPolicyLoadState = .available
-        self.execApprovalMutationError = nil
-    }
-
-    func retryExecApprovalModeRead() {
-        self.scheduleExecApprovalModeReadRetry()
-    }
-
-    func waitForExecApprovalModeRead() async {
-        await self.execApprovalsReadRetryTask?.value
-    }
-
-    func recoverExecApprovalModeRead(maxAttempts: Int) async {
-        self.execApprovalsReadGeneration += 1
-        let generation = self.execApprovalsReadGeneration
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalsReadRetryTask = nil
-        await self.performExecApprovalModeReadAttempts(
-            maxAttempts: maxAttempts,
-            generation: generation)
-    }
-
-    private func performExecApprovalModeReadAttempts(maxAttempts: Int, generation: Int) async {
-        guard self.execApprovalsReadGeneration == generation else { return }
-        guard maxAttempts > 0 else {
-            self.execApprovalPolicyLoadState = .unavailable(Self.execApprovalsReadUnavailableMessage)
-            return
-        }
-        self.execApprovalPolicyLoadState = .loading
-        for attempt in 0..<maxAttempts {
-            if attempt > 0 {
-                do {
-                    try await Task.sleep(for: self.execApprovalsReadRetryDelay)
-                } catch {
-                    return
-                }
-            }
-            guard self.execApprovalsReadGeneration == generation else { return }
-            let result = await self.execApprovalsDefaultsAsyncResolver()
-            guard self.execApprovalsReadGeneration == generation else { return }
-            switch result {
-            case let .success(defaults):
-                self.syncExecApprovalMode(
-                    ExecApprovalQuickMode.from(security: defaults.security, ask: defaults.ask))
-                return
-            case .failure:
-                continue
-            }
-        }
-        guard self.execApprovalsReadGeneration == generation else { return }
-        self.execApprovalPolicyLoadState = .unavailable(Self.execApprovalsReadUnavailableMessage)
-    }
-
-    private func scheduleExecApprovalModeReadRetry() {
-        self.execApprovalsReadGeneration += 1
-        let generation = self.execApprovalsReadGeneration
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalPolicyLoadState = .loading
-        self.execApprovalsReadRetryTask = Task { [weak self] in
-            await self?.performExecApprovalModeReadAttempts(
-                maxAttempts: Self.execApprovalsReadRetryAttempts,
-                generation: generation)
-        }
-    }
-
     /// Tracks whether the Canvas panel is currently visible (not persisted).
     var canvasPanelVisible: Bool = false
 
@@ -991,6 +889,112 @@ final class AppState {
     private func storeChime(_ chime: VoiceWakeChime, key: String) {
         guard let data = try? JSONEncoder().encode(chime) else { return }
         UserDefaults.standard.set(data, forKey: key)
+    }
+}
+
+// MARK: - Exec approval settings
+
+extension AppState {
+    var execApprovalPolicyAvailable: Bool {
+        self.execApprovalPolicyLoadState.isAvailable
+    }
+
+    var execApprovalLoadError: String? {
+        self.execApprovalPolicyLoadState.errorMessage
+    }
+
+    func updateExecApprovalMode(_ mode: ExecApprovalQuickMode) {
+        guard !self.isPreview else {
+            self.syncExecApprovalMode(mode)
+            return
+        }
+        let result = ExecApprovalsStore.updateDefaults { defaults in
+            defaults.security = mode.security
+            defaults.ask = mode.ask
+        }
+        self.applyExecApprovalModeMutation(mode, result: result)
+    }
+
+    func applyExecApprovalModeMutation(
+        _ mode: ExecApprovalQuickMode,
+        result: Result<Void, ExecApprovalsMutationError>)
+    {
+        switch result {
+        case .success:
+            self.syncExecApprovalMode(mode)
+        case let .failure(error):
+            self.execApprovalMutationError = error.message
+        }
+    }
+
+    func syncExecApprovalMode(_ mode: ExecApprovalQuickMode) {
+        self.execApprovalsReadGeneration += 1
+        self.execApprovalsReadRetryTask?.cancel()
+        self.execApprovalsReadRetryTask = nil
+        self.execApprovalMode = mode
+        self.execApprovalPolicyLoadState = .available
+        self.execApprovalMutationError = nil
+    }
+
+    func retryExecApprovalModeRead() {
+        self.scheduleExecApprovalModeReadRetry()
+    }
+
+    func waitForExecApprovalModeRead() async {
+        await self.execApprovalsReadRetryTask?.value
+    }
+
+    func recoverExecApprovalModeRead(maxAttempts: Int) async {
+        self.execApprovalsReadGeneration += 1
+        let generation = self.execApprovalsReadGeneration
+        self.execApprovalsReadRetryTask?.cancel()
+        self.execApprovalsReadRetryTask = nil
+        await self.performExecApprovalModeReadAttempts(
+            maxAttempts: maxAttempts,
+            generation: generation)
+    }
+
+    private func performExecApprovalModeReadAttempts(maxAttempts: Int, generation: Int) async {
+        guard self.execApprovalsReadGeneration == generation else { return }
+        guard maxAttempts > 0 else {
+            self.execApprovalPolicyLoadState = .unavailable(Self.execApprovalsReadUnavailableMessage)
+            return
+        }
+        self.execApprovalPolicyLoadState = .loading
+        for attempt in 0..<maxAttempts {
+            if attempt > 0 {
+                do {
+                    try await Task.sleep(for: self.execApprovalsReadRetryDelay)
+                } catch {
+                    return
+                }
+            }
+            guard self.execApprovalsReadGeneration == generation else { return }
+            let result = await self.execApprovalsDefaultsAsyncResolver()
+            guard self.execApprovalsReadGeneration == generation else { return }
+            switch result {
+            case let .success(defaults):
+                self.syncExecApprovalMode(
+                    ExecApprovalQuickMode.from(security: defaults.security, ask: defaults.ask))
+                return
+            case .failure:
+                continue
+            }
+        }
+        guard self.execApprovalsReadGeneration == generation else { return }
+        self.execApprovalPolicyLoadState = .unavailable(Self.execApprovalsReadUnavailableMessage)
+    }
+
+    private func scheduleExecApprovalModeReadRetry() {
+        self.execApprovalsReadGeneration += 1
+        let generation = self.execApprovalsReadGeneration
+        self.execApprovalsReadRetryTask?.cancel()
+        self.execApprovalPolicyLoadState = .loading
+        self.execApprovalsReadRetryTask = Task { [weak self] in
+            await self?.performExecApprovalModeReadAttempts(
+                maxAttempts: Self.execApprovalsReadRetryAttempts,
+                generation: generation)
+        }
     }
 }
 

@@ -734,101 +734,36 @@ extension MacNodeRuntime {
 // MARK: - System commands
 
 extension MacNodeRuntime {
-    private func handleSystemRun(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = try Self.decodeParams(OpenClawSystemRunParams.self, from: req.paramsJSON)
+    private struct SystemRunPreparation {
+        let params: OpenClawSystemRunParams
         let approvalSource: ExecApprovalRequestSource?
-        switch params.approvalSource {
-        case nil:
-            approvalSource = nil
-        case "ask-fallback":
-            approvalSource = .askFallback
-        case "auto-review":
-            approvalSource = .autoReview
-        default:
-            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: approvalSource invalid")
-        }
-        if approvalSource != nil, params.approved != nil || params.approvalDecision != nil {
-            return Self.errorResponse(
-                req,
-                code: .invalidRequest,
-                message: "INVALID_REQUEST: approvalSource cannot be combined with explicit approval")
-        }
-        let command = params.command
         let validatedCommand: ExecHostValidatedRequest
-        switch ExecHostRequestEvaluator.validateCommand(
-            command: command,
-            rawCommand: params.rawCommand)
-        {
-        case let .success(resolved):
-            validatedCommand = resolved
-        case let .failure(error):
-            let message = error.message.hasPrefix("INVALID_REQUEST:")
-                ? error.message
-                : "INVALID_REQUEST: \(error.message)"
-            return Self.errorResponse(req, code: .invalidRequest, message: message)
-        }
-        let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
-            : self.mainSessionKey
-        let providedRunId = params.runId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let runId = providedRunId.isEmpty ? UUID().uuidString : providedRunId
-        let envOverrideDiagnostics = HostEnvSanitizer.inspectOverrides(
-            overrides: params.env,
-            blockPathOverrides: true)
-        if !envOverrideDiagnostics.blockedKeys.isEmpty || !envOverrideDiagnostics.invalidKeys.isEmpty {
-            var details: [String] = []
-            if !envOverrideDiagnostics.blockedKeys.isEmpty {
-                details.append("blocked override keys: \(envOverrideDiagnostics.blockedKeys.joined(separator: ", "))")
-            }
-            if !envOverrideDiagnostics.invalidKeys.isEmpty {
-                details.append(
-                    "invalid non-portable override keys: \(envOverrideDiagnostics.invalidKeys.joined(separator: ", "))")
-            }
-            return Self.errorResponse(
-                req,
-                code: .invalidRequest,
-                message: "SYSTEM_RUN_DENIED: environment override rejected (\(details.joined(separator: "; ")))")
-        }
-        let evaluation = await ExecApprovalEvaluator.evaluate(
-            command: command,
-            rawCommand: validatedCommand.evaluationRawCommand,
-            displayCommand: validatedCommand.displayCommand,
-            cwd: params.cwd,
-            envOverrides: params.env,
-            agentId: params.agentId)
-        let security = approvalSource == .askFallback
-            ? ExecSecurity.narrower(evaluation.security, evaluation.askFallback)
-            : evaluation.security
+        let evaluation: ExecApprovalEvaluation
+        let security: ExecSecurity
+        let sessionKey: String
+        let runId: String
+    }
 
-        if security == .deny {
-            await self.emitExecEvent(
-                "exec.denied",
-                payload: ExecEventPayload(
-                    sessionKey: sessionKey,
-                    runId: runId,
-                    host: "node",
-                    command: evaluation.displayCommand,
-                    reason: "security=deny"))
-            return Self.errorResponse(
-                req,
-                code: .unavailable,
-                message: "SYSTEM_RUN_DISABLED: security=deny")
-        }
+    private enum SystemRunPreparationResult {
+        case prepared(SystemRunPreparation)
+        case response(BridgeInvokeResponse)
+    }
 
-        if approvalSource == .autoReview, evaluation.ask == .always {
-            await self.emitExecEvent(
-                "exec.denied",
-                payload: ExecEventPayload(
-                    sessionKey: sessionKey,
-                    runId: runId,
-                    host: "node",
-                    command: evaluation.displayCommand,
-                    reason: "ask=always"))
-            return Self.errorResponse(
-                req,
-                code: .unavailable,
-                message: "SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always")
+    private func handleSystemRun(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let prepared: SystemRunPreparation
+        switch try await self.prepareSystemRun(req) {
+        case let .prepared(result):
+            prepared = result
+        case let .response(response):
+            return response
         }
+        let params = prepared.params
+        let approvalSource = prepared.approvalSource
+        let command = prepared.validatedCommand.command
+        let evaluation = prepared.evaluation
+        let security = prepared.security
+        let sessionKey = prepared.sessionKey
+        let runId = prepared.runId
 
         let approvedByAsk: Bool
         let persistAllowlist: Bool
@@ -940,6 +875,116 @@ extension MacNodeRuntime {
             runId: runId,
             displayCommand: evaluation.displayCommand,
             execution: execution)
+    }
+
+    private func prepareSystemRun(_ req: BridgeInvokeRequest) async throws -> SystemRunPreparationResult {
+        let params = try Self.decodeParams(OpenClawSystemRunParams.self, from: req.paramsJSON)
+        let approvalSource: ExecApprovalRequestSource?
+        switch params.approvalSource {
+        case nil:
+            approvalSource = nil
+        case "ask-fallback":
+            approvalSource = .askFallback
+        case "auto-review":
+            approvalSource = .autoReview
+        default:
+            return .response(
+                Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: approvalSource invalid"))
+        }
+        if approvalSource != nil, params.approved != nil || params.approvalDecision != nil {
+            return .response(
+                Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: approvalSource cannot be combined with explicit approval"))
+        }
+        let validatedCommand: ExecHostValidatedRequest
+        switch ExecHostRequestEvaluator.validateCommand(
+            command: params.command,
+            rawCommand: params.rawCommand)
+        {
+        case let .success(resolved):
+            validatedCommand = resolved
+        case let .failure(error):
+            let message = error.message.hasPrefix("INVALID_REQUEST:")
+                ? error.message
+                : "INVALID_REQUEST: \(error.message)"
+            return .response(Self.errorResponse(req, code: .invalidRequest, message: message))
+        }
+        let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : self.mainSessionKey
+        let providedRunId = params.runId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let runId = providedRunId.isEmpty ? UUID().uuidString : providedRunId
+        let envOverrideDiagnostics = HostEnvSanitizer.inspectOverrides(
+            overrides: params.env,
+            blockPathOverrides: true)
+        if !envOverrideDiagnostics.blockedKeys.isEmpty || !envOverrideDiagnostics.invalidKeys.isEmpty {
+            var details: [String] = []
+            if !envOverrideDiagnostics.blockedKeys.isEmpty {
+                details.append("blocked override keys: \(envOverrideDiagnostics.blockedKeys.joined(separator: ", "))")
+            }
+            if !envOverrideDiagnostics.invalidKeys.isEmpty {
+                details.append(
+                    "invalid non-portable override keys: \(envOverrideDiagnostics.invalidKeys.joined(separator: ", "))")
+            }
+            return .response(
+                Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "SYSTEM_RUN_DENIED: environment override rejected (\(details.joined(separator: "; ")))"))
+        }
+        let evaluation = await ExecApprovalEvaluator.evaluate(
+            command: validatedCommand.command,
+            rawCommand: validatedCommand.evaluationRawCommand,
+            displayCommand: validatedCommand.displayCommand,
+            cwd: params.cwd,
+            envOverrides: params.env,
+            agentId: params.agentId)
+        let security = approvalSource == .askFallback
+            ? ExecSecurity.narrower(evaluation.security, evaluation.askFallback)
+            : evaluation.security
+
+        if security == .deny {
+            await self.emitExecEvent(
+                "exec.denied",
+                payload: ExecEventPayload(
+                    sessionKey: sessionKey,
+                    runId: runId,
+                    host: "node",
+                    command: evaluation.displayCommand,
+                    reason: "security=deny"))
+            return .response(
+                Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "SYSTEM_RUN_DISABLED: security=deny"))
+        }
+
+        if approvalSource == .autoReview, evaluation.ask == .always {
+            await self.emitExecEvent(
+                "exec.denied",
+                payload: ExecEventPayload(
+                    sessionKey: sessionKey,
+                    runId: runId,
+                    host: "node",
+                    command: evaluation.displayCommand,
+                    reason: "ask=always"))
+            return .response(
+                Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always"))
+        }
+
+        return .prepared(SystemRunPreparation(
+            params: params,
+            approvalSource: approvalSource,
+            validatedCommand: validatedCommand,
+            evaluation: evaluation,
+            security: security,
+            sessionKey: sessionKey,
+            runId: runId))
     }
 
     private func handleSystemWhich(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
