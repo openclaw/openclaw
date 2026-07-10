@@ -5791,6 +5791,39 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
+  it("normalizes canonical reasoning casing in Responses and Chat Completions payloads", () => {
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+    const baseModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"] as Model["input"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    };
+
+    const responses = buildOpenAIResponsesParams(
+      { ...baseModel, api: "openai-responses" } satisfies Model<"openai-responses">,
+      context,
+      { reasoningEffort: " XHIGH " } as never,
+    ) as { reasoning?: unknown };
+    const completions = buildOpenAICompletionsParams(
+      { ...baseModel, api: "openai-completions" } satisfies Model<"openai-completions">,
+      context,
+      { reasoningEffort: " XHIGH " } as never,
+    ) as { reasoning_effort?: unknown };
+
+    expect(responses.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+    expect(completions.reasoning_effort).toBe("xhigh");
+  });
+
   it("uses disabled OpenAI Responses reasoning when the model supports none", () => {
     const params = buildOpenAIResponsesParams(
       {

@@ -71,7 +71,7 @@ export function isOpenAIGpt55Model(model: OpenAIReasoningModel): boolean {
 export function normalizeOpenAIReasoningEffort(effort: string): string {
   const trimmed = effort.trim();
   const folded = trimmed.toLowerCase();
-  // Only fold OpenAI-owned names; provider-native compat values can be case-sensitive.
+  // Only fold canonical names; provider-native values can be case-sensitive.
   return CANONICAL_REASONING_EFFORTS.has(folded) ? folded : trimmed;
 }
 
@@ -153,10 +153,10 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   fallbackMap?: Record<string, string>;
 }): OpenAIApiReasoningEffort | undefined {
   const requested = normalizeOpenAIReasoningEffort(params.effort);
-  // Config preserves map-key casing, so compare canonical keys after exact lookup.
+  // Config preserves map-key casing, so only canonical keys get a folded lookup.
   const mapped =
     params.fallbackMap?.[requested] ??
-    (params.fallbackMap
+    (params.fallbackMap && CANONICAL_REASONING_EFFORTS.has(requested)
       ? Object.entries(params.fallbackMap).find(
           ([effort]) => normalizeOpenAIReasoningEffort(effort) === requested,
         )?.[1]
@@ -166,16 +166,6 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   const supported = resolveOpenAISupportedReasoningEfforts(params.model);
   if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
     return normalized as OpenAIApiReasoningEffort;
-  }
-  if (mapped === undefined) {
-    // Unmapped canonical requests may match compat values case-insensitively, but
-    // return the configured value so provider payload casing remains intact.
-    const canonicalMatch = supported.find(
-      (effort) => normalizeOpenAIReasoningEffort(effort) === requested,
-    );
-    if (canonicalMatch !== undefined) {
-      return canonicalMatch;
-    }
   }
   if (isDisabledReasoningEffort(requested) || isDisabledReasoningEffort(normalized)) {
     return undefined;
@@ -192,5 +182,7 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   if (requested === "max" && supported.includes("xhigh")) {
     return "xhigh";
   }
-  return supported.find((effort) => effort !== "none");
+  return supported.find(
+    (effort) => !isDisabledReasoningEffort(normalizeOpenAIReasoningEffort(effort)),
+  );
 }

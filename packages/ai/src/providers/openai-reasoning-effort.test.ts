@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveOpenAIReasoningEffortForModel,
   resolveOpenAISupportedReasoningEfforts,
+  supportsOpenAIReasoningEffort,
 } from "./openai-reasoning-effort.js";
 
 describe("OpenAI reasoning effort support", () => {
@@ -153,16 +154,36 @@ describe("OpenAI reasoning effort support", () => {
     ).toBe("HIGH");
   });
 
-  it("preserves unmapped canonical-looking provider-native compat values", () => {
+  it("requires an explicit map for canonical-looking provider casing", () => {
     const model = {
       provider: "example",
       id: "custom-reasoning",
       compat: {
-        supportedReasoningEfforts: ["LOW", "MEDIUM", "HIGH"],
+        supportedReasoningEfforts: ["NONE", "HIGH"],
       },
     };
 
-    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "HIGH" })).toBe("HIGH");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBeUndefined();
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "none",
+        fallbackMap: { none: "NONE" },
+      }),
+    ).toBe("NONE");
+  });
+
+  it("does not fold provider-native compat values", () => {
+    const model = {
+      provider: "example",
+      id: "custom-reasoning",
+      compat: {
+        supportedReasoningEfforts: ["ProviderDefault"],
+      },
+    };
+
+    expect(supportsOpenAIReasoningEffort(model, "ProviderDefault")).toBe(true);
+    expect(supportsOpenAIReasoningEffort(model, "providerdefault")).toBe(false);
   });
 
   it("omits unsupported disabled reasoning instead of falling back to enabled effort", () => {
