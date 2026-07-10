@@ -3481,6 +3481,91 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(issues).toEqual([]);
   });
 
+  it("does not advertise dependency repair for non-updateable install sources", async () => {
+    const pluginDir = path.join(makeTempDir(), "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      demo: {
+        source: "archive",
+        spec: "/tmp/plugin-demo.tgz",
+        installPath: pluginDir,
+      },
+    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const { detectConfiguredPluginInstallHealthIssues } =
+      await import("./missing-configured-plugin-install.js");
+    const issues = await detectConfiguredPluginInstallHealthIssues({ cfg: {}, env: {} });
+
+    expect(issues).toEqual([]);
+  });
+
+  it("does not attribute a same-id config plugin's missing dependencies to an installed record", async () => {
+    const tempRoot = makeTempDir();
+    const installedPluginDir = path.join(tempRoot, "installed-demo");
+    const configuredPluginDir = path.join(tempRoot, "configured-demo");
+    const installedDependencyDir = path.join(
+      installedPluginDir,
+      "node_modules",
+      "@example",
+      "required-runtime",
+    );
+    fs.mkdirSync(installedDependencyDir, { recursive: true });
+    fs.mkdirSync(configuredPluginDir, { recursive: true });
+    for (const pluginDir of [installedPluginDir, configuredPluginDir]) {
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+        "utf8",
+      );
+    }
+    fs.writeFileSync(
+      path.join(installedDependencyDir, "package.json"),
+      JSON.stringify({ name: "@example/required-runtime", version: "1.0.0" }),
+      "utf8",
+    );
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        installPath: installedPluginDir,
+      },
+    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          origin: "config",
+          rootDir: configuredPluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const { detectConfiguredPluginInstallHealthIssues } =
+      await import("./missing-configured-plugin-install.js");
+    const issues = await detectConfiguredPluginInstallHealthIssues({ cfg: {}, env: {} });
+
+    expect(issues).toEqual([]);
+  });
+
   it("repairs an installed plugin whose required dependencies are missing on disk", async () => {
     const pluginDir = path.join(makeTempDir(), "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
