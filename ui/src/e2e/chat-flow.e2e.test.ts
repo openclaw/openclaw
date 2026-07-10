@@ -1,6 +1,7 @@
 // Control UI tests cover chat flow behavior.
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -247,6 +248,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           timestamp: Date.now(),
         },
       ],
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+      sessionKey: "agent:main:session-a",
     });
 
     try {
@@ -295,6 +298,41 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await lastPane.click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
       await expect.poll(() => headers.last().getAttribute("class")).toContain("--active");
+
+      // A pane header is part of that pane's visible cell even though it is an
+      // in-flow sibling of openclaw-chat-pane. Start with no retained body
+      // preview and dispatch the session drag directly onto the header.
+      const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+      await dataTransfer.evaluate(
+        (transfer, data) => {
+          transfer.setData(data.mime, data.sessionKey);
+        },
+        { mime: SESSION_DRAG_MIME, sessionKey: "agent:main:session-b" },
+      );
+      const targetHeader = headers.first();
+      const targetBox = await targetHeader.boundingBox();
+      if (!targetBox) {
+        throw new Error("expected the pane header to have a layout box");
+      }
+      const directHeaderDrag = {
+        bubbles: true,
+        clientX: targetBox.x + targetBox.width / 2,
+        clientY: targetBox.y + targetBox.height / 2,
+        dataTransfer,
+      };
+      await targetHeader.dispatchEvent("dragenter", directHeaderDrag);
+      await targetHeader.dispatchEvent("dragover", directHeaderDrag);
+      await expect.poll(() => page.locator(".chat-split-view__drop-indicator").count()).toBe(1);
+      await targetHeader.dispatchEvent("drop", directHeaderDrag);
+      await dataTransfer.dispose();
+
+      await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(3);
+      await expect
+        .poll(() => page.locator(".chat-pane__session-title").allTextContents())
+        .toContain("Session B");
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("session"))
+        .toBe("agent:main:session-b");
     } finally {
       await closeBrowserContext(context);
     }
