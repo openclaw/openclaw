@@ -24,12 +24,12 @@ export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId
   sourceMessage: Message;
 };
 
-export type TelegramConversationContextNode = {
+type TelegramConversationContextNode = {
   node: TelegramCachedMessageNode;
   isReplyTarget?: boolean;
 };
 
-export type TelegramMessageCache = {
+type TelegramMessageCache = {
   record: (params: {
     accountId: string;
     chatId: string | number;
@@ -96,7 +96,7 @@ export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cac
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
 const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
 
-export type PersistedTelegramMessageCacheValue = {
+type PersistedTelegramMessageCacheValue = {
   sourceMessage: Message;
   threadId?: string;
 };
@@ -447,10 +447,18 @@ function mergeCachedMessageNode(
   mode: TelegramMessageObservationMode,
 ): TelegramCachedMessageNode {
   const threadId = parseCachedThreadId(incoming.threadId ?? existing.threadId);
-  const sourceMessage =
+  const mergedSourceMessage =
     mode === "authoritative"
       ? mergeAuthoritativeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
       : mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage);
+  const syntheticOutboundFrom =
+    existing.senderId === "0" && incoming.sourceMessage.sender_chat
+      ? existing.sourceMessage.from
+      : undefined;
+  // sender_chat pairs with a fake `from`; preserve our outbound-only id=0 sentinel.
+  const sourceMessage = syntheticOutboundFrom
+    ? ({ ...mergedSourceMessage, from: syntheticOutboundFrom } as Message)
+    : mergedSourceMessage;
   return normalizeRequiredMessageNode(sourceMessage, threadId !== undefined ? { threadId } : {});
 }
 

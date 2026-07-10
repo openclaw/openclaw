@@ -61,7 +61,9 @@ enum OpenClawConfigFile {
     {
         self.withFileLock {
             // Nix mode disables config writes in production, but tests rely on saving temp configs.
-            if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return false }
+            if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests {
+                return false
+            }
             let url = self.url()
             let previousData = try? Data(contentsOf: url)
             let previousRoot = previousData.flatMap { self.parseConfigData($0) }
@@ -207,6 +209,42 @@ enum OpenClawConfigFile {
         return browser?["enabled"] as? Bool ?? defaultValue
     }
 
+    private static func normalizedPluginConfigId(_ value: Any?) -> String? {
+        guard let value = value as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func pluginEntry(_ pluginId: String, root: [String: Any]? = nil) -> [String: Any]? {
+        let root = root ?? self.loadDict()
+        guard let plugins = root["plugins"] as? [String: Any],
+              let entries = plugins["entries"] as? [String: Any]
+        else { return nil }
+        return entries.first(where: { key, _ in
+            self.normalizedPluginConfigId(key) == pluginId
+        })?.value as? [String: Any]
+    }
+
+    static func explicitlyEnabledPlugin(_ pluginId: String, root: [String: Any]? = nil) -> Bool {
+        let root = root ?? self.loadDict()
+        guard let plugins = root["plugins"] as? [String: Any],
+              plugins["enabled"] as? Bool != false,
+              let entry = self.pluginEntry(pluginId, root: root),
+              entry["enabled"] as? Bool == true
+        else { return false }
+
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        if deny.contains(pluginId) {
+            return false
+        }
+
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        if !allow.isEmpty, !allow.contains(pluginId) {
+            return false
+        }
+        return true
+    }
+
     static func setBrowserControlEnabled(_ enabled: Bool) {
         var root = self.loadDict()
         var browser = root["browser"] as? [String: Any] ?? [:]
@@ -241,7 +279,9 @@ enum OpenClawConfigFile {
     static func gatewayPort() -> Int? {
         let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any] else { return nil }
-        if let port = gateway["port"] as? Int, port > 0 { return port }
+        if let port = gateway["port"] as? Int, port > 0 {
+            return port
+        }
         if let number = gateway["port"] as? NSNumber, number.intValue > 0 {
             return number.intValue
         }
@@ -508,14 +548,22 @@ enum OpenClawConfigFile {
     }
 
     private static func fileAttributeInt(_ value: Any?) -> Int? {
-        if let number = value as? NSNumber { return number.intValue }
-        if let number = value as? Int { return number }
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let number = value as? Int {
+            return number
+        }
         return nil
     }
 
     private static func fileSystemNumber(_ value: Any?) -> String? {
-        if let number = value as? NSNumber { return number.stringValue }
-        if let number = value as? Int { return String(number) }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        if let number = value as? Int {
+            return String(number)
+        }
         return nil
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import os
 import Testing
@@ -58,7 +59,7 @@ struct GatewayConnectionTests {
 
     @Test func `request reuses single web socket for same config`() async throws {
         let session = self.makeSession()
-        let (conn, _) = try self.makeConnection(session: session)
+        let (conn, _) = try makeConnection(session: session)
 
         _ = try await conn.request(method: "status", params: nil)
         #expect(session.snapshotMakeCount() == 1)
@@ -70,7 +71,7 @@ struct GatewayConnectionTests {
 
     @Test func `request reconfigures and cancels on token change`() async throws {
         let session = self.makeSession()
-        let (conn, cfg) = try self.makeConnection(session: session, token: "a")
+        let (conn, cfg) = try makeConnection(session: session, token: "a")
 
         _ = try await conn.request(method: "status", params: nil)
         #expect(session.snapshotMakeCount() == 1)
@@ -81,9 +82,38 @@ struct GatewayConnectionTests {
         #expect(session.snapshotCancelCount() == 1)
     }
 
+    @Test func `captured route cancels instead of reconfiguring on token change`() async throws {
+        let session = self.makeSession()
+        let (conn, cfg) = try makeConnection(session: session, token: "a")
+
+        _ = try await conn.request(method: "status", params: nil)
+        let route = try #require(await conn.captureRoute())
+        cfg.setToken("b")
+
+        do {
+            _ = try await conn.request(
+                method: "status",
+                params: nil,
+                ifCurrentRoute: route)
+            Issue.record("expected stale route cancellation")
+        } catch is CancellationError {}
+
+        do {
+            _ = try await conn.request(
+                method: "status",
+                params: nil,
+                ifCurrentRoute: route,
+                distinguishPreDispatchRouteChange: true)
+            Issue.record("expected typed stale route rejection")
+        } catch is OpenClawChatTransportSendError {}
+
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(session.snapshotCancelCount() == 0)
+    }
+
     @Test func `concurrent requests still use single web socket`() async throws {
         let session = self.makeSession(helloDelayMs: 150)
-        let (conn, _) = try self.makeConnection(session: session)
+        let (conn, _) = try makeConnection(session: session)
 
         async let r1: Data = conn.request(method: "status", params: nil)
         async let r2: Data = conn.request(method: "status", params: nil)
@@ -101,7 +131,7 @@ struct GatewayConnectionTests {
                     }
                 })
             })
-        let (conn, _) = try self.makeConnection(session: session)
+        let (conn, _) = try makeConnection(session: session)
 
         do {
             _ = try await conn.request(
@@ -118,7 +148,7 @@ struct GatewayConnectionTests {
 
     @Test func `subscribe replays latest snapshot`() async throws {
         let session = self.makeSession()
-        let (conn, _) = try self.makeConnection(session: session)
+        let (conn, _) = try makeConnection(session: session)
 
         _ = try await conn.request(method: "status", params: nil)
 
@@ -135,7 +165,7 @@ struct GatewayConnectionTests {
 
     @Test func `subscribe emits seq gap before event`() async throws {
         let session = self.makeSession()
-        let (conn, _) = try self.makeConnection(session: session)
+        let (conn, _) = try makeConnection(session: session)
 
         let stream = await conn.subscribe(bufferingNewest: 10)
         var iterator = stream.makeAsyncIterator()

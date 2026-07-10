@@ -360,6 +360,35 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeUserTranscriptsDriveSpeechActive() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    assertFalse(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello"))
+    assertTrue(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello world", final = true))
+    assertFalse(manager.speechActive.value)
+  }
+
+  @Test
+  fun finalUserTranscriptMarksAwaitingAgentUntilStatusMovesOn() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    assertFalse(manager.awaitingAgent.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello", final = true))
+    assertTrue(manager.awaitingAgent.value)
+    // Any later status transition clears the typed flag; forgetting it at a
+    // new setStatus site fails safe instead of showing a stale Thinking wave.
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "hi there", final = true))
+    manager.stopAllCapture()
+    assertFalse(manager.awaitingAgent.value)
+  }
+
+  @Test
   fun realtimeTranscriptDeltasAccumulateVoiceConversation() {
     val manager = createManager()
 
@@ -1047,11 +1076,13 @@ private class FakeTalkAudioPlayer : TalkAudioPlaying {
 
 private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   override fun loadEntry(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? = null
 
   override fun saveToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
@@ -1059,6 +1090,7 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   ) = Unit
 
   override fun clearToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ) = Unit

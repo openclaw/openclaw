@@ -25,6 +25,7 @@ function overview(overrides: Partial<CrestodianOverview["tools"]> = {}): Crestod
     tools: {
       codex: { command: "codex", found: false },
       claude: { command: "claude", found: false },
+      gemini: { command: "gemini", found: false },
       apiKeys: { openai: false, anthropic: false },
       ...overrides,
     },
@@ -120,6 +121,19 @@ describe("Crestodian assistant", () => {
     expect(prompt).toContain("OpenClaw source: /tmp/openclaw");
   });
 
+  it("keeps truncated conversation history valid at a UTF-16 boundary", () => {
+    const prefix = "a".repeat(499);
+    const prompt = buildCrestodianAssistantUserPrompt({
+      input: "continue",
+      overview: overview(),
+      history: [{ role: "user", text: `${prefix}🎉tail` }],
+    });
+
+    expect(prompt.slice(0, prompt.indexOf("User request:"))).toBe(
+      `Conversation so far:\nUser: ${prefix}…\n\n`,
+    );
+  });
+
   it("uses Claude CLI first for configless planning", async () => {
     const runCliAgent = vi.fn(
       async (_params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> => ({
@@ -173,6 +187,17 @@ describe("Crestodian assistant", () => {
       ).map((backend) => backend.kind),
     ).toEqual(["claude-cli", "codex-app-server"]);
 
+    // Setup-ladder order: Claude Code, Codex, Gemini.
+    expect(
+      selectCrestodianLocalPlannerBackends(
+        overview({
+          claude: { command: "claude", found: true },
+          codex: { command: "codex", found: true },
+          gemini: { command: "gemini", found: true },
+        }),
+      ).map((backend) => backend.kind),
+    ).toEqual(["claude-cli", "codex-app-server", "gemini-cli"]);
+
     const [codexAppServer] = selectCrestodianLocalPlannerBackends(
       overview({
         codex: { command: "codex", found: true },
@@ -186,7 +211,7 @@ describe("Crestodian assistant", () => {
     const codexAppServerEntries = requireRecord(codexAppServerPlugins.entries);
     const codexAppServerCodexEntry = requireRecord(codexAppServerEntries.codex);
     expect(codexAppServerDefaults.workspace).toBe("/tmp/workspace");
-    expect(codexAppServerModel.primary).toBe("openai/gpt-5.5");
+    expect(codexAppServerModel.primary).toBe("openai/gpt-5.6-sol");
     expect(codexAppServerCodexEntry.enabled).toBe(true);
   });
 
@@ -221,12 +246,12 @@ describe("Crestodian assistant", () => {
     }
     expect(result.command).toBe("gateway status");
     expect(result.reply).toBe("Codex planner online.");
-    expect(result.modelLabel).toBe("openai/gpt-5.5 via codex");
+    expect(result.modelLabel).toBe("openai/gpt-5.6-sol via codex");
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     const firstEmbeddedCall = firstMockArg(runEmbeddedAgent);
     expect(firstEmbeddedCall.provider).toBe("openai");
-    expect(firstEmbeddedCall.model).toBe("gpt-5.5");
+    expect(firstEmbeddedCall.model).toBe("gpt-5.6-sol");
     expect(firstEmbeddedCall.agentHarnessId).toBe("codex");
     expect(firstEmbeddedCall.disableTools).toBe(true);
     expect(firstEmbeddedCall.toolsAllow).toEqual([]);
@@ -237,7 +262,7 @@ describe("Crestodian assistant", () => {
     const embeddedPlugins = requireRecord(embeddedConfig.plugins);
     const embeddedEntries = requireRecord(embeddedPlugins.entries);
     const embeddedCodexEntry = requireRecord(embeddedEntries.codex);
-    expect(embeddedModel.primary).toBe("openai/gpt-5.5");
+    expect(embeddedModel.primary).toBe("openai/gpt-5.6-sol");
     expect(embeddedCodexEntry.enabled).toBe(true);
   });
 

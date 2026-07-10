@@ -45,6 +45,32 @@ target change -> stale
 
 Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
+## Lifecycle curation
+
+The Gateway tracks aggregate skill usage in the shared state database. Once a
+day, it reviews skills created and applied by Skill Workshop. Skills unused for
+more than 30 days become `stale`; after 90 days they become `archived` and are
+left out of new agent skill snapshots. Archived skill files remain unchanged on
+disk. Manually authored skills are never curated; only skills created by Skill
+Workshop proposals enter lifecycle curation.
+
+Pinned skills bypass lifecycle transitions. A stale skill returns to `active`
+after it is used and the next sweep runs. Archived skills return only through an
+explicit restore:
+
+Lifecycle transitions and restores apply to new sessions; running sessions keep
+their current skill snapshot.
+
+```bash
+openclaw skills curator status
+openclaw skills curator pin <skill>
+openclaw skills curator unpin <skill>
+openclaw skills curator restore <skill>
+```
+
+All curator commands accept `--json`. Status also reports deterministic overlap
+candidates as suggestions only; it never merges skills or calls a model.
+
 ## Chat
 
 Ask the agent for the skill you want; it calls `skill_workshop` and returns a
@@ -257,6 +283,10 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.proposals.apply`           | `operator.admin` |
 | `skills.proposals.reject`          | `operator.admin` |
 | `skills.proposals.quarantine`      | `operator.admin` |
+| `skills.curator.status`            | `operator.read`  |
+| `skills.curator.pin`               | `operator.admin` |
+| `skills.curator.unpin`             | `operator.admin` |
+| `skills.curator.restore`           | `operator.admin` |
 
 `requestRevision` is Gateway-only (no CLI or agent-tool equivalent): it
 forwards free-text revision instructions to the owning agent's chat session

@@ -209,6 +209,42 @@ describe("extended-stable npm release request", () => {
     ).toEqual({ extendedStable: false });
   });
 
+  it("accepts a SHA-only extended-stable preflight from an arbitrary workflow ref", () => {
+    expect(
+      validateExtendedStableNpmReleaseRequest({
+        ...valid,
+        preflightOnly: true,
+        releaseTag: sha,
+        npmWorkflowRef: "refs/heads/main",
+        extendedStableBranchSha: "",
+      }),
+    ).toEqual({
+      extendedStable: true,
+      releaseVersion: "2026.6.33",
+      extendedStableBranch: "extended-stable/2026.6.33",
+    });
+    expect(() =>
+      validateExtendedStableNpmReleaseRequest({
+        ...valid,
+        preflightOnly: true,
+        releaseTag: "b".repeat(40),
+        npmWorkflowRef: "refs/heads/dev/preflight-candidate",
+        extendedStableBranchSha: "",
+      }),
+    ).toThrow(/must match the checked-out commit/u);
+    expect(() =>
+      validateExtendedStableNpmReleaseRequest({
+        ...valid,
+        preflightOnly: true,
+        releaseTag: sha,
+        checkoutSha: "",
+      }),
+    ).toThrow(/requires the full checked-out commit SHA/u);
+    expect(() => validateExtendedStableNpmReleaseRequest({ ...valid, releaseTag: sha })).toThrow(
+      /exact final vYYYY\.M\.P release tag/u,
+    );
+  });
+
   it("bypasses patch and protected-main policy while preserving canonical branch identity", () => {
     const bypassed = {
       ...valid,

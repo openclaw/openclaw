@@ -6,7 +6,7 @@ struct AssistantTextSegment: Identifiable {
         case response
     }
 
-    let id = UUID()
+    let id: Int
     let kind: Kind
     let text: String
 }
@@ -16,7 +16,7 @@ enum AssistantTextParser {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         guard raw.contains("<") else {
-            return [AssistantTextSegment(kind: .response, text: trimmed)]
+            return [AssistantTextSegment(id: 0, kind: .response, text: trimmed)]
         }
 
         var segments: [AssistantTextSegment] = []
@@ -37,7 +37,9 @@ enum AssistantTextParser {
 
             let isSelfClosing = self.isSelfClosingTag(in: raw, tagEnd: tagEnd)
             cursor = tagEnd.upperBound
-            if isSelfClosing { continue }
+            if isSelfClosing {
+                continue
+            }
 
             if match.closing {
                 currentKind = .response
@@ -51,7 +53,7 @@ enum AssistantTextParser {
         }
 
         guard matchedTag else {
-            return [AssistantTextSegment(kind: .response, text: trimmed)]
+            return [AssistantTextSegment(id: 0, kind: .response, text: trimmed)]
         }
 
         if includeThinking {
@@ -133,7 +135,9 @@ enum AssistantTextParser {
         while cursor > text.startIndex {
             cursor = text.index(before: cursor)
             let char = text[cursor]
-            if char.isWhitespace { continue }
+            if char.isWhitespace {
+                continue
+            }
             return char == "/"
         }
         return false
@@ -146,6 +150,8 @@ enum AssistantTextParser {
     {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        segments.append(AssistantTextSegment(kind: kind, text: trimmed))
+        // Parsing repeats during unrelated view updates. Stable positional IDs keep
+        // SwiftUI from rebuilding unchanged markdown segments and visibly flickering.
+        segments.append(AssistantTextSegment(id: segments.count, kind: kind, text: trimmed))
     }
 }

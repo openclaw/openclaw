@@ -1,7 +1,9 @@
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishCommand,
+  candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
   githubApi,
@@ -9,7 +11,12 @@ import {
   parseRunIdFromDispatchOutput,
   resolveArtifactName,
   requireRunIdFromDispatchOutput,
+  run,
+  validateCandidateChangelogProvenance,
+  validateCandidateCheckout,
+  validateCandidateReleaseNotes,
   validateFullManifest,
+  validatePreflightManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
@@ -32,6 +39,290 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
+  it("captures changelogs larger than the Node spawnSync default buffer", () => {
+    const output = run(
+      process.execPath,
+      ["-e", "process.stdout.write('x'.repeat(2 * 1024 * 1024))"],
+      { capture: true },
+    );
+
+    expect(output).toHaveLength(2 * 1024 * 1024);
+  });
+
+  it("requires candidate tooling to come from the clean tagged checkout", () => {
+    expect(
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        headSha: "a".repeat(40),
+        trackedStatus: "",
+      }),
+    ).toEqual({ status: "passed", targetSha: "a".repeat(40) });
+    expect(() =>
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        headSha: "b".repeat(40),
+        trackedStatus: "",
+      }),
+    ).toThrow("but HEAD is");
+    expect(() =>
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        headSha: "a".repeat(40),
+        trackedStatus: " M scripts/release-candidate-checklist.mjs",
+      }),
+    ).toThrow("requires a clean tracked worktree");
+  });
+
+  it("validates the exact tag changelog before dispatching the release matrix", () => {
+    const check = validateCandidateReleaseNotes({
+      changelog: [
+        "# Changelog",
+        "",
+        "## 2026.7.1",
+        "",
+        "### Highlights",
+        "",
+        "- User-facing notes.",
+        "",
+        "### Complete contribution record",
+        "",
+        `- **PR #123** ${"record ".repeat(20_000)}`,
+      ].join("\n"),
+      repository: "openclaw/openclaw",
+      tag: "v2026.7.1-beta.3",
+    });
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const validationIndex = source.indexOf(
+      "const releaseNotesCheck = validateCandidateReleaseNotes",
+    );
+    const fullMatrixDispatchIndex = source.indexOf(
+      "if (!options.fullReleaseRunId && !options.skipDispatch)",
+    );
+
+    expect(check).toMatchObject({ status: "passed", mode: "compact" });
+    expect(validationIndex).toBeGreaterThanOrEqual(0);
+    expect(fullMatrixDispatchIndex).toBeGreaterThan(validationIndex);
+    expect(source).toContain('run("git", ["show", `${targetSha}:CHANGELOG.md`]');
+  });
+
+  it("rejects contribution-record provenance outside the release tag history", () => {
+    const base = "v2026.6.11";
+    const recordedTarget = "a".repeat(40);
+    const targetSha = "b".repeat(40);
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- User-facing notes.",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete ${base}..${recordedTarget} history: 1 merged PR.`,
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #123** fix: example.",
+    ].join("\n");
+    const reachable = vi.fn((ancestor: string, target: string) => {
+      return ancestor === base && target === recordedTarget;
+    });
+
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha,
+        isAncestor: reachable,
+      }),
+    ).toThrow(`contribution record target ${recordedTarget} is not reachable`);
+    expect(reachable).toHaveBeenCalledWith(base, recordedTarget);
+    expect(reachable).toHaveBeenCalledWith(recordedTarget, targetSha);
+  });
+
+  it("rejects duplicate contribution record rows even when the declared count matches", () => {
+    const targetSha = "b".repeat(40);
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- User-facing notes.",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #123** fix: example.",
+      "- **PR #123** fix: duplicate.",
+    ].join("\n");
+
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha,
+        isAncestor: () => true,
+      }),
+    ).toThrow("duplicate contribution record PR rows: #123");
+  });
+
+  it("uses numbered historical record rows and skips Unreleased baseline rows", () => {
+    const changelog = [
+      "# Changelog",
+      "",
+      "## Unreleased",
+      "",
+      "### Complete contribution record",
+      "",
+      "This audited record covers the complete base..HEAD history: 99 merged PRs.",
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #1** fix: not shipped.",
+      "",
+      "## 2026.6.11",
+      "",
+      "### Complete contribution record",
+      "",
+      "This audited record covers the complete base..HEAD history: 0 merged PRs.",
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #2** fix: shipped.",
+    ].join("\n");
+
+    expect([...candidateCumulativeShippedPullRequests(changelog, "test baseline")]).toEqual([2]);
+  });
+
+  it("validates cumulative shipped baseline exclusion metadata", () => {
+    const base = "66e676d29b92d040716376a75aca32bad655cfac";
+    const recordedTarget = "a".repeat(40);
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- User-facing notes.",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete ${base}..${recordedTarget} history: 1 merged PR.`,
+      "",
+      "Shipped baseline exclusions: v2026.6.11 (8 PRs: #101, #102, #103, #104, #105, #106, #107, #108).",
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #123** fix: example.",
+    ].join("\n");
+    const shippedPullRequests = new Set([101, 102, 103, 104, 105, 106, 107, 108]);
+    const loadShippedBaseline = vi.fn(() => ({
+      ref: "v2026.6.11",
+      pullRequests: shippedPullRequests,
+    }));
+    expect(
+      validateCandidateChangelogProvenance({
+        changelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha: recordedTarget,
+        isAncestor: () => true,
+        loadShippedBaseline,
+      }),
+    ).toEqual({
+      status: "passed",
+      base,
+      target: recordedTarget,
+      shippedBaselines: [
+        {
+          ref: "v2026.6.11",
+          count: 8,
+          pullRequests: [101, 102, 103, 104, 105, 106, 107, 108],
+        },
+      ],
+    });
+    expect(loadShippedBaseline).toHaveBeenCalledWith("v2026.6.11");
+
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog: changelog.replace("8 PRs:", "8 pull requests:"),
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha: recordedTarget,
+        isAncestor: () => true,
+        loadShippedBaseline,
+      }),
+    ).toThrow("malformed shipped baseline exclusion");
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha: recordedTarget,
+        isAncestor: () => true,
+        loadShippedBaseline: () => ({
+          ref: "v2026.6.11",
+          pullRequests: new Set([...shippedPullRequests].slice(1)),
+        }),
+      }),
+    ).toThrow("lists PRs absent from shipped baseline v2026.6.11: #101");
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog: changelog.replace(
+          "- **PR #123** fix: example.",
+          "- **PR #101** fix: already shipped.",
+        ),
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha: recordedTarget,
+        isAncestor: () => true,
+        loadShippedBaseline,
+      }),
+    ).toThrow("still contains shipped PRs from v2026.6.11: #101");
+  });
+
+  it("requires contribution records for beta candidates but permits alpha Unreleased fallback", () => {
+    const betaChangelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- User-facing notes.",
+    ].join("\n");
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog: betaChangelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha: "a".repeat(40),
+      }),
+    ).toThrow("missing ### Complete contribution record");
+
+    const alpha = validateCandidateChangelogProvenance({
+      changelog: betaChangelog.replace("## 2026.7.1", "## Unreleased"),
+      version: "2026.7.1",
+      tag: "v2026.7.1-alpha.1",
+      targetSha: "a".repeat(40),
+    });
+    expect(alpha).toEqual({
+      status: "skipped",
+      reason: "alpha release uses the explicit Unreleased fallback",
+      shippedBaselines: [],
+    });
+  });
+
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
     expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
@@ -69,8 +360,64 @@ describe("release candidate checklist", () => {
       candidateParallelsShellCommand(
         ".artifacts/preflight/openclaw candidate.tgz",
         "/opt/homebrew/bin/gtimeout",
+        [".artifacts/preflight/openclaw-ai candidate.tgz"],
       ),
     ).toContain("'--target-tarball' '.artifacts/preflight/openclaw candidate.tgz'");
+    expect(
+      candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [
+        ".artifacts/preflight/openclaw-ai.tgz",
+      ]),
+    ).toEqual([
+      "test:parallels:npm-update",
+      "--",
+      "--target-tarball",
+      ".artifacts/preflight/openclaw.tgz",
+      "--dependency-tarball",
+      ".artifacts/preflight/openclaw-ai.tgz",
+      "--json",
+    ]);
+  });
+
+  it("requires exact dependency tarball metadata in npm preflight manifests", () => {
+    const manifest = {
+      releaseTag: "v2026.7.1-beta.3",
+      releaseSha: "candidate-sha",
+      npmDistTag: "beta",
+      tarballName: "openclaw-2026.7.1-beta.3.tgz",
+      tarballSha256: "root-sha",
+      dependencyTarballs: [
+        {
+          packageName: "@openclaw/ai",
+          packageVersion: "2026.7.1-beta.3",
+          tarballName: "openclaw-ai-2026.7.1-beta.3.tgz",
+          tarballSha256: "ai-sha",
+        },
+      ],
+    };
+    const params = {
+      tag: "v2026.7.1-beta.3",
+      targetSha: "candidate-sha",
+      npmDistTag: "beta",
+    };
+
+    expect(() => validatePreflightManifest(manifest, params)).not.toThrow();
+    expect(() =>
+      validatePreflightManifest({ ...manifest, dependencyTarballs: undefined }, params),
+    ).toThrow("missing dependency tarball metadata");
+    expect(() =>
+      validatePreflightManifest(
+        {
+          ...manifest,
+          dependencyTarballs: [
+            {
+              ...manifest.dependencyTarballs[0],
+              tarballName: "../openclaw-ai.tgz",
+            },
+          ],
+        },
+        params,
+      ),
+    ).toThrow("invalid dependency tarball metadata");
   });
 
   it("requires run ids when dispatch is disabled", () => {
@@ -87,7 +434,10 @@ describe("release candidate checklist", () => {
       secondValue: string,
       prefix = requiredArgs,
     ): [string, string[]] => [flag, [...prefix, flag, firstValue, flag, secondValue]];
-    const duplicateFlag = (flag: string): [string, string[]] => [flag, [...requiredArgs, flag, flag]];
+    const duplicateFlag = (flag: string): [string, string[]] => [
+      flag,
+      [...requiredArgs, flag, flag],
+    ];
     const duplicateCases = [
       duplicateOption("--tag", "v2026.5.14-beta.3", "v2026.5.14-beta.4", []),
       duplicateOption("--workflow-ref", "release/a", "release/b"),

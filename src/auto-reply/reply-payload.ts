@@ -66,7 +66,7 @@ export type ReplyPayload = {
 
 // Private device-pair -> Gateway live-display envelope key. Do not re-export
 // through Plugin SDK; this is not a third-party plugin contract.
-export const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
+const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
 
 export type PairingQrReplyChannelData = {
   setupCode: string;

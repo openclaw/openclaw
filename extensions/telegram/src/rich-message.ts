@@ -26,8 +26,8 @@ type TelegramRichMessageReplyMarkup =
   | ForceReply;
 
 export const TELEGRAM_RICH_TEXT_LIMIT = 32_768;
-export const TELEGRAM_RICH_BLOCK_LIMIT = 500;
-export const TELEGRAM_RICH_MEDIA_LIMIT = 50;
+const TELEGRAM_RICH_BLOCK_LIMIT = 500;
+const TELEGRAM_RICH_MEDIA_LIMIT = 50;
 
 export type TelegramInputRichMessage =
   | {
@@ -43,14 +43,14 @@ export type TelegramInputRichMessage =
       skip_entity_detection?: boolean;
     };
 
-export type TelegramInputRichHtmlMessage = Extract<TelegramInputRichMessage, { html: string }>;
+type TelegramInputRichHtmlMessage = Extract<TelegramInputRichMessage, { html: string }>;
 
 type TelegramRichMessageOptions = {
   skipEntityDetection?: boolean;
   tableMode?: MarkdownTableMode;
 };
 
-export type TelegramRichTextMode = "markdown" | "html";
+type TelegramRichTextMode = "markdown" | "html";
 
 export type TelegramRichTextChunk = {
   text: string;
@@ -60,7 +60,7 @@ export type TelegramRichTextChunk = {
   degradationReasons: readonly TelegramRichHtmlDegradationReason[];
 };
 
-export type TelegramRichMessagePlan = {
+type TelegramRichMessagePlan = {
   richMessage: TelegramInputRichHtmlMessage;
   degradationReasons: readonly TelegramRichHtmlDegradationReason[];
 };

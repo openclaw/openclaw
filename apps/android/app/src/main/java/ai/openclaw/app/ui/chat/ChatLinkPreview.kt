@@ -1,14 +1,22 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.takeUtf16Safe
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Authenticator
+import okhttp3.Call
 import okhttp3.CookieJar
 import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.ResponseBody
 import okio.Buffer
 import org.commonmark.node.Code
@@ -25,14 +33,22 @@ import java.net.URI
 import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.math.max
 
 internal const val LINK_PREVIEW_TITLE_MAX_CHARS = 120
 internal const val LINK_PREVIEW_DESCRIPTION_MAX_CHARS = 200
 internal const val LINK_PREVIEW_BODY_MAX_BYTES = 512 * 1024
+internal const val LINK_PREVIEW_IMAGE_BODY_MAX_BYTES = 1024 * 1024
+internal const val LINK_PREVIEW_IMAGE_MAX_DIMENSION = 600
 private const val LINK_PREVIEW_MAX_REDIRECTS = 3
 private const val LINK_PREVIEW_TIMEOUT_MILLIS = 6_000L
 private const val LINK_PREVIEW_CACHE_ENTRIES = 64
+private const val LINK_PREVIEW_IMAGE_CACHE_MAX_BYTES = 8 * 1024 * 1024
+private const val LINK_PREVIEW_IMAGE_CACHE_ENTRIES = 32
 private const val LINK_PREVIEW_ACCEPT = "text/html, application/xhtml+xml;q=0.9"
+private const val LINK_PREVIEW_IMAGE_ACCEPT = "image/*"
+private val LINK_PREVIEW_IMAGE_CONTENT_TYPES = setOf("image/jpeg", "image/png", "image/webp")
 
 internal data class LinkPreviewMetadata(
   val url: String,
@@ -47,6 +63,14 @@ internal sealed interface LinkPreviewResult {
   ) : LinkPreviewResult
 
   data object Failed : LinkPreviewResult
+}
+
+internal sealed interface LinkPreviewImageResult {
+  data class Loaded(
+    val bitmap: Bitmap,
+  ) : LinkPreviewImageResult
+
+  data object Failed : LinkPreviewImageResult
 }
 
 /** Returns the first safe web link outside inline and block code. */
@@ -113,66 +137,208 @@ internal class LinkPreviewFetcher(
       fetchBlocking(url)
     }
 
-  private fun fetchBlocking(originalUrl: String): LinkPreviewResult {
+  suspend fun fetchImage(url: String): LinkPreviewImageResult =
+    withContext(Dispatchers.IO) {
+      fetchImageBlocking(url)
+    }
+
+  private suspend fun fetchBlocking(originalUrl: String): LinkPreviewResult {
+    val response =
+      fetchBody(
+        originalUrl = originalUrl,
+        accept = LINK_PREVIEW_ACCEPT,
+        allowedContentTypes = setOf("text/html"),
+        maxBytes = LINK_PREVIEW_BODY_MAX_BYTES,
+        rejectOversizedBody = false,
+      ) ?: return LinkPreviewResult.Failed
+    val html = response.bytes.toString(response.charset)
+    return when (val parsed = parseOpenGraph(html, response.url.toString())) {
+      is LinkPreviewResult.Loaded -> parsed.copy(metadata = parsed.metadata.copy(url = originalUrl))
+      LinkPreviewResult.Failed -> LinkPreviewResult.Failed
+    }
+  }
+
+  private suspend fun fetchImageBlocking(url: String): LinkPreviewImageResult {
+    val response =
+      fetchBody(
+        originalUrl = url,
+        accept = LINK_PREVIEW_IMAGE_ACCEPT,
+        allowedContentTypes = LINK_PREVIEW_IMAGE_CONTENT_TYPES,
+        maxBytes = LINK_PREVIEW_IMAGE_BODY_MAX_BYTES,
+        rejectOversizedBody = true,
+      ) ?: return LinkPreviewImageResult.Failed
+    val bitmap =
+      decodeLinkPreviewBitmap(
+        bytes = response.bytes,
+        expectedContentType = response.contentType,
+      ) ?: return LinkPreviewImageResult.Failed
+    return LinkPreviewImageResult.Loaded(bitmap)
+  }
+
+  private suspend fun fetchBody(
+    originalUrl: String,
+    accept: String,
+    allowedContentTypes: Set<String>,
+    maxBytes: Int,
+    rejectOversizedBody: Boolean,
+  ): LinkPreviewFetchedBody? {
     var currentUrl =
       originalUrl
         .toHttpUrlOrNull()
         ?.takeIf(::isSafeWebUrl)
         ?.takeIf(hostPolicy)
-        ?: return LinkPreviewResult.Failed
+        ?: return null
     val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
     var redirects = 0
 
     while (true) {
       val remainingNanos = deadlineNanos - System.nanoTime()
-      if (remainingNanos <= 0L) return LinkPreviewResult.Failed
+      if (remainingNanos <= 0L) return null
       val request =
         Request
           .Builder()
           .url(currentUrl)
-          .header("Accept", LINK_PREVIEW_ACCEPT)
+          .header("Accept", accept)
           .get()
           .build()
       val call = client.newCall(request)
       call.timeout().timeout(remainingNanos, TimeUnit.NANOSECONDS)
 
-      val response = runCatching { call.execute() }.getOrElse { return LinkPreviewResult.Failed }
+      val response = call.executeCancellable() ?: return null
       response.use {
         if (it.isRedirect) {
-          if (redirects >= LINK_PREVIEW_MAX_REDIRECTS) return LinkPreviewResult.Failed
-          currentUrl = resolveRedirect(currentUrl, it.header("Location"), hostPolicy) ?: return LinkPreviewResult.Failed
+          if (redirects >= LINK_PREVIEW_MAX_REDIRECTS) return null
+          currentUrl = resolveRedirect(currentUrl, it.header("Location"), hostPolicy) ?: return null
           redirects += 1
           continue
         }
-        if (!it.isSuccessful) return LinkPreviewResult.Failed
-        val contentType = it.body.contentType() ?: return LinkPreviewResult.Failed
-        if (contentType.type != "text" || contentType.subtype != "html") return LinkPreviewResult.Failed
+        if (!it.isSuccessful) return null
+        val contentType = it.body.contentType() ?: return null
+        val contentTypeName = "${contentType.type}/${contentType.subtype}".lowercase(Locale.US)
+        if (contentTypeName !in allowedContentTypes) return null
 
-        val bytes =
-          try {
-            readBodyPrefix(it.body)
-          } catch (_: IOException) {
-            return LinkPreviewResult.Failed
-          }
-        val html = bytes.toString(contentType.charset(Charsets.UTF_8) ?: Charsets.UTF_8)
-        return when (val parsed = parseOpenGraph(html, currentUrl.toString())) {
-          is LinkPreviewResult.Loaded ->
-            parsed.copy(metadata = parsed.metadata.copy(url = originalUrl))
-          LinkPreviewResult.Failed -> LinkPreviewResult.Failed
-        }
+        val bytes = call.awaitBodyRead { readBody(it.body, maxBytes, rejectOversizedBody) } ?: return null
+        return LinkPreviewFetchedBody(
+          url = currentUrl,
+          bytes = bytes,
+          charset = contentType.charset(Charsets.UTF_8) ?: Charsets.UTF_8,
+          contentType = contentTypeName,
+        )
       }
     }
   }
 }
 
-private fun readBodyPrefix(body: ResponseBody): ByteArray {
+private suspend fun Call.executeCancellable(): Response? =
+  suspendCancellableCoroutine { continuation ->
+    // execute() blocks this IO worker, so cancellation must cancel the Call from the cancelling thread.
+    continuation.invokeOnCancellation { cancel() }
+    val response =
+      try {
+        execute()
+      } catch (_: IOException) {
+        null
+      }
+    if (response != null) {
+      continuation.resume(response) { _, cancelledResponse, _ ->
+        cancelledResponse.close()
+      }
+    } else if (continuation.isActive) {
+      continuation.resume(null)
+    }
+  }
+
+private suspend fun <T> Call.awaitBodyRead(block: () -> T?): T? =
+  suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    try {
+      val result = block()
+      if (continuation.isActive) {
+        continuation.resume(result)
+      }
+    } catch (_: IOException) {
+      if (continuation.isActive) {
+        continuation.resume(null)
+      }
+    }
+  }
+
+private data class LinkPreviewFetchedBody(
+  val url: HttpUrl,
+  val bytes: ByteArray,
+  val charset: java.nio.charset.Charset,
+  val contentType: String,
+)
+
+private fun readBody(
+  body: ResponseBody,
+  maxBytes: Int,
+  rejectOversizedBody: Boolean,
+): ByteArray? {
+  if (rejectOversizedBody && body.contentLength() > maxBytes) return null
   val buffer = Buffer()
   val source = body.source()
-  while (buffer.size < LINK_PREVIEW_BODY_MAX_BYTES) {
-    val remaining = LINK_PREVIEW_BODY_MAX_BYTES - buffer.size
+  val readLimit = maxBytes.toLong() + if (rejectOversizedBody) 1L else 0L
+  while (buffer.size < readLimit) {
+    val remaining = readLimit - buffer.size
     if (source.read(buffer, remaining) == -1L) break
   }
+  if (rejectOversizedBody && buffer.size > maxBytes) return null
   return buffer.readByteArray()
+}
+
+internal fun decodeLinkPreviewBitmap(
+  bytes: ByteArray,
+  maxDimension: Int = LINK_PREVIEW_IMAGE_MAX_DIMENSION,
+  expectedContentType: String? = null,
+): Bitmap? {
+  if (bytes.isEmpty() || maxDimension <= 0) return null
+  val encodedContentType = linkPreviewImageContentType(bytes) ?: return null
+  if (expectedContentType != null && encodedContentType != expectedContentType) return null
+  return try {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+    BitmapFactory.decodeByteArray(
+      bytes,
+      0,
+      bytes.size,
+      BitmapFactory.Options().apply {
+        inSampleSize = linkPreviewImageSampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+      },
+    )
+  } catch (_: RuntimeException) {
+    null
+  } catch (_: OutOfMemoryError) {
+    null
+  }
+}
+
+private fun linkPreviewImageContentType(bytes: ByteArray): String? =
+  when {
+    bytes.matchesPrefix(0xff, 0xd8, 0xff) -> "image/jpeg"
+    bytes.matchesPrefix(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a) -> "image/png"
+    bytes.matchesPrefix(0x52, 0x49, 0x46, 0x46) && bytes.matchesAt(8, 0x57, 0x45, 0x42, 0x50) -> "image/webp"
+    else -> null
+  }
+
+private fun ByteArray.matchesAt(
+  offset: Int,
+  vararg expected: Int,
+): Boolean = size >= offset + expected.size && expected.indices.all { index -> (this[offset + index].toInt() and 0xff) == expected[index] }
+
+private fun linkPreviewImageSampleSize(
+  width: Int,
+  height: Int,
+  maxDimension: Int,
+): Int {
+  var sample = 1
+  while (max(width / sample, height / sample) > maxDimension && sample <= Int.MAX_VALUE / 2) {
+    sample *= 2
+  }
+  return sample
 }
 
 internal class LinkPreviewStore(
@@ -192,6 +358,33 @@ internal class LinkPreviewStore(
   }
 }
 
+internal class LinkPreviewImageStore(
+  private val fetcher: suspend (String) -> LinkPreviewImageResult,
+  maxBytes: Int = LINK_PREVIEW_IMAGE_CACHE_MAX_BYTES,
+) {
+  // Every result pays at least one entry share, preserving the entry cap while loaded bitmaps
+  // also pay their full backing allocation.
+  private val minimumResultBytes = max(1, maxBytes / LINK_PREVIEW_IMAGE_CACHE_ENTRIES)
+  private val cache =
+    object : LruCache<String, LinkPreviewImageResult>(maxBytes) {
+      override fun sizeOf(
+        key: String,
+        value: LinkPreviewImageResult,
+      ): Int =
+        when (value) {
+          is LinkPreviewImageResult.Loaded -> value.bitmap.allocationByteCount.coerceAtLeast(minimumResultBytes)
+          LinkPreviewImageResult.Failed -> minimumResultBytes
+        }
+    }
+
+  suspend fun get(url: String): LinkPreviewImageResult {
+    cache.get(url)?.let { return it }
+    val result = fetcher(url)
+    cache.put(url, result)
+    return result
+  }
+}
+
 private val defaultLinkPreviewClient: OkHttpClient =
   OkHttpClient
     .Builder()
@@ -206,7 +399,9 @@ private val defaultLinkPreviewClient: OkHttpClient =
     .dns(PublicOnlyDns())
     .build()
 
-internal val chatLinkPreviewStore = LinkPreviewStore(fetcher = LinkPreviewFetcher()::fetch)
+private val chatLinkPreviewFetcher = LinkPreviewFetcher()
+internal val chatLinkPreviewStore = LinkPreviewStore(fetcher = chatLinkPreviewFetcher::fetch)
+internal val chatLinkPreviewImageStore = LinkPreviewImageStore(fetcher = chatLinkPreviewFetcher::fetchImage)
 
 internal fun resolveRedirect(
   baseUrl: HttpUrl,
@@ -294,7 +489,7 @@ private fun InetAddress.isSpecialPurposeAddress(): Boolean =
     else -> true
   }
 
-private fun ByteArray.matchesPrefix(vararg prefix: Int): Boolean = prefix.indices.all { index -> (this[index].toInt() and 0xff) == prefix[index] }
+private fun ByteArray.matchesPrefix(vararg prefix: Int): Boolean = matchesAt(0, *prefix)
 
 internal class PublicOnlyDns(
   private val delegate: Dns = Dns.SYSTEM,
@@ -330,7 +525,7 @@ private fun sanitizeMetadataText(
       .filterNot(Character::isISOControl)
       .replace(Regex("\\s+"), " ")
       .trim()
-  return sanitized.take(maxChars).takeIf(String::isNotEmpty)
+  return sanitized.takeUtf16Safe(maxChars).takeIf(String::isNotEmpty)
 }
 
 private fun findTitle(html: String): String? =

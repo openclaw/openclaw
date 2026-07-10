@@ -70,6 +70,9 @@ const mocks = vi.hoisted(() => ({
     aborted: false,
   })),
 }));
+const globalMocks = vi.hoisted(() => ({
+  logVerbose: vi.fn(),
+}));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageDispatchCompleted: vi.fn(),
   logMessageDispatchStarted: vi.fn(),
@@ -442,6 +445,14 @@ vi.mock("./abort.runtime.js", () => ({
     return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
   },
 }));
+
+vi.mock("../../globals.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../globals.js")>();
+  return {
+    ...actual,
+    logVerbose: globalMocks.logVerbose,
+  };
+});
 
 vi.mock("../../logging/diagnostic.js", () => ({
   logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
@@ -1598,6 +1609,43 @@ describe("dispatchReplyFromConfig", () => {
         mirror: false,
       }),
     );
+  });
+
+  it("uses accepted steered inbound audio for final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      SessionKey: "agent:main:whatsapp:direct:chat-1",
+      BodyForAgent: "text turn",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const operation = (
+        opts as
+          | {
+              replyOperation?: ReturnType<typeof createReplyOperation>;
+            }
+          | undefined
+      )?.replyOperation;
+      expect(operation?.acceptedSteeredInboundAudio).toBe(false);
+      operation?.markAcceptedSteeredInboundAudio();
+      return { text: "reply to steered audio" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticDirectReplyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const finalTtsCall = ttsMocks.maybeApplyTtsToPayload.mock.calls.find(
+      ([params]) => (params as { kind?: string }).kind === "final",
+    )?.[0] as { inboundAudio?: boolean } | undefined;
+    expect(finalTtsCall?.inboundAudio).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.mediaUrl).toBe("https://example.com/tts-synth.opus");
   });
 
   it("passes reply policy to routed block delivery", async () => {
@@ -3806,6 +3854,46 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("starts a preamble item before a later partial callback", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const callbackOrder: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      void opts?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "checking first",
+      });
+      void opts?.onPartialReply?.({ text: "answer after preamble" });
+      return { text: "done" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "whatsapp" }),
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        preserveProgressCallbackStartOrder: true,
+        suppressDefaultToolProgressMessages: true,
+        onItemEvent: () => {
+          callbackOrder.push("item");
+        },
+        onPartialReply: () => {
+          callbackOrder.push("partial");
+        },
+      },
+    });
+
+    expect(callbackOrder).toEqual(["item", "partial"]);
+  });
+
   it("flushes trailing verbose commentary before the final reply", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -5201,6 +5289,58 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("keeps tool-error fallbacks eligible when a channel declines failed progress", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const onCommandOutput = vi.fn(async () => false as const);
+    const onItemEvent = vi.fn(async () => false as const);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      ChatType: "direct",
+      SessionKey: "agent:main:discord:direct:U1",
+    });
+    let receivedOptions: GetReplyOptions | undefined;
+    let commandOutputResult: false | void = undefined;
+    let itemEventResult: false | void = undefined;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      receivedOptions = opts;
+      commandOutputResult = await opts?.onCommandOutput?.({
+        phase: "end",
+        name: "exec",
+        status: "failed",
+        exitCode: 1,
+      });
+      itemEventResult = await opts?.onItemEvent?.({
+        kind: "tool",
+        phase: "end",
+        name: "exec",
+        status: "failed",
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onCommandOutput, onItemEvent },
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
+    expect(commandOutputResult).toBe(false);
+    expect(itemEventResult).toBe(false);
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
@@ -9695,47 +9835,71 @@ describe("dispatchReplyFromConfig", () => {
     const deliveryGate = new Promise<void>((resolve) => {
       releaseDelivery = resolve;
     });
+    const progressOrder: string[] = [];
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         delivered.push(payload);
+        if (payload.text === "final") {
+          progressOrder.push("final");
+        }
         markDeliveryStarted?.();
         await deliveryGate;
       },
     });
     const onToolStart = vi.fn();
+    onToolStart.mockImplementation(() => {
+      progressOrder.push("tool");
+    });
+    const onPartialReply = vi.fn(() => {
+      progressOrder.push("partial");
+    });
     let toolProgressSettled = false;
+    let toolProgressPromise: Promise<void> | undefined;
+    let partialProgressPromise: Promise<void> | undefined;
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
-    ): Promise<ReplyPayload | undefined> => {
+    ): Promise<ReplyPayload> => {
       await opts?.onBlockReply?.({ text: "before tool" });
-      const toolProgressPromise = Promise.resolve(opts?.onToolStart?.({ name: "lookup" })).then(
-        () => {
-          toolProgressSettled = true;
-        },
-      );
-
-      await deliveryStarted;
-
-      expect(delivered).toEqual([{ text: "before tool" }]);
-      expect(onToolStart).not.toHaveBeenCalled();
-      expect(toolProgressSettled).toBe(false);
-
-      releaseDelivery?.();
-      await toolProgressPromise;
-      return undefined;
+      toolProgressPromise = Promise.resolve(opts?.onToolStart?.({ name: "lookup" })).then(() => {
+        toolProgressSettled = true;
+      });
+      partialProgressPromise = Promise.resolve(opts?.onPartialReply?.({ text: "after tool" }));
+      return { text: "final" };
     };
 
-    await dispatchReplyFromConfig({
+    let dispatchSettled = false;
+    const dispatchPromise = dispatchReplyFromConfig({
       ctx,
       cfg,
       dispatcher,
       replyResolver,
-      replyOptions: { onToolStart },
+      replyOptions: {
+        preserveProgressCallbackStartOrder: true,
+        onPartialReply,
+        onToolStart,
+      },
+    }).then((result) => {
+      dispatchSettled = true;
+      return result;
     });
 
+    await deliveryStarted;
+    expect(delivered).toEqual([{ text: "before tool" }]);
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(toolProgressSettled).toBe(false);
+    expect(dispatchSettled).toBe(false);
+
+    releaseDelivery?.();
+    await Promise.all([dispatchPromise, toolProgressPromise, partialProgressPromise]);
+
+    expect(dispatchSettled).toBe(true);
     expect(toolProgressSettled).toBe(true);
     expect(onToolStart).toHaveBeenCalledWith({ name: "lookup" });
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "after tool" });
+    expect(progressOrder).toEqual(["tool", "partial", "final"]);
+    expect(delivered).toEqual([{ text: "before tool" }, { text: "final" }]);
   });
 
   it("does not synthesize tool-start capability while ordering item progress", async () => {
@@ -10166,6 +10330,32 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
     expect(result.sendPolicyDenied).toBe(true);
+  });
+
+  it("keeps the suppressed reply log preview UTF-16 safe", async () => {
+    setNoAbort();
+    globalMocks.logVerbose.mockClear();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const text = `${"y".repeat(159)}🚀`;
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text }),
+    });
+
+    const suppressedLog = globalMocks.logVerbose.mock.calls.find(([message]) =>
+      message.includes("final reply suppressed"),
+    )?.[0];
+    expect(suppressedLog).toContain("textChars=161");
+    expect(suppressedLog).toContain(`textPreview=${JSON.stringify("y".repeat(159))}`);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("does not mark allowed group silence eligible for no-visible fallback", async () => {

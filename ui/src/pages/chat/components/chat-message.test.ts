@@ -14,13 +14,18 @@ import {
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const markdownRenderMock = vi.hoisted(() =>
-  vi.fn((value: string, _options?: { codeBlockChrome?: "copy" | "none" }) => value),
+  vi.fn(
+    (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
+  ),
 );
 const streamingTextRenderMock = vi.hoisted(() =>
   vi.fn((value: string) => `<div class="markdown-plain-text-fallback">${value}</div>`),
 );
 const streamingMarkdownRenderMock = vi.hoisted(() =>
-  vi.fn((value: string) => `<div class="streaming-markdown">${value}</div>`),
+  vi.fn(
+    (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
+      `<div class="streaming-markdown">${value}</div>`,
+  ),
 );
 
 vi.mock("../../../local-storage.ts", () => ({
@@ -71,49 +76,6 @@ function selectText(element: Element) {
 function pointerClick(element: Element) {
   element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
 }
-
-vi.mock("../../../lib/agents/display.ts", () => {
-  const isRenderableControlUiAvatarUrl = (value: string) =>
-    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
-
-  return {
-    assistantAvatarFallbackUrl: () => "/openclaw-molty.png",
-    agentLogoUrl: () => "/openclaw-logo.svg",
-    isRenderableControlUiAvatarUrl,
-    resolveAssistantTextAvatar: (value: string | null | undefined) => {
-      const trimmed = value?.trim();
-      if (!trimmed || trimmed === "A") {
-        return null;
-      }
-      if (trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed)) {
-        return null;
-      }
-      if (
-        trimmed.length > 8 ||
-        /\s/.test(trimmed) ||
-        /[\\/.:]/.test(trimmed) ||
-        /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u.test(trimmed)
-      ) {
-        return null;
-      }
-      return trimmed;
-    },
-    resolveChatAvatarRenderUrl: (
-      candidate: string | null | undefined,
-      agent: { identity?: { avatar?: string; avatarUrl?: string } },
-    ) => {
-      if (typeof candidate === "string" && candidate.startsWith("blob:")) {
-        return candidate;
-      }
-      for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
-        if (typeof value === "string" && isRenderableControlUiAvatarUrl(value)) {
-          return value;
-        }
-      }
-      return null;
-    },
-  };
-});
 
 vi.mock("./chat-avatar.ts", () => ({
   renderChatAvatar: (role: string) => {
@@ -575,7 +537,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
-  it("reserves bubble space when assistant message actions render", () => {
+  it("renders assistant message actions in the footer row", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
       role: "assistant",
@@ -583,13 +545,11 @@ describe("grouped chat rendering", () => {
       timestamp: 1000,
     });
 
-    const assistantBubble = expectElement(
-      container,
-      ".chat-group.assistant .chat-bubble",
-      HTMLElement,
-    );
-    expect(assistantBubble.classList.contains("has-copy")).toBe(true);
-    expect(assistantBubble.querySelector(".chat-bubble-actions")).toBeInstanceOf(HTMLElement);
+    const assistantGroup = expectElement(container, ".chat-group.assistant", HTMLElement);
+    expect(assistantGroup.querySelector(".chat-bubble-actions")).toBeNull();
+    expect(
+      assistantGroup.querySelector(".chat-group-footer-actions .chat-copy-btn"),
+    ).toBeInstanceOf(HTMLElement);
 
     renderGroupedMessage(
       container,
@@ -606,6 +566,30 @@ describe("grouped chat rendering", () => {
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
   });
 
+  it("uses the displayed answer for assistant message actions", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "<think>internal reasoning</think>\nVisible answer",
+        timestamp: 1000,
+      },
+      {
+        onOpenSidebar,
+        showReasoning: false,
+      },
+    );
+
+    container.querySelector<HTMLButtonElement>(".chat-expand-btn")?.click();
+
+    expect(requireFirstMockArg(onOpenSidebar, "sidebar open")).toMatchObject({
+      kind: "markdown",
+      content: "Visible answer",
+    });
+  });
+
   it("renders user markdown without code-block copy chrome", () => {
     const container = document.createElement("div");
     const markdown = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
@@ -620,7 +604,10 @@ describe("grouped chat rendering", () => {
       "user",
     );
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, { codeBlockChrome: "none" });
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+      codeBlockChrome: "none",
+      fileLinks: true,
+    });
   });
 
   it("keeps assistant markdown code-block copy chrome enabled", () => {
@@ -633,7 +620,10 @@ describe("grouped chat rendering", () => {
       timestamp: 1000,
     });
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, undefined);
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+      codeBlockChrome: "copy",
+      fileLinks: true,
+    });
   });
 
   it("positions delete confirm by message side", () => {
@@ -1017,7 +1007,10 @@ describe("grouped chat rendering", () => {
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
     expect(streamingTextRenderMock).not.toHaveBeenCalled();
-    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", undefined);
+    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
+      codeBlockChrome: "copy",
+      fileLinks: true,
+    });
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
   });
@@ -1155,7 +1148,8 @@ describe("grouped chat rendering", () => {
     });
 
     const activity = expectElement(container, ".chat-activity-group__summary", HTMLButtonElement);
-    expect(activity.textContent).toContain("Activity: 2 tools");
+    // Aggregate summary from summarizeToolGroup replaces the old "Activity: N tools" label.
+    expect(activity.textContent).toContain("Ran a command, read a file");
     expect(activity.querySelector(".chat-activity-group__preview")).toBeNull();
     expect(activity.textContent).not.toContain("read_file");
     expect(activity.textContent).not.toContain("run_command");
@@ -1322,7 +1316,9 @@ describe("grouped chat rendering", () => {
     const summaries = container.querySelectorAll(".chat-tool-msg-summary");
     expect(summaries).toHaveLength(2);
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
-    expect(summaries[0]?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("bash");
+    expect(container.querySelector(".chat-tool-row__badge")).toBeNull();
+    // Command calls render a `$ command` row instead of the tool-name label.
+    expect(summaries[0]?.querySelector(".chat-tool-row__cmd")?.textContent).toBe("run fallback");
   });
 
   it("hides grouped tool activity when tool calls are disabled", () => {
@@ -1385,23 +1381,24 @@ describe("grouped chat rendering", () => {
       timestamp: Date.now(),
     };
     renderAssistantMessage(container, message, {
-      isToolMessageExpanded: () => false,
+      isToolExpanded: () => false,
     });
 
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
 
     renderAssistantMessage(container, message, {
-      isToolMessageExpanded: () => true,
+      isToolExpanded: () => true,
     });
 
+    // Simple object args render as key-value rows; only the output keeps a block.
+    const kvRow = container.querySelector(".chat-tool-kv__row");
+    expect(kvRow?.querySelector(".chat-tool-kv__key")?.textContent).toBe("url:");
+    expect(kvRow?.querySelector(".chat-tool-kv__value")?.textContent).toBe("https://example.com");
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
     expect(
       blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input", "Tool output"]);
-    expect(blocks.map((block) => block.querySelector("code")?.textContent)).toEqual([
-      '{\n  "url": "https://example.com"\n}',
-      "Opened page",
-    ]);
+    ).toEqual(["Tool output"]);
+    expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
   it("renders expanded standalone tool-call rows", () => {
@@ -1421,7 +1418,7 @@ describe("grouped chat rendering", () => {
       timestamp: Date.now(),
     };
     renderAssistantMessage(container, message, {
-      isToolMessageExpanded: () => false,
+      isToolExpanded: () => false,
     });
 
     expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
@@ -1430,13 +1427,21 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
 
     renderAssistantMessage(container, message, {
-      isToolMessageExpanded: () => true,
+      isToolExpanded: () => true,
     });
 
-    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool input");
-    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
-      '{\n  "mode": "session",\n  "thread": true\n}',
-    );
+    // Simple object args render as key-value rows instead of a raw JSON block.
+    expect(container.querySelector(".chat-tool-card__block")).toBeNull();
+    const kvRows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
+    expect(
+      kvRows.map((row) => [
+        row.querySelector(".chat-tool-kv__key")?.textContent,
+        row.querySelector(".chat-tool-kv__value")?.textContent,
+      ]),
+    ).toEqual([
+      ["mode:", "session"],
+      ["thread:", "true"],
+    ]);
   });
 
   it("renders assistant tool content as a flat concise tool row without a top-level call id", () => {
@@ -1461,7 +1466,8 @@ describe("grouped chat rendering", () => {
 
     expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
     const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("bash");
+    // Command calls render a `$ command` row instead of the tool-name label.
+    expect(summary.querySelector(".chat-tool-row__cmd")?.textContent).toBe("bash");
     expect(summary.querySelector(".chat-tool-msg-summary__names")).toBeNull();
   });
 
@@ -1528,21 +1534,20 @@ describe("grouped chat rendering", () => {
       timestamp: Date.now(),
     };
     renderAssistantMessage(container, message, {
-      isToolMessageExpanded: () => false,
+      isToolExpanded: () => false,
     });
 
+    // The cleaned string-arg preview is now the primary collapsed label.
     expect(container.querySelector(".chat-tool-msg-summary__label")?.textContent?.trim()).toBe(
-      "presentation_create",
-    );
-    expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent?.trim()).toBe(
       "Example Deck",
     );
+    expect(container.querySelector(".chat-tool-msg-summary__names")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-summary")?.textContent).not.toContain(
       "with Example Deck",
     );
 
     renderAssistantMessage(container, message, {
-      isToolMessageExpanded: () => true,
+      isToolExpanded: () => true,
     });
 
     expect(container.querySelector(".chat-tool-msg-body")?.textContent).not.toContain(
@@ -1601,14 +1606,22 @@ describe("grouped chat rendering", () => {
       },
     );
 
+    // The call's simple args render as key-value rows; the error keeps a block.
+    const kvRows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
+    expect(
+      kvRows.map((row) => [
+        row.querySelector(".chat-tool-kv__key")?.textContent,
+        row.querySelector(".chat-tool-kv__value")?.textContent,
+      ]),
+    ).toEqual([
+      ["mode:", "session"],
+      ["thread:", "true"],
+    ]);
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
     expect(
       blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input", "Tool error"]);
-    expect(blocks[0]?.querySelector("code")?.textContent).toBe(
-      '{\n  "mode": "session",\n  "thread": true\n}',
-    );
-    expect(JSON.parse(blocks[1]?.querySelector("code")?.textContent ?? "{}")).toEqual({
+    ).toEqual(["Tool error"]);
+    expect(JSON.parse(blocks[0]?.querySelector("code")?.textContent ?? "{}")).toEqual({
       status: "error",
       error: "Session mode is unavailable for this target.",
       childSessionKey: "agent:test:subagent:abc123",
@@ -1795,24 +1808,34 @@ describe("grouped chat rendering", () => {
       ),
     ];
     renderMessageGroups(container, groups, {
+      isToolExpanded: () => true,
       isToolMessageExpanded: () => true,
     });
 
-    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool input");
-    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
-      '{\n  "mode": "session",\n  "thread": true\n}',
-    );
+    // The call's simple args render as key-value rows while expanded.
+    const kvRows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
+    expect(
+      kvRows.map((row) => [
+        row.querySelector(".chat-tool-kv__key")?.textContent,
+        row.querySelector(".chat-tool-kv__value")?.textContent,
+      ]),
+    ).toEqual([
+      ["mode:", "session"],
+      ["thread:", "true"],
+    ]);
     expect(
       JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
     ).toEqual({
       status: "error",
     });
 
+    // Collapsing the call card must not hide the matching tool output message.
     renderMessageGroups(container, groups, {
-      isToolMessageExpanded: (messageId) => !messageId.startsWith("toolmsg:assistant:"),
+      isToolExpanded: () => false,
+      isToolMessageExpanded: () => true,
     });
 
-    expect(container.querySelector(".chat-tool-card__block")).toBeNull();
+    expect(container.querySelector(".chat-tool-kv")).toBeNull();
     expect(
       JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
     ).toEqual({
@@ -1873,6 +1896,26 @@ describe("grouped chat rendering", () => {
     );
 
     expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders transcript video URLs with encoded extensions", () => {
+    const container = document.createElement("div");
+    const mediaUrl = "https://cdn.example/clip%2Emp4?download=1";
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-encoded-video",
+        role: "user",
+        content: "",
+        MediaPath: mediaUrl,
+        timestamp: Date.now(),
+      },
+      "user",
+      { showToolCalls: false },
+    );
+
+    expect(expectElement(container, "video", HTMLVideoElement).src).toBe(mediaUrl);
   });
 
   it("renders allowed transcript and content image variants", async () => {
@@ -2879,7 +2922,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-msg-summary")).not.toBeNull();
   });
 
-  it("reserves layout space for assistant message actions", () => {
+  it("keeps assistant message actions outside the bubble", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
       id: "assistant-action-space",
@@ -2889,8 +2932,11 @@ describe("grouped chat rendering", () => {
     });
 
     const bubble = container.querySelector(".chat-group.assistant .chat-bubble");
-    expect(bubble?.classList.contains("chat-bubble--has-actions")).toBe(true);
-    expect(bubble?.querySelector(".chat-bubble-actions")).not.toBeNull();
+    expect(bubble?.classList.contains("chat-bubble--has-actions")).toBe(false);
+    expect(bubble?.querySelector(".chat-bubble-actions")).toBeNull();
+    expect(
+      container.querySelector(".chat-group.assistant .chat-group-footer-actions .chat-copy-btn"),
+    ).not.toBeNull();
   });
 
   it("renders hidden assistant_message canvas results with the configured sandbox", () => {

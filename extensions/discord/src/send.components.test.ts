@@ -313,7 +313,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
         mediaLocalRoots: undefined,
         mediaReadFile: readFileMock,
         mediaAccess,
-        replyTo: undefined,
+        reply: undefined,
         silent: undefined,
         textLimit: undefined,
         maxLinesPerMessage: undefined,
@@ -322,6 +322,25 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
         onDeliveryResult,
       },
     ]);
+  });
+
+  it("forwards first-chunk reply fanout through classic media downgrades", async () => {
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      { blocks: [{ type: "text", text: "report" }] },
+      {
+        cfg: DISCORD_TEST_CFG,
+        token: "t",
+        mediaUrl: "https://example.com/report.pdf",
+        reply: { messageId: "source-1", scope: "first" },
+      },
+    );
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    const options = readMockCall(sendMessageDiscordMock, 0)[2] as {
+      reply?: { messageId: string; scope: "all" | "first" };
+    };
+    expect(options.reply).toEqual({ messageId: "source-1", scope: "first" });
   });
 
   it("keeps modal component messages on the component path", async () => {

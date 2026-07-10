@@ -12,8 +12,22 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/components/app-sidebar.ts",
+      "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
       "path": "ui/src/components/app-topbar.ts",
-      "text": "⌘K"
+      "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/app-topbar.ts",
+      "text": "OpenClaw"
     },
     {
       "count": 1,
@@ -583,13 +597,6 @@
       "text": "Web"
     },
     {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/dashboard-header.ts",
-      "text": "OpenClaw"
-    },
-    {
       "count": 1,
       "kind": "html-text",
       "name": "text",
@@ -653,6 +660,20 @@
       "text": "Open"
     },
     {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/lobster-pet.ts",
+      "text": "z"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/lobster-pet.ts",
+      "text": "Z"
+    },
+    {
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
@@ -665,6 +686,13 @@
       "name": "text",
       "path": "ui/src/components/login-gate.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/settings-sidebar.ts",
+      "text": "esc"
     },
     {
       "count": 1,
@@ -1113,34 +1141,6 @@
       "name": "help",
       "path": "ui/src/lib/chat/commands.ts",
       "text": "tools"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Auto"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Default"
-    },
-    {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Fast"
-    },
-    {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Standard"
     },
     {
       "count": 1,
@@ -1852,13 +1852,6 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Talk settings"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Cancel reply"
@@ -1963,13 +1956,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Talk settings"
-    },
-    {
-      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
@@ -2057,14 +2043,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Faster"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Model"
+      "text": "Default"
     },
     {
       "count": 1,
@@ -2078,35 +2057,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Smarter"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-model-controls.ts",
       "text": "Speed"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Talk options"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Auto"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Model"
     },
     {
       "count": 1,
@@ -2144,32 +2095,11 @@
       "text": "Coral"
     },
     {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Default"
-    },
-    {
       "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Echo"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "High"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Low"
     },
     {
       "count": 1,
@@ -2183,21 +2113,7 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Medium"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Sage"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Sensitivity"
     },
     {
       "count": 1,
@@ -2215,17 +2131,52 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Voice"
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Close sidebar"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
-      "text": "Close sidebar"
+      "text": "Copy path"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Next match"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Previous match"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Search in file"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Show in Files"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Search"
     },
     {
       "count": 1,
@@ -2256,7 +2207,7 @@
       "text": "Sanitized rich-text preview for quick reading."
     },
     {
-      "count": 4,
+      "count": 5,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
@@ -2502,62 +2453,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Balanced default for daily use."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Highest context budget for repo work."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Lean follow-ups for shared bots."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Smallest context budget and lowest cost."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Code Agent"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Minimal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Personal Assistant"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Team Bot"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/config/quick.ts",
@@ -2603,13 +2498,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Choose how much workspace context OpenClaw injects into each run. Profiles only change bootstrap size and follow-up reinjection — never your model, tools, channels, or theme."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
       "text": "Choose image"
     },
     {
@@ -2639,20 +2527,6 @@
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
       "text": "Connect →"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Current"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Custom"
     },
     {
       "count": 1,
@@ -2722,28 +2596,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Pending"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Roundness"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Saved"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Selected"
+      "text": "Save stores your changes. Apply Now also reloads the current session."
     },
     {
       "count": 1,
@@ -2757,7 +2610,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Stores a Control UI override. Clear it to return to IDENTITY.md."
+      "text": "Stores a Control UI override. Clear it to return to the configured avatar."
     },
     {
       "count": 1,
@@ -2785,6 +2638,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
+      "text": "Unsaved changes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/quick.ts",
       "text": "User"
     },
     {
@@ -2795,6 +2655,13 @@
       "text": "Claw"
     },
     {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/config/quick.ts",
+      "text": "CPU"
+    },
+    {
       "count": 1,
       "kind": "object-property",
       "name": "label",
@@ -2802,18 +2669,11 @@
       "text": "Dash"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Default"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Full"
+      "text": "Disk"
     },
     {
       "count": 1,
@@ -2837,18 +2697,11 @@
       "text": "M"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "None"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Round"
+      "text": "Memory"
     },
     {
       "count": 1,
@@ -2856,13 +2709,6 @@
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
       "text": "S"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Slight"
     },
     {
       "count": 1,
@@ -2919,13 +2765,6 @@
       "name": "placeholder",
       "path": "ui/src/pages/config/view.ts",
       "text": "Search settings..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/view.ts",
-      "text": "Adjust corner radius across the UI."
     },
     {
       "count": 1,
@@ -3094,13 +2933,6 @@
       "name": "text",
       "path": "ui/src/pages/config/view.ts",
       "text": "Receive browser push notifications from your gateway."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/view.ts",
-      "text": "Roundness"
     },
     {
       "count": 2,
@@ -3982,6 +3814,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "text": "Default action"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Defaults"
     },
     {
@@ -4038,6 +3877,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "text": "Host-native policy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Load exec approvals to edit allowlists."
     },
     {
@@ -4046,6 +3892,13 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Mode"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "text": "Native"
     },
     {
       "count": 1,
@@ -4074,6 +3927,13 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Pattern"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "text": "Read-only here. Edit from the companion app or CLI."
     },
     {
       "count": 1,
@@ -4163,15 +4023,106 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Any node"
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "approval needed"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Approve"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "auto-paired"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "No paired nodes or devices."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Nodes & devices"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "One entry per paired client: roles, tokens, live links."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Paired"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Pending approval"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Reject"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Remove"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Revoke"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Rotate"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Tokens"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Tokens & capabilities"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view.ts",
-      "text": "Approve"
+      "text": "Any node"
     },
     {
       "count": 1,
@@ -4185,13 +4136,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view.ts",
-      "text": "Devices"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
       "text": "No agents found."
     },
     {
@@ -4199,91 +4143,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view.ts",
-      "text": "No nodes found."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
       "text": "No nodes with system.run available."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "No paired devices."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Nodes"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Paired"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Paired devices and live links."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Pairing requests + role tokens."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Pending"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Reject"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Revoke"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Rotate"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Tokens"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Tokens: none"
     },
     {
       "count": 1,
@@ -4333,6 +4193,237 @@
       "name": "placeholder",
       "path": "ui/src/pages/overview/view.ts",
       "text": "ws://100.x.y.z:18789"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "A personalized daily briefing: news, weather, and tasks in one message."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Ask questions about any public GitHub repo. Free, no account needed."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Browse, search, and summarize subreddits and threads."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Capture notes to Markdown, Obsidian, Notion, or Bear."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Check payments, customers, invoices, and subscriptions in your Stripe account."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Cluster operations and troubleshooting from chat."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Control lights, climate, and automations across your whole home."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Crash alerts explained and triaged the moment they fire."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Create and edit Canva designs, manage assets, and export results."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Create, search, and triage Jira tickets from chat."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Extract, merge, convert, and OCR PDF documents."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Flight and hotel search with fare watching and trip memory."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Grafana know-how and community connectors for dashboards and alerts."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Live stocks and crypto with price alerts and daily digests."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Mailbox triage, summaries, and drafts with send-on-approval."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Places, routing, and travel-time answers."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "PR review queues, issue triage, and repo Q&A through the official GitHub MCP."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Query and update records, tables, and bases in Airtable."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Read, add, and complete tasks and projects in Todoist."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Read, create, and get briefed on events — your agent owns your schedule."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Search models, datasets, and papers; run Spaces as tools."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Search, create, and update pages and databases in your Notion workspace."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Search, queue, and soundtrack your day with mood-based playlists."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Translate and localize text and documents."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Triage issues, update cycles, and file bugs straight from chat."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Turn audio and video into clean, structured transcripts."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Version-specific library docs and code examples while coding. No signup needed."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Whole-home audio: play, group rooms, and queue by chat."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/plugins/view.ts",
+      "text": "context7"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/plugins/view.ts",
+      "text": "https://mcp.example.com/mcp · npx some-mcp-server"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/view.ts",
+      "text": "MCP"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/view.ts",
+      "text": "OAuth"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/profile/profile-page.ts",
+      "text": "OpenClaw"
     },
     {
       "count": 1,

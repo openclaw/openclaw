@@ -71,6 +71,7 @@ function createApi() {
     id: "browser",
     name: "Browser",
     source: "test",
+    rootDir: "/plugins/browser",
     config: {},
     runtime: {} as OpenClawPluginApi["runtime"],
     registerCli,
@@ -107,7 +108,10 @@ function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
 
 describe("browser plugin", () => {
   it("exposes static browser metadata on the plugin definition", () => {
-    expect(browserPluginReload).toEqual({ restartPrefixes: ["browser"] });
+    expect(browserPluginReload).toEqual({
+      restartPrefixes: ["browser"],
+      hotPrefixes: ["browser.profiles"],
+    });
     expect(browserPluginNodeHostCommands).toHaveLength(1);
     expect(browserPluginNodeHostCommands[0]?.command).toBe("browser.proxy");
     expect(browserPluginNodeHostCommands[0]?.cap).toBe("browser");
@@ -146,6 +150,8 @@ describe("browser plugin", () => {
     }
 
     expect(tool.name).toBe("browser");
+    expect(tool.description).toContain("action=profiles");
+    expect(tool.description).not.toContain('profile="user"');
     expect(runtimeApiMocks.createBrowserTool).not.toHaveBeenCalled();
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
@@ -239,7 +245,11 @@ describe("browser plugin", () => {
       ],
     });
     await registrar({ program: {} as never });
-    expect(runtimeApiMocks.registerBrowserCli).toHaveBeenCalledWith({});
+    expect(runtimeApiMocks.registerBrowserCli).toHaveBeenCalledWith(
+      {},
+      process.argv,
+      "/plugins/browser",
+    );
   });
 
   it("registers browser.request as an admin gateway method and lazy-loads handler", async () => {

@@ -72,6 +72,18 @@ export const CrestodianSetupDetectResultSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    /** Text-inference key/token methods exposed by the Gateway provider registry. */
+    manualProviders: Type.Array(
+      Type.Object(
+        {
+          /** Opaque provider-auth choice sent back during activation. */
+          id: NonEmptyString,
+          label: NonEmptyString,
+          hint: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     workspace: NonEmptyString,
     configuredModel: Type.Optional(Type.String()),
     setupComplete: Type.Boolean(),
@@ -90,9 +102,9 @@ export const CrestodianSetupActivateParamsSchema = Type.Object(
       Type.Literal("gemini-cli"),
       Type.Literal("api-key"),
     ]),
-    /** Manual step only: provider the pasted key belongs to (anthropic/openai/google). */
-    provider: Type.Optional(Type.String()),
-    /** Manual step only: the pasted API key; masked by clients, never echoed. */
+    /** Manual step only: opaque provider-auth choice returned by detection. */
+    authChoice: Type.Optional(Type.String()),
+    /** Manual step only: the pasted API key or token; masked by clients, never echoed. */
     apiKey: Type.Optional(Type.String()),
     workspace: Type.Optional(Type.String()),
   },

@@ -12,6 +12,7 @@ import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
 const pluginMetadataMocks = vi.hoisted(() => {
+  vi.resetModules();
   const snapshot = {
     plugins: [
       {

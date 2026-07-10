@@ -415,6 +415,8 @@ export type ProviderAuthMethod = {
   label: string;
   hint?: string;
   kind: ProviderAuthKind;
+  /** Provider-owned model used to validate app-guided secret setup. */
+  starterModel?: string;
   /**
    * Optional wizard/onboarding metadata for this specific auth method.
    *
@@ -653,7 +655,13 @@ export type ProviderResolveUsageAuthContext = {
   resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
 
-export type ProviderUsageAuthToken = { token: string; accountId?: string };
+export type ProviderUsageAuthToken = {
+  token: string;
+  accountId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
+};
 
 /**
  * Result of `resolveUsageAuth`.
@@ -686,6 +694,9 @@ export type ProviderFetchUsageSnapshotContext = {
   token: string;
   accountId?: string;
   authProfileId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };
@@ -711,6 +722,9 @@ export type ProviderAuthDoctorHintContext = {
  * Use this to set provider defaults or rewrite provider-specific config keys
  * into the merged `extraParams` object. Return the full next extraParams object.
  */
+/** Provider-facing effort after OpenClaw lowers orchestration-only modes. */
+export type ProviderTransportThinkingLevel = Exclude<ThinkLevel, "ultra">;
+
 export type ProviderPrepareExtraParamsContext = {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -721,7 +735,7 @@ export type ProviderPrepareExtraParamsContext = {
   modelId: string;
   model?: ProviderRuntimeModel;
   extraParams?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderTransportThinkingLevel;
 };
 
 export type ProviderExtraParamsForTransportContext = Omit<
@@ -1985,6 +1999,8 @@ export type PluginCommandContext = {
   senderIsOwner?: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
+  /** Host-resolved agent that owns the active session. */
+  agentId?: string;
   /** Stable host session key for the active conversation when available. */
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */

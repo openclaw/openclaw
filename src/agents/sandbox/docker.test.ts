@@ -13,7 +13,7 @@ type SpawnCall = {
 type MockDockerChild = EventEmitter & {
   stdout: Readable;
   stderr: Readable;
-  stdin: { end: (input?: string | Buffer) => void };
+  stdin: EventEmitter & { end: (input?: string | Buffer) => void };
   kill: (signal?: NodeJS.Signals) => void;
 };
 
@@ -21,7 +21,7 @@ const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
   imageExists: true,
   inspectError: "",
-  streamError: undefined as "stdout" | "stderr" | undefined,
+  streamError: undefined as "stdin" | "stdout" | "stderr" | undefined,
   killSignals: [] as (NodeJS.Signals | undefined)[],
 }));
 
@@ -29,7 +29,7 @@ function createMockDockerChild(): MockDockerChild {
   const child = new EventEmitter() as MockDockerChild;
   child.stdout = new Readable({ read() {} });
   child.stderr = new Readable({ read() {} });
-  child.stdin = { end: () => undefined };
+  child.stdin = Object.assign(new EventEmitter(), { end: () => undefined });
   child.kill = (signal) => {
     spawnState.killSignals.push(signal);
   };
@@ -59,10 +59,8 @@ function spawnDockerProcess(command: string, args: string[]) {
 
   queueMicrotask(() => {
     if (spawnState.streamError) {
-      child[spawnState.streamError].emit(
-        "error",
-        new Error(`${spawnState.streamError} read failed`),
-      );
+      const stream = child[spawnState.streamError] as EventEmitter;
+      stream.emit("error", new Error(`${spawnState.streamError} read failed`));
     }
     if (stderr) {
       child.stderr.emit("data", Buffer.from(stderr));
@@ -163,7 +161,7 @@ describe("execDockerRaw", () => {
     await loadFreshDockerModuleForTest();
   });
 
-  it.each(["stdout", "stderr"] as const)(
+  it.each(["stdin", "stdout", "stderr"] as const)(
     "rejects and terminates Docker when %s fails",
     async (stream) => {
       spawnState.streamError = stream;

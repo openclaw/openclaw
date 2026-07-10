@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "../string-coerce.ts";
 
-export type ParsedAgentSessionKey = {
+type ParsedAgentSessionKey = {
   agentId: string;
   rest: string;
 };
@@ -53,7 +53,7 @@ function normalizeMainKey(value: string | undefined | null): string {
   return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
 }
 
-function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | null): string {
+export function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | null): string {
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
     return "";

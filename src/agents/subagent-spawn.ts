@@ -5,7 +5,6 @@
  */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -106,7 +105,7 @@ import {
   resolveMainSessionAlias,
   resolveSandboxRuntimeStatus,
   updateSessionStore,
-  isAdminOnlyMethod,
+  resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
 import type {
   SpawnSubagentContextMode,
@@ -242,9 +241,15 @@ async function callSubagentGateway(
   // scope-upgrade handshake that headless gateway-client connections cannot
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
-  // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" -> write) keep their least-privilege scope.
-  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
+  // "agent" -> write) keep their least-privilege scope. The params-aware
+  // resolver keeps spawn-metadata sessions.patch calls on the admin tier.
+  const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
+    params.method,
+    params.params,
+  );
+  const scopes =
+    params.scopes ?? (leastPrivilegeScopes.includes(ADMIN_SCOPE) ? [ADMIN_SCOPE] : undefined);
   const request = {
     ...params,
     ...(scopes != null ? { scopes } : {}),
@@ -504,7 +509,6 @@ async function prepareSubagentSessionContext(params: {
   let parentEntry: SessionEntry | undefined;
   let childEntry: SessionEntry | undefined;
   let forkFallbackNote: string | undefined;
-  const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
     if (params.targetAgentId !== params.requesterAgentId) {
@@ -521,7 +525,6 @@ async function prepareSubagentSessionContext(params: {
       sessionStoreKeys: childTarget.storeKeys,
       fallbackEntry: { sessionId: "", updatedAt: Date.now() },
       agentId: params.requesterAgentId,
-      sessionsDir,
     });
     if (forkedResult.status === "missing-parent") {
       throw new Error(

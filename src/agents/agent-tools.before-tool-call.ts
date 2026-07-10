@@ -16,6 +16,7 @@ import {
 import {
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
+  emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
   type DiagnosticEventPrivateData,
   type DiagnosticToolParamsSummary,
@@ -67,7 +68,7 @@ import {
   resolveSkillTelemetrySource,
   resolveSkillTelemetrySourceValue,
 } from "../skills/loading/source.js";
-import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
+import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import {
@@ -77,6 +78,7 @@ import {
   recordStructuredReplaySafeToolCall,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
+import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
 export {
   consumeAdjustedParamsForToolCall,
@@ -114,6 +116,7 @@ import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import { getToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
+import { canonicalizePath } from "./utils/paths.js";
 
 export type ToolOutcomeObservation = {
   toolName: string;
@@ -151,8 +154,10 @@ export type HookContext = {
   onToolOutcome?: ToolOutcomeObserver;
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   skillsSnapshot?: SkillSnapshot;
+  skillUsagePaths?: SkillUsagePath[];
   skillCommand?: {
     commandName: string;
+    skillFile?: string;
     skillName: string;
     skillSource?: SkillTelemetrySource;
     toolName?: string;
@@ -263,7 +268,7 @@ const pendingTerminalPresentationByToolCall = new Map<
   }
 >();
 
-export function resolveToolTerminalPresentation(params: {
+function resolveToolTerminalPresentation(params: {
   tool: AnyAgentTool;
   toolParams: unknown;
   result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
@@ -586,10 +591,47 @@ function resolveToolDiagnosticIdentity(tool: AnyAgentTool): ToolDiagnosticIdenti
 }
 
 type SkillUsageMatch = {
+  skillFile?: string;
   skillName: string;
   skillSource: SkillTelemetrySource;
   activation: "command" | "read";
 };
+
+function canonicalSkillFile(value: string | undefined): string | undefined {
+  const skillFile = value?.trim();
+  return skillFile && path.isAbsolute(skillFile)
+    ? canonicalizePath(path.resolve(skillFile))
+    : undefined;
+}
+
+function resolvedSkillUsageMatch(params: {
+  activation: SkillUsageMatch["activation"];
+  skill: NonNullable<SkillSnapshot["resolvedSkills"]>[number];
+}): SkillUsageMatch {
+  const skillFile = canonicalSkillFile(params.skill.filePath);
+  return {
+    skillName: params.skill.name.trim(),
+    skillSource: resolveSkillTelemetrySource(params.skill),
+    activation: params.activation,
+    ...(skillFile ? { skillFile } : {}),
+  };
+}
+
+function findResolvedSkillUsageMatch(params: {
+  activation: SkillUsageMatch["activation"];
+  skillName: string;
+  skillSource: SkillTelemetrySource;
+  snapshot?: SkillSnapshot;
+}): SkillUsageMatch | undefined {
+  const skillName = params.skillName.trim();
+  const candidates = (params.snapshot?.resolvedSkills ?? []).filter(
+    (skill) => skill.name.trim() === skillName,
+  );
+  const skill =
+    candidates.find((candidate) => resolveSkillTelemetrySource(candidate) === params.skillSource) ??
+    (candidates.length === 1 ? candidates[0] : undefined);
+  return skill ? resolvedSkillUsageMatch({ activation: params.activation, skill }) : undefined;
+}
 
 function resolveRelativeToolPath(candidate: string, ctx?: HookContext): string | undefined {
   const trimmed = candidate.trim();
@@ -615,7 +657,7 @@ function readToolPathCandidates(params: unknown, ctx?: HookContext): string[] {
   }
   const candidates = typeof params.path === "string" ? [params.path] : [];
   return candidates
-    .map((candidate) => resolveRelativeToolPath(candidate, ctx))
+    .map((candidate) => resolveRelativeToolPath(normalizeFileToolPathParam(candidate), ctx))
     .filter((candidate): candidate is string => Boolean(candidate));
 }
 
@@ -626,11 +668,7 @@ function skillInstructionPaths(snapshot: SkillSnapshot | undefined): Map<string,
     if (!skillName) {
       continue;
     }
-    const match = {
-      skillName,
-      skillSource: resolveSkillTelemetrySource(skill),
-      activation: "read" as const,
-    };
+    const match = resolvedSkillUsageMatch({ activation: "read", skill });
     const filePath = typeof skill.filePath === "string" ? skill.filePath.trim() : "";
     if (filePath && path.isAbsolute(filePath)) {
       matches.set(path.resolve(filePath), match);
@@ -639,6 +677,19 @@ function skillInstructionPaths(snapshot: SkillSnapshot | undefined): Map<string,
     if (baseDir && path.isAbsolute(baseDir)) {
       matches.set(path.resolve(baseDir, "SKILL.md"), match);
     }
+  }
+  return matches;
+}
+
+function materializedSkillInstructionPaths(paths: SkillUsagePath[] | undefined) {
+  const matches = new Map<string, SkillUsageMatch>();
+  for (const entry of paths ?? []) {
+    matches.set(path.resolve(entry.readPath), {
+      skillFile: entry.skillFile,
+      skillName: entry.skillName,
+      skillSource: entry.skillSource,
+      activation: "read",
+    });
   }
   return matches;
 }
@@ -652,18 +703,29 @@ function findSkillUsageMatch(params: {
   if (command) {
     const commandToolName = normalizeToolName(command.toolName ?? params.toolName);
     if (!commandToolName || commandToolName === params.toolName) {
+      const skillSource = resolveSkillTelemetrySourceValue(command.skillSource);
+      const snapshotMatch = findResolvedSkillUsageMatch({
+        activation: "command",
+        skillName: command.skillName,
+        skillSource,
+        snapshot: params.ctx?.skillsSnapshot,
+      });
+      const skillFile = canonicalSkillFile(command.skillFile) ?? snapshotMatch?.skillFile;
       return {
         skillName: command.skillName,
-        skillSource: resolveSkillTelemetrySourceValue(command.skillSource),
+        skillSource,
         activation: "command",
+        ...(skillFile ? { skillFile } : {}),
       };
     }
   }
 
-  if (params.toolName !== "read" || !params.ctx?.skillsSnapshot?.resolvedSkills?.length) {
+  if (params.toolName !== "read") {
     return undefined;
   }
-  const skillPaths = skillInstructionPaths(params.ctx.skillsSnapshot);
+  const skillPaths = params.ctx?.skillsSnapshot?.resolvedSkills?.length
+    ? skillInstructionPaths(params.ctx.skillsSnapshot)
+    : materializedSkillInstructionPaths(params.ctx?.skillUsagePaths);
   for (const candidate of readToolPathCandidates(params.toolParams, params.ctx)) {
     const match = skillPaths.get(candidate);
     if (match) {
@@ -682,19 +744,24 @@ function emitSkillUsedDiagnostic(params: {
   const trace = params.ctx?.trace
     ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace))
     : undefined;
-  emitTrustedDiagnosticEvent({
-    type: "skill.used",
-    ...(params.ctx?.runId && { runId: params.ctx.runId }),
-    ...(params.ctx?.sessionKey && { sessionKey: params.ctx.sessionKey }),
-    ...(params.ctx?.sessionId && { sessionId: params.ctx.sessionId }),
-    ...(params.ctx?.agentId && { agentId: params.ctx.agentId }),
-    ...(trace && { trace }),
-    skillName: params.match.skillName,
-    skillSource: params.match.skillSource,
-    activation: params.match.activation,
-    toolName: params.toolName,
-    ...(params.toolCallId && { toolCallId: params.toolCallId }),
-  });
+  // Skill file paths are trusted-internal accounting data. Public diagnostic
+  // payloads stay path-free even when diagnostics are enabled.
+  emitTrustedSkillUsedDiagnosticEvent(
+    {
+      type: "skill.used",
+      ...(params.ctx?.runId && { runId: params.ctx.runId }),
+      ...(params.ctx?.sessionKey && { sessionKey: params.ctx.sessionKey }),
+      ...(params.ctx?.sessionId && { sessionId: params.ctx.sessionId }),
+      ...(params.ctx?.agentId && { agentId: params.ctx.agentId }),
+      ...(trace && { trace }),
+      skillName: params.match.skillName,
+      skillSource: params.match.skillSource,
+      activation: params.match.activation,
+      toolName: params.toolName,
+      ...(params.toolCallId && { toolCallId: params.toolCallId }),
+    },
+    params.match.skillFile ? { skillUsage: { skillFile: params.match.skillFile } } : undefined,
+  );
 }
 
 function emitToolBlockedSecurityEvent(params: {

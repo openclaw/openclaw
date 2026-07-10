@@ -1,5 +1,5 @@
 // Control UI component renders the login gate.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
@@ -12,6 +12,7 @@ import {
   shouldShowInsecureContextHint,
 } from "../lib/overview-hints.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
 
@@ -25,7 +26,7 @@ type LoginFailureKind =
   | "protocol-mismatch"
   | "network";
 
-export type LoginFailureFeedback = {
+type LoginFailureFeedback = {
   kind: LoginFailureKind;
   title: string;
   summary: string;
@@ -35,7 +36,7 @@ export type LoginFailureFeedback = {
   rawError: string;
 };
 
-export type LoginGateProps = {
+type LoginGateProps = {
   basePath: string;
   connected: boolean;
   lastError: string | null;
@@ -108,7 +109,7 @@ function buildFeedback(params: {
   };
 }
 
-export function resolveLoginFailureFeedback(
+function resolveLoginFailureFeedback(
   params: LoginFailureFeedbackParams,
 ): LoginFailureFeedback | null {
   if (params.connected || !params.lastError) {
@@ -431,17 +432,8 @@ function renderLoginGate(props: LoginGateProps) {
   `;
 }
 
-export class LoginGate extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class LoginGate extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: LoginGateProps;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-  }
 
   override render() {
     return this.props ? renderLoginGate(this.props) : nothing;

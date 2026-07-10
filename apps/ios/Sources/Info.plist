@@ -67,7 +67,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>OpenClaw uses your location when you allow location sharing.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>OpenClaw uses the microphone for realtime chat, voice wake, and push-to-talk.</string>
+	<string>OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>OpenClaw may use motion data to support device-aware interactions and automations.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -82,6 +82,10 @@
 	<string>$(OPENCLAW_ACTIVE_APP_GROUP_ID)</string>
 	<key>OpenClawCanonicalVersion</key>
 	<string>$(OPENCLAW_IOS_VERSION)</string>
+	<key>OpenClawGitCommit</key>
+	<string>$(OPENCLAW_GIT_COMMIT)</string>
+	<key>OpenClawBuildTimestamp</key>
+	<string>$(OPENCLAW_BUILD_TIMESTAMP)</string>
 	<key>OpenClawPushMode</key>
 	<string>$(OPENCLAW_PUSH_MODE)</string>
 	<key>OpenClawPushRelayBaseURL</key>

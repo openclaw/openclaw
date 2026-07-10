@@ -4,9 +4,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import {
   isCliProvider,
@@ -22,12 +22,33 @@ import {
   detectInferenceBackends,
   type InferenceBackendKind,
 } from "../commands/onboard-inference.js";
+import { createMergePatch } from "../config/io.write-prepare.js";
+import { applyMergePatch } from "../config/merge-patch.js";
+import {
+  normalizeAgentModelRefForConfig,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { enablePluginInConfig } from "../plugins/enable.js";
+import {
+  applyProviderPluginAuthMethodResultConfig,
+  runProviderPluginAuthMethodUnpersisted,
+} from "../plugins/provider-auth-choice.js";
+import {
+  resolveManifestProviderAuthChoice,
+  resolveManifestProviderAuthChoices,
+  type ProviderAuthChoiceMetadata,
+} from "../plugins/provider-auth-choices.js";
+import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import type { ProviderAuthMethod, ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { buildCliPlannerConfig, buildCodexAppServerPlannerConfig } from "./assistant-backends.js";
 import { loadAuthoredSetupConfig } from "./onboarding-welcome.js";
-import { applyCrestodianSetup, createQuickstartNotePrompter } from "./setup-apply.js";
+import {
+  applyCrestodianModelSelection,
+  applyCrestodianSetup,
+  createQuickstartNotePrompter,
+} from "./setup-apply.js";
 
 /**
  * Inference is the one required onboarding step (docs/cli/crestodian.md
@@ -39,14 +60,6 @@ import { applyCrestodianSetup, createQuickstartNotePrompter } from "./setup-appl
 export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
 const SETUP_INFERENCE_TEST_MAX_TOKENS = 32;
-const GOOGLE_API_DEFAULT_MODEL_REF = "google/gemini-3.1-pro-preview";
-
-/** Providers accepted for the manual API-key step, mapped to a starter model. */
-const MANUAL_API_KEY_MODEL_REFS: Record<string, string> = {
-  anthropic: ANTHROPIC_API_DEFAULT_MODEL_REF,
-  openai: OPENAI_API_DEFAULT_MODEL_REF,
-  google: GOOGLE_API_DEFAULT_MODEL_REF,
-};
 
 export type SetupInferenceCandidate = {
   kind: InferenceBackendKind;
@@ -57,8 +70,17 @@ export type SetupInferenceCandidate = {
   credentials?: boolean;
 };
 
+export type SetupInferenceManualProvider = {
+  /** Provider-auth choice id sent back to `crestodian.setup.activate`. */
+  id: string;
+  label: string;
+  hint?: string;
+};
+
 export type SetupInferenceDetection = {
   candidates: SetupInferenceCandidate[];
+  /** Text-inference key/token methods exposed by installed provider manifests. */
+  manualProviders: SetupInferenceManualProvider[];
   /** Resolved workspace the setup apply would use (display + default). */
   workspace: string;
   configuredModel?: string;
@@ -80,11 +102,15 @@ export type ActivateSetupInferenceResult =
   | { ok: true; modelRef: string; latencyMs: number; lines: string[] }
   | { ok: false; status: SetupInferenceStatus; error: string };
 
+export type VerifySetupInferenceResult =
+  | { ok: true; modelRef: string; latencyMs: number }
+  | { ok: false; status: SetupInferenceStatus; error: string };
+
 export type ActivateSetupInferenceParams = {
   kind: InferenceBackendKind | "api-key";
-  /** Manual step only: provider the pasted API key belongs to. */
-  provider?: string;
-  /** Manual step only: the pasted API key. Never logged. */
+  /** Manual step only: provider-auth choice returned by detection. */
+  authChoice?: string;
+  /** Manual step only: the pasted API key or token. Never logged. */
   apiKey?: string;
   workspace?: string;
   surface: "cli" | "gateway";
@@ -98,13 +124,67 @@ export type ActivateSetupInferenceDeps = {
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   applySetup?: typeof applyCrestodianSetup;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
+  transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   updateConfig?: typeof import("../commands/models/shared.js").updateConfig;
+  refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
+  resolvePluginProviders?: typeof resolvePluginProviders;
+  resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
+  enablePluginInConfig?: typeof enablePluginInConfig;
+  resolveAgentDir?: typeof resolveAgentDir;
   createTempDir?: () => Promise<string>;
   removeTempDir?: (dir: string) => Promise<void>;
   timeoutMs?: number;
 };
 
-export async function detectSetupInference(): Promise<SetupInferenceDetection> {
+export type DetectSetupInferenceDeps = {
+  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
+};
+
+async function resolveSetupInferenceWorkspace(params: {
+  configExists: boolean;
+  configValid: boolean;
+}): Promise<{ workspace: string; hasAuthoredSetup: boolean }> {
+  const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig(params);
+  const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
+  return {
+    workspace: resolveUserPath(
+      authoredConfig?.agents?.defaults?.workspace?.trim() || DEFAULT_WORKSPACE,
+    ),
+    hasAuthoredSetup,
+  };
+}
+
+function supportsTextInference(scopes?: ProviderAuthChoiceMetadata["onboardingScopes"]): boolean {
+  return !scopes || scopes.includes("text-inference");
+}
+
+function supportsManualSecret(choice: ProviderAuthChoiceMetadata): boolean {
+  return supportsTextInference(choice.onboardingScopes) && choice.appGuidedSecret === true;
+}
+
+export function listSetupInferenceManualProviders(
+  authChoices: readonly ProviderAuthChoiceMetadata[],
+): SetupInferenceManualProvider[] {
+  const choices = new Map<string, SetupInferenceManualProvider>();
+  for (const choice of authChoices) {
+    const id = choice.choiceId.trim();
+    if (!id || choices.has(id) || !supportsManualSecret(choice)) {
+      continue;
+    }
+    choices.set(id, {
+      id,
+      label: choice.choiceLabel,
+      ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
+    });
+  }
+  return [...choices.values()].toSorted(
+    (a, b) => a.label.localeCompare(b.label, "en") || a.id.localeCompare(b.id, "en"),
+  );
+}
+
+export async function detectSetupInference(
+  deps: DetectSetupInferenceDeps = {},
+): Promise<SetupInferenceDetection> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   const cfg = snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
@@ -116,17 +196,22 @@ export async function detectSetupInference(): Promise<SetupInferenceDetection> {
     ...candidate,
     recommended: index === recommendedIndex,
   }));
-  const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig({
+  const { workspace, hasAuthoredSetup } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
   });
   const configuredModel = raw.find((candidate) => candidate.kind === "existing-model")?.modelRef;
-  const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
-  const workspace = resolveUserPath(
-    authoredConfig?.agents?.defaults?.workspace?.trim() || DEFAULT_WORKSPACE,
-  );
+  const authChoices = (
+    deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
+  )({
+    config: cfg,
+    workspaceDir: workspace,
+    includeUntrustedWorkspacePlugins: false,
+    includeWorkspacePlugins: false,
+  }).filter((choice) => enablePluginInConfig(cfg, choice.pluginId).enabled);
   return {
     candidates,
+    manualProviders: listSetupInferenceManualProviders(authChoices),
     workspace,
     ...(configuredModel ? { configuredModel } : {}),
     setupComplete: hasAuthoredSetup && Boolean(configuredModel),
@@ -139,10 +224,17 @@ type SetupInferenceTestPlan = {
   model: string;
   modelRef: string;
   config: OpenClawConfig;
-  agentHarnessId?: string;
+  agentId?: string;
+  agentDir?: string;
+  cleanupBundleMcpOnRunEnd?: boolean;
   authProfileId?: string;
   /** Model to persist as default on success; undefined keeps the current one. */
   persistModelRef?: string;
+  manualAuth?: {
+    profiles: ProviderAuthResult["profiles"];
+    configPatch: unknown;
+    pluginId?: string;
+  };
 };
 
 type RunResult = {
@@ -189,9 +281,14 @@ function mapFailoverReasonToSetupStatus(reason?: string | null): SetupInferenceS
 
 async function buildTestPlan(params: {
   kind: InferenceBackendKind | "api-key";
-  provider?: string;
+  authChoice?: string;
+  apiKey?: string;
   cfg: OpenClawConfig;
   workspaceDir: string;
+  pluginWorkspaceDir: string;
+  agentDir: string;
+  runtime: RuntimeEnv;
+  deps: ActivateSetupInferenceDeps;
 }): Promise<SetupInferenceTestPlan | { error: string }> {
   const { kind, cfg, workspaceDir } = params;
   switch (kind) {
@@ -204,6 +301,7 @@ async function buildTestPlan(params: {
         model: ref.model,
         modelRef,
         config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
       };
     }
     case "claude-cli": {
@@ -212,7 +310,8 @@ async function buildTestPlan(params: {
         runner: "cli",
         ...ref,
         modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, CLAUDE_CLI_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       };
     }
@@ -222,7 +321,8 @@ async function buildTestPlan(params: {
         runner: "cli",
         ...ref,
         modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, GEMINI_CLI_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       };
     }
@@ -232,8 +332,10 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
-        config: buildCodexAppServerPlannerConfig(workspaceDir),
-        agentHarnessId: "codex",
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
+        agentDir: params.agentDir,
+        cleanupBundleMcpOnRunEnd: true,
         persistModelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       };
     }
@@ -243,7 +345,8 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef: OPENAI_API_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, OPENAI_API_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: OPENAI_API_DEFAULT_MODEL_REF,
       };
     }
@@ -253,27 +356,127 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, ANTHROPIC_API_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
       };
     }
     case "api-key": {
-      const provider = normalizeProviderId(params.provider ?? "");
-      const canonical = provider === "codex" || provider === "openai-codex" ? "openai" : provider;
-      const modelRef = MANUAL_API_KEY_MODEL_REFS[canonical];
-      if (!modelRef) {
+      const apiKey = params.apiKey?.trim();
+      if (!apiKey) {
+        return { error: "Enter an API key or token first." };
+      }
+      const authChoice = params.authChoice?.trim();
+      const choice = authChoice
+        ? (params.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
+            authChoice,
+            {
+              config: cfg,
+              workspaceDir: params.pluginWorkspaceDir,
+              includeUntrustedWorkspacePlugins: false,
+              includeWorkspacePlugins: false,
+            },
+          )
+        : undefined;
+      if (!choice || !supportsManualSecret(choice)) {
+        return { error: "That key-based provider is not available on this Gateway." };
+      }
+      const enableResult = (params.deps.enablePluginInConfig ?? enablePluginInConfig)(
+        cfg,
+        choice.pluginId,
+      );
+      if (!enableResult.enabled) {
         return {
-          error: `Unsupported provider "${params.provider ?? ""}" — expected anthropic, openai, or google.`,
+          error: `${choice.choiceLabel} is disabled (${enableResult.reason ?? "blocked"}).`,
+        };
+      }
+      const providers = (params.deps.resolvePluginProviders ?? resolvePluginProviders)({
+        config: enableResult.config,
+        workspaceDir: params.pluginWorkspaceDir,
+        mode: "setup",
+        includeUntrustedWorkspacePlugins: false,
+        onlyPluginIds: [choice.pluginId],
+      });
+      const provider = providers.find(
+        (candidate) =>
+          candidate.pluginId === choice.pluginId &&
+          normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
+      );
+      const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
+      const resolved = provider && method ? { provider, method } : null;
+      if (!resolved || !supportsTextInference(resolved.method.wizard?.onboardingScopes)) {
+        return { error: "That key-based provider is not available on this Gateway." };
+      }
+      let result: ProviderAuthResult;
+      let preparedConfig: OpenClawConfig;
+      try {
+        if (resolved.method.kind === "api_key" || resolved.method.kind === "token") {
+          result = await runProviderPluginAuthMethodUnpersisted({
+            config: enableResult.config,
+            runtime: params.runtime,
+            prompter: createQuickstartNotePrompter(params.runtime),
+            method: resolved.method,
+            agentDir: params.agentDir,
+            workspaceDir,
+            secretInputMode: "plaintext",
+            allowSecretRefPrompt: false,
+            opts: { token: apiKey, tokenProvider: resolved.provider.id },
+          });
+          preparedConfig = applyProviderPluginAuthMethodResultConfig({
+            config: enableResult.config,
+            result,
+          });
+        } else {
+          const prepared = await runProviderManualSecretMethod({
+            config: enableResult.config,
+            baseConfig: cfg,
+            choice,
+            method: resolved.method,
+            apiKey,
+            agentDir: params.agentDir,
+            workspaceDir,
+          });
+          result = prepared.result;
+          preparedConfig = prepared.config;
+        }
+      } catch {
+        return {
+          error: `${resolved.provider.label} could not prepare this credential for app-guided setup.`,
+        };
+      }
+      const modelRef = result.defaultModel
+        ? normalizeAgentModelRefForConfig(result.defaultModel)
+        : "";
+      if (!modelRef || result.profiles.length === 0) {
+        return {
+          error: `${resolved.provider.label} does not expose a starter model for app-guided setup.`,
         };
       }
       const ref = parseRef(modelRef);
+      if (!ref.model) {
+        return {
+          error: `${resolved.provider.label} returned an invalid starter model.`,
+        };
+      }
+      const matchingProfile =
+        result.profiles.find(
+          (profile) =>
+            normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
+        ) ?? result.profiles[0];
       return {
         runner: "embedded",
         ...ref,
         modelRef,
-        config: buildCliPlannerConfig(workspaceDir, modelRef),
-        authProfileId: `${canonical}:manual`,
+        agentDir: params.agentDir,
+        config: preparedConfig,
+        agentId: resolveDefaultAgentId(preparedConfig),
+        authProfileId: matchingProfile.profileId,
         persistModelRef: modelRef,
+        manualAuth: {
+          profiles: result.profiles,
+          configPatch: createMergePatch(enableResult.config, preparedConfig),
+          ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
+        },
       };
     }
     default:
@@ -281,12 +484,108 @@ async function buildTestPlan(params: {
   }
 }
 
+async function runProviderManualSecretMethod(params: {
+  config: OpenClawConfig;
+  baseConfig: OpenClawConfig;
+  choice: ProviderAuthChoiceMetadata;
+  method: ProviderAuthMethod;
+  apiKey: string;
+  agentDir: string;
+  workspaceDir: string;
+}): Promise<{ result: ProviderAuthResult; config: OpenClawConfig }> {
+  const optionKey = params.choice.optionKey;
+  const runNonInteractive = params.method.runNonInteractive;
+  if (!optionKey || !params.choice.cliOption || !runNonInteractive) {
+    throw new Error("Provider does not expose app-guided secret setup.");
+  }
+
+  let methodError = "";
+  const isolatedRuntime: RuntimeEnv = {
+    log: () => {},
+    error: (...args) => {
+      methodError = args.map(String).join(" ");
+    },
+    // Provider CLI methods use exit for validation failures. Convert it to a
+    // request-local failure so app-guided setup can never stop the Gateway.
+    exit: (code) => {
+      throw new Error(methodError || `Provider setup exited with code ${code}.`);
+    },
+  };
+  const configured = await runNonInteractive({
+    authChoice: params.choice.choiceId,
+    config: params.config,
+    baseConfig: params.baseConfig,
+    opts: { [optionKey]: params.apiKey, secretInputMode: "plaintext" },
+    runtime: isolatedRuntime,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    resolveApiKey: async (input) =>
+      typeof input.flagValue === "string" && input.flagValue.trim()
+        ? { key: input.flagValue.trim(), source: "flag" }
+        : null,
+    toApiKeyCredential: ({ provider, resolved, email, metadata }) => ({
+      type: "api_key",
+      provider,
+      key: resolved.key,
+      ...(email ? { email } : {}),
+      ...(metadata ? { metadata } : {}),
+    }),
+  });
+  if (!configured) {
+    throw new Error(methodError || "Provider setup did not produce a configuration.");
+  }
+
+  const store = loadPersistedAuthProfileStore(params.agentDir);
+  const profiles = Object.entries(store?.profiles ?? {}).map(([profileId, credential]) => ({
+    profileId,
+    credential,
+  }));
+  const previousModel = resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
+  const configuredModel = resolveAgentModelPrimaryValue(configured.agents?.defaults?.model);
+  const configuredProvider = configuredModel ? parseRef(configuredModel).provider : undefined;
+  // Dynamic provider setup can rediscover the already-selected model while
+  // repairing credentials. It is valid only when the provider still owns it.
+  const configuredModelOwnedByProvider =
+    configuredProvider !== undefined &&
+    normalizeProviderId(configuredProvider) === normalizeProviderId(params.choice.providerId);
+  const defaultModel =
+    configuredModel && (configuredModel !== previousModel || configuredModelOwnedByProvider)
+      ? configuredModel
+      : params.method.starterModel;
+  if (profiles.length === 0 || !defaultModel) {
+    throw new Error("Provider setup did not produce credentials and a starter model.");
+  }
+  return {
+    result: { profiles, defaultModel },
+    config: configured,
+  };
+}
+
 /**
  * Test one candidate with a real completion, then persist it as the setup
- * default. Manual API keys are staged into the auth store for the test and
- * rolled back when the test fails, so a bad key leaves no trace.
+ * default. Manual credentials are tested from a temporary auth store and
+ * copied into the real agent store only after success, so failures leave no trace.
  */
 export async function activateSetupInference(
+  params: ActivateSetupInferenceParams,
+): Promise<ActivateSetupInferenceResult> {
+  try {
+    const result = await activateSetupInferenceUnredacted(params);
+    if (result.ok) {
+      return result;
+    }
+    return {
+      ...result,
+      error: await redactSetupInferenceError(result.error, params.apiKey),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // oxlint-disable-next-line preserve-caught-error -- The original cause can contain the submitted setup secret.
+    throw new Error(await redactSetupInferenceError(message, params.apiKey));
+  }
+}
+
+async function activateSetupInferenceUnredacted(
   params: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
   const deps = params.deps ?? {};
@@ -295,35 +594,139 @@ export async function activateSetupInference(
   const snapshot = await readSnapshot();
   const cfg: OpenClawConfig =
     snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const workspace = params.workspace?.trim()
+    ? resolveUserPath(params.workspace)
+    : (
+        await resolveSetupInferenceWorkspace({
+          configExists: snapshot.exists,
+          configValid: snapshot.valid,
+        })
+      ).workspace;
 
   const tempDir = await (
     deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
   )();
+  const agentDir = (deps.resolveAgentDir ?? resolveAgentDir)(cfg, resolveDefaultAgentId(cfg));
+  const testAgentDir = path.join(tempDir, "agent");
   try {
     const plan = await buildTestPlan({
       kind: params.kind,
-      ...(params.provider !== undefined ? { provider: params.provider } : {}),
+      ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
+      ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
       cfg,
       workspaceDir: tempDir,
+      pluginWorkspaceDir: workspace,
+      agentDir: testAgentDir,
+      runtime: params.runtime,
+      deps,
     });
     if ("error" in plan) {
       return { ok: false, status: "unavailable", error: plan.error };
     }
 
-    const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
-    let stagedProfile: { profileId: string; prior?: AuthProfileCredential } | null = null;
-    if (plan.authProfileId) {
-      const apiKey = params.apiKey?.trim();
-      if (!apiKey) {
-        return { ok: false, status: "unavailable", error: "Enter an API key first." };
-      }
-      stagedProfile = await stageManualApiKeyProfile({
-        profileId: plan.authProfileId,
-        provider: plan.provider,
-        apiKey,
-        agentDir,
+    let testPlan = plan;
+    if (plan.persistModelRef) {
+      const stagedConfig = await applyCrestodianModelSelection({
+        config: plan.config,
+        model: plan.persistModelRef,
+        ...(params.kind === "codex-cli" ? { agentRuntimeId: "codex" } : {}),
       });
-      if (!stagedProfile) {
+      testPlan = {
+        ...plan,
+        config: stagedConfig,
+        agentId: resolveDefaultAgentId(stagedConfig),
+      };
+    }
+
+    let codexPluginPatch: unknown;
+    if (params.kind === "codex-cli") {
+      const { stripPendingPluginInstallRecords } =
+        await import("../plugins/install-record-commit.js");
+      // This explicit Codex CLI choice owns its runtime independently of the
+      // user's existing OpenAI provider route (which may use a custom base URL).
+      const codexInstallBase = stripPendingPluginInstallRecords(testPlan.config);
+      const enabledCodexBase = enablePluginInConfig(codexInstallBase, "codex");
+      if (!enabledCodexBase.enabled) {
+        return {
+          ok: false,
+          status: "unavailable",
+          error: `Could not enable the Codex runtime plugin: ${enabledCodexBase.reason ?? "plugin disabled"}.`,
+        };
+      }
+      const ensureCodex =
+        deps.ensureCodexRuntimePlugin ??
+        (await import("../commands/codex-runtime-plugin-install.js"))
+          .ensureCodexRuntimePluginForModelSelection;
+      const ensured = await ensureCodex({
+        cfg: enabledCodexBase.config,
+        model: plan.modelRef,
+        agentId: testPlan.agentId,
+        prompter: createQuickstartNotePrompter(params.runtime),
+        runtime: params.runtime,
+        workspaceDir: tempDir,
+      });
+      if (!ensured.installed) {
+        return {
+          ok: false,
+          status: ensured.status === "timed_out" ? "timeout" : "unavailable",
+          error:
+            ensured.status === "timed_out"
+              ? "Codex runtime plugin installation timed out. Try again."
+              : ensured.reason
+                ? `Could not enable the Codex runtime plugin: ${ensured.reason}.`
+                : "Could not install the Codex runtime plugin. Try again once the plugin is available.",
+        };
+      }
+      const pendingCodexInstall = ensured.cfg.plugins?.installs?.codex;
+      if (pendingCodexInstall) {
+        // The package is already in the managed global root. Record ownership now so a
+        // failed or abandoned live probe cannot leave an untracked install behind.
+        const transformConfig =
+          deps.transformConfigWithPendingPluginInstalls ??
+          (await import("../plugins/install-record-commit.js"))
+            .transformConfigWithPendingPluginInstalls;
+        await transformConfig({
+          afterWrite: {
+            mode: "none",
+            reason: "Crestodian records the installed Codex runtime before probing",
+          },
+          transform: (current) => {
+            const strippedCurrent = stripPendingPluginInstallRecords(current);
+            return {
+              nextConfig: {
+                ...strippedCurrent,
+                plugins: {
+                  ...strippedCurrent.plugins,
+                  installs: { codex: pendingCodexInstall },
+                },
+              },
+            };
+          },
+        });
+      }
+      const enabledCodex = enablePluginInConfig(ensured.cfg, "codex");
+      if (!enabledCodex.enabled) {
+        return {
+          ok: false,
+          status: "unavailable",
+          error: `Could not enable the Codex runtime plugin: ${enabledCodex.reason ?? "plugin disabled"}.`,
+        };
+      }
+      // Enablement and the model-scoped runtime pin remain transient probe inputs.
+      // Persist them only after completion; the managed install record is durable above.
+      const stagedCodexConfig = stripPendingPluginInstallRecords(enabledCodex.config);
+      codexPluginPatch = createMergePatch(cfg, stagedCodexConfig);
+      testPlan = {
+        ...testPlan,
+        config: applyMergePatch(stagedCodexConfig, {
+          tools: { exec: { mode: "full" } },
+        }) as OpenClawConfig,
+      };
+    }
+
+    if (plan.manualAuth) {
+      const staged = await persistManualAuthProfiles(plan.manualAuth.profiles, testAgentDir);
+      if (!staged) {
         return {
           ok: false,
           status: "unknown",
@@ -332,52 +735,59 @@ export async function activateSetupInference(
       }
     }
 
-    const test = await runSetupInferenceTest({ plan, tempDir, deps });
+    const test = await runSetupInferenceTest({ plan: testPlan, tempDir, deps });
     if (!test.ok) {
-      if (stagedProfile) {
-        await rollbackManualApiKeyProfile({ ...stagedProfile, agentDir });
-      }
       return test;
     }
 
-    // Test passed — persist. Codex routes openai/* through the Codex plugin,
-    // so make sure it is installed/enabled before the model ref lands in config.
-    if (params.kind === "codex-cli") {
-      const ensureCodex =
-        deps.ensureCodexRuntimePlugin ??
-        (await import("../commands/codex-runtime-plugin-install.js"))
-          .ensureCodexRuntimePluginForModelSelection;
-      const ensured = await ensureCodex({
-        cfg,
-        model: plan.modelRef,
-        prompter: createQuickstartNotePrompter(params.runtime),
-        runtime: params.runtime,
-        workspaceDir: tempDir,
+    if (codexPluginPatch !== undefined) {
+      // Persist success-gated enablement and the model-scoped runtime pin. The managed
+      // install record was committed before the live probe.
+      const { stripPendingPluginInstallRecords } =
+        await import("../plugins/install-record-commit.js");
+      const transformConfig =
+        deps.transformConfigWithPendingPluginInstalls ??
+        (await import("../plugins/install-record-commit.js"))
+          .transformConfigWithPendingPluginInstalls;
+      const committed = await transformConfig({
+        // Keep the setup RPC alive until the final model/setup write completes. The explicit
+        // registry refresh below makes the newly installed plugin available without a restart.
+        afterWrite: { mode: "none", reason: "Crestodian setup finalizes config after refresh" },
+        transform: (current) => ({
+          nextConfig: applyMergePatch(
+            stripPendingPluginInstallRecords(current),
+            codexPluginPatch,
+          ) as OpenClawConfig,
+        }),
       });
-      if (ensured.required) {
-        const updateConfig =
-          deps.updateConfig ?? (await import("../commands/models/shared.js")).updateConfig;
-        const { enablePluginInConfig } = await import("../plugins/enable.js");
-        await updateConfig((current) => enablePluginInConfig(current, "codex").config);
-      }
+      const refreshPluginRegistry =
+        deps.refreshPluginRegistryAfterConfigMutation ??
+        (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
+      await refreshPluginRegistry({
+        config: committed.nextConfig,
+        reason: "source-changed",
+        workspaceDir: workspace,
+        logger: { warn: (message) => params.runtime.log?.(message) },
+      });
     }
-    if (stagedProfile && plan.authProfileId) {
+    if (plan.manualAuth) {
+      const manualAuth = plan.manualAuth;
+      const persisted = await persistManualAuthProfiles(manualAuth.profiles, agentDir);
+      if (!persisted) {
+        return {
+          ok: false,
+          status: "unknown",
+          error: "Could not update the auth profile store; try again in a moment.",
+        };
+      }
       const updateConfig =
         deps.updateConfig ?? (await import("../commands/models/shared.js")).updateConfig;
-      const { applyAuthProfileConfig } = await import("../plugins/provider-auth-helpers.js");
-      const profileId = plan.authProfileId;
-      const provider = plan.provider;
-      await updateConfig((current) =>
-        applyAuthProfileConfig(current, { profileId, provider, mode: "api_key" }),
-      );
+      await updateConfig((current) => applyManualAuthConfig(current, manualAuth));
     }
 
     const applySetup = deps.applySetup ?? applyCrestodianSetup;
-    const detection = params.workspace?.trim()
-      ? { workspace: resolveUserPath(params.workspace) }
-      : { workspace: (await detectSetupInference()).workspace };
     const applied = await applySetup({
-      workspace: detection.workspace,
+      workspace,
       ...(plan.persistModelRef ? { model: plan.persistModelRef } : {}),
       surface: params.surface,
       runtime: params.runtime,
@@ -390,52 +800,95 @@ export async function activateSetupInference(
   }
 }
 
-async function stageManualApiKeyProfile(params: {
-  profileId: string;
-  provider: string;
-  apiKey: string;
-  agentDir: string;
-}): Promise<{ profileId: string; prior?: AuthProfileCredential } | null> {
-  let prior: AuthProfileCredential | undefined;
-  const updated = await updateAuthProfileStoreWithLock({
-    agentDir: params.agentDir,
-    saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
-    updater: (store) => {
-      prior = store.profiles[params.profileId];
-      return false;
-    },
-  });
-  if (updated === null) {
-    return null;
+async function redactSetupInferenceError(message: string, apiKey?: string): Promise<string> {
+  const secrets = new Set(
+    [apiKey, apiKey?.trim()].filter((value): value is string => Boolean(value)),
+  );
+  let redacted = message;
+  for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
+    redacted = redacted.split(secret).join("[redacted]");
   }
-  const upserted = await upsertAuthProfileWithLock({
-    profileId: params.profileId,
-    credential: { type: "api_key", provider: params.provider, key: params.apiKey },
-    agentDir: params.agentDir,
-  });
-  if (upserted === null) {
-    return null;
-  }
-  return { profileId: params.profileId, ...(prior ? { prior } : {}) };
+  const { redactToolPayloadText } = await import("../logging/redact.js");
+  return redactToolPayloadText(redacted);
 }
 
-async function rollbackManualApiKeyProfile(params: {
-  profileId: string;
-  prior?: AuthProfileCredential;
-  agentDir: string;
-}): Promise<void> {
-  await updateAuthProfileStoreWithLock({
-    agentDir: params.agentDir,
+/** Live-test the configured default model without changing config or auth state. */
+export async function verifySetupInference(params: {
+  kind?: "existing-model";
+  runtime: RuntimeEnv;
+  timeoutMs?: number;
+  deps?: ActivateSetupInferenceDeps;
+}): Promise<VerifySetupInferenceResult> {
+  const deps: ActivateSetupInferenceDeps = {
+    ...params.deps,
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+  };
+  const readSnapshot =
+    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
+  const snapshot = await readSnapshot();
+  const cfg: OpenClawConfig =
+    snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const tempDir = await (
+    deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
+  )();
+  try {
+    const plan = await buildTestPlan({
+      kind: params.kind ?? "existing-model",
+      cfg,
+      workspaceDir: tempDir,
+      pluginWorkspaceDir: tempDir,
+      agentDir: path.join(tempDir, "agent"),
+      runtime: params.runtime,
+      deps,
+    });
+    if ("error" in plan) {
+      return { ok: false, status: "unavailable", error: plan.error };
+    }
+    const test = await runSetupInferenceTest({ plan, tempDir, deps });
+    if (test.ok) {
+      return { ...test, modelRef: plan.modelRef };
+    }
+    return {
+      ...test,
+      error: await redactSetupInferenceError(test.error),
+    };
+  } finally {
+    await (deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true })))(
+      tempDir,
+    );
+  }
+}
+
+function applyManualAuthConfig(
+  config: OpenClawConfig,
+  manualAuth: NonNullable<SetupInferenceTestPlan["manualAuth"]>,
+): OpenClawConfig {
+  let enabledConfig = config;
+  if (manualAuth.pluginId) {
+    const enableResult = enablePluginInConfig(config, manualAuth.pluginId);
+    if (!enableResult.enabled) {
+      throw new Error(`Provider plugin ${manualAuth.pluginId} is ${enableResult.reason}.`);
+    }
+    enabledConfig = enableResult.config;
+  }
+  return applyMergePatch(enabledConfig, manualAuth.configPatch) as OpenClawConfig;
+}
+
+async function persistManualAuthProfiles(
+  profiles: ProviderAuthResult["profiles"],
+  agentDir: string,
+): Promise<boolean> {
+  const updated = await updateAuthProfileStoreWithLock({
+    agentDir,
     saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
     updater: (store) => {
-      if (params.prior) {
-        store.profiles[params.profileId] = params.prior;
-      } else {
-        delete store.profiles[params.profileId];
+      for (const profile of profiles) {
+        store.profiles[profile.profileId] = normalizeAuthProfileCredential(profile.credential);
       }
       return true;
     },
   });
+  return updated !== null;
 }
 
 async function runSetupInferenceTest(params: {
@@ -446,7 +899,9 @@ async function runSetupInferenceTest(params: {
   { ok: true; latencyMs: number } | { ok: false; status: SetupInferenceStatus; error: string }
 > {
   const { plan, tempDir, deps } = params;
-  const runId = `setup-inference-${randomUUID()}`;
+  // Keep these probe prefixes aligned with logging/subsystem.ts and process/command-queue.ts
+  // so expected setup failures stay off the interactive TTY.
+  const runId = `probe-setup-inference-${randomUUID()}`;
   const sessionId = `${runId}-session`;
   const sessionFile = path.join(tempDir, "session.jsonl");
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
@@ -458,10 +913,11 @@ async function runSetupInferenceTest(params: {
       result = (await runCli({
         sessionId,
         sessionKey: `temp:setup-inference:${runId}`,
-        agentId: "crestodian",
+        agentId: plan.agentId ?? "crestodian",
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
+        ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
         config: plan.config,
         prompt: SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
@@ -478,10 +934,11 @@ async function runSetupInferenceTest(params: {
       result = (await runEmbedded({
         sessionId,
         sessionKey: `temp:setup-inference:${runId}`,
-        agentId: "crestodian",
+        agentId: plan.agentId ?? "crestodian",
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
+        ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
         config: plan.config,
         prompt: SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
@@ -489,12 +946,10 @@ async function runSetupInferenceTest(params: {
         ...(plan.authProfileId
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),
-        ...(plan.agentHarnessId
-          ? { agentHarnessId: plan.agentHarnessId, cleanupBundleMcpOnRunEnd: true }
-          : {}),
+        ...(plan.cleanupBundleMcpOnRunEnd ? { cleanupBundleMcpOnRunEnd: true } : {}),
         timeoutMs,
         runId,
-        lane: `setup-inference:${plan.provider}`,
+        lane: `session:probe-setup-inference:${plan.provider}`,
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",
@@ -516,11 +971,10 @@ async function runSetupInferenceTest(params: {
     return { ok: true, latencyMs: Date.now() - started };
   } catch (error) {
     const described = describeFailoverError(error);
-    const { redactSecrets } = await import("../commands/status-all/format.js");
     return {
       ok: false,
       status: mapFailoverReasonToSetupStatus(described.reason),
-      error: redactSecrets(described.message),
+      error: described.message,
     };
   }
 }

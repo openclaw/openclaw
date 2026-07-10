@@ -1266,7 +1266,7 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(registry.trustedToolPolicies).toHaveLength(0);
     const loaded = registry.plugins.find((entry) => entry.id === "trusted-policy-register-fail");
     expect(loaded?.status).toBe("error");
     expect(loaded?.error).toContain("register boom");
@@ -1302,9 +1302,9 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(
-      (registry.trustedToolPolicies ?? []).map((entry) => [entry.pluginId, entry.policy.id]),
-    ).toEqual([["trusted-policy-success", "declared-policy"]]);
+    expect(registry.trustedToolPolicies.map((entry) => [entry.pluginId, entry.policy.id])).toEqual([
+      ["trusted-policy-success", "declared-policy"],
+    ]);
     expect(registry.diagnostics).not.toContainEqual(
       expect.objectContaining({
         pluginId: "trusted-policy-success",
@@ -1347,9 +1347,9 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadRegistryFromAllowedPlugins([stablePlugin, failingPlugin]);
 
-    expect(
-      (registry.trustedToolPolicies ?? []).map((entry) => [entry.pluginId, entry.policy.id]),
-    ).toEqual([["stable-trusted-policy", "stable-policy"]]);
+    expect(registry.trustedToolPolicies.map((entry) => [entry.pluginId, entry.policy.id])).toEqual([
+      ["stable-trusted-policy", "stable-policy"],
+    ]);
     const failed = registry.plugins.find(
       (entry) => entry.id === "later-trusted-policy-register-fail",
     );

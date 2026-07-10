@@ -196,7 +196,9 @@ enum ChatCodeHighlighter {
             } else if self.matches(chars, at: end, block.close) {
                 depth -= 1
                 end += block.close.count
-                if depth == 0 { break }
+                if depth == 0 {
+                    break
+                }
             } else {
                 end += 1
             }
@@ -242,7 +244,9 @@ enum ChatCodeHighlighter {
                 end += delimiter.count
                 break
             }
-            if !multiline, chars[end] == "\n" { break }
+            if !multiline, chars[end] == "\n" {
+                break
+            }
             end += 1
         }
         end = min(end, chars.count)
@@ -354,21 +358,24 @@ enum ChatCodeHighlighter {
 
 /// Content-keyed memo so streaming re-renders reuse finished highlight work
 /// instead of re-tokenizing every completed block on each delta tick.
+/// Public so app file previews reuse the chat renderer's highlighting.
 @MainActor
-enum ChatCodeHighlightCache {
+public enum ChatCodeHighlightCache {
     private static var cache: [String: AttributedString] = [:]
     // Bounded: wholesale reset past the cap keeps long sessions flat; a miss
     // just re-tokenizes one visible block, which is cheap.
     private static let capacity = 160
 
-    static func highlighted(code: String, languageId: String?) -> AttributedString {
+    public static func highlighted(code: String, languageId: String?) -> AttributedString {
         guard ChatCodeHighlighter.language(for: languageId) != nil,
               ChatCodeHighlighter.isWithinHighlightLimits(code)
         else {
             return AttributedString(code)
         }
         let key = "\(languageId ?? "")\u{0}\(code)"
-        if let hit = self.cache[key] { return hit }
+        if let hit = self.cache[key] {
+            return hit
+        }
         let value = ChatCodeHighlighter.attributedCode(code, languageId: languageId)
         if self.cache.count >= self.capacity {
             self.cache.removeAll(keepingCapacity: true)

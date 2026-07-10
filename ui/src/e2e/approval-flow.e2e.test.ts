@@ -27,6 +27,13 @@ function approval(id: string, command: string, createdAtMs: number) {
   };
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected object value");
+  }
+  return value as Record<string, unknown>;
+}
+
 describeControlUiE2e("Control UI approval flow", () => {
   beforeAll(async () => {
     server = await startControlUiE2eServer();
@@ -77,5 +84,38 @@ describeControlUiE2e("Control UI approval flow", () => {
     await expect
       .poll(() => currentPage.getByRole("button", { name: "Deny" }).isEnabled())
       .toBe(true);
+  });
+
+  it("sends a typed approval command immediately while the active run waits", async () => {
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage);
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await gateway.waitForRequest("sessions.list");
+
+    const composer = currentPage.locator(".agent-chat__composer-combobox textarea");
+    await composer.fill("run a command that needs approval");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    const firstSend = requireRecord((await gateway.waitForRequest("chat.send")).params);
+    expect(firstSend.message).toBe("run a command that needs approval");
+    await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
+
+    await composer.fill("/approve approval-123 allow-once");
+    await currentPage.getByRole("button", { name: "Queue message" }).click();
+
+    await expect
+      .poll(async () => (await gateway.getRequests("chat.send")).length, { timeout: 10_000 })
+      .toBe(2);
+    const sends = await gateway.getRequests("chat.send");
+    const approvalSend = requireRecord(sends[1]?.params);
+    expect(approvalSend.message).toBe("/approve approval-123 allow-once");
+    expect(approvalSend.deliver).toBe(false);
+    expect(typeof approvalSend.idempotencyKey).toBe("string");
+    expect(await currentPage.locator(".chat-queue").count()).toBe(0);
+    expect(await composer.inputValue()).toBe("");
+    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(1);
   });
 });

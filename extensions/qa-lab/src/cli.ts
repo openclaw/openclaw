@@ -470,7 +470,7 @@ export function registerQaLabCli(program: Command) {
     .option("--channel-driver <id>", "QA channel driver: qa-channel, crabline, or live")
     .option(
       "--channel <id>",
-      "Internal host QA channel override for --channel-driver; defaults to scenario/default",
+      "Channel id for --channel-driver crabline or live",
     )
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")

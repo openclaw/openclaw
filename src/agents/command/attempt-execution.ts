@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   type FastMode,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
@@ -29,11 +30,17 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import {
+  buildPersistedUserTurnMessage,
   preparePersistedUserTurnMessageForTranscriptWrite,
   type PersistedUserTurnMessage,
+  type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -41,6 +48,8 @@ import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { runCliAgent } from "../cli-runner.js";
+import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
+import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
@@ -123,6 +132,7 @@ type PersistTextTurnTranscriptParams = {
   finalText: string;
   sessionId: string;
   sessionKey: string;
+  sessionFile?: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -308,11 +318,6 @@ async function persistTextTurnTranscript(
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
-  if (!promptText && !replyText) {
-    return { kind: "persisted", sessionEntry: params.sessionEntry };
-  }
-
-  const messages = [];
   const userMessage =
     params.userMessage ??
     (promptText
@@ -322,6 +327,11 @@ async function persistTextTurnTranscript(
           timestamp: Date.now(),
         } as PersistedUserTurnMessage)
       : undefined);
+  if (!userMessage && !replyText) {
+    return { kind: "persisted", sessionEntry: params.sessionEntry };
+  }
+
+  const messages = [];
   if (userMessage) {
     messages.push({
       message: userMessage,
@@ -363,6 +373,7 @@ async function persistTextTurnTranscript(
     {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
       sessionEntry: params.sessionEntry,
       sessionStore: params.sessionStore,
       storePath: params.storePath,
@@ -405,9 +416,11 @@ function isClaudeCliProvider(provider: string): boolean {
 export async function persistAcpTurnTranscript(params: {
   body: string;
   transcriptBody?: string;
+  userInput?: UserTurnInput;
   finalText: string;
   sessionId: string;
   sessionKey: string;
+  sessionFile?: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -418,6 +431,7 @@ export async function persistAcpTurnTranscript(params: {
 }): Promise<PersistTextTurnTranscriptResult> {
   return await persistTextTurnTranscript({
     ...params,
+    ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
     assistant: {
       api: "openai-responses",
       provider: "openclaw",
@@ -433,6 +447,7 @@ export async function persistCliTurnTranscript(params: {
   result: EmbeddedAgentRunResult;
   sessionId: string;
   sessionKey: string;
+  sessionFile?: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -456,6 +471,7 @@ export async function persistCliTurnTranscript(params: {
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     storePath: params.storePath,
@@ -479,6 +495,7 @@ export function runAgentAttempt(params: {
   originalProvider: string;
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
+  agentHarnessRuntimeOverride?: string;
   sessionId: string;
   sessionKey: string | undefined;
   sessionAgentId: string;
@@ -551,15 +568,24 @@ export function runAgentAttempt(params: {
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
+  const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
+  const sessionCliRuntime =
+    sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
+      ? sessionRuntimeOverride
+      : undefined;
+  const configuredCliRuntime =
+    !isRawModelRun && !sessionRuntimeOverride
+      ? resolveCliRuntimeExecutionProvider({
+          provider: params.providerOverride,
+          cfg: params.cfg,
+          agentId: params.sessionAgentId,
+          modelId: params.modelOverride,
+          authProfileId: params.sessionEntry?.authProfileOverride,
+        })
+      : undefined;
   const cliExecutionProvider = isRawModelRun
     ? params.providerOverride
-    : (resolveCliRuntimeExecutionProvider({
-        provider: params.providerOverride,
-        cfg: params.cfg,
-        agentId: params.sessionAgentId,
-        modelId: params.modelOverride,
-        authProfileId: params.sessionEntry?.authProfileOverride,
-      }) ?? params.providerOverride);
+    : (sessionCliRuntime ?? configuredCliRuntime ?? params.providerOverride);
   const isCliExecutionProvider = isCliProvider(cliExecutionProvider, params.cfg);
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
@@ -576,13 +602,15 @@ export function runAgentAttempt(params: {
     });
   const agentHarnessPolicy = isRawModelRun
     ? ({ runtime: "openclaw", runtimeSource: "model" } as const)
-    : resolveAvailableAgentHarnessPolicy({
-        provider: params.providerOverride,
-        modelId: params.modelOverride,
-        config: params.cfg,
-        agentId: params.sessionAgentId,
-        sessionKey: params.sessionKey ?? params.sessionId,
-      });
+    : sessionRuntimeOverride
+      ? ({ runtime: sessionRuntimeOverride, runtimeSource: "model" } as const)
+      : resolveAvailableAgentHarnessPolicy({
+          provider: params.providerOverride,
+          modelId: params.modelOverride,
+          config: params.cfg,
+          agentId: params.sessionAgentId,
+          sessionKey: params.sessionKey ?? params.sessionId,
+        });
   const harnessAuthSelection = resolveHarnessAuthProfileSelection({
     config: params.cfg,
     agentDir: params.agentDir,
@@ -631,6 +659,7 @@ export function runAgentAttempt(params: {
   });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
+    sessionRuntimeOverride ??
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
@@ -650,9 +679,22 @@ export function runAgentAttempt(params: {
           }
         : undefined;
     const resolveReusableCliSessionBinding = async () => {
+      const hasManagedClaudeLiveSession = Boolean(
+        isClaudeCliProvider(cliExecutionProvider) &&
+        cliSessionBinding?.sessionId &&
+        hasClaudeLiveSessionForOwner({
+          backendId: cliExecutionProvider,
+          agentAccountId: params.runContext.accountId,
+          agentId: params.sessionAgentId,
+          authProfileId: cliSessionBinding.authProfileId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+        }),
+      );
       if (
         !isClaudeCliProvider(cliExecutionProvider) ||
         !cliSessionBinding?.sessionId ||
+        hasManagedClaudeLiveSession ||
         (await claudeCliSessionTranscriptHasContent({
           sessionId: cliSessionBinding.sessionId,
           workspaceDir: cliProcessCwd,
@@ -673,13 +715,19 @@ export function runAgentAttempt(params: {
           })) ?? params.sessionEntry;
       }
 
-      return undefined;
+      // The store is already cleared above, so no stale --resume can leak to a
+      // later turn. Still return the bound id as the reuse candidate: prepare
+      // re-detects the missing transcript, keeps useResume=false, and arms
+      // raw-transcript reseed from prior OpenClaw history. Returning undefined
+      // strips the candidate and starves reseed, losing warm-stdin continuity.
+      return cliSessionBinding;
     };
+    const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(params.sessionKey);
     const runCliWithSession = (
       nextCliSessionId: string | undefined,
       activeCliSessionBinding = cliSessionBinding,
-    ) =>
-      runCliAgent({
+    ) => {
+      return runCliAgent({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionEntry: params.sessionEntry,
@@ -702,7 +750,9 @@ export function runAgentAttempt(params: {
         extraSystemPrompt: params.opts.extraSystemPrompt,
         inputProvenance: params.opts.inputProvenance,
         sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
-        requireExplicitMessageTarget: isSubagentSessionKey(params.sessionKey),
+        requireExplicitMessageTarget:
+          params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+        cliSessionBindingFacts: params.opts.cliSessionBindingFacts,
         cliSessionId: nextCliSessionId,
         cliSessionBinding:
           nextCliSessionId === activeCliSessionBinding?.sessionId
@@ -730,7 +780,10 @@ export function runAgentAttempt(params: {
         agentAccountId: params.runContext.accountId,
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
-        toolsAllow: params.opts.toolsAllow,
+        toolsAllow: resolveCliRuntimeToolsAllow(
+          params.opts.toolsAllow,
+          params.opts.toolsAllowIsDefault,
+        ),
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
         oneShotCliRun: params.opts.oneShotCliRun,
@@ -739,7 +792,10 @@ export function runAgentAttempt(params: {
         ...(mutableCliSessionStore
           ? {
               onBeforeFreshCliSessionRetry: async (retry) => {
-                if (retry.sessionId !== activeCliSessionBinding?.sessionId) {
+                if (
+                  hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) ||
+                  retry.sessionId !== activeCliSessionBinding?.sessionId
+                ) {
                   return false;
                 }
 
@@ -757,6 +813,7 @@ export function runAgentAttempt(params: {
             }
           : {}),
       });
+    };
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
@@ -764,6 +821,7 @@ export function runAgentAttempt(params: {
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
           shouldClearReusedCliSessionAfterError(err) &&
+          !hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) &&
           activeCliSessionBinding?.sessionId &&
           mutableCliSessionStore
         ) {
@@ -1158,7 +1216,7 @@ function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): strin
 }
 
 function sanitizeAcpDiagnosticText(value: string): string {
-  return redactSensitiveText(value).replace(/\s+/g, " ").trim().slice(0, 240);
+  return truncateUtf16Safe(redactSensitiveText(value).replace(/\s+/g, " ").trim(), 240);
 }
 
 function acpRuntimeEventDiagnostics(event: AcpRuntimeEvent): Record<string, unknown> {

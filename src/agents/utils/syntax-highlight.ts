@@ -10,7 +10,7 @@ import { decodeHtmlEntityAt } from "./html.js";
 /** Formatter applied to highlighted text segments. */
 export type HighlightFormatter = (text: string) => string;
 /** Mapping from highlight.js scope names to text formatters. */
-export type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
+type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
 
 /** Options used when highlighting code and rendering themed text. */
 interface HighlightOptions {

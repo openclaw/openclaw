@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
 import type { LogLevel } from "./log-lines.ts";
-import { renderLogs, type LogsProps } from "./view.ts";
+import { renderLogs } from "./view.ts";
+
+type LogsProps = Parameters<typeof renderLogs>[0];
 
 function createLevelFilters(overrides: Partial<Record<LogLevel, boolean>> = {}) {
   return {

@@ -5,7 +5,7 @@ import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
 
-export type DebugProps = {
+type DebugProps = {
   loading: boolean;
   status: Record<string, unknown> | null;
   health: Record<string, unknown> | null;

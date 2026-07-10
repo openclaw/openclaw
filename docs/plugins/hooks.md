@@ -49,8 +49,11 @@ export default definePluginEntry({
 });
 ```
 
-Handlers run sequentially in descending `priority`; same-priority handlers
-keep registration order.
+Handlers that can return decisions or modifications run sequentially in
+descending `priority`; same-priority handlers keep registration order.
+Observation-only handlers run in parallel, and fire-and-forget observation
+dispatches can overlap with later events. Do not use priority to order
+observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
@@ -428,6 +431,8 @@ final assistant answer. It is not the `/stop` cancellation path and does not
 run when the user aborts a turn. Return `{ action: "revise", reason }` to ask
 the harness for one more model pass before finalization, `{ action:
 "finalize", reason? }` to force finalization, or omit a result to continue.
+Handlers have a 15s default budget; on timeout, OpenClaw logs the failure and
+continues with the original final answer.
 Codex native `Stop` hooks are relayed into this hook as OpenClaw
 `before_agent_finalize` decisions.
 
@@ -583,9 +588,16 @@ snapshot (including `state.nextRunAtMs`, `state.lastRunStatus`, and
 `state.lastError` when present) plus a `PluginHookGatewayCronDeliveryStatus`
 of `not-requested` | `delivered` | `not-delivered` | `unknown`. Removed events
 still carry the deleted job snapshot so external schedulers can reconcile
-state. Use `ctx.getCron?.()` and `ctx.config` from the runtime context when
-syncing external wake schedulers, and keep OpenClaw as the source of truth
-for due checks and execution.
+state.
+
+A `scheduled` event is post-commit: it fires only after a successful durable
+write changes an existing job's effective `nextRunAtMs`, excluding that job's
+explicit `added`, `updated`, or `removed` lifecycle event. The top-level
+`event.nextRunAtMs` is the committed next wake; when it is absent, the job has
+no next wake. Treat these events as reconciliation hints, not an ordered delta
+log. Use `ctx.getCron?.()` and `ctx.config` from the runtime context when
+syncing external wake schedulers, and keep OpenClaw as the source of truth for
+due checks and execution.
 
 ## Upcoming deprecations
 

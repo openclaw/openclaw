@@ -49,6 +49,24 @@ Stops orchestrators from idling while sub-agents work: an async callback mechani
 Keeps OpenClaw usable on 2-4 GB machines: checks free memory and trims heavy features before the box starts swapping. [Source on GitHub](https://github.com/mirajmahmudul/openclaw-lite-mode).
 </Card>
 
+<Card title="tokenomics cost tracker" icon="coins" href="https://github.com/ncz-os/tokenomics">
+  **@ncz-os** • `devtools` `costs` `tokens`
+
+Token cost tracker from an NVIDIA engineer with first-class OpenClaw support: see exactly where your agent spend goes, per model and per session.
+</Card>
+
+<Card title="Excalidraw diagram generator" icon="shapes" href="https://x.com/swiftlysingh/status/2009684853827281070">
+  **@swiftlysingh** • `diagrams` `excalidraw` `devtools`
+
+Describe a diagram in chat and get a programmatically generated Excalidraw sketch back.
+</Card>
+
+<Card title="GA4 analytics skill" icon="chart-column" href="https://x.com/jdrhyne/status/2012028725710192741">
+  **@jdrhyne** • `analytics` `ga4` `skill`
+
+Had OpenClaw build its own Google Analytics query tool, then packaged and published it to ClawHub.
+</Card>
+
 <Card title="ClawEval model rankings" icon="ranking-star" href="https://github.com/AIgenteur/ClawEval">
   **@AIgenteur** • `evals` `models` `devtools`
 
@@ -253,6 +271,30 @@ Automated Todoist tasks and had OpenClaw generate the skill directly in Telegram
 Logs into TradingView via browser automation, screenshots charts, and performs technical analysis on demand. No API needed — just browser control.
 </Card>
 
+<Card title="Car negotiation ($4,200 saved)" icon="car-side" href="https://x.com/astuyve/status/2014147784098681217">
+  **@astuyve** • `negotiation` `email` `automation`
+
+Set OpenClaw loose on car dealers: it handled the back-and-forth negotiation and knocked $4,200 off the price.
+</Card>
+
+<Card title="Flight check-in autopilot" icon="plane-departure" href="https://x.com/armanddp/status/2008767951340794245">
+  **@armanddp** • `travel` `email` `automation`
+
+Finds the next flight in email, runs through online check-in, and picks a window seat — no airline app required.
+</Card>
+
+<Card title="Insurance claim filing" icon="file-signature" href="https://x.com/avi_press/status/2013066316467560521">
+  **@avi_press** • `automation` `insurance` `browser`
+
+Filed an insurance claim and scheduled the follow-up appointment autonomously.
+</Card>
+
+<Card title="Idealista real estate skill" icon="building" href="https://x.com/quifago/status/2012458753786859872">
+  **@quifago** • `real-estate` `api` `skill`
+
+Idealista API CLI for property queries and valuations, wrapped as a skill so the agent can house-hunt in chat.
+</Card>
+
 <Card title="Gardening business back office" icon="seedling" href="https://news.ycombinator.com/item?id=47783940">
   **@mjsweet** • `automation` `email` `invoicing`
 
@@ -279,6 +321,18 @@ Systems that index, search, remember, and reason over personal or team knowledge
 Chinese learning engine with pronunciation feedback and study flows via OpenClaw.
 
   <img src="/assets/showcase/xuezh-pronunciation.jpeg" alt="xuezh pronunciation feedback" />
+</Card>
+
+<Card title="X post analysis pipeline" icon="hashtag" href="https://x.com/andrewjiang/status/2008388427180630155">
+  **@andrewjiang** • `analysis` `x` `pipeline`
+
+Pulled 4 million posts across 100 top X accounts and turned them into a queryable analysis pipeline.
+</Card>
+
+<Card title="Lab results to Notion" icon="flask" href="https://x.com/danpeguine/status/2013388700479058068">
+  **@danpeguine** • `health` `notion` `organization`
+
+Organized years of bloodwork lab results into a structured Notion database.
 </Card>
 
 <Card title="Obsidian second brain" icon="book" href="https://notesbylex.com/openclaw-the-missing-piece-for-obsidians-second-brain">
@@ -318,6 +372,18 @@ Separate memory manager that turns session files into memories, then beliefs, th
 Speech-first entry points, phone bridges, and transcription-heavy workflows.
 
 <CardGroup cols={2}>
+
+<Card title="Pebble Ring one-tap voice" icon="ring" href="https://x.com/thekitze/status/2014765279650189578">
+  **@thekitze** • `voice` `wearable` `hardware`
+
+One tap on a Pebble Ring starts a voice conversation with OpenClaw — agent access from a wearable.
+</Card>
+
+<Card title="Creator media studio" icon="clapperboard" href="https://x.com/cedric_chee/status/2014608153393168425">
+  **@cedric_chee** • `media` `tts` `transcription`
+
+A full media studio in chat: TTS, transcription, and browser automation hooked up to Codex 5.2 and MiniMax.
+</Card>
 
 <Card title="Action Button walkie-talkie" icon="walkie-talkie" href="https://x.com/i/status/2072766510053888497">
   **@buddyhadry** • `voice` `ios` `mobile`
@@ -361,6 +427,12 @@ Control and automate Home Assistant devices via natural language.
   <img src="/assets/showcase/homeassistant.png" alt="Home Assistant skill on ClawHub" />
 </Card>
 
+<Card title="macOS menu bar manager" icon="desktop" href="https://x.com/MagiMetal/status/2009424267801485362">
+  **@MagiMetal** • `macos` `swift` `ui`
+
+Native Swift menu bar app showing agent status with quick controls.
+</Card>
+
 <Card title="Nix packaging" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
   **@openclaw** • `nix` `packaging` `deployment`
 
@@ -382,6 +454,18 @@ Calendar skill using khal and vdirsyncer. Self-hosted calendar integration.
 The physical-world side of OpenClaw: homes, sensors, cameras, vacuums, and other devices.
 
 <CardGroup cols={2}>
+
+<Card title="Self-built HomePod skill" icon="volume-high" href="https://x.com/localghost/status/2014763987683225685">
+  **@localghost** • `homepod` `discovery` `skill`
+
+OpenClaw found the HomePods on the local network and wrote itself a skill to control them.
+</Card>
+
+<Card title="$35 holo cube interface" icon="cube" href="https://x.com/andrewjiang/status/2013140793649734032">
+  **@andrewjiang** • `hardware` `display` `fun`
+
+A cheap holographic cube as the agent's physical face on the desk.
+</Card>
 
 <Card title="GoHome automation" icon="house-signal" href="https://github.com/joshp123/gohome">
   **@joshp123** • `home` `nix` `grafana`
@@ -439,3 +523,4 @@ Open agent-to-agent negotiation: your agent haggles deals, schedules, and servic
 
 - [Getting started](/start/getting-started)
 - [OpenClaw](/start/openclaw)
+- [Full X showcase on openclaw.ai](https://openclaw.ai/showcase/)

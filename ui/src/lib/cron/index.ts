@@ -24,7 +24,7 @@ import {
 } from "../gateway-errors.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
 
-export const CRON_CHANNEL_LAST = "last";
+const CRON_CHANNEL_LAST = "last";
 
 export type CronFormState = {
   name: string;
@@ -72,7 +72,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object");
 }
 
-export function isCronPayload(value: unknown): value is CronPayload {
+function isCronPayload(value: unknown): value is CronPayload {
   if (!isRecord(value)) {
     return false;
   }

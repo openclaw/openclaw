@@ -66,6 +66,7 @@ type SessionManagerMocks = {
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
   createAgentSessionMock: UnknownMock;
+  applyExtraParamsToAgentMock: UnknownMock;
   sessionManagerOpenMock: UnknownMock;
   defaultResourceLoaderInitMock: UnknownMock;
   resolveSandboxContextMock: UnknownMock;
@@ -96,6 +97,7 @@ type AttemptSpawnWorkspaceHoisted = {
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
   preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
+  compactionReserveTokens: number;
   systemPromptTexts: string[];
   embeddedSystemPromptInputs: unknown[];
   sessionManager: SessionManagerMocks;
@@ -145,6 +147,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
+  const applyExtraParamsToAgentMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
   const defaultResourceLoaderInitMock = vi.fn();
   const resolveSandboxContextMock = vi.fn();
@@ -201,6 +204,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     (messages) => messages,
   );
   const preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][] = [];
+  const compactionReserveTokens = 0;
   const systemPromptTexts: string[] = [];
   const embeddedSystemPromptInputs: unknown[] = [];
   const sessionManager = {
@@ -217,6 +221,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   return {
     spawnSubagentDirectMock,
     createAgentSessionMock,
+    applyExtraParamsToAgentMock,
     sessionManagerOpenMock,
     defaultResourceLoaderInitMock,
     resolveSandboxContextMock,
@@ -245,6 +250,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     getHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
     preemptiveCompactionCalls,
+    compactionReserveTokens,
     systemPromptTexts,
     embeddedSystemPromptInputs,
     sessionManager,
@@ -299,6 +305,15 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   listPluginOriginsFromMetadataSnapshot: () => new Map(),
   loadPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
+
+vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
+  ensureProviderRuntimePluginHandle: (params: Record<string, unknown>) =>
+    params.runtimeHandle ?? params,
+  prepareProviderExtraParams: () => undefined,
+  resolveProviderExtraParamsForTransport: () => undefined,
+  resolveProviderRuntimePluginHandle: (params: Record<string, unknown>) => params,
+  wrapProviderStreamFn: () => undefined,
 }));
 
 vi.mock("../../../trajectory/metadata.js", () => ({
@@ -428,7 +443,7 @@ vi.mock("../../docs-path.js", () => ({
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: () => ({
     reload: async () => {},
-    getCompactionReserveTokens: () => 0,
+    getCompactionReserveTokens: () => hoisted.compactionReserveTokens,
     getCompactionKeepRecentTokens: () => 40_000,
     getDefaultProvider: () => undefined,
     getDefaultModel: () => undefined,
@@ -564,7 +579,10 @@ vi.mock("../extra-params.js", async () => {
   const actual = await vi.importActual<typeof import("../extra-params.js")>("../extra-params.js");
   return {
     ...actual,
-    applyExtraParamsToAgent: () => ({ effectiveExtraParams: {} }),
+    applyExtraParamsToAgent: (...args: unknown[]) => {
+      hoisted.applyExtraParamsToAgentMock(...args);
+      return { effectiveExtraParams: {} };
+    },
     resolvePreparedExtraParams: (params: {
       cfg?: unknown;
       provider: string;
@@ -829,10 +847,13 @@ vi.mock("../tool-split.js", () => ({
   }),
 }));
 
-vi.mock("../utils.js", () => ({
-  describeUnknownError: (error: unknown) => formatErrorMessage(error),
-  mapThinkingLevel: () => undefined,
-}));
+vi.mock("../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
+  return {
+    ...actual,
+    describeUnknownError: (error: unknown) => formatErrorMessage(error),
+  };
+});
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
   hasActiveCompactionRetryWork: ({
@@ -956,6 +977,7 @@ export function resetEmbeddedAttemptHarness(
     });
   }
   hoisted.createAgentSessionMock.mockReset();
+  hoisted.applyExtraParamsToAgentMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
   hoisted.defaultResourceLoaderInitMock.mockReset();
   hoisted.resolveSandboxContextMock.mockReset();
@@ -1024,6 +1046,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
   hoisted.preemptiveCompactionCalls.length = 0;
+  hoisted.compactionReserveTokens = 0;
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);

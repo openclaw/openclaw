@@ -4,6 +4,7 @@ import {
   resetAgentEventsForTest,
   type AgentEventPayload,
 } from "../../infra/agent-events.js";
+import { createDeferred } from "../../shared/deferred.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -94,9 +95,11 @@ describe("runEmbeddedAgent fast auto progress", () => {
         resolve(successAttempt("ollama", "glm-5.1:cloud"));
       };
     });
+    const attemptStarted = createDeferred();
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
       attemptParams = params as FastModeAttemptParams;
       resolveAttemptFastMode(params);
+      attemptStarted.resolve();
       return attemptDone;
     });
 
@@ -115,9 +118,9 @@ describe("runEmbeddedAgent fast auto progress", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    });
+    await vi.advanceTimersByTimeAsync(0);
+    await attemptStarted.promise;
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(31_000);
 
     expect(events.map((event) => event.data?.summary).filter(Boolean)).toHaveLength(0);
@@ -190,9 +193,11 @@ describe("runEmbeddedAgent fast auto progress", () => {
         resolve(successAttempt("ollama", "glm-5.1:cloud"));
       };
     });
+    const attemptStarted = createDeferred();
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
       attemptParams = params as FastModeAttemptParams;
       resolveAttemptFastMode(params);
+      attemptStarted.resolve();
       return attemptDone;
     });
 
@@ -211,9 +216,9 @@ describe("runEmbeddedAgent fast auto progress", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    });
+    await vi.advanceTimersByTimeAsync(0);
+    await attemptStarted.promise;
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(31_000);
     await attemptParams?.onAgentEvent?.({
       stream: "tool",
@@ -266,9 +271,11 @@ describe("runEmbeddedAgent fast auto progress", () => {
           resolve(successAttempt("ollama", "glm-5.1:cloud"));
         };
       });
+      const attemptStarted = createDeferred();
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
         attemptParams = params as FastModeAttemptParams;
         resolveAttemptFastMode(params);
+        attemptStarted.resolve();
         return attemptDone;
       });
 
@@ -298,9 +305,9 @@ describe("runEmbeddedAgent fast auto progress", () => {
         },
       });
 
-      await vi.waitFor(() => {
-        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-      });
+      await vi.advanceTimersByTimeAsync(0);
+      await attemptStarted.promise;
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(61_000);
       await attemptParams?.onAgentEvent?.({
         stream: "tool",
@@ -341,9 +348,11 @@ describe("runEmbeddedAgent fast auto progress", () => {
           resolve(successAttempt("ollama", "glm-5.1:cloud"));
         };
       });
+      const attemptStarted = createDeferred();
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
         attemptParams = params as FastModeAttemptParams;
         resolveAttemptFastMode(params);
+        attemptStarted.resolve();
         return attemptDone;
       });
 
@@ -368,9 +377,9 @@ describe("runEmbeddedAgent fast auto progress", () => {
         },
       });
 
-      await vi.waitFor(() => {
-        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-      });
+      await vi.advanceTimersByTimeAsync(0);
+      await attemptStarted.promise;
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(61_000);
       await attemptParams?.onAgentEvent?.({
         stream: "tool",

@@ -101,6 +101,10 @@
             "type": "boolean",
             "default": false
           },
+          "allow_all_plugins": {
+            "type": "boolean",
+            "default": false
+          },
           "allow_destructive_actions": {
             "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }],
             "default": true
@@ -345,6 +349,11 @@
     "codexPlugins.enabled": {
       "label": "Enable Native Plugins",
       "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.allow_all_plugins": {
+      "label": "Allow All Connected Apps",
+      "help": "Expose every currently accessible app connected to the authenticated Codex account when a new Codex thread starts.",
       "advanced": true
     },
     "codexPlugins.allow_destructive_actions": {

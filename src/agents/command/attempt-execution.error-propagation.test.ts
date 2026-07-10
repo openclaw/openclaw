@@ -123,6 +123,18 @@ describe("ACP diagnostic events", () => {
     expect(String(event?.data.text)).not.toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
   });
 
+  it("keeps bounded ACP diagnostics UTF-16 well-formed", () => {
+    emitAcpRuntimeEvent({
+      runId: "run-utf16-status",
+      event: {
+        type: "status",
+        text: `${"x".repeat(239)}🚀tail`,
+      },
+    });
+
+    expect(captured[0]?.data.text).toBe("x".repeat(239));
+  });
+
   it("keeps audit-only ACP lifecycle and runtime events off the shared bus", () => {
     const secret = "private ACP cause chain";
     const auditEvents: AgentEventPayload[] = [];

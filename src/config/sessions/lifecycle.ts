@@ -121,7 +121,7 @@ function readFirstLine(filePath: string): string | undefined {
 }
 
 /** Reads session start time from a transcript header when store metadata is missing. */
-export function readSessionHeaderStartedAtMs(params: {
+function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
   storePath?: string;
@@ -211,6 +211,11 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
     isTerminalSessionStatus(params.entry.status) ||
     resolvePositiveTimestamp(params.entry.endedAt) !== undefined;
   if (!hasTerminalLifecycle) {
+    return undefined;
+  }
+  if (params.entry.status === "done") {
+    // Successful rows stay reusable: transcript writes can land after registry
+    // updates without making the session stale.
     return undefined;
   }
   if (params.entry.status === "failed") {

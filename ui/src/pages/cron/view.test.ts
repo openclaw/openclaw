@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../lib/cron/index.ts";
 import { createDefaultDraft, renderCronQuickCreate } from "./quick-create.ts";
-import { renderCron, type CronProps } from "./view.ts";
+import { renderCron } from "./view.ts";
+
+type CronProps = Parameters<typeof renderCron>[0];
 
 function createJob(id: string): CronJob {
   return {
@@ -695,10 +697,10 @@ describe("cron view", () => {
     );
 
     expect(
-      Array.from(container.querySelectorAll(".cron-summary-label")).map((label) =>
+      Array.from(container.querySelectorAll(".summary-stat__label")).map((label) =>
         label.textContent?.trim(),
       ),
-    ).toEqual(["Enabled", "Jobs", "Next wake"]);
+    ).toEqual(["Scheduler", "Jobs", "Next wake"]);
     expect(
       Array.from(container.querySelectorAll(".cron-form-section__title")).map((label) =>
         label.textContent?.trim(),

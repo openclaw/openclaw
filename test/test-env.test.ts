@@ -133,6 +133,35 @@ describe("installTestEnv", () => {
       path.join(realHome, ".codex", "sessions", "2026", "02", "26", "rollout.jsonl"),
       "session\n",
     );
+    writeFile(path.join(realHome, ".gemini", "oauth_creds.json"), '{"token":"gemini"}\n');
+    writeFile(path.join(realHome, ".gemini", "settings.json"), '{"theme":"dark"}\n');
+    writeFile(path.join(realHome, ".gemini", "commands", "Cache", "review.toml"), "prompt\n");
+    writeFile(path.join(realHome, ".minimax", "Cache", "credentials.json"), "minimax\n");
+    writeFile(
+      path.join(
+        realHome,
+        ".gemini",
+        "antigravity-browser-profile",
+        "Default",
+        "Cache",
+        "Cache_Data",
+        "blob",
+      ),
+      "cached-browser-bytes\n",
+    );
+    writeFile(
+      path.join(realHome, ".gemini", "antigravity", "browser_recordings", "session.webm"),
+      "recording\n",
+    );
+    writeFile(
+      path.join(realHome, ".gemini", "cli-browser-profile", "Default", "History"),
+      "browser-history\n",
+    );
+    writeFile(path.join(realHome, ".gemini", "GPUCache", "data.bin"), "gpu-cache\n");
+    writeFile(
+      path.join(realHome, ".gemini", "Service Worker", "CacheStorage", "cache.bin"),
+      "worker-cache\n",
+    );
 
     setTestEnvValue("HOME", realHome);
     setTestEnvValue("USERPROFILE", realHome);
@@ -214,6 +243,27 @@ describe("installTestEnv", () => {
     expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "auth.json"))).toBe(true);
     expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "config.toml"))).toBe(true);
     expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "sessions"))).toBe(false);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".gemini", "oauth_creds.json"))).toBe(true);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".gemini", "settings.json"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "commands", "Cache", "review.toml")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".minimax", "Cache", "credentials.json")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "antigravity-browser-profile")),
+    ).toBe(false);
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "antigravity", "browser_recordings")),
+    ).toBe(false);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".gemini", "cli-browser-profile"))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".gemini", "GPUCache"))).toBe(false);
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "Service Worker", "CacheStorage")),
+    ).toBe(false);
   });
 
   it("allows explicit live runs against the real HOME", () => {

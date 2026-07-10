@@ -1,12 +1,12 @@
-/**
- * Read/write/edit tool wrappers for host and sandbox workspaces.
- * Adds workspace-root guards, adaptive read paging, image validation, memory
- * append-only writes, and parameter cleanup around the session file tools.
- */
+// Read/write/edit tool wrappers for host and sandbox workspaces.
+// Adds workspace-root guards, adaptive read paging, image validation, memory
+// append-only writes, and parameter cleanup around the session file tools.
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
+import { formatByteSize } from "@openclaw/normalization-core";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import {
@@ -96,13 +96,12 @@ function malformedXmlArgValuePathError(key: string): Error {
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.round(bytes / 1024)}KB`;
-  }
-  return `${bytes}B`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: "",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : unit === "kilo" ? 0 : 1),
+  });
 }
 
 function getToolResultText(result: AgentToolResult<unknown>): string | undefined {

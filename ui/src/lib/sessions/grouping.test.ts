@@ -4,6 +4,7 @@ import {
   groupSidebarSessionRows,
   groupSessionRows,
   normalizeSessionsGroupBy,
+  normalizeSidebarSessionsGrouping,
   resolveSessionGroupId,
   UNGROUPED_ID,
 } from "./grouping.ts";
@@ -34,6 +35,56 @@ describe("groupSidebarSessionRows", () => {
     expect(groupSidebarSessionRows([row({ key: "a" })]).map((section) => section.id)).toEqual([
       "ungrouped",
     ]);
+  });
+
+  it("keeps stored-but-empty known groups visible as sections", () => {
+    const sections = groupSidebarSessionRows(
+      [row({ key: "a" }), row({ key: "b", category: "Zulu" })],
+      {
+        knownGroups: ["Apps", " ", "Zulu"],
+      },
+    );
+    expect(sections.map((section) => section.id)).toEqual([
+      "category:Apps",
+      "category:Zulu",
+      "ungrouped",
+    ]);
+    expect(sections[0]?.rows).toEqual([]);
+    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["b"]);
+  });
+
+  it("keeps custom groups in their persisted order", () => {
+    const sections = groupSidebarSessionRows(
+      [row({ key: "a", category: "Alpha" }), row({ key: "z", category: "Zulu" })],
+      { knownGroups: ["Zulu", "Alpha"] },
+    );
+    expect(sections.map((section) => section.id)).toEqual([
+      "category:Zulu",
+      "category:Alpha",
+      "ungrouped",
+    ]);
+  });
+
+  it("collapses categories into the ungrouped list when grouping is none", () => {
+    const sections = groupSidebarSessionRows(
+      [
+        row({ key: "p-1", pinned: true }),
+        row({ key: "a-1", category: "Alpha" }),
+        row({ key: "u-1" }),
+      ],
+      { grouping: "none", knownGroups: ["Alpha", "Apps"] },
+    );
+    expect(sections.map((section) => section.id)).toEqual(["pinned", "ungrouped"]);
+    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["a-1", "u-1"]);
+  });
+});
+
+describe("normalizeSidebarSessionsGrouping", () => {
+  it("accepts none and falls back to category grouping", () => {
+    expect(normalizeSidebarSessionsGrouping("none")).toBe("none");
+    expect(normalizeSidebarSessionsGrouping("category")).toBe("category");
+    expect(normalizeSidebarSessionsGrouping(null)).toBe("category");
+    expect(normalizeSidebarSessionsGrouping("bogus")).toBe("category");
   });
 });
 

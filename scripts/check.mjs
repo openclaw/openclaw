@@ -23,7 +23,7 @@ export function usage() {
 /**
  * Parses aggregate check runner arguments.
  */
-export function parseCheckArgs(argv) {
+function parseCheckArgs(argv) {
   const args = {
     help: false,
     includeArchitecture: false,

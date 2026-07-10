@@ -8,9 +8,11 @@ import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
 import {
   readCodexAppServerBinding,
-  resolveCodexAppServerBindingPath,
+  registerCodexTestSessionIdentity,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
-} from "./app-server/session-binding.js";
+} from "./app-server/session-binding.test-helpers.js";
 import { createCodexThreadsTool } from "./native-thread-tool.js";
 
 describe("native Codex thread tool", () => {
@@ -23,6 +25,12 @@ describe("native Codex thread tool", () => {
       sessionFile = path.join(root, "sessions", "session-id.jsonl");
       await fs.mkdir(path.dirname(sessionFile), { recursive: true });
       await fs.writeFile(sessionFile, "");
+      resetCodexTestBindingStore();
+      registerCodexTestSessionIdentity(
+        "session-id",
+        "session-id",
+        "agent:main:telegram:direct:owner",
+      );
       await run();
     });
   }
@@ -31,6 +39,7 @@ describe("native Codex thread tool", () => {
     owner?: boolean;
     homeScope?: "agent" | "user";
     request?: ReturnType<typeof vi.fn>;
+    sessionId?: string | null;
   }) {
     const context: OpenClawPluginToolContext = {
       config: {},
@@ -38,7 +47,7 @@ describe("native Codex thread tool", () => {
       agentDir: path.join(root, "agent"),
       workspaceDir: path.join(root, "workspace"),
       sessionKey: "agent:main:telegram:direct:owner",
-      sessionId: "session-id",
+      sessionId: params?.sessionId === null ? undefined : (params?.sessionId ?? "session-id"),
       senderIsOwner: params?.owner ?? true,
     };
     const runtime = createPluginRuntimeMock({
@@ -51,6 +60,7 @@ describe("native Codex thread tool", () => {
       },
     });
     return createCodexThreadsTool({
+      bindingStore: testCodexAppServerBindingStore,
       context,
       runtime,
       getPluginConfig: () => ({ appServer: { homeScope: params?.homeScope ?? "user" } }),
@@ -107,7 +117,7 @@ describe("native Codex thread tool", () => {
         model: "gpt-5.5",
         modelProvider: "openai",
       }));
-      const tool = createTool({ request });
+      const tool = createTool({ request, sessionId: null });
 
       const result = await tool?.execute("call-2", {
         action: "fork",
@@ -121,12 +131,13 @@ describe("native Codex thread tool", () => {
         expect.any(Object),
       );
       await expect(
-        readCodexAppServerBinding(sessionFile, { agentDir: path.join(root, "agent") }),
+        readCodexAppServerBinding("session-id", { agentDir: path.join(root, "agent") }),
       ).resolves.toMatchObject({
         threadId: "forked-thread",
         cwd: "/tmp/project",
         model: "gpt-5.5",
         modelProvider: "openai",
+        historyCoveredThrough: expect.any(String),
       });
       expect(result?.details).toMatchObject({
         action: "fork",
@@ -135,9 +146,29 @@ describe("native Codex thread tool", () => {
       });
     }));
 
+  it("reports a conflict when a fork cannot attach to the current generation", () =>
+    withFixture(async () => {
+      const request = vi.fn(async () => ({
+        thread: { id: "forked-thread", cwd: "/tmp/project", status: { type: "idle" } },
+      }));
+      const mutate = vi
+        .spyOn(testCodexAppServerBindingStore, "mutate")
+        .mockResolvedValueOnce(false);
+      try {
+        await expect(
+          createTool({ request })?.execute("call-conflict", {
+            action: "fork",
+            thread_id: "source-thread",
+          }),
+        ).rejects.toThrow("binding changed before the fork could be attached");
+      } finally {
+        mutate.mockRestore();
+      }
+    }));
+
   it("refuses to archive the active thread bound to this OpenClaw session", () =>
     withFixture(async () => {
-      await writeCodexAppServerBinding(sessionFile, {
+      await writeCodexAppServerBinding("session-id", {
         threadId: "active-thread",
         cwd: "/tmp/project",
       });
@@ -166,7 +197,7 @@ describe("native Codex thread tool", () => {
 
   it("archives an idle bound thread and clears its attachment", () =>
     withFixture(async () => {
-      await writeCodexAppServerBinding(sessionFile, {
+      await writeCodexAppServerBinding("session-id", {
         threadId: "idle-thread",
         cwd: "/tmp/project",
       });
@@ -190,9 +221,7 @@ describe("native Codex thread tool", () => {
         { threadId: "idle-thread" },
         expect.any(Object),
       );
-      await expect(fs.access(resolveCodexAppServerBindingPath(sessionFile))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expect(readCodexAppServerBinding("session-id")).resolves.toBeUndefined();
     }));
 
   it.each([

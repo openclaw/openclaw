@@ -215,7 +215,7 @@ export async function runPluginHostCleanup(params: {
   }
   let cleanupCount = persistentCleanupCount;
   if (registry) {
-    for (const registration of registry.sessionExtensions ?? []) {
+    for (const registration of registry.sessionExtensions) {
       if (!shouldCleanup()) {
         return { cleanupCount, failures };
       }
@@ -243,7 +243,7 @@ export async function runPluginHostCleanup(params: {
         });
       }
     }
-    for (const registration of registry.runtimeLifecycles ?? []) {
+    for (const registration of registry.runtimeLifecycles) {
       if (!shouldCleanup()) {
         return { cleanupCount, failures };
       }
@@ -320,16 +320,16 @@ export async function runPluginHostCleanup(params: {
 
 function collectHostHookPluginIds(registry: PluginRegistry): Set<string> {
   const ids = new Set<string>();
-  for (const registration of registry.sessionExtensions ?? []) {
+  for (const registration of registry.sessionExtensions) {
     ids.add(registration.pluginId);
   }
-  for (const registration of registry.runtimeLifecycles ?? []) {
+  for (const registration of registry.runtimeLifecycles) {
     ids.add(registration.pluginId);
   }
-  for (const registration of registry.agentEventSubscriptions ?? []) {
+  for (const registration of registry.agentEventSubscriptions) {
     ids.add(registration.pluginId);
   }
-  for (const registration of registry.sessionSchedulerJobs ?? []) {
+  for (const registration of registry.sessionSchedulerJobs) {
     ids.add(registration.pluginId);
   }
   return ids;

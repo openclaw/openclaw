@@ -495,7 +495,8 @@ describe("subagent-orphan-recovery", () => {
   it("truncates long task descriptions in resume message", async () => {
     mockSingleAbortedSession();
 
-    const longTask = "x".repeat(5000);
+    const taskPrefix = "x".repeat(1999);
+    const longTask = `${taskPrefix}🚀 omitted tail`;
     const activeRuns = createActiveRuns(createTestRunRecord({ task: longTask }));
 
     await recoverOrphanedSubagentSessions({
@@ -503,9 +504,8 @@ describe("subagent-orphan-recovery", () => {
     });
 
     const message = getResumeMessage();
-    // Message should contain truncated task (2000 chars + "...")
-    expect(message.length).toBeLessThan(5000);
-    expect(message).toContain("...");
+    expect(message).toContain(`Your original task was:\n\n${taskPrefix}...\n\n`);
+    expect(message).not.toContain("🚀");
   });
 
   it("includes last human message in resume when available", async () => {

@@ -171,16 +171,4 @@ class RoomChatCommandOutboxTest {
 
       assertEquals(listOf("for other"), store.load("gateway-a").map { it.text })
     }
-
-  @Test
-  fun clearAllPurgesEveryGatewayScope() =
-    runTest {
-      store.enqueueQueued("a command", nowMs = 10, gatewayId = "gateway-a")
-      store.enqueueQueued("b command", nowMs = 20, gatewayId = "gateway-b")
-
-      store.clearAll()
-
-      assertEquals(emptyList<ChatOutboxItem>(), store.load("gateway-a"))
-      assertEquals(emptyList<ChatOutboxItem>(), store.load("gateway-b"))
-    }
 }

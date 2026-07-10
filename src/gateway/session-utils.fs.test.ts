@@ -2008,6 +2008,20 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result[0]?.text.endsWith("...")).toBe(true);
   });
 
+  test("keeps preview text valid when the limit bisects an emoji", () => {
+    const sessionId = "preview-truncate-utf16";
+    const lines = [
+      JSON.stringify({
+        message: { role: "assistant", content: `${"t".repeat(196)}🚀xyz` },
+      }),
+    ];
+    writeTranscriptLines(sessionId, lines);
+
+    expect(readPreview(sessionId, 1, 200)).toEqual([
+      { role: "assistant", text: `${"t".repeat(196)}...` },
+    ]);
+  });
+
   test("strips inline directives from preview items", () => {
     const sessionId = "preview-strip-inline-directives";
     const lines = [

@@ -375,6 +375,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsPromptCacheKey",
     "supportsDeveloperRole",
     "supportsReasoningEffort",
+    "supportsTemperature",
     "supportsUsageInStreaming",
     "supportsTools",
     "supportsStrictMode",
@@ -383,6 +384,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "requiresToolResultName",
     "requiresAssistantAfterToolResult",
     "requiresThinkingAsText",
+    "requiresReasoningContentOnAssistantMessages",
     "zaiToolStream",
     "sendSessionAffinityHeaders",
     "sendSessionIdHeader",
@@ -554,10 +556,12 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
   const api = normalizeModelCatalogApi(value.api);
   const headers = normalizeStringMap(value.headers);
+  const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
   return {
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),
+    ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
     models,
   };
 }

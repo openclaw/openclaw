@@ -8,6 +8,9 @@ export function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("cron job id must not be blank") ||
     message.includes("cron declarationKey") ||
     message.includes("cron displayName") ||
+    message.includes("cron triggers are disabled") ||
+    message.includes("cron triggers require") ||
+    message.includes("cron trigger every interval") ||
     message.includes("cron job is missing sessionTarget") ||
     message.includes("invalid cron sessionTarget session id") ||
     message.includes('main cron jobs require payload.kind="systemEvent"') ||

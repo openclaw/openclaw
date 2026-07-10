@@ -5,6 +5,8 @@ import {
   ErrorCodes,
   errorShape,
   validateSkillsBinsParams,
+  validateSkillsCuratorActionParams,
+  validateSkillsCuratorStatusParams,
   validateSkillsDetailParams,
   validateSkillsInstallParams,
   validateSkillsProposalActionParams,
@@ -48,6 +50,12 @@ import {
   collectClawHubVerdictTargets,
   fetchOpenClawSkillSecurityVerdicts,
 } from "../../skills/security/clawhub-verdicts.js";
+import {
+  getSkillCuratorStatus,
+  pinCuratedSkill,
+  restoreCuratedSkill,
+  unpinCuratedSkill,
+} from "../../skills/workshop/curator.js";
 import {
   applySkillProposal,
   inspectSkillProposal,
@@ -331,6 +339,60 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond(true, detail, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
+  },
+  "skills.curator.status": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsCuratorStatusParams,
+        "skills.curator.status",
+        respond,
+      )
+    ) {
+      return;
+    }
+    respond(true, getSkillCuratorStatus(), undefined);
+  },
+  "skills.curator.pin": async ({ params, respond }) => {
+    if (
+      !assertValidParams(params, validateSkillsCuratorActionParams, "skills.curator.pin", respond)
+    ) {
+      return;
+    }
+    try {
+      respond(true, pinCuratedSkill(params.skill), undefined);
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.curator.unpin": async ({ params, respond }) => {
+    if (
+      !assertValidParams(params, validateSkillsCuratorActionParams, "skills.curator.unpin", respond)
+    ) {
+      return;
+    }
+    try {
+      respond(true, unpinCuratedSkill(params.skill), undefined);
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.curator.restore": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsCuratorActionParams,
+        "skills.curator.restore",
+        respond,
+      )
+    ) {
+      return;
+    }
+    try {
+      respond(true, restoreCuratedSkill(params.skill), undefined);
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
     }
   },
   "skills.proposals.list": async ({ params, respond, context }) => {

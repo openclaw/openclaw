@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenClawKit
 import OSLog
 import Speech
 import SwabbleKit
@@ -188,7 +189,7 @@ actor VoiceWakeRuntime {
             input.removeTap(onBus: 0)
             input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self, weak request] buffer, _ in
                 request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-                guard let rms = Self.rmsLevel(buffer: buffer) else { return }
+                let rms = TalkAudioLevel.rms(buffer: buffer)
                 Task.detached { [weak self] in
                     await self?.noteAudioLevel(rms: rms)
                     await self?.noteAudioTap(rms: rms)
@@ -337,7 +338,9 @@ actor VoiceWakeRuntime {
             }
         }
 
-        if self.isCapturing { return }
+        if self.isCapturing {
+            return
+        }
 
         let gateConfig = WakeWordGateConfig(triggers: config.triggers)
         var usedFallback = false
@@ -726,18 +729,6 @@ actor VoiceWakeRuntime {
         }
     }
 
-    private static func rmsLevel(buffer: AVAudioPCMBuffer) -> Double? {
-        guard let channelData = buffer.floatChannelData?.pointee else { return nil }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return nil }
-        var sum: Double = 0
-        for i in 0..<frameCount {
-            let sample = Double(channelData[i])
-            sum += sample * sample
-        }
-        return sqrt(sum / Double(frameCount))
-    }
-
     private func restartRecognizer() {
         // Restart the recognizer so we listen for the next trigger with a clean buffer.
         let current = self.currentConfig
@@ -748,7 +739,9 @@ actor VoiceWakeRuntime {
     }
 
     private func restartRecognizerIfIdleAndOverlayHidden() async {
-        if self.isCapturing { return }
+        if self.isCapturing {
+            return
+        }
         self.restartRecognizer()
     }
 

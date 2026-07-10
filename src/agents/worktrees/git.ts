@@ -11,7 +11,7 @@ export type GitResult = {
   code: number | null;
 };
 
-export type WorktreeListEntry = {
+type WorktreeListEntry = {
   path: string;
   lockedReason?: string;
 };

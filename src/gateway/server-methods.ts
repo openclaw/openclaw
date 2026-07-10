@@ -70,6 +70,10 @@ const loadAgentsHandlers = lazyHandlerModule(
   () => import("./server-methods/agents.js"),
   (module) => module.agentsHandlers,
 );
+const loadAgentsWorkspaceHandlers = lazyHandlerModule(
+  () => import("./server-methods/agents-workspace.js"),
+  (module) => module.agentsWorkspaceHandlers,
+);
 const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
@@ -174,6 +178,10 @@ const loadPluginHostHookHandlers = lazyHandlerModule(
   () => import("./server-methods/plugin-host-hooks.js"),
   (module) => module.pluginHostHookHandlers,
 );
+const loadPluginsHandlers = lazyHandlerModule(
+  () => import("./server-methods/plugins.js"),
+  (module) => module.pluginsHandlers,
+);
 const loadPushHandlers = lazyHandlerModule(
   () => import("./server-methods/push.js"),
   (module) => module.pushHandlers,
@@ -209,6 +217,10 @@ const loadTalkHandlers = lazyHandlerModule(
 const loadTasksHandlers = lazyHandlerModule(
   () => import("./server-methods/tasks.js"),
   (module) => module.tasksHandlers,
+);
+const loadTaskSuggestionsHandlers = lazyHandlerModule(
+  () => import("./server-methods/task-suggestions.js"),
+  (module) => module.taskSuggestionsHandlers,
 );
 const loadToolsCatalogHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-catalog.js"),
@@ -341,6 +353,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "chat.startup",
       "chat.metadata",
       "chat.message.get",
+      "chat.toolTitles",
       "chat.abort",
       "chat.send",
       "chat.inject",
@@ -371,6 +384,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "device.pair.approve",
       "device.pair.reject",
       "device.pair.remove",
+      "device.pair.rename",
       "device.token.rotate",
       "device.token.revoke",
     ],
@@ -385,7 +399,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDiagnosticsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["controlUi.githubPreview"],
+    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests"],
     loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -408,6 +422,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "worktrees.list",
+      "worktrees.branches",
       "worktrees.create",
       "worktrees.remove",
       "worktrees.restore",
@@ -443,6 +458,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["plugins.uiDescriptors", "plugins.sessionAction"],
     loadHandlers: loadPluginHostHookHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "plugins.list",
+      "plugins.search",
+      "plugins.install",
+      "plugins.setEnabled",
+      "plugins.uninstall",
+    ],
+    loadHandlers: loadPluginsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -495,6 +520,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTasksHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: [
+      "taskSuggestions.list",
+      "taskSuggestions.create",
+      "taskSuggestions.accept",
+      "taskSuggestions.dismiss",
+    ],
+    loadHandlers: loadTaskSuggestionsHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["tools.catalog"],
     loadHandlers: loadToolsCatalogHandlers,
   }),
@@ -512,6 +546,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "tts.enable",
       "tts.disable",
       "tts.convert",
+      "tts.speak",
       "tts.setProvider",
       "tts.personas",
       "tts.setPersona",
@@ -532,6 +567,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.skillCard",
       "skills.install",
       "skills.update",
+      "skills.curator.status",
+      "skills.curator.pin",
+      "skills.curator.unpin",
+      "skills.curator.restore",
       "skills.proposals.list",
       "skills.proposals.inspect",
       "skills.proposals.create",
@@ -569,6 +608,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.delete",
       "sessions.get",
       "sessions.compact",
+      "sessions.groups.list",
+      "sessions.groups.put",
+      "sessions.groups.rename",
+      "sessions.groups.delete",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -589,12 +632,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "node.pair.request",
       "node.pair.list",
       "node.pair.approve",
       "node.pair.reject",
       "node.pair.remove",
-      "node.pair.verify",
       "node.rename",
       "node.list",
       "node.describe",
@@ -654,6 +695,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "agents.files.set",
     ],
     loadHandlers: loadAgentsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["agents.workspace.list", "agents.workspace.get"],
+    loadHandlers: loadAgentsWorkspaceHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],

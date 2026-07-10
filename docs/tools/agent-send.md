@@ -75,7 +75,7 @@ programmatic delivery. Full flag and behavior reference:
 | `--model <id>`              | Model override for this run (`provider/model` or model id)           |
 | `--local`                   | Force local embedded runtime (skip Gateway)                          |
 | `--deliver`                 | Send the reply to a chat channel                                     |
-| `--channel <name>`          | Delivery channel (discord, slack, telegram, whatsapp, etc.)          |
+| `--channel <name>`          | Delivery channel; with `--agent` + `--to`, also applies DM scope     |
 | `--reply-to <target>`       | Delivery target override                                             |
 | `--reply-channel <name>`    | Delivery channel override                                            |
 | `--reply-account <id>`      | Delivery account id override                                         |
@@ -94,7 +94,10 @@ programmatic delivery. Full flag and behavior reference:
   run; a Gateway timeout falls back with a fresh session instead of racing the
   original transcript.
 - Session selection: `--to` derives the session key (group/channel targets
-  preserve isolation; direct chats collapse to `main`).
+  preserve isolation; direct chats collapse to `main`). With `--agent`,
+  `--channel`, and `--to` together, routing follows the channel's canonical
+  recipient and `session.dmScope`. Stable outbound-only identities use a
+  provider-owned session isolated from the agent's main session.
 - `--session-key` selects an explicit key. Agent-prefixed keys must use
   `agent:<agent-id>:<session-key>`, and `--agent` must match that agent id when
   both are supplied. Bare non-sentinel keys are scoped to `--agent` when
@@ -103,8 +106,7 @@ programmatic delivery. Full flag and behavior reference:
   to the configured default agent. Literal `global` and `unknown` remain
   unscoped only when no `--agent` is supplied; the embedded fallback path
   resolves those sentinel sessions to the configured default agent.
-- `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery,
-  not session routing.
+- `--reply-channel` and `--reply-account` affect delivery only.
 - Thinking and verbose flags persist into the session store.
 - Output: plain text by default, or `--json` for structured payload + metadata.
 - With `--json --deliver`, the JSON includes delivery status for sent,

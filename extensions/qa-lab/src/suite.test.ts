@@ -37,6 +37,39 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
 }
 
 describe("qa suite", () => {
+  it("continues ordered cleanup after a resource reports failure", async () => {
+    const calls: string[] = [];
+    const failure = new Error("gateway pipe failed");
+
+    const errors = await qaSuiteProgressTesting.runQaSuiteCleanupSteps([
+      async () => {
+        calls.push("gateway");
+        throw failure;
+      },
+      async () => {
+        calls.push("transport");
+      },
+      async () => {
+        calls.push("lab");
+      },
+    ]);
+
+    expect(calls).toEqual(["gateway", "transport", "lab"]);
+    expect(errors).toEqual([failure]);
+  });
+
+  it("keeps the primary suite error as the cause of aggregated cleanup failures", () => {
+    const runError = new Error("gateway infrastructure failed");
+
+    expect(() =>
+      qaSuiteProgressTesting.throwQaSuiteCleanupErrors({
+        cleanupErrors: [new Error("transport cleanup failed")],
+        runFailed: true,
+        runError,
+      }),
+    ).toThrow(expect.objectContaining({ cause: runError }));
+  });
+
   it("rejects unsupported transport ids before starting the lab", async () => {
     const startLab = vi.fn();
 
@@ -48,6 +81,69 @@ describe("qa suite", () => {
     ).rejects.toThrow("unsupported QA transport: qa-nope");
 
     expect(startLab).not.toHaveBeenCalled();
+  });
+
+  it("keeps metadata-only live channel drivers on the canonical QA transport", async () => {
+    const create = vi.fn();
+
+    await expect(
+      qaSuiteProgressTesting.createQaSuiteTransportAdapter({
+        adapterFactories: [{ id: "telegram", matches: () => true, create }],
+        channelDriver: "live",
+        outputDir: "/tmp/qa-output",
+        state: {} as QaLabServerHandle["state"],
+        transportId: "qa-channel",
+      }),
+    ).resolves.toMatchObject({ adapter: { id: "qa-channel" } });
+
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("uses a contributed live adapter when its channel is selected", async () => {
+    const adapter = { id: "telegram" } as QaTransportAdapter;
+    const create = vi.fn(async () => adapter);
+
+    await expect(
+      qaSuiteProgressTesting.createQaSuiteTransportAdapter({
+        adapterFactories: [{ id: "telegram", matches: () => true, create }],
+        channelDriver: "live",
+        channelId: "telegram",
+        outputDir: "/tmp/qa-output",
+        transportPolicy: { requireGroupMention: true },
+        state: {} as QaLabServerHandle["state"],
+        transportId: "qa-channel",
+      }),
+    ).resolves.toMatchObject({ adapter });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterOptions: expect.objectContaining({
+          transportPolicy: { requireGroupMention: true },
+        }),
+      }),
+    );
+  });
+
+  it("preserves caller-supplied transport policy without scenario metadata", async () => {
+    const adapter = { id: "telegram" } as QaTransportAdapter;
+    const create = vi.fn(async () => adapter);
+
+    await qaSuiteProgressTesting.createQaSuiteTransportAdapter({
+      adapterFactories: [{ id: "telegram", matches: () => true, create }],
+      adapterOptions: { transportPolicy: { topLevelReplies: true } },
+      channelDriver: "live",
+      channelId: "telegram",
+      outputDir: "/tmp/qa-output",
+      state: {} as QaLabServerHandle["state"],
+      transportId: "qa-channel",
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterOptions: { transportPolicy: { topLevelReplies: true } },
+      }),
+    );
   });
 
   it("parses progress env booleans", () => {
@@ -462,6 +558,11 @@ describe("qa suite", () => {
 
   it("forwards run options into isolated scenario worker params", () => {
     const startLab = vi.fn();
+    const adapterFactory = {
+      id: "telegram",
+      matches: vi.fn(() => true),
+      create: vi.fn(),
+    };
     const scenario = makeQaSuiteTestScenario("patched-control-ui", {
       surface: "control-ui",
       gatewayConfigPatch: {
@@ -485,6 +586,9 @@ describe("qa suite", () => {
         scenario,
         startLab,
         input: {
+          adapterFactories: [adapterFactory],
+          channelId: "telegram",
+          adapterOptions: { repoRoot: "/repo" },
           thinkingDefault: "minimal",
           claudeCliAuthMode: "subscription",
           enabledPluginIds: ["acpx"],
@@ -495,6 +599,9 @@ describe("qa suite", () => {
       }),
     ).toMatchObject({
       scenarioIds: ["patched-control-ui"],
+      adapterFactories: [adapterFactory],
+      channelId: "telegram",
+      adapterOptions: { repoRoot: "/repo" },
       concurrency: 1,
       startLab,
       controlUiEnabled: true,

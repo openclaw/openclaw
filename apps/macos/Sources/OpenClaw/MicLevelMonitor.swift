@@ -1,4 +1,5 @@
 import AVFoundation
+import OpenClawKit
 import OSLog
 import SwiftUI
 
@@ -15,7 +16,9 @@ actor MicLevelMonitor {
 
     func start(onLevel: @Sendable @escaping (Double) -> Void) async throws {
         self.update = onLevel
-        if self.running { return }
+        if self.running {
+            return
+        }
         self.logger.info(
             "mic level monitor start (\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public))")
         self.lastUpdate = .now
@@ -41,7 +44,7 @@ actor MicLevelMonitor {
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 512, format: format) { [weak self] buffer, _ in
             guard let self else { return }
-            let level = Self.normalizedLevel(from: buffer)
+            let level = TalkAudioLevel.normalized(rms: TalkAudioLevel.rms(buffer: buffer))
             Task { await self.push(level: level) }
         }
         engine.prepare()
@@ -71,20 +74,6 @@ actor MicLevelMonitor {
         self.lastPublishedLevel = value
         Task { @MainActor in update(value) }
     }
-
-    private static func normalizedLevel(from buffer: AVAudioPCMBuffer) -> Double {
-        guard let channel = buffer.floatChannelData?[0] else { return 0 }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return 0 }
-        var sum: Float = 0
-        for i in 0..<frameCount {
-            let s = channel[i]
-            sum += s * s
-        }
-        let rms = sqrt(sum / Float(frameCount) + 1e-12)
-        let db = 20 * log10(Double(rms))
-        return max(0, min(1, (db + 50) / 50))
-    }
 }
 
 struct MicLevelBar: View {
@@ -108,8 +97,12 @@ struct MicLevelBar: View {
 
     private func segmentColor(for idx: Int) -> Color {
         let fraction = Double(idx + 1) / Double(self.segments)
-        if fraction < 0.65 { return .green }
-        if fraction < 0.85 { return .yellow }
+        if fraction < 0.65 {
+            return .green
+        }
+        if fraction < 0.85 {
+            return .yellow
+        }
         return .red
     }
 }

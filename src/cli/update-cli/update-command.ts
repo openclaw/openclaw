@@ -16,10 +16,14 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
+import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
+  UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV,
+  UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
+  UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
 } from "../../commands/doctor/shared/update-phase.js";
 import { createPreUpdateConfigSnapshot } from "../../config/backup-rotation.js";
 import {
@@ -110,9 +114,14 @@ import {
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
-import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import {
+  resolveUpdateDoctorExecutionPolicy,
+  runGatewayUpdate,
+  type UpdateRunResult,
+} from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
@@ -123,6 +132,7 @@ import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "../../plugins/official-external-install-records.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import {
   isClawHubTrustSkippedOutcome,
   syncPluginsForUpdateChannel,
@@ -145,9 +155,7 @@ import {
   waitForGatewayHealthyRestart,
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
-import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
 import {
   registerSignalExitBarrier,
   registerSignalExitGate,
@@ -749,8 +757,12 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   serviceInstalled: boolean;
   serviceLoaded: boolean;
   serviceStoppedForUpdate?: boolean;
+  serviceMatchesMutationRoot?: boolean;
   serviceMatchesUpdateRoot?: boolean;
 }): boolean {
+  if (params.serviceMatchesMutationRoot === false) {
+    return false;
+  }
   if (isPackageManagerUpdateMode(params.updateMode)) {
     return params.serviceInstalled;
   }
@@ -901,6 +913,7 @@ type PreManagedServiceStop = {
   inspected: boolean;
   runtimeInspected: boolean;
   running: boolean;
+  serviceMatchesMutationRoot?: boolean;
   blockMessage?: string;
   serviceEnv?: NodeJS.ProcessEnv;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
@@ -1144,6 +1157,13 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     };
   }
 
+  const serviceMatchesMutationRoot = await gatewayServiceCommandUsesRoot({
+    root: params.root,
+    command: serviceState.command,
+  });
+  const serviceOwnership =
+    serviceMatchesMutationRoot === null ? {} : { serviceMatchesMutationRoot };
+
   if (!params.shouldRestart) {
     if (!params.jsonMode && serviceState.running) {
       defaultRuntime.log(
@@ -1163,6 +1183,7 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       inspected: true,
       runtimeInspected,
       running: serviceState.running,
+      ...serviceOwnership,
       serviceEnv: serviceState.env,
       ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
     };
@@ -1182,6 +1203,7 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       inspected: true,
       runtimeInspected: false,
       running: false,
+      ...serviceOwnership,
       serviceEnv: serviceState.env,
       ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
     };
@@ -1197,6 +1219,7 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       inspected: true,
       runtimeInspected: true,
       running: false,
+      ...serviceOwnership,
       serviceEnv: serviceState.env,
       ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
     };
@@ -1209,20 +1232,17 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       inspected: true,
       runtimeInspected: true,
       running: true,
+      ...serviceOwnership,
       blockMessage,
       serviceEnv: serviceState.env,
     };
   }
 
-  if (
-    params.updateInstallKind === "git" &&
-    (await gatewayServiceCommandUsesRoot({ root: params.root, command: serviceState.command })) ===
-      false
-  ) {
+  if (serviceMatchesMutationRoot === false) {
     if (!params.jsonMode) {
       defaultRuntime.log(
         theme.muted(
-          "Managed gateway service points at a different OpenClaw root; leaving it running during this git update.",
+          `Managed gateway service points at a different OpenClaw root; leaving it running during this ${params.updateInstallKind} update.`,
         ),
       );
     }
@@ -1231,6 +1251,7 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       inspected: true,
       runtimeInspected: true,
       running: true,
+      ...serviceOwnership,
       serviceEnv: serviceState.env,
     };
   }
@@ -1279,6 +1300,7 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     inspected: true,
     runtimeInspected: true,
     running: true,
+    ...serviceOwnership,
     serviceEnv: serviceState.env,
     ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
   };
@@ -1473,7 +1495,10 @@ export function resolvePostInstallDoctorEnv(params?: {
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
 }): NodeJS.ProcessEnv {
-  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  const resolvedEnv: NodeJS.ProcessEnv = {
+    ...disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env),
+    [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
+  };
   if (!params?.serviceEnv) {
     return resolvedEnv;
   }
@@ -1830,7 +1855,12 @@ async function gatewayServiceCommandUsesRoot(params: {
       : params.command;
   const layout = await summarizeGatewayServiceLayout(command);
   const serviceRoot = layout?.packageRoot;
-  if (!serviceRoot) {
+  const serviceEntrypoint = layout?.entrypoint;
+  if (
+    !serviceRoot ||
+    !serviceEntrypoint ||
+    (!path.isAbsolute(serviceEntrypoint) && !path.win32.isAbsolute(serviceEntrypoint))
+  ) {
     return null;
   }
   const [expectedRootReal, serviceRootReal] = await Promise.all([
@@ -1849,6 +1879,8 @@ async function runPackageInstallUpdate(params: {
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   jsonMode: boolean;
+  allowGatewayServiceRepair: boolean;
+  allowGatewayActivation: boolean;
   managedServiceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
   honorPackageRoot?: boolean;
@@ -1924,12 +1956,16 @@ async function runPackageInstallUpdate(params: {
         await createUpdateConfigSnapshot();
         const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
         const doctorResultPath = createUpdatePostInstallDoctorResultPath();
+        const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
+          targetVersion: candidateHostVersion,
+          allowGatewayServiceRepair: params.allowGatewayServiceRepair,
+        });
         const doctorArgv = [
           params.nodeRunner ?? resolveNodeRunner(),
           entryPath,
           "doctor",
           "--non-interactive",
-          "--fix",
+          ...(doctorPolicy.fix ? ["--fix"] : []),
         ];
         const doctorProgressInfo = {
           name: `${CLI_NAME} doctor`,
@@ -1950,6 +1986,16 @@ async function runPackageInstallUpdate(params: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+            [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
+            [UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV]: params.allowGatewayServiceRepair
+              ? "1"
+              : "0",
+            [UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV]: params.allowGatewayActivation
+              ? "1"
+              : "0",
+            ...(doctorPolicy.serviceRepairPolicy
+              ? { OPENCLAW_SERVICE_REPAIR_POLICY: doctorPolicy.serviceRepairPolicy }
+              : {}),
             [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
             ...(candidateHostVersion === null
               ? {}
@@ -2000,7 +2046,12 @@ async function runGitUpdate(params: {
   opts: UpdateCommandOptions;
   stop: () => void;
   devTargetRef?: string;
-  beforeGitMutation?: () => Promise<void>;
+  beforeGitMutation?: () => Promise<{
+    allowGatewayServiceRepair?: boolean;
+    allowGatewayActivation?: boolean;
+  } | void>;
+  allowGatewayServiceRepair: boolean;
+  allowGatewayActivation: boolean;
 }): Promise<UpdateRunResult> {
   const updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
@@ -2039,6 +2090,8 @@ async function runGitUpdate(params: {
     tag: params.tag,
     devTargetRef: params.devTargetRef,
     deferConfiguredPluginInstallRepair: true,
+    allowGatewayServiceRepair: params.allowGatewayServiceRepair,
+    allowGatewayActivation: params.allowGatewayActivation,
     beforeGitMutation: params.beforeGitMutation,
   });
   const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
@@ -2753,6 +2806,7 @@ async function maybeRestartService(params: {
             process.stdin.isTTY && !params.opts.json && params.opts.yes !== true;
           await doctorCommand(defaultRuntime, {
             nonInteractive: !interactiveDoctor,
+            crossStateDirImports: false,
           });
         } catch (err) {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
@@ -2939,6 +2993,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       nonInteractive: true,
       repair: true,
       yes: opts.yes === true,
+      crossStateDirImports: false,
     });
     configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     if (requestedChannel) {
@@ -3429,6 +3484,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
       env: {
         ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(params.requestedChannel
@@ -4185,6 +4241,11 @@ async function updateCommandInternal(
             startedAt,
             progress,
             jsonMode: Boolean(opts.json),
+            allowGatewayServiceRepair: preManagedServiceStop?.serviceMatchesMutationRoot === true,
+            allowGatewayActivation:
+              shouldRestart &&
+              preManagedServiceStop?.stopped === true &&
+              preManagedServiceStop.serviceMatchesMutationRoot === true,
             managedServiceEnv: preManagedServiceStop?.serviceEnv,
             invocationCwd,
             honorPackageRoot:
@@ -4208,8 +4269,22 @@ async function updateCommandInternal(
             devTargetRef,
             beforeGitMutation:
               updateInstallKind === "git"
-                ? () => stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? [root])
+                ? async () => {
+                    await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? [root]);
+                    return {
+                      // Only a positively owned service may be rewritten. Activation
+                      // additionally requires this update to have stopped it.
+                      allowGatewayServiceRepair:
+                        preManagedServiceStop?.serviceMatchesMutationRoot === true,
+                      allowGatewayActivation:
+                        shouldRestart &&
+                        preManagedServiceStop?.stopped === true &&
+                        preManagedServiceStop.serviceMatchesMutationRoot === true,
+                    };
+                  }
                 : undefined,
+            allowGatewayServiceRepair: false,
+            allowGatewayActivation: false,
           });
   } catch (err) {
     stop();
@@ -4468,24 +4543,33 @@ async function updateCommandInternal(
         }),
       });
       const serviceMatchesUpdateRoot =
-        resultWithPostUpdate.mode === "git"
-          ? ((await gatewayServiceCommandUsesRoot({
-              root: postUpdateRoot,
-              command: serviceState.command,
-            })) ?? undefined)
-          : undefined;
+        (await gatewayServiceCommandUsesRoot({
+          root: postUpdateRoot,
+          command: serviceState.command,
+        })) ?? undefined;
+      const serviceOwnershipConfirmed =
+        preManagedServiceStop?.serviceMatchesMutationRoot === true ||
+        serviceMatchesUpdateRoot === true;
+      const knownForeignService =
+        preManagedServiceStop?.serviceMatchesMutationRoot === false &&
+        serviceMatchesUpdateRoot !== true;
       skipLegacyServiceRestart =
-        resultWithPostUpdate.mode === "git" &&
-        serviceState.installed &&
-        serviceState.loaded &&
-        preManagedServiceStop?.stopped !== true &&
-        serviceMatchesUpdateRoot === false;
+        knownForeignService ||
+        (resultWithPostUpdate.mode === "git" &&
+          serviceState.installed &&
+          serviceState.loaded &&
+          preManagedServiceStop?.stopped !== true &&
+          serviceMatchesUpdateRoot === false);
       if (
+        !knownForeignService &&
         shouldPrepareUpdatedInstallRestart({
           updateMode: resultWithPostUpdate.mode,
           serviceInstalled: serviceState.installed,
           serviceLoaded: serviceState.loaded,
           serviceStoppedForUpdate: preManagedServiceStop?.stopped,
+          serviceMatchesMutationRoot: serviceOwnershipConfirmed
+            ? true
+            : preManagedServiceStop?.serviceMatchesMutationRoot,
           serviceMatchesUpdateRoot,
         })
       ) {
@@ -4496,7 +4580,9 @@ async function updateCommandInternal(
           serviceEnv: gatewayServiceEnv,
         });
         restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
-        refreshGatewayServiceEnvLocal = true;
+        // An ambiguous wrapper may be stopped and restored, but only proven
+        // ownership authorizes rewriting the service definition.
+        refreshGatewayServiceEnvLocal = serviceOwnershipConfirmed;
       }
     } catch {
       // Ignore errors during pre-check; fallback to standard restart

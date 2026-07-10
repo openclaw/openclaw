@@ -17,6 +17,11 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
+  it("uses route-specific GPT-5.6 defaults for direct API and Codex", () => {
+    expect(OPENAI_API_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6");
+    expect(CODEX_APP_SERVER_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
+  });
+
   it("returns nothing when no backend exists", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
@@ -53,6 +58,31 @@ describe("detectInferenceBackends", () => {
     expect(candidates[2]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
     expect(candidates[3]?.modelRef).toBe(CLAUDE_CLI_DEFAULT_MODEL_REF);
     expect(candidates[4]?.modelRef).toBe(CODEX_APP_SERVER_DEFAULT_MODEL_REF);
+  });
+
+  it("prefers the configured default agent model over the global default", async () => {
+    const candidates = await detectInferenceBackends({
+      config: {
+        agents: {
+          defaults: { model: "openai/gpt-5.5" },
+          list: [
+            { id: "fallback", model: "google/gemini-3.1-pro-preview" },
+            { id: "ops", default: true, model: "anthropic/claude-opus-4-8" },
+          ],
+        },
+      },
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({}),
+        readClaudeCliCredentials: () => null,
+        readCodexCliCredentials: () => null,
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      { kind: "existing-model", modelRef: "anthropic/claude-opus-4-8" },
+    ]);
   });
 
   it("sinks a definitively logged-out CLI below a logged-in one", async () => {

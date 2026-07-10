@@ -28,7 +28,7 @@ type CardState = {
 
 export type FeishuStreamingFetch = typeof fetch;
 
-export type FeishuStreamingDeps = {
+type FeishuStreamingDeps = {
   /** Override fetch for tests while preserving the real SSRF guard path. */
   fetchImpl?: FeishuStreamingFetch;
   /** Override hostname lookup for hermetic SSRF-guard tests. */

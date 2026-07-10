@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { extractToolCards } from "../../../lib/chat/tool-cards.ts";
-import { buildToolCardSidebarContent } from "./chat-tool-cards.ts";
+import { buildPreviewSidebarContent, buildToolCardSidebarContent } from "./chat-tool-cards.ts";
 
 vi.mock("../../../components/icons.ts", () => ({
   icons: {},
@@ -380,6 +380,7 @@ with Example Deck
             target: "assistant_message",
             title: "Inline demo",
             preferred_height: 420,
+            sandbox: "scripts",
           },
         }),
       },
@@ -393,6 +394,27 @@ with Example Deck
     expect(card?.preview?.url).toBe("/__openclaw__/canvas/documents/cv_inline/index.html");
     expect(card?.preview?.title).toBe("Inline demo");
     expect(card?.preview?.preferredHeight).toBe(420);
+    expect(card?.preview?.sandbox).toBe("scripts");
+  });
+
+  it("carries the preview sandbox ceiling into sidebar canvas content", () => {
+    const sidebar = buildPreviewSidebarContent(
+      {
+        kind: "canvas",
+        surface: "assistant_message",
+        render: "url",
+        viewId: "cv_widget",
+        url: "/__openclaw__/canvas/documents/cv_widget/index.html",
+        title: "Widget",
+        sandbox: "scripts",
+      },
+      null,
+    );
+
+    // Dropping the ceiling here would re-grant allow-same-origin to widget
+    // script whenever the global embed mode is "trusted".
+    expect(sidebar?.kind).toBe("canvas");
+    expect(sidebar && "sandbox" in sidebar ? sidebar.sandbox : undefined).toBe("scripts");
   });
 
   it("uses transcript metadata ids for history-backed tool messages", () => {
@@ -503,5 +525,44 @@ describe("tool-card canvas URLs", () => {
     expect(resolveCanvasIframeUrl("https://example.com/embed.html?x=1#y", undefined, true)).toBe(
       "https://example.com/embed.html?x=1#y",
     );
+  });
+});
+
+describe("isRunningToolCard", () => {
+  it("marks only live uncompleted cards as running while a run is active", async () => {
+    const { isRunningToolCard } = await import("./chat-tool-cards.ts");
+    const liveCard = { id: "t:1", name: "bash", live: true } as const;
+    const historicalCard = { id: "t:2", name: "bash" } as const;
+
+    expect(isRunningToolCard(liveCard, true)).toBe(true);
+    // Partial streamed output must not end the running state; only the final
+    // result event does.
+    expect(isRunningToolCard({ ...liveCard, outputText: "partial…" }, true)).toBe(true);
+    expect(isRunningToolCard({ ...liveCard, completed: true, outputText: "" }, true)).toBe(false);
+    // Historical transcript calls without results (e.g. aborted runs) must
+    // stay inert when a later run is active in the same session.
+    expect(isRunningToolCard(historicalCard, true)).toBe(false);
+    expect(isRunningToolCard(liveCard, false)).toBe(false);
+  });
+
+  it("threads live and completion markers from tool-stream messages into cards", () => {
+    const running = extractToolCards({
+      role: "assistant",
+      toolCallId: "call-live",
+      __openclawToolStreamLive: true,
+      __openclawToolStreamResultReceived: false,
+      content: [{ type: "toolcall", name: "bash", arguments: { command: "sleep 5" } }],
+    });
+    expect(running).toHaveLength(1);
+    expect(running[0]).toMatchObject({ live: true, completed: false });
+
+    const finished = extractToolCards({
+      role: "assistant",
+      toolCallId: "call-live",
+      __openclawToolStreamLive: true,
+      __openclawToolStreamResultReceived: true,
+      content: [{ type: "toolcall", name: "bash", arguments: { command: "sleep 5" } }],
+    });
+    expect(finished[0]).toMatchObject({ live: true, completed: true });
   });
 });

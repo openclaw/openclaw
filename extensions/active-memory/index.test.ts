@@ -15,6 +15,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Match only lone surrogates so valid supplementary-plane characters remain allowed.
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await fs.access(targetPath);
@@ -61,6 +65,16 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
 });
 
 describe("active-memory plugin", () => {
+  it("keeps previous-message query context UTF-16 well-formed", () => {
+    const query = testing.buildSearchQuery({
+      latestUserMessage: "why?",
+      recentTurns: [{ role: "user", text: `${"x".repeat(119)}🚀tail` }],
+    });
+
+    expect(query).toBe(`${"x".repeat(119)} why?`);
+    expect(query).not.toMatch(UNPAIRED_SURROGATE_RE);
+  });
+
   const hooks: Record<string, Function> = {};
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
@@ -3187,6 +3201,47 @@ describe("active-memory plugin", () => {
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps partial assistant transcript caps UTF-16 safe", async () => {
+    const sessionFile = path.join(stateDir, "surrogate-timeout-transcript.jsonl");
+    await writeTranscriptJsonl(sessionFile, [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: `${"a".repeat(38)}🎉TAILWORD`,
+        },
+      },
+    ]);
+
+    const result = await testing.readPartialAssistantText(sessionFile, {
+      maxChars: 39,
+      maxLines: 10,
+    });
+
+    expect(result).toBe("a".repeat(38));
+  });
+
+  it("keeps joined partial assistant transcript caps UTF-16 safe", async () => {
+    const sessionFile = path.join(stateDir, "joined-surrogate-timeout-transcript.jsonl");
+    await writeTranscriptJsonl(sessionFile, [
+      {
+        type: "message",
+        message: { role: "assistant", content: "a".repeat(37) },
+      },
+      {
+        type: "message",
+        message: { role: "assistant", content: "🎉TAILWORD" },
+      },
+    ]);
+
+    const result = await testing.readPartialAssistantText(sessionFile, {
+      maxChars: 39,
+      maxLines: 10,
+    });
+
+    expect(result).toBe("a".repeat(37));
+  });
+
   it("skips malformed JSONL lines when reading partial assistant transcripts", async () => {
     const sessionFile = path.join(stateDir, "malformed-timeout-transcript.jsonl");
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
@@ -4802,13 +4857,14 @@ describe("active-memory plugin", () => {
     ).not.toEqual([]);
   });
 
-  it("caps active-memory log field lengths", async () => {
+  it("caps active-memory log field lengths without splitting surrogate pairs", async () => {
     api.pluginConfig = {
       agents: ["main"],
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    const hugeSession = `agent:main:${"x".repeat(500)}`;
+    const sessionPrefix = `agent:main:${"x".repeat(288)}`;
+    const hugeSession = `${sessionPrefix}😀tail`;
 
     await hooks.before_prompt_build(
       { prompt: "what wings should i order? long log value", messages: [] },
@@ -4826,7 +4882,8 @@ describe("active-memory plugin", () => {
     const startLine = infoLines.find((line: string) => line.includes(" start timeoutMs="));
     const line = requireNonEmptyString(startLine, "active memory start log line missing");
     expect(line.length).toBeLessThan(500);
-    expect(line).toContain("...");
+    expect(line).toContain(`session=${sessionPrefix}...`);
+    expect(line).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 
   it("uses a canonical agent session key when only sessionId is available", async () => {
@@ -5083,6 +5140,73 @@ describe("active-memory plugin", () => {
     expect(prompt).toContain("Bounded memory search query:\nwhat should i grab on the way?");
     expect(prompt).toContain("Conversation context:\nwhat should i grab on the way?");
     expect(prompt).not.toContain("Recent conversation tail:");
+  });
+
+  it("keeps recent conversation context UTF-16 well-formed", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "recent",
+      recentUserTurns: 1,
+      recentAssistantTurns: 1,
+      recentUserChars: 40,
+      recentAssistantChars: 40,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "what now?",
+        messages: [
+          { role: "user", content: `${"u".repeat(39)}🚀 user tail` },
+          { role: "assistant", content: `${"a".repeat(39)}🚀 assistant tail` },
+        ],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = lastEmbeddedPrompt();
+    expect(prompt).toContain(
+      [
+        "Conversation context:",
+        "Recent conversation tail:",
+        `user: ${"u".repeat(39)}`,
+        `assistant: ${"a".repeat(39)}`,
+        "",
+        "Latest user message:",
+        "what now?",
+      ].join("\n"),
+    );
+    expect(prompt).not.toMatch(UNPAIRED_SURROGATE_RE);
+  });
+
+  it("keeps a whole code point when the bounded search query crosses an emoji", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "message",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const prefix = "a".repeat(479);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: `${prefix}😀tail`,
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const query = lastEmbeddedPrompt().match(/Bounded memory search query:\n([^\n]*)/u)?.[1];
+    expect(query).toBe(prefix);
   });
 
   it("sends a bounded latest-message query instead of channel metadata to memory search", async () => {

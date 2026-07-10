@@ -71,6 +71,16 @@ describe("readResponseBodySnippet", () => {
     expect(byteLen).toBeLessThanOrEqual(100);
   });
 
+  it("stream path drops partial UTF-8 characters at the byte boundary", async () => {
+    const response = new Response(new Blob([new TextEncoder().encode("ab😀cd")]).stream());
+    const result = await readResponseBodySnippet(response, {
+      maxBytes: 3,
+      maxChars: 100,
+    });
+
+    expect(result).toBe("ab");
+  });
+
   it("stream path still enforces maxChars", async () => {
     const data = new Uint8Array(500).fill(97);
     const response = new Response(new Blob([data]).stream());
@@ -95,5 +105,31 @@ describe("readResponseBodySnippet", () => {
       maxChars: 50,
     });
     expect(result).toBe("");
+  });
+
+  it.each([
+    {
+      name: "body-less response under the byte limit",
+      response: () => bodyLessResponse("a" + "🦞".repeat(10)),
+      maxBytes: 1024,
+    },
+    {
+      name: "body-less response truncated by the byte limit",
+      response: () => bodyLessResponse("a" + "🦞".repeat(10)),
+      maxBytes: 30,
+    },
+    {
+      name: "streamed response",
+      response: () =>
+        new Response(new Blob([new TextEncoder().encode("a" + "🦞".repeat(10))]).stream()),
+      maxBytes: 1024,
+    },
+  ])("preserves surrogate pairs for $name", async ({ response, maxBytes }) => {
+    const result = await readResponseBodySnippet(response(), {
+      maxBytes,
+      maxChars: 10,
+    });
+
+    expect(result).toBe("a" + "🦞".repeat(4));
   });
 });
