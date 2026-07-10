@@ -173,14 +173,17 @@ function buildCliMcpExecSession(
 
 function buildCliMcpChannelContext(
   channelContext: RunCliAgentParams["channelContext"],
+  senderId?: string | null,
 ): McpLoopbackRequestContext["channelContext"] {
-  const senderId = normalizeOptionalMcpContextValue(channelContext?.sender?.id);
+  const resolvedSenderId =
+    normalizeOptionalMcpContextValue(senderId ?? undefined) ??
+    normalizeOptionalMcpContextValue(channelContext?.sender?.id);
   const chatId = normalizeOptionalMcpContextValue(channelContext?.chat?.id);
-  if (!senderId && !chatId) {
+  if (!resolvedSenderId && !chatId) {
     return undefined;
   }
   return {
-    ...(senderId ? { sender: { id: senderId } } : {}),
+    ...(resolvedSenderId ? { sender: { id: resolvedSenderId } } : {}),
     ...(chatId ? { chat: { id: chatId } } : {}),
   };
 }
@@ -199,7 +202,7 @@ function buildCliMcpGrantContext(params: {
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
   );
   const execSession = buildCliMcpExecSession(params.run.sessionEntry);
-  const channelContext = buildCliMcpChannelContext(params.run.channelContext);
+  const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
   return {
     sessionKey,
     sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
@@ -853,7 +856,7 @@ export async function prepareCliRunContext(
             approvalReviewerDeviceId: normalizeOptionalMcpContextValue(
               params.approvalReviewerDeviceId,
             ),
-            channelContext: buildCliMcpChannelContext(params.channelContext),
+            channelContext: buildCliMcpChannelContext(params.channelContext, params.senderId),
           }).tools
         : [];
     const promptToolNamesHash =

@@ -3015,6 +3015,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
         approvalReviewerDeviceId: "reviewer-device",
+        senderId: "canonical-sender",
         channelContext: {
           sender: { id: "sender-1", displayName: "not-forwarded" },
           chat: { id: "chat-1", title: "not-forwarded" },
@@ -3052,7 +3053,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           trigger: "user",
           approvalReviewerDeviceId: "reviewer-device",
           channelContext: {
-            sender: { id: "sender-1" },
+            sender: { id: "canonical-sender" },
             chat: { id: "chat-1" },
           },
         },
@@ -3076,6 +3077,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           clientCaps: ["tool-events", "inline-widgets"],
           taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
+          channelContext: {
+            sender: { id: "canonical-sender" },
+            chat: { id: "chat-1" },
+          },
         }),
       );
       expect(context.systemPrompt).toContain(
