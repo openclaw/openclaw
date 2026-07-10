@@ -161,10 +161,10 @@ export function emitGatewaySessionEndPluginHook(params: {
   nextSessionId?: string;
   nextSessionKey?: string;
 }): void {
+  emitGatewaySessionEnded({ sessionKey: params.sessionKey, reason: params.reason });
   if (!params.sessionId) {
     return;
   }
-  emitGatewaySessionEnded({ sessionKey: params.sessionKey, reason: params.reason });
   // Drop this session from the shutdown finalizer's tracked set unconditionally
   // -- even when no plugin hooks are registered for `session_end`, the session
   // is being closed here and must not be re-finalized by a later shutdown drain.

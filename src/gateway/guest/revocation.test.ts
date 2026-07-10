@@ -5,7 +5,7 @@ import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "../server-methods/types.js";
-import { emitGatewaySessionEnded } from "../session-end-events.js";
+import { emitGatewaySessionEndPluginHook } from "../session-reset-service.js";
 import { GuestAccessController } from "./access-controller.js";
 import { GuestGrantStore } from "./grant-store.js";
 import {
@@ -188,8 +188,18 @@ describe("Wave 1 guest live revocation", () => {
     const endedSocket = await attachRecordingSocket(harness, ended.code, "198.51.100.80");
     const deletedSocket = await attachRecordingSocket(harness, deleted.code, "198.51.100.81");
 
-    emitGatewaySessionEnded({ sessionKey: ended.grant.sessionKey, reason: "reset" });
-    emitGatewaySessionEnded({ sessionKey: deleted.grant.sessionKey, reason: "deleted" });
+    emitGatewaySessionEndPluginHook({
+      cfg: {},
+      sessionKey: ended.grant.sessionKey,
+      storePath: harness.stateDir,
+      reason: "reset",
+    });
+    emitGatewaySessionEndPluginHook({
+      cfg: {},
+      sessionKey: deleted.grant.sessionKey,
+      storePath: harness.stateDir,
+      reason: "deleted",
+    });
 
     expect(endedSocket.socket.closes).toContainEqual({
       code: 4403,
@@ -222,7 +232,12 @@ describe("Wave 1 guest live revocation", () => {
     const deletedSocket = await attachRecordingSocket(harness, deleted.code, "198.51.100.90");
     const survivorSocket = await attachRecordingSocket(harness, survivor.code, "198.51.100.91");
 
-    emitGatewaySessionEnded({ sessionKey: deleted.grant.sessionKey, reason: "deleted" });
+    emitGatewaySessionEndPluginHook({
+      cfg: {},
+      sessionKey: deleted.grant.sessionKey,
+      storePath: harness.stateDir,
+      reason: "deleted",
+    });
 
     expect(deletedSocket.socket.closes).toContainEqual({
       code: 4403,
