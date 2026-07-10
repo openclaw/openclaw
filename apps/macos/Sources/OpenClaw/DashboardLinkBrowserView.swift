@@ -72,6 +72,12 @@ private final class DashboardLinkBrowserTab {
             break
         }
     }
+
+    func failNavigation() {
+        // A failed initial chain has no reusable page. Retire its alias so
+        // opening the original link again starts a fresh load.
+        self.requestAliasPhase = .retired
+    }
 }
 
 @MainActor
@@ -240,6 +246,12 @@ final class DashboardLinkBrowserView: NSView {
 
     func navigationDidFinish(_ navigation: WKNavigation?, for webView: WKWebView) {
         self.finishNavigation(navigation, at: webView.url, title: webView.title, in: webView)
+    }
+
+    func navigationDidFail(for webView: WKWebView) {
+        guard let tab = self.tab(owning: webView) else { return }
+        tab.failNavigation()
+        self.updateChrome()
     }
 
     func navigationURLDidChange(for webView: WKWebView) {

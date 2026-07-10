@@ -285,6 +285,23 @@ struct DashboardWindowSmokeTests {
         #expect(view._testActiveWebView !== webView)
     }
 
+    @Test func `dashboard link browser retires initial URL when redirected navigation fails`() throws {
+        let view = DashboardLinkBrowserView(websiteDataStore: .default())
+        defer { view.closeBrowser() }
+        let requestedURL = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let redirectURL = try #require(URL(string: "http://127.0.0.1:1/redirect"))
+        view.open(requestedURL)
+        let webView = try #require(view._testActiveWebView)
+        view._testStartNavigation(NSObject(), in: webView)
+        view.navigationWillStart(redirectURL, in: webView)
+        view.navigationDidFail(for: webView)
+
+        view.open(requestedURL)
+
+        #expect(view._testTabCount == 2)
+        #expect(view._testActiveWebView !== webView)
+    }
+
     @Test func `dashboard link browser prefers current URL over initial alias`() throws {
         let view = DashboardLinkBrowserView(websiteDataStore: .default())
         defer { view.closeBrowser() }

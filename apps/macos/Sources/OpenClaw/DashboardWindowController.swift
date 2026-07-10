@@ -687,7 +687,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         if self.linkBrowser.owns(webView) {
-            self.linkBrowser.updateChrome()
+            self.linkBrowser.navigationDidFail(for: webView)
             return
         }
         guard webView === self.webView else { return }
@@ -700,7 +700,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         withError error: Error)
     {
         if self.linkBrowser.owns(webView) {
-            self.linkBrowser.updateChrome()
+            self.linkBrowser.navigationDidFail(for: webView)
             return
         }
         guard webView === self.webView else { return }
