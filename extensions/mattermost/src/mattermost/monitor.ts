@@ -1877,7 +1877,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           const boundarySettled = enterBlockPreviewActivity("text");
           lastPartialText = cleaned;
           if (firstAssistantPreviewPrefixPending) {
-            firstAssistantPreviewPrefix = resolveResponsePrefix();
+            firstAssistantPreviewPrefix = resolveResponsePrefix?.();
             firstAssistantPreviewPrefixPending = false;
             currentAssistantPreviewUsesPrefix = Boolean(firstAssistantPreviewPrefix);
           }

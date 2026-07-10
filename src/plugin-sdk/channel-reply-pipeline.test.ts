@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+import { createChannelReplyPipeline, type ReplyPrefixOptions } from "./channel-reply-pipeline.js";
 
 describe("createChannelReplyPipeline", () => {
   afterEach(() => {
@@ -110,7 +110,17 @@ describe("createChannelReplyPipeline", () => {
       thinkLevel: "high",
     });
 
-    expect(pipeline.resolveResponsePrefix()).toBe("[gpt-5.5 | high]");
+    expect(pipeline.resolveResponsePrefix?.()).toBe("[gpt-5.5 | high]");
+  });
+
+  it("keeps existing SDK prefix options constructible without the live resolver", () => {
+    const options: ReplyPrefixOptions = {
+      responsePrefix: "[bot]",
+      responsePrefixContextProvider: () => ({ identityName: "bot" }),
+      onModelSelected: () => {},
+    };
+
+    expect(options.responsePrefix).toBe("[bot]");
   });
 
   it("uses an explicit reply transform without resolving the channel plugin", () => {
