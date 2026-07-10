@@ -443,6 +443,11 @@ export const pl: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Wizyty homara",
+      lobsterVisitsOn: "Wpada od czasu do czasu",
+      lobsterVisitsOff: "Nigdy nie odwiedza",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -485,6 +490,10 @@ export const pl: TranslationMap = {
     settingsGroupConnections: "Połączenia",
     settingsGroupAgents: "Agenci i narzędzia",
     settingsGroupSystem: "System",
+    settingsSearchLabel: "Szukaj w ustawieniach",
+    settingsSearchPlaceholder: "Szukaj w ustawieniach…",
+    settingsSearchNoResults: "Brak pasujących ustawień.",
+    settingsSearchClear: "Wyczyść wyszukiwanie w ustawieniach",
     exitSettings: "Powrót do aplikacji",
     expand: "Rozwiń pasek boczny",
     collapse: "Zwiń pasek boczny",
@@ -604,7 +613,9 @@ export const pl: TranslationMap = {
   },
   tasksPage: {
     active: "Aktywne",
+    activeSub: "Zakolejkowane i uruchomione zadania w tle.",
     recent: "Ostatnie",
+    recentSub: "Ostatnio ukończone, nieudane i anulowane zadania.",
     loading: "Ładowanie zadań…",
     empty: "Brak zadań w tle.",
     emptyActive: "Brak zadań w kolejce lub uruchomionych.",
@@ -1706,7 +1717,6 @@ export const pl: TranslationMap = {
       splitRight: "Podziel w prawo",
       splitDown: "Podziel w dół",
       closePane: "Zamknij panel",
-      sessionSelect: "Sesja panelu",
       dropSplit: "Podziel",
       dropOpenHere: "Otwórz tutaj",
     },
@@ -1746,10 +1756,6 @@ export const pl: TranslationMap = {
       retry: "Ponów",
       retrySend: "Ponów wysłanie",
       retryQueuedMessage: "Ponów wiadomość w kolejce",
-    },
-    modelPicker: {
-      faster: "Szybciej",
-      smarter: "Inteligentniej",
     },
     pairingQrExpired: {
       title: "Kod QR parowania wygasł",
@@ -1948,8 +1954,7 @@ export const pl: TranslationMap = {
     },
     summary: {
       enabled: "Włączone",
-      yes: "Tak",
-      no: "Nie",
+      scheduler: "Harmonogram",
       jobs: "Zadania",
       nextWake: "Następne wybudzenie",
       refreshing: "Odświeżanie...",
