@@ -3568,7 +3568,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("repairs an installed plugin whose required dependencies are missing on disk", async () => {
-    const pluginDir = path.join(makeTempDir(), "demo");
+    const pluginDir = path.join(makeTempDir(), "node_modules", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
@@ -3642,7 +3642,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("clears dependency-repair retention when the npm update fails", async () => {
-    const pluginDir = path.join(makeTempDir(), "demo");
+    const pluginDir = path.join(makeTempDir(), "node_modules", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
