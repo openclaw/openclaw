@@ -794,6 +794,10 @@ struct RootTabsSourceGuardTests {
             sectionsSource,
             from: "var locationModeCard: some View",
             to: "var agentSelectionCard: some View")
+        let pendingLocationApplication = try Self.extract(
+            actionsSource,
+            from: "func applyPendingLocationModeIfAvailable()",
+            to: "func openLocationSettings()")
 
         #expect(!settingsList.contains("route: .notifications"))
         #expect(privacyDestination.contains("self.notificationsSection"))
@@ -826,6 +830,12 @@ struct RootTabsSourceGuardTests {
         #expect(actionsSource.contains("func selectLocationAccessLevel"))
         #expect(actionsSource.contains("presentation.accessLevelAction(mode: mode)"))
         #expect(actionsSource.contains("self.pendingLocationMode ?? self.selectedLocationMode"))
+        #expect(pendingLocationApplication.contains(
+            "self.locationSettingsPresentation(selectedMode: mode).statusText"))
+        let pendingClear = try #require(pendingLocationApplication.range(of: "self.pendingLocationMode = nil"))
+        let unavailableReturn = try #require(
+            pendingLocationApplication.range(of: "guard summary.effectiveMode != .off else"))
+        #expect(pendingClear.lowerBound < unavailableReturn.lowerBound)
         #expect(actionsSource.contains("UIApplication.shared.unregisterForRemoteNotifications()"))
         #expect(actionsSource.contains("UIApplication.openNotificationSettingsURLString"))
         #expect(actionsSource.contains("UIApplication.openSettingsURLString"))

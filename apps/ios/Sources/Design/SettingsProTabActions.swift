@@ -670,8 +670,12 @@ extension SettingsProTab {
                 authorizationStatus: manager.authorizationStatus,
                 accuracyAuthorization: manager.accuracyAuthorization)
             self.locationPermissionSummary = summary
-            guard summary.effectiveMode != .off else { return }
+            let unavailableStatus = self.locationSettingsPresentation(selectedMode: mode).statusText
             self.pendingLocationMode = nil
+            guard summary.effectiveMode != .off else {
+                self.locationStatusText = unavailableStatus
+                return
+            }
             self.setLocationMode(mode)
         }
     }
