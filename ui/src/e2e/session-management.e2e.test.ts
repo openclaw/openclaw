@@ -364,6 +364,184 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await context.close();
     }
   });
+
+  it("dismisses session menus before keyboard, pointer, or narrow transitions hide them", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:main",
+    });
+    const dialogs: string[] = [];
+    page.on("dialog", (dialog) => {
+      dialogs.push(dialog.message());
+      void dialog.dismiss();
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const row = sidebar.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:research"]',
+      );
+      const shell = page.locator(".shell");
+      const shellNav = page.locator(".shell-nav");
+      const panelToggle = page.locator(".topbar-panel-toggle");
+      const sessionMenu = sidebar.locator("openclaw-session-menu");
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+
+      const openSessionMenu = async () => {
+        await row.hover();
+        await row.getByRole("button", { name: "Open session menu" }).click();
+        await page
+          .getByRole("menu", { name: "Actions for Research notes" })
+          .waitFor({ state: "visible" });
+      };
+      const expectPanelCollapsed = async () => {
+        await expect.poll(() => sidebar.isVisible()).toBe(false);
+      };
+      const expectDrawerClosed = async () => {
+        await expect
+          .poll(() => shell.getAttribute("class"))
+          .not.toContain("shell--nav-drawer-open");
+        await expect
+          .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().right))
+          .toBeLessThanOrEqual(0);
+      };
+      const expectDismissedWithToggleFocus = async () => {
+        await expect.poll(() => sessionMenu.count()).toBe(0);
+        await expect
+          .poll(() => panelToggle.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+      };
+      const observeHiddenMenuAction = async (
+        shortcut: "p" | "a" | "d",
+        before: { deletes: number; dialogs: number; patches: number },
+      ) => {
+        const menuMounted = (await sessionMenu.count()) > 0;
+        const toggleFocused = await panelToggle.evaluate(
+          (element) => element === document.activeElement,
+        );
+        await page.keyboard.press(shortcut);
+        await page.waitForTimeout(150);
+        return {
+          deleteDelta: (await gateway.getRequests("sessions.delete")).length - before.deletes,
+          dialogDelta: dialogs.length - before.dialogs,
+          menuMounted,
+          patchDelta: (await gateway.getRequests("sessions.patch")).length - before.patches,
+          shortcut,
+          toggleFocused,
+        };
+      };
+
+      const keyboardObservations = [];
+      for (const shortcut of ["p", "a", "d"] as const) {
+        await openSessionMenu();
+        const before = {
+          deletes: (await gateway.getRequests("sessions.delete")).length,
+          dialogs: dialogs.length,
+          patches: (await gateway.getRequests("sessions.patch")).length,
+        };
+        await page.keyboard.press("Meta+B");
+        await expectPanelCollapsed();
+        keyboardObservations.push(await observeHiddenMenuAction(shortcut, before));
+        await panelToggle.click();
+        await expect.poll(() => sidebar.isVisible()).toBe(true);
+      }
+      expect(keyboardObservations).toEqual(
+        ["p", "a", "d"].map((shortcut) => ({
+          deleteDelta: 0,
+          dialogDelta: 0,
+          menuMounted: false,
+          patchDelta: 0,
+          shortcut,
+          toggleFocused: true,
+        })),
+      );
+
+      await openSessionMenu();
+      const beforePointerCollapse = {
+        deletes: (await gateway.getRequests("sessions.delete")).length,
+        dialogs: dialogs.length,
+        patches: (await gateway.getRequests("sessions.patch")).length,
+      };
+      await panelToggle.click();
+      await expectPanelCollapsed();
+      await expectDismissedWithToggleFocus();
+      for (const shortcut of ["p", "a", "d"] as const) {
+        expect(await observeHiddenMenuAction(shortcut, beforePointerCollapse)).toMatchObject({
+          deleteDelta: 0,
+          dialogDelta: 0,
+          patchDelta: 0,
+          shortcut,
+        });
+      }
+
+      await panelToggle.click();
+      await expect.poll(() => sidebar.isVisible()).toBe(true);
+      await openSessionMenu();
+      const beforeNarrowTransition = {
+        deletes: (await gateway.getRequests("sessions.delete")).length,
+        dialogs: dialogs.length,
+        patches: (await gateway.getRequests("sessions.patch")).length,
+      };
+      await page.setViewportSize({ height: 900, width: 900 });
+      await expectDrawerClosed();
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      for (const shortcut of ["p", "a", "d"] as const) {
+        expect(await observeHiddenMenuAction(shortcut, beforeNarrowTransition)).toMatchObject({
+          deleteDelta: 0,
+          dialogDelta: 0,
+          patchDelta: 0,
+          shortcut,
+        });
+      }
+
+      const drawerToggle = page.locator(".topbar-nav-toggle");
+      await drawerToggle.click();
+      await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+      await expect
+        .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().left))
+        .toBe(0);
+      await openSessionMenu();
+      const beforeDrawerCollapse = {
+        deletes: (await gateway.getRequests("sessions.delete")).length,
+        dialogs: dialogs.length,
+        patches: (await gateway.getRequests("sessions.patch")).length,
+      };
+      await page.keyboard.press("Meta+B");
+      await expectDrawerClosed();
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await expect
+        .poll(() => drawerToggle.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      for (const shortcut of ["p", "a", "d"] as const) {
+        expect(await observeHiddenMenuAction(shortcut, beforeDrawerCollapse)).toMatchObject({
+          deleteDelta: 0,
+          dialogDelta: 0,
+          patchDelta: 0,
+          shortcut,
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("archives a session from the Sessions page context menu and kebab", async () => {
     const context = await browser.newContext({
       locale: "en-US",
