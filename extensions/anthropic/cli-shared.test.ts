@@ -101,91 +101,65 @@ describe("Claude CLI model aliases", () => {
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
-  it("omits effort args when thinking is off", () => {
+  it.each(["off", undefined] as const)(
+    "preserves configured effort args when thinking is %s",
+    (thinkingLevel) => {
+      const baseArgs = ["-p", "--effort", "xhigh", "--effort=low"];
+
+      expect(
+        resolveClaudeCliExecutionArgs({
+          workspaceDir: "/tmp",
+          provider: "claude-cli",
+          modelId: "claude-sonnet-4-6",
+          thinkingLevel,
+          useResume: false,
+          baseArgs,
+        }),
+      ).toEqual(baseArgs);
+    },
+  );
+
+  it.each([
+    ["minimal", "low"],
+    ["low", "low"],
+    ["medium", "medium"],
+    ["high", "high"],
+    ["xhigh", "xhigh"],
+    ["max", "max"],
+  ] as const)("maps %s thinking to --effort %s", (thinkingLevel, effort) => {
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",
         provider: "claude-cli",
-        modelId: "claude-sonnet-4-6",
-        thinkingLevel: "off",
+        modelId: "claude-opus-4-7",
+        thinkingLevel,
         useResume: false,
-        baseArgs: ["-p", "--output-format", "stream-json"],
+        baseArgs: ["-p"],
       }),
-    ).toEqual(["-p", "--output-format", "stream-json"]);
+    ).toEqual(["-p", "--effort", effort]);
   });
 
-  it("maps OpenClaw thinking levels to Claude effort args", () => {
+  it("strips configured effort args when thinking is adaptive", () => {
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",
         provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-        thinkingLevel: "minimal",
-        useResume: false,
-        baseArgs: ["-p"],
-      }),
-    ).toEqual(["-p", "--effort", "low"]);
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-        thinkingLevel: "medium",
-        useResume: false,
-        baseArgs: ["-p"],
-      }),
-    ).toEqual(["-p", "--effort", "medium"]);
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-        thinkingLevel: "high",
-        useResume: false,
-        baseArgs: ["-p"],
-      }),
-    ).toEqual(["-p", "--effort", "high"]);
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-        thinkingLevel: "xhigh",
+        modelId: "claude-opus-4-8",
+        thinkingLevel: "adaptive",
         useResume: true,
-        baseArgs: ["-p", "--resume", "{sessionId}"],
+        baseArgs: [
+          "-p",
+          "--effort",
+          "xhigh",
+          "--output-format",
+          "stream-json",
+          "--effort=low",
+          "--verbose",
+          "--resume",
+          "{sessionId}",
+        ],
       }),
-    ).toEqual(["-p", "--resume", "{sessionId}", "--effort", "xhigh"]);
-  });
-
-  it("omits effort args for adaptive so the Claude CLI's native default applies (issue #103245)", () => {
-    // Before fix, adaptive was silently pinned to `--effort medium`. Models
-    // without adaptive support get "adaptive" clamped to a concrete level on
-    // the spawn lanes first (see "maps unsupported adaptive to medium" in
-    // src/auto-reply/thinking.test.ts), which still yields a concrete
-    // `--effort` flag here.
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-8",
-        thinkingLevel: "adaptive",
-        useResume: false,
-        baseArgs: ["-p", "--output-format", "stream-json"],
-      }),
-    ).toEqual(["-p", "--output-format", "stream-json"]);
-  });
-
-  it("keeps operator-supplied effort args when thinking is adaptive", () => {
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-8",
-        thinkingLevel: "adaptive",
-        useResume: false,
-        baseArgs: ["-p", "--effort", "xhigh"],
-      }),
-    ).toEqual(["-p", "--effort", "xhigh"]);
+    ).toEqual(["-p", "--output-format", "stream-json", "--verbose", "--resume", "{sessionId}"]);
   });
 
   it("replaces static effort args when a session thinking level is active", () => {
