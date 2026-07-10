@@ -15,8 +15,7 @@ regressions for real-world provider/model bugs.
 <Note>
 **QA stack (qa-lab, qa-channel, live transport lanes)** is documented separately:
 
-- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring.
-- [Matrix QA](/concepts/qa-matrix) - reference for `pnpm openclaw qa matrix`.
+- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring, and Matrix profiles.
 - [Maturity scorecard](/maturity/scorecard) - how release QA evidence supports stability and LTS decisions.
 - [QA channel](/channels/qa-channel) - the synthetic transport plugin used by repo-backed scenarios.
 
@@ -403,7 +402,7 @@ gh workflow run package-acceptance.yml --ref main \
     homeserver. Source-checkout only - packaged installs do not ship
     `qa-lab`.
   - Full CLI, profile/scenario catalog, env vars, and artifact layout:
-    [Matrix QA](/concepts/qa-matrix).
+    [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-smoke-lanes).
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the
     driver and SUT bot tokens from env.

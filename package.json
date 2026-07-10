@@ -129,7 +129,6 @@
     "!dist/extensions/pixverse/**",
     "!dist/extensions/qa-channel/**",
     "!dist/extensions/qa-lab/**",
-    "!dist/extensions/qa-matrix/**",
     "!dist/extensions/openshell/**",
     "!dist/extensions/qwen/**",
     "!dist/extensions/searxng/**",

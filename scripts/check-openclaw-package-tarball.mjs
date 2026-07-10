@@ -315,7 +315,6 @@ const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_P
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
   "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
-  "dist/extensions/qa-matrix/",
   "dist/plugin-sdk/extensions/qa-channel/",
   "dist/plugin-sdk/extensions/qa-lab/",
 ];

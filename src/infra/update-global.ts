@@ -63,7 +63,6 @@ const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15
 const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
   "dist/extensions/qa-channel",
   "dist/extensions/qa-lab",
-  "dist/extensions/qa-matrix",
 ]);
 
 /** npm prefix layout paths needed to install, stage, and expose global bins. */

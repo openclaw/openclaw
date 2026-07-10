@@ -38,7 +38,7 @@ function isMatrixModuleScenario(
   );
 }
 
-describe("qa-matrix scenario migration", () => {
+describe("legacy Matrix scenario migration", () => {
   const moduleScenarioIds = readQaBootstrapScenarioCatalog()
     .scenarios.filter(isMatrixModuleScenario)
     .map((scenario) => scenario.id);
