@@ -156,7 +156,7 @@ describe("mime detection", () => {
 
   it("detects MIME types from encoded URL extensions", async () => {
     const mime = await detectMime({
-      filePath: "https://cdn.example.com/render%2Emp4?download=1",
+      filePath: "https://cdn.example.com/render%2Emp4?download=1#preview",
     });
 
     expect(mime).toBe("video/mp4");
@@ -205,18 +205,22 @@ describe("mimeTypeFromFilePath", () => {
     { filePath: "clip.avi", expected: "video/x-msvideo" },
     { filePath: "clip.mkv", expected: "video/x-matroska" },
     { filePath: "clip.webm", expected: "video/webm" },
-    { filePath: "https://cdn.example.com/render%2Emp4?download=1", expected: "video/mp4" },
+    {
+      filePath: "https://cdn.example.com/render%2Emp4?download=1#preview",
+      expected: "video/mp4",
+    },
     { filePath: "https://cdn.example.com/render%2Em%70%34", expected: "video/mp4" },
     { filePath: "https://cdn.example.com/render%2EMP4", expected: "video/mp4" },
     { filePath: "https://cdn.example.com/clip%2Ewebm", expected: "video/webm" },
     { filePath: "https://cdn.example.com/bad%ZZ/render%2Emp4", expected: "video/mp4" },
     { filePath: "https://cdn.example.com/archive%2Fclip.mp4", expected: "video/mp4" },
     { filePath: "https://cdn.example.com/archive%2Fclip%2Emp4", expected: "video/mp4" },
+    { filePath: "https://cdn.example.com/archive%5Cclip%2Emp4", expected: "video/mp4" },
     { filePath: "https://cdn.example.com/render.mp4%2Fpreview", expected: undefined },
     { filePath: "https://cdn.example.com/render.mp4%5Cpreview", expected: undefined },
     { filePath: "clip.flv", expected: "video/x-flv" },
     { filePath: "clip.wmv", expected: "video/x-ms-wmv" },
-    { filePath: "https://cdn.example.com/bad%E0%A4%A.mp4", expected: "video/mp4" },
+    { filePath: "https://cdn.example.com/bad%E0%A4%A%2Emp4", expected: undefined },
     { filePath: "debug.log", expected: "text/plain" },
     { filePath: "config.yml", expected: "application/yaml" },
     { filePath: "config.yaml", expected: "application/yaml" },

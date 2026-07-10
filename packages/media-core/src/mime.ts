@@ -147,11 +147,12 @@ export function getFileExtension(filePath?: string | null): string | undefined {
       const pathname = url.pathname;
       let filename = pathname.split("/").pop() ?? pathname;
       try {
-        filename = decodeURIComponent(filename);
+        // Keep encoded separators literal so URL object keys do not become path boundaries.
+        filename = decodeURIComponent(filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C"));
       } catch {
         // fall back to the raw URL filename when percent encoding is malformed
       }
-      return path.extname(filename).toLowerCase() || undefined;
+      return path.posix.extname(filename).toLowerCase() || undefined;
     }
   } catch {
     // fall back to plain path parsing
