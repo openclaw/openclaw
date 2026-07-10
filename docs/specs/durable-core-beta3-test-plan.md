@@ -65,25 +65,27 @@ claim no runtime delivery behavior.
 
 ## Proof Matrix
 
-| Area                          | Required proof                                                                                                                                                          | Proof surface                     |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| Disabled-path no mutation     | CLI and Gateway durable inspection reject before creating SQLite, WAL, SHM, migration, or durable tables                                                                | Durable config and inspection     |
-| Runtime opt-in                | Durable recording and inspection are inert by default and enabled only by explicit durable runtime config                                                               | Runtime config                    |
-| Worker separate gate          | Runtime-enabled startup records only allowed facts; worker recovery requires separate worker opt-in                                                                     | Worker recovery                   |
-| Future schema fail-closed     | Newer durable schema versions fail before DDL, ALTER, backfill, worker mutation, or projection mutation                                                                 | Schema migration                  |
-| Terminal immutability         | Terminal runs, steps, and wake states reject claim, heartbeat, checkpoint, output, error, delivery, ack, retry, and facts rewrites except retention/compaction metadata | Storage mutation guards           |
-| Identity propagation          | Chat, `agent.run`, user turns, embedded-agent yield, task completion, and status notices carry stable durable refs                                                      | Runtime identity                  |
-| ACP/manual-spawn preservation | ACP manual-spawn child turn task suppression remains intact; plugin-subagent precedence and CLI fallback still work                                                     | Agent and subagent compatibility  |
-| Pairing QR regression         | Webchat pairing QR display remains visible without persisting sensitive QR content                                                                                      | Adjacent channel compatibility    |
-| Wake target resolution        | Owner, parent, peer, scheduled, Task Flow, external route, missing, unauthorized, and ambiguous targets resolve or fail closed with inspectable evidence                | Wake routing                      |
-| Wake queue contract           | Wake records include stable ids, target refs, reason, facts refs, dedupe key, attempt fields, ack/failure fields, and lifecycle state                                   | Wake storage                      |
-| Replay authority              | Automatic replay is denied unless operation registry, input material, idempotency, side-effect class, dedupe/CAS or reconciliation, and retention gates pass            | Replay safeguards                 |
-| CLI/Gateway inspection        | Read APIs expose runs, facts, wake queue, unresolved obligations, and uncertainty without worker mutation                                                               | Read APIs                         |
-| Owner controls                | Acknowledge, supersede, owner decision, retry request, abandon request, and resume request are caller-invoked audited facts                                             | Control APIs                      |
-| Worker no-handler behavior    | Empty registry and no-handler rows fail closed and do not mark unknown side effects as handled                                                                          | Worker recovery                   |
-| Claim/lease recovery          | Expired claimed run/step rows are inspectable and reclaim only when eligible, with SQLite row evidence                                                                  | Lease recovery                    |
-| Internal session handoff      | Resolved session targets move through internal delivery handoff with durable evidence and no external transport claim                                                   | Internal delivery                 |
-| External delivery             | Only claimed if the implementation includes external transport delivery and direct proof                                                                                | External transport implementation |
+| Area                          | Required proof                                                                                                                                                          | Owner PR                                |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| Disabled-path no mutation     | CLI and Gateway durable inspection reject before creating SQLite, WAL, SHM, migration, or durable tables                                                                | PR2                                     |
+| Runtime opt-in                | Durable recording and inspection are inert by default and enabled only by explicit durable runtime config                                                               | PR2                                     |
+| Worker separate gate          | Runtime-enabled startup records only allowed facts; worker recovery requires separate worker opt-in                                                                     | PR2                                     |
+| Future schema fail-closed     | Newer durable schema versions fail before DDL, ALTER, backfill, worker mutation, or projection mutation                                                                 | PR2                                     |
+| Terminal immutability         | Terminal runs, steps, and wake states reject claim, heartbeat, checkpoint, output, error, delivery, ack, retry, and facts rewrites except retention/compaction metadata | PR2 and descendants                     |
+| Identity propagation          | Chat, `agent.run`, user turns, embedded-agent yield, task completion, and status notices carry stable durable refs                                                      | PR2/PR3                                 |
+| ACP/manual-spawn preservation | ACP manual-spawn child turn task suppression remains intact; plugin-subagent precedence and CLI fallback still work                                                     | PR2/PR3                                 |
+| Pairing QR regression         | Webchat pairing QR display remains visible without persisting sensitive QR content                                                                                      | PR2/PR3 when adjacent paths are touched |
+| Wake target resolution        | Owner, parent, peer, scheduled, Task Flow, external route, missing, unauthorized, and ambiguous targets resolve or fail closed with inspectable evidence                | PR3                                     |
+| Wake queue contract           | Wake records include stable ids, target refs, reason, facts refs, dedupe key, attempt fields, ack/failure fields, and lifecycle state                                   | PR3                                     |
+| Wake producers                | Child terminal, fan-in, recovery, side-effect uncertainty, and no-handler facts produce durable wake obligations exactly once per dedupe key                            | PR3                                     |
+| Delivery replay ledger        | Delivery attempts, repeated scans, result-mailbox replay, and missed wake recovery record idempotent attempt evidence without duplicating committed wake facts          | PR3                                     |
+| Replay authority              | Automatic replay is denied unless operation registry, input material, idempotency, side-effect class, dedupe/CAS or reconciliation, and retention gates pass            | PR3                                     |
+| CLI/Gateway inspection        | Read APIs expose runs, facts, wake queue, unresolved obligations, and uncertainty without worker mutation                                                               | PR4                                     |
+| Owner controls                | Acknowledge, supersede, owner decision, retry request, abandon request, and resume request are caller-invoked audited facts                                             | PR4                                     |
+| Worker no-handler behavior    | Empty registry and no-handler rows fail closed and do not mark unknown side effects as handled                                                                          | PR5                                     |
+| Claim/lease recovery          | Expired claimed run/step rows are inspectable and reclaim only when eligible, with SQLite row evidence                                                                  | PR5                                     |
+| Internal session handoff      | Resolved session targets move through internal delivery handoff with durable evidence and no external transport claim                                                   | PR5                                     |
+| External delivery             | Only claimed if the implementation includes external transport delivery and direct proof                                                                                | PR5 or follow-up                        |
 
 ## Required Scenarios
 
@@ -110,11 +112,16 @@ claim no runtime delivery behavior.
 - Seed wake reasons including `child_terminal`, `fan_in_incomplete`,
   `restart_interrupted`, `delivery_unknown`, `side_effect_uncertain`,
   `no_handler`, and `operator_requested`.
+- Assert target resolution covers parent session aliases, resolved agent/session
+  targets, missing targets, ambiguous facts, unauthorized refs, and inspect-only
+  obligations without making an owner policy decision.
 - Assert legal transitions: `pending -> delivered`,
   `pending|delivered -> acked`, `pending|delivered -> failed`, and
   `pending|delivered|failed -> superseded`.
 - Assert duplicate wake creation from repeated child completion, worker scans,
   Gateway reports, and result-mailbox replay dedupes by key.
+- Assert delivery replay attempts record stable attempt evidence and recover
+  missed wake records without duplicating already-created obligations.
 
 ### Restart And Side-Effect Uncertainty
 

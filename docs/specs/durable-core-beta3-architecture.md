@@ -168,6 +168,19 @@ items, delivery evidence, no-handler diagnostics, and acknowledgement state. It
 must not decide whether the owner should retry, resume, abandon, wait, ask the
 user, or create new work.
 
+A wake record includes a stable wake id, compatibility parent run/session fields
+when a parent is the owner, optional resolved target agent/session/channel refs,
+a machine-readable reason, facts or source-run refs, a dedupe key, attempt
+counts, bounded failure state, acknowledgement time, metadata, and lifecycle
+status. Terminal wake states are immutable except retention or compaction
+metadata.
+
+Wake target resolution is generalized beyond parent sessions. Resolver logic may
+classify targets as resolved, missing, ambiguous, unauthorized, or inspect-only
+from stored runtime facts. Creation, delivery attempts, recovery reconciliation,
+and result-mailbox replay must use stable dedupe keys so repeated producer scans
+or repeated delivery attempts are idempotent.
+
 Internal session delivery-queue handoff satisfies the durable-core delivery
 boundary only for a resolved session target. External channel transport remains a
 separate delivery claim and must not be implied by this RFC or by the internal
