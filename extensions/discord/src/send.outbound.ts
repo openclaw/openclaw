@@ -1,5 +1,5 @@
 // Discord plugin module implements send.outbound behavior.
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, type APIChannel } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -28,7 +28,7 @@ import {
   normalizeStickerIds,
   resolveDiscordMessageFlags,
   resolveChannelId,
-  resolveDiscordChannelType,
+  resolveDiscordChannel,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   sendDiscordMedia,
@@ -125,6 +125,17 @@ function isForumLikeType(channelType?: number): boolean {
   return channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
 }
 
+function resolveForumDefaultAutoArchiveDuration(channel?: APIChannel): number | undefined {
+  if (!channel || !isForumLikeType(channel.type)) {
+    return undefined;
+  }
+  if (!("default_auto_archive_duration" in channel)) {
+    return undefined;
+  }
+  const duration = channel.default_auto_archive_duration;
+  return typeof duration === "number" ? duration : undefined;
+}
+
 function toDiscordSendResult(
   result: DiscordChannelMessageResult,
   fallbackChannelId: string,
@@ -199,10 +210,11 @@ export async function sendMessageDiscord(
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.
-  const channelType = await resolveDiscordChannelType(rest, channelId);
+  const channel = await resolveDiscordChannel(rest, channelId);
 
-  if (isForumLikeType(channelType)) {
+  if (isForumLikeType(channel?.type)) {
     const threadName = deriveForumThreadName(textWithTables);
+    const autoArchiveDuration = resolveForumDefaultAutoArchiveDuration(channel);
     const chunks = buildDiscordTextChunks(textWithMentions, {
       maxLinesPerMessage,
       chunkMode,
@@ -236,6 +248,9 @@ export async function sendMessageDiscord(
             {
               body: {
                 name: threadName,
+                ...(autoArchiveDuration === undefined
+                  ? {}
+                  : { auto_archive_duration: autoArchiveDuration }),
                 message: starterBody,
               },
             },
