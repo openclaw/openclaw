@@ -934,6 +934,7 @@ catalog, API-key auth, and dynamic model resolution.
           id: "acme-ai",
           label: "Acme Video",
           defaultTimeoutMs: 600_000,
+          models: ["acme-video", "acme-image-video"],
           capabilities: {
             generate: { maxVideos: 1, maxDurationSeconds: 10, supportsResolution: true },
             imageToVideo: {
@@ -945,6 +946,21 @@ catalog, API-key auth, and dynamic model resolution.
             },
             videoToVideo: { enabled: false },
           },
+          catalogByModel: {
+            "acme-image-video": {
+              modes: ["imageToVideo"],
+              capabilities: {
+                imageToVideo: {
+                  enabled: true,
+                  maxVideos: 1,
+                  maxInputImages: 1,
+                  resolutions: ["480P", "720P", "1080P"],
+                  supportsResolution: true,
+                },
+                videoToVideo: { enabled: false },
+              },
+            },
+          },
           generateVideo: async (req) => ({ videos: [] }),
         });
         ```
@@ -952,6 +968,13 @@ catalog, API-key auth, and dynamic model resolution.
         `capabilities` is required on both provider types; `edit` and the
         video transform blocks (`imageToVideo`, `videoToVideo`) always need an
         explicit `enabled` flag.
+
+        Use `catalogByModel` when a listed model's static modes or capabilities
+        differ from the provider defaults. This metadata keeps
+        `video_generate action=list` and model catalogs accurate without
+        invoking provider code. Request-time capability lookup and enforcement
+        still belong in `resolveModelCapabilities` and `generateVideo`; reuse
+        the same capability constant for both paths when possible.
       </Tab>
       <Tab title="Web fetch and search">
         ```typescript
