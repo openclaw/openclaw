@@ -44,6 +44,7 @@ describe("plugin loader records", () => {
         realtimeTranscriptionProviders: ["kitchen-sink-transcription-provider"],
         realtimeVoiceProviders: ["kitchen-sink-voice-provider"],
         mediaUnderstandingProviders: ["kitchen-sink-media-provider"],
+        computerUseProviders: ["kitchen-sink-computer-use-provider"],
         imageGenerationProviders: ["kitchen-sink-image-provider"],
         videoGenerationProviders: ["kitchen-sink-video-provider"],
         musicGenerationProviders: ["kitchen-sink-music-provider"],
@@ -62,6 +63,7 @@ describe("plugin loader records", () => {
     ]);
     expect(record.realtimeVoiceProviderIds).toEqual(["kitchen-sink-voice-provider"]);
     expect(record.mediaUnderstandingProviderIds).toEqual(["kitchen-sink-media-provider"]);
+    expect(record.computerUseProviderIds).toEqual(["kitchen-sink-computer-use-provider"]);
     expect(record.imageGenerationProviderIds).toEqual(["kitchen-sink-image-provider"]);
     expect(record.videoGenerationProviderIds).toEqual(["kitchen-sink-video-provider"]);
     expect(record.musicGenerationProviderIds).toEqual(["kitchen-sink-music-provider"]);

@@ -119,6 +119,11 @@ local proof.
     `contracts.trustedToolPolicies`. These declarations keep install-time
     inspection and runtime registration aligned.
 
+    Computer Use providers use the same manifest-first pattern: declare provider
+    ids in `contracts.computerUseProviders`, then add
+    `computerUseProviderMetadata` when the macOS app needs cheap host-binding
+    facts before runtime loads.
+
     For every manifest field, see [Plugin manifest](/plugins/manifest).
 
   </Step>
