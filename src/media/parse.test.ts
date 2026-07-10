@@ -66,6 +66,8 @@ describe("splitMediaFromOutput", () => {
       String.raw`MEDIA:/path/to/image.png\"}],\"details\":{\"provider\":\"openai\"}`,
     ],
     ["/tmp/render,final.png", "MEDIA:/tmp/render,final.png"],
+    ["/tmp/generated.png", "MEDIA:FILE:///tmp/generated.png"],
+    ["/tmp/generated.png", "MEDIA:File:///tmp/generated.png"],
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
     expectAcceptedMediaPathCase(expectedPath, input);
   });
