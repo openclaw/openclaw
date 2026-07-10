@@ -57,6 +57,22 @@ describe("JsonlSessionStorage timestamps", () => {
     );
   });
 
+  it("reports physical entry line numbers when blank JSONL rows are skipped", async () => {
+    const fs = createReadOnlyFs(
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "session-1",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: "/repo",
+      })}\n\nnot-json\n`,
+    );
+
+    await expect(JsonlSessionStorage.open(fs, "/sessions/invalid-entry.jsonl")).rejects.toThrow(
+      "line 3 is not valid JSON",
+    );
+  });
+
   it("uses a leaf control's opaque append parent for the next entry", async () => {
     let content = [
       {
