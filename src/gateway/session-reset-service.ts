@@ -20,6 +20,7 @@ import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -78,7 +79,6 @@ import {
   loadSessionEntry,
   resolveGatewaySessionStoreTarget,
   resolveSessionStoreKey,
-  resolveSessionModelRef,
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
@@ -116,22 +116,6 @@ function resolveResetSessionFile(params: {
       agentId: params.agentId,
     }),
   );
-}
-
-function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
-  if (!entry) {
-    return entry;
-  }
-  return {
-    ...entry,
-    // Reset should keep user selection preferences but drop per-run resolved
-    // model state so the next turn rehydrates from current config.
-    model: undefined,
-    modelProvider: undefined,
-    contextTokens: undefined,
-    contextBudgetStatus: undefined,
-    systemPromptReport: undefined,
-  };
 }
 
 export function archiveSessionTranscriptsForSessionDetailed(params: {
@@ -880,7 +864,7 @@ export async function performGatewaySessionReset(params: {
       ok: true;
       key: string;
       entry: SessionEntry;
-      resolvedModel?: { provider: string; model: string };
+      resolved: { modelProvider: string; model: string };
       agentId: string;
       storePath: string;
     }
@@ -1067,8 +1051,6 @@ export async function performGatewaySessionReset(params: {
         });
       }
 
-      let lifecycleResolvedModel: { provider: string; model: string } | undefined;
-
       const lifecycle = await resetSessionEntryLifecycle({
         agentId: target.agentId,
         storePath,
@@ -1089,18 +1071,6 @@ export async function performGatewaySessionReset(params: {
           const resetPreservedSelection = resolveResetPreservedSelection({
             entry: currentEntry,
           });
-          const resetEntry = {
-            ...stripRuntimeModelState(currentEntry),
-            providerOverride: undefined,
-            modelOverride: undefined,
-            modelOverrideSource: undefined,
-            authProfileOverride: undefined,
-            authProfileOverrideSource: undefined,
-            authProfileOverrideCompactionCount: undefined,
-            ...resetPreservedSelection,
-          };
-          const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
-          lifecycleResolvedModel = resolvedModel;
           const now = Date.now();
           const nextSessionId = randomUUID();
           const sessionFile = resolveResetSessionFile({
@@ -1134,15 +1104,6 @@ export async function performGatewaySessionReset(params: {
             groupActivation: currentEntry?.groupActivation,
             groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
             chatType: currentEntry?.chatType,
-            // Only cache runtime model metadata when it came from a preserved
-            // override (user explicit selection), not from agent defaults. After
-            // a config hot-reload, sessions without cached metadata automatically
-            // re-resolve from the current config so the model change takes effect
-            // without a full gateway restart.
-            ...(resetPreservedSelection.providerOverride || resetPreservedSelection.modelOverride
-              ? { model: resolvedModel.model, modelProvider: resolvedModel.provider }
-              : {}),
-            contextTokens: resetEntry?.contextTokens,
             compactionCount: currentEntry?.compactionCount,
             compactionCheckpoints: currentEntry?.compactionCheckpoints,
             sendPolicy: currentEntry?.sendPolicy,
@@ -1251,6 +1212,18 @@ export async function performGatewaySessionReset(params: {
         },
       });
       const next = lifecycle.nextEntry;
+      const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
+      const resolved = {
+        modelProvider: selectedModel.provider,
+        model: selectedModel.model,
+      };
+      // Runtime model identity is a response projection, not reset persistence. Keep the
+      // established RPC entry shape while the stored row retains selection intent only.
+      const responseEntry: SessionEntry = {
+        ...next,
+        modelProvider: resolved.modelProvider,
+        model: resolved.model,
+      };
       const oldSessionId = lifecycle.previousSessionId;
       const oldSessionFile = lifecycle.previousSessionFile;
 
@@ -1284,8 +1257,8 @@ export async function performGatewaySessionReset(params: {
       return {
         ok: true,
         key: target.canonicalKey,
-        entry: next,
-        resolvedModel: lifecycleResolvedModel,
+        entry: responseEntry,
+        resolved,
         agentId: target.agentId,
         storePath,
       };

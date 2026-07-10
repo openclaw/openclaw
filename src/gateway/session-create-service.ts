@@ -15,6 +15,7 @@ import {
 } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   forkSessionFromParent,
   resolveParentForkDecision,
@@ -106,9 +107,7 @@ export function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
 }
 
-function inheritSessionRuntimeSelection(
-  parentEntry: SessionEntry | undefined,
-): Partial<SessionEntry> {
+function inheritSessionSelection(parentEntry: SessionEntry | undefined): Partial<SessionEntry> {
   if (!parentEntry) {
     return {};
   }
@@ -120,13 +119,6 @@ function inheritSessionRuntimeSelection(
       : {}),
     ...(parentEntry.agentRuntimeOverride
       ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
-      : {}),
-    // Only inherit runtime model metadata when the parent entry carries
-    // explicit user overrides — default-derived values may be stale after
-    // a config hot-reload. The resolver re-resolves from current config
-    // at query time when no overrides are present.
-    ...(parentEntry.providerOverride && parentEntry.modelOverride
-      ? { modelProvider: parentEntry.modelProvider, model: parentEntry.model }
       : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
@@ -156,6 +148,7 @@ type CreateGatewaySessionResult =
       key: string;
       agentId: string;
       entry: SessionEntry;
+      resolved: { modelProvider: string; model: string };
       resetExisting: boolean;
     }
   | { ok: false; error: ErrorShape };
@@ -307,6 +300,7 @@ export async function createGatewaySession(params: {
         key: resetResult.key,
         agentId: resetResult.agentId,
         entry: resetResult.entry,
+        resolved: resetResult.resolved,
         resetExisting: true,
       };
     }
@@ -418,7 +412,7 @@ export async function createGatewaySession(params: {
         }
         const inheritedSelection = normalizeOptionalString(params.model)
           ? {}
-          : inheritSessionRuntimeSelection(currentParentSessionEntry);
+          : inheritSessionSelection(currentParentSessionEntry);
         const entry: SessionEntry = {
           ...patched.entry,
           ...inheritedSelection,
@@ -524,11 +518,17 @@ export async function createGatewaySession(params: {
       });
     }
 
+    const selectedModel = resolveSessionModelRef(params.cfg, created.entry, target.agentId);
+
     return {
       ok: true,
       key: target.canonicalKey,
       agentId: target.agentId,
       entry: created.entry,
+      resolved: {
+        modelProvider: selectedModel.provider,
+        model: selectedModel.model,
+      },
       resetExisting: false,
     };
   };

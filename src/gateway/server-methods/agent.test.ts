@@ -8346,20 +8346,13 @@ describe("gateway agent handler chat.abort integration", () => {
   });
 
   it("does not dispatch when chat.abort lands during slow attachment setup", async () => {
-    mockMainSessionEntry(
-      {
-        sessionId: "existing-session-id",
-        model: "vision-model",
-        modelProvider: "test",
-      },
-      {
-        agents: {
-          defaults: {
-            model: { primary: "test/vision-model" },
-          },
-        },
-      },
-    );
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      model: "vision-model",
+      modelProvider: "test",
+      providerOverride: "test",
+      modelOverride: "vision-model",
+    });
     mocks.updateSessionStore.mockResolvedValue(undefined);
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
 
@@ -8455,16 +8448,12 @@ describe("gateway agent handler chat.abort integration", () => {
       updatedAt: Date.now(),
       model: "vision-model",
       modelProvider: "test",
+      providerOverride: "test",
+      modelOverride: "vision-model",
     };
     let deleted = false;
     mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "test/vision-model" },
-          },
-        },
-      },
+      cfg: {},
       storePath: "/tmp/sessions.json",
       entry: deleted ? undefined : persistedEntry,
       canonicalKey: sessionKey,
@@ -8529,16 +8518,12 @@ describe("gateway agent handler chat.abort integration", () => {
       updatedAt: Date.now(),
       model: "vision-model",
       modelProvider: "test",
+      providerOverride: "test",
+      modelOverride: "vision-model",
     };
     let currentEntry = persistedEntry;
     mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "test/vision-model" },
-          },
-        },
-      },
+      cfg: {},
       storePath: "/tmp/sessions.json",
       entry: currentEntry,
       canonicalKey: sessionKey,
@@ -8599,19 +8584,15 @@ describe("gateway agent handler chat.abort integration", () => {
   it("keeps selected-global agent scope while aborting during attachment setup", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadSessionEntry.mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "test/vision-model" },
-          },
-        },
-      },
+      cfg: {},
       storePath: "/tmp/sessions.json",
       entry: {
         sessionId: "work-global-session-id",
         updatedAt: Date.now(),
         modelProvider: "test",
         model: "vision-model",
+        providerOverride: "test",
+        modelOverride: "vision-model",
       },
       canonicalKey: "global",
     });

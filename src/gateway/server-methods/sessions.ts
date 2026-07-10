@@ -35,13 +35,13 @@ import {
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
@@ -1428,6 +1428,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           key: created.key,
           sessionId: created.entry.sessionId,
           entry: created.entry,
+          resolved: created.resolved,
           runStarted: false,
           ...(createdWorktree ? { worktree: createdWorktree } : {}),
         },
@@ -1459,6 +1460,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ...(runPayload ? runPayload : {}),
         ...(runStarted && typeof messageSeq === "number" ? { messageSeq } : {}),
         ...(runError ? { runError } : {}),
+        resolved: created.resolved,
         ...(createdWorktree ? { worktree: createdWorktree } : {}),
       },
       undefined,
@@ -2257,7 +2259,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     respond(
       true,
-      { ok: true, key: result.key, entry: result.entry, resolvedModel: result.resolvedModel },
+      { ok: true, key: result.key, entry: result.entry, resolved: result.resolved },
       undefined,
     );
     emitSessionsChanged(context, {
@@ -2856,7 +2858,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               spawnedBy: latestEntry.spawnedBy,
               workspaceDir: latestEntry.spawnedWorkspaceDir,
               cwd: latestEntry.spawnedCwd,
-            }) ?? resolveAgentWorkspaceDir(cfg, target.agentId);
+            }) ??
+            resolveAgentWorkspaceDir(cfg, target.agentId);
           const operationId = randomUUID();
           emitSessionOperation(context, {
             operationId,

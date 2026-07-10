@@ -300,30 +300,11 @@ export class GatewayChatClient implements TuiBackend {
     reason?: "new" | "reset",
     opts?: { agentId?: string },
   ): Promise<TuiSessionMutationResult> {
-    const raw = await this.client.request("sessions.reset", {
+    return await this.client.request<TuiSessionMutationResult>("sessions.reset", {
       key,
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       ...(reason ? { reason } : {}),
     });
-    const response = raw as {
-      ok?: boolean;
-      key?: string;
-      entry?: TuiSessionMutationResult["entry"];
-      resolvedModel?: { provider: string; model: string };
-    };
-    return {
-      ok: response.ok,
-      key: response.key,
-      entry: response.entry,
-      ...(response.resolvedModel
-        ? {
-            resolved: {
-              modelProvider: response.resolvedModel.provider,
-              model: response.resolvedModel.model,
-            },
-          }
-        : {}),
-    };
   }
 
   async getGatewayStatus() {

@@ -1997,63 +1997,6 @@ describe("resolveSessionModelRef", () => {
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
-
-  test("returns runtime metadata when it still matches current agent defaults", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "anthropic/claude-sonnet-4-6",
-    });
-
-    const resolved = resolveSessionModelRef(
-      cfg,
-      {
-        sessionId: "s-valid",
-        updatedAt: Date.now(),
-        modelProvider: "anthropic",
-        model: "claude-sonnet-4-6",
-      },
-      "main",
-    );
-
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
-  });
-
-  test("preserves runtime metadata when agentId is not provided (backward compat)", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "anthropic/claude-opus-4-6",
-    });
-
-    const resolved = resolveSessionModelRef(cfg, {
-      sessionId: "s-no-agent",
-      updatedAt: Date.now(),
-      modelProvider: "openai",
-      model: "gpt-5.4",
-    });
-
-    // Without agentId, runtime metadata is returned as-is regardless of config.
-    expect(resolved).toEqual({ provider: "openai", model: "gpt-5.4" });
-  });
-
-  test("re-resolves from current config when runtime metadata is stale (agentId, no overrides)", () => {
-    const cfg = createModelDefaultsConfig({
-      // Current agent default after hot-reload.
-      primary: "anthropic/claude-opus-4-6",
-    });
-
-    const resolved = resolveSessionModelRef(
-      cfg,
-      {
-        sessionId: "s-stale",
-        updatedAt: Date.now(),
-        // Stale runtime metadata cached from the old agent default.
-        modelProvider: "openai",
-        model: "gpt-5.4",
-      },
-      "main",
-    );
-
-    // Should return the current config default, not the stale cached values.
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
-  });
 });
 
 describe("listSessionsFromStore selected model display", () => {
