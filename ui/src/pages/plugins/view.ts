@@ -824,9 +824,11 @@ function renderMcpForm(props: PluginsViewProps) {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
     const data = new FormData(form);
+    const name = data.get("mcp-name");
+    const target = data.get("mcp-target");
     props.onMcpAdd({
-      name: String(data.get("mcp-name") ?? "").trim(),
-      target: String(data.get("mcp-target") ?? "").trim(),
+      name: typeof name === "string" ? name.trim() : "",
+      target: typeof target === "string" ? target.trim() : "",
     });
   };
   return html`

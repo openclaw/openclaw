@@ -4,11 +4,11 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
-import {
-  type PluginCatalogItem,
-  type PluginListResult,
-  type PluginMutationResult,
-  type PluginSearchResponse,
+import type {
+  PluginCatalogItem,
+  PluginListResult,
+  PluginMutationResult,
+  PluginSearchResponse,
 } from "../../lib/plugins/index.ts";
 import {
   canRunPlaywrightChromium,

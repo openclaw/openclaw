@@ -122,8 +122,7 @@ function parseMcpTarget(target: string): Record<string, unknown> | null {
     const transport = /\/sse\/?$/i.test(target.split("?")[0] ?? target) ? "sse" : "streamable-http";
     return { url: target, transport };
   }
-  const parts = target.split(/\s+/u).filter(Boolean);
-  const [command, ...args] = parts;
+  const [command, ...args] = target.trim().split(/\s+/u);
   if (!command) {
     return null;
   }
