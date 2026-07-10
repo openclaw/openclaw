@@ -103,6 +103,12 @@ export type GoogleChatAccountConfig = {
   mediaMaxMb?: number;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /**
+   * Opt-in DM reply threading. "none" (default) keeps DM replies unthreaded
+   * (post-#87054 behavior); "thread" makes DM replies use the message thread
+   * like group replies.
+   */
+  dmThreadMode?: "none" | "thread";
   /** Per-action tool gating (default: true for all). */
   actions?: GoogleChatActionConfig;
   dm?: GoogleChatDmConfig;
