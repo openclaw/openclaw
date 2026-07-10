@@ -1,6 +1,29 @@
 // Amazon Bedrock Mantle tests cover discovery plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Captures the discovery subsystem's debug diagnostics so the log-spam
+// regression below can assert the deduped emission count directly.
+const discoveryDebugSpy = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/core")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const real = actual.createSubsystemLogger(subsystem);
+      if (subsystem !== "bedrock-mantle-discovery") {
+        return real;
+      }
+      return {
+        ...real,
+        debug: (message: string, meta?: Record<string, unknown>) => {
+          discoveryDebugSpy(message, meta);
+          real.debug(message, meta);
+        },
+      };
+    },
+  };
+});
+
 const {
   discoverMantleModels,
   generateBearerTokenFromIam,
@@ -605,6 +628,9 @@ describe("bedrock mantle discovery", () => {
     // iamTokenFailureLogged so the diagnostic fires at most once.
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Other tests in this file also fail token generation; only count the
+    // diagnostics this test's three calls emit.
+    discoveryDebugSpy.mockClear();
     const tokenProviderFactory = vi.fn(() => {
       throw new Error("no credentials");
     });
@@ -630,6 +656,13 @@ describe("bedrock mantle discovery", () => {
       // semantics — we do not short-circuit hosts that rely on instance roles
       // / IRSA / SSO etc.) but the diagnostic log line is deduped per region.
       expect(tokenProviderFactory).toHaveBeenCalledTimes(3);
+      // Direct count assertion: exactly one diagnostic for three failed calls.
+      // This fails if the per-region dedupe guard is removed (3 emissions).
+      const unavailableDiagnostics = discoveryDebugSpy.mock.calls.filter(
+        ([message]) => message === "Mantle IAM token generation unavailable",
+      );
+      expect(unavailableDiagnostics).toHaveLength(1);
+      expect(unavailableDiagnostics[0]?.[1]).toMatchObject({ region: "us-east-1" });
     } finally {
       logSpy.mockRestore();
       errorSpy.mockRestore();
