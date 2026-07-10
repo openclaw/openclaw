@@ -149,10 +149,9 @@ function getSynologyWebhookInvalidTokenRateLimitKey(params: {
 }
 
 function getSynologyWebhookInFlightKey(account: ResolvedSynologyChatAccount): string {
-  // Synology webhook ingress is typically a single upstream per account, and this
-  // handler does not have a trusted-proxy-aware client IP config. Keep the shared
-  // pre-auth concurrency budget scoped per account instead of keying on a fragile
-  // remoteAddress value that can collapse behind proxies or to "unknown".
+  // Keep concurrent pre-auth body reads as a per-account pressure budget. The
+  // invalid-token limiter handles client identity; this guard only bounds work
+  // already accepted for the Synology account route.
   return account.accountId;
 }
 
