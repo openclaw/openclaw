@@ -319,6 +319,97 @@ describe("gateway tool defaults", () => {
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
   });
 
+  it.each([
+    {
+      name: "approved flag",
+      params: { approved: true, runId: "approval-inline" },
+    },
+    {
+      name: "allow-once decision",
+      params: { approvalDecision: "allow-once", runId: "approval-async" },
+    },
+    {
+      name: "allow-always decision",
+      params: { approvalDecision: "allow-always", runId: "approval-always" },
+    },
+  ])("binds persisted device identity to node system.run with $name", async ({ params }) => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "node.invoke",
+      {},
+      { nodeId: "node-1", command: "system.run", params, idempotencyKey: "invoke-1" },
+      { scopes: ["operator.write", "operator.approvals"] },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(call).not.toHaveProperty("approvalRuntimeToken");
+  });
+
+  it.each([
+    {
+      name: "unapproved system.run",
+      command: "system.run",
+      params: { approved: false },
+    },
+    {
+      name: "system.run.prepare",
+      command: "system.run.prepare",
+      params: { approved: true, approvalDecision: "allow-once" },
+    },
+    {
+      name: "unrelated node command",
+      command: "system.info",
+      params: { approved: true, approvalDecision: "allow-always" },
+    },
+  ])("keeps ordinary node.invoke device-less for $name", async ({ command, params }) => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command,
+        params,
+        idempotencyKey: "invoke-1",
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call).not.toHaveProperty("deviceIdentity");
+    expect(call).not.toHaveProperty("approvalRuntimeToken");
+  });
+
+  it.each([
+    { name: "missing persisted identity", persistedDeviceIdentity: null },
+    {
+      name: "different persisted identity",
+      persistedDeviceIdentity: {
+        ...mocks.deviceIdentity,
+        deviceId: "other-device",
+      },
+    },
+  ])("fails approved node system.run closed for $name", async ({ persistedDeviceIdentity }) => {
+    mocks.persistedDeviceIdentity = persistedDeviceIdentity;
+
+    await expect(
+      callGatewayTool(
+        "node.invoke",
+        {},
+        {
+          nodeId: "node-1",
+          command: "system.run",
+          params: { approved: true, runId: "approval-id" },
+          idempotencyKey: "invoke-1",
+        },
+        { scopes: ["operator.write", "operator.approvals"] },
+      ),
+    ).rejects.toThrow("approved node gateway calls require a stable device identity");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
   it("does not mark direct cron helper calls with agent runtime identity", async () => {
     mocks.callGateway.mockResolvedValueOnce({ id: "job-1" });
 
