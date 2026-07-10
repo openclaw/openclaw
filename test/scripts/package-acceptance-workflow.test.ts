@@ -437,6 +437,8 @@ describe("package acceptance workflow", () => {
     expect(setupPnpmAction).not.toContain("shasum");
     expect(setupPnpmAction).not.toContain("PNPM_VERSION_INPUT");
     expect(setupPnpmAction).not.toContain("version: ${{ inputs.pnpm-version }}");
+    expect(setupPnpmAction).toContain('corepack enable --install-directory "$PNPM_HOME"');
+    expect(setupPnpmAction).toContain('echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"');
 
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     expect(setupNodeAction).toContain("Normalize container toolcache");
@@ -575,6 +577,9 @@ describe("package acceptance workflow", () => {
     expect(hydrateGithub.if).toBe("${{ inputs.crabbox_job == 'hydrate-github' }}");
     expect(workflowStep(hydrateGithub, "Setup Node environment").uses).toBe(
       "./.github/actions/setup-node-env",
+    );
+    expect(workflowStep(hydrateGithub, "Setup Node environment").env?.PNPM_HOME).toBe(
+      "${{ runner.temp }}/pnpm-home",
     );
     const hydrateGithubCrabboxShell = workflowStep(hydrateGithub, "Prepare Crabbox shell").run;
     expect(hydrateGithubCrabboxShell).toContain("link_node_tool()");
