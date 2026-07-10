@@ -48,7 +48,7 @@ type PostbackEvent = webhook.PostbackEvent;
 type UnfollowEvent = webhook.UnfollowEvent;
 type WebhookEvent = webhook.Event;
 
-interface MediaRef {
+export interface MediaRef {
   path: string;
   contentType?: string;
 }
@@ -75,6 +75,29 @@ interface LineHandlerContext {
   replayCache?: LineWebhookReplayCache;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
+  pendingMediaQueues?: Map<string, MediaRef[]>;
+}
+
+const DEFAULT_LINE_PENDING_MEDIA_LIMIT = 3;
+
+/**
+ * Push a media ref onto a group's pending queue, capped at `limit`, dropping
+ * the oldest entries when over the cap so the N most recent are kept.
+ */
+export function pushBoundedPendingMedia(params: {
+  queues: Map<string, MediaRef[]>;
+  key: string;
+  media: MediaRef;
+  limit: number;
+}): MediaRef[] {
+  const { queues, key, media, limit } = params;
+  const queue = queues.get(key) ?? [];
+  queue.push(media);
+  if (queue.length > limit) {
+    queue.splice(0, queue.length - limit);
+  }
+  queues.set(key, queue);
+  return queue;
 }
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
@@ -276,7 +299,8 @@ async function shouldProcessLineEvent(
     const wasMentionedByPattern =
       event.message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
     return {
-      canDetectMention: event.message.type === "text",
+      canDetectMention:
+        event.message.type === "text" || groupConfig?.requireMentionForNonText === true,
       wasMentioned: wasMentionedByNative || wasMentionedByPattern,
       hasAnyMention: hasAnyLineMention(event.message),
     };
@@ -464,11 +488,52 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         },
       });
     }
+    if (historyKey && context.pendingMediaQueues && isDownloadableLineMessageType(message.type)) {
+      const groupConfig = resolveLineGroupConfig({
+        config: account.config,
+        groupId,
+        roomId,
+      });
+      try {
+        const originalFilename =
+          message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+        const media = await downloadLineMedia(
+          message.id,
+          account.channelAccessToken,
+          mediaMaxBytes,
+          { originalFilename },
+        );
+        pushBoundedPendingMedia({
+          queues: context.pendingMediaQueues,
+          key: historyKey,
+          media: { path: media.path, contentType: media.contentType },
+          limit: groupConfig?.pendingMediaLimit ?? DEFAULT_LINE_PENDING_MEDIA_LIMIT,
+        });
+      } catch (err) {
+        const errMsg = String(err);
+        if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
+          logVerbose(`line: pending media exceeds size limit for message ${message.id}`);
+        } else {
+          runtime.error?.(danger(`line: failed to download pending media: ${errMsg}`));
+        }
+      }
+    }
     return;
   }
 
   const allMedia: MediaRef[] = [];
   let mediaUnavailable = false;
+
+  if (isGroup && context.pendingMediaQueues) {
+    const pendingKey = groupId ?? roomId;
+    if (pendingKey) {
+      const pending = context.pendingMediaQueues.get(pendingKey);
+      if (pending && pending.length > 0) {
+        allMedia.push(...pending);
+        context.pendingMediaQueues.delete(pendingKey);
+      }
+    }
+  }
 
   if (isDownloadableLineMessageType(message.type)) {
     try {

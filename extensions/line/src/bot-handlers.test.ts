@@ -226,7 +226,10 @@ function createLineWebhookTestContext(params: {
   allowFrom?: LineAccountConfig["allowFrom"];
   groupAllowFrom?: LineAccountConfig["groupAllowFrom"];
   requireMention?: boolean;
+  requireMentionForNonText?: boolean;
+  pendingMediaLimit?: number;
   groupHistories?: Map<string, HistoryEntry[]>;
+  pendingMediaQueues?: Map<string, { path: string; contentType?: string }[]>;
   replayCache?: ReturnType<typeof createLineWebhookReplayCache>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
 }): Parameters<typeof handleLineWebhookEvents>[1] {
@@ -237,6 +240,10 @@ function createLineWebhookTestContext(params: {
     ...(allowFrom ? { allowFrom } : {}),
     ...(params.groupAllowFrom ? { groupAllowFrom: params.groupAllowFrom } : {}),
   };
+  const hasGroupOverride =
+    params.requireMention !== undefined ||
+    params.requireMentionForNonText !== undefined ||
+    params.pendingMediaLimit !== undefined;
   return {
     cfg: {
       ...(params.accessGroups ? { accessGroups: params.accessGroups } : {}),
@@ -250,15 +257,30 @@ function createLineWebhookTestContext(params: {
       tokenSource: "config",
       config: {
         ...lineConfig,
-        ...(params.requireMention === undefined
-          ? {}
-          : { groups: { "*": { requireMention: params.requireMention } } }),
+        ...(hasGroupOverride
+          ? {
+              groups: {
+                "*": {
+                  ...(params.requireMention === undefined
+                    ? {}
+                    : { requireMention: params.requireMention }),
+                  ...(params.requireMentionForNonText === undefined
+                    ? {}
+                    : { requireMentionForNonText: params.requireMentionForNonText }),
+                  ...(params.pendingMediaLimit === undefined
+                    ? {}
+                    : { pendingMediaLimit: params.pendingMediaLimit }),
+                },
+              },
+            }
+          : {}),
       },
     },
     runtime: createRuntime(),
     mediaMaxBytes: 1,
     processMessage: params.processMessage,
     ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
+    ...(params.pendingMediaQueues ? { pendingMediaQueues: params.pendingMediaQueues } : {}),
     ...(params.replayCache ? { replayCache: params.replayCache } : {}),
   };
 }
@@ -1090,6 +1112,162 @@ describe("handleLineWebhookEvents", () => {
     });
 
     await expectRequireMentionGroupMessageProcessed(event);
+  });
+
+  it("skips unmentioned non-text group messages when requireMentionForNonText is set", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementation(async () => ({
+      path: "/media/skip-1.jpg",
+      contentType: "image/jpeg",
+    }));
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-nontext-gate",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-nontext-gate",
+      },
+      source: { type: "group", groupId: "group-1", userId: "user-nontext-gate" },
+      webhookEventId: "evt-nontext-gate",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        requireMentionForNonText: true,
+      }),
+    );
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("caps the pending media queue at pendingMediaLimit, keeping only the most recent entries", async () => {
+    const processMessage = vi.fn();
+    let counter = 0;
+    downloadLineMediaMock.mockImplementation(async () => {
+      counter += 1;
+      return { path: `/media/pending-${counter}.jpg`, contentType: "image/jpeg" };
+    });
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaLimit: 2,
+      pendingMediaQueues,
+    });
+
+    for (let i = 1; i <= 3; i += 1) {
+      const event = createTestMessageEvent({
+        message: {
+          id: `m-pending-${i}`,
+          type: "image",
+          contentProvider: { type: "line" },
+          quoteToken: `q-pending-${i}`,
+        },
+        source: { type: "group", groupId: "group-pending", userId: "user-pending" },
+        webhookEventId: `evt-pending-${i}`,
+      });
+      await handleLineWebhookEvents([event], context);
+    }
+
+    expect(processMessage).not.toHaveBeenCalled();
+    const queue = pendingMediaQueues.get("group-pending");
+    expect(queue).toHaveLength(2);
+    expect(queue?.map((m) => m.path)).toEqual(["/media/pending-2.jpg", "/media/pending-3.jpg"]);
+  });
+
+  it("flushes queued pending media into allMedia when a later mentioned message triggers processing, then clears the queue", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementation(async () => ({
+      path: "/media/queued-1.jpg",
+      contentType: "image/jpeg",
+    }));
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+    });
+
+    const skippedEvent = createTestMessageEvent({
+      message: {
+        id: "m-flush-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-flush-img",
+      },
+      source: { type: "group", groupId: "group-flush", userId: "user-flush" },
+      webhookEventId: "evt-flush-img",
+    });
+    await handleLineWebhookEvents([skippedEvent], context);
+    expect(pendingMediaQueues.get("group-flush")).toHaveLength(1);
+
+    const mentionedEvent = createTestMessageEvent({
+      message: {
+        id: "m-flush-text",
+        type: "text",
+        text: "@bot check this out",
+        mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-flush", userId: "user-flush" },
+      webhookEventId: "evt-flush-text",
+    });
+    await handleLineWebhookEvents([mentionedEvent], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allMedia: [{ path: "/media/queued-1.jpg", contentType: "image/jpeg" }],
+      }),
+    );
+    expect(pendingMediaQueues.has("group-flush")).toBe(false);
+  });
+
+  it("defaults pendingMediaLimit to 3 when unset", async () => {
+    const processMessage = vi.fn();
+    let counter = 0;
+    downloadLineMediaMock.mockImplementation(async () => {
+      counter += 1;
+      return { path: `/media/default-${counter}.jpg`, contentType: "image/jpeg" };
+    });
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+    });
+
+    for (let i = 1; i <= 4; i += 1) {
+      const event = createTestMessageEvent({
+        message: {
+          id: `m-default-${i}`,
+          type: "image",
+          contentProvider: { type: "line" },
+          quoteToken: `q-default-${i}`,
+        },
+        source: { type: "group", groupId: "group-default", userId: "user-default" },
+        webhookEventId: `evt-default-${i}`,
+      });
+      await handleLineWebhookEvents([event], context);
+    }
+
+    const queue = pendingMediaQueues.get("group-default");
+    expect(queue).toHaveLength(3);
+    expect(queue?.map((m) => m.path)).toEqual([
+      "/media/default-2.jpg",
+      "/media/default-3.jpg",
+      "/media/default-4.jpg",
+    ]);
   });
 
   it("does not bypass mention gating when non-bot mention is present with control command", async () => {

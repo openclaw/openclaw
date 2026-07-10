@@ -51,4 +51,36 @@ describe("LineConfigSchema", () => {
       'channels.line.dmPolicy="open" requires channels.line.allowFrom to include "*"',
     );
   });
+
+  it("accepts requireMentionForNonText and pendingMediaLimit on group config", () => {
+    const result = LineConfigSchema.safeParse({
+      channelAccessToken: "token",
+      channelSecret: "secret",
+      groups: {
+        "*": {
+          requireMention: true,
+          requireMentionForNonText: true,
+          pendingMediaLimit: 5,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects non-positive pendingMediaLimit", () => {
+    const result = LineConfigSchema.safeParse({
+      channelAccessToken: "token",
+      channelSecret: "secret",
+      groups: {
+        "*": {
+          pendingMediaLimit: 0,
+        },
+      },
+    });
+
+    if (result.success) {
+      throw new Error("Expected config validation to fail");
+    }
+  });
 });
