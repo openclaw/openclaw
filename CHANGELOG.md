@@ -6,11 +6,13 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Meta provider:** add bundled `muse-spark-1.1` model support with Responses API streaming, tool calls, encrypted reasoning replay, onboarding, and standalone npm/ClawHub distribution. (#102873) Thanks @HamidShojanazeri.
 - **Android chat agent selector:** switch the active agent directly from the live chat screen while keeping chat, Talk mode, and home canvas on the same canonical session. (#80422) Thanks @bcperry.
 - **Gateway host status:** show the connected Gateway's host, network address, OS, runtime, uptime, CPU, memory, and disk details in Control UI Settings. (#100478)
 - **iOS offline chat:** pre-paint recent sessions and canonical transcripts from a protected, bounded per-gateway cache, keep sending disabled offline, and purge cached conversation text when pairing is reset. (#100194)
 - **Slack progress indicators:** use Slack's native assistant thread status and rotating loading messages by default while keeping acknowledgement reactions static; lifecycle reaction updates now require `messages.statusReactions.enabled: true`.
 - **Control UI Talk controls:** keep voice, model, sensitivity, and other realtime defaults in Settings → Communications → Talk, and use the composer microphone caret to select any browser audio input. (#101046)
+- **Control UI session workspace shortcut:** expand or collapse the active Chat pane's session workspace rail with ⇧⌘B without changing the main app sidebar or the separate detail and Canvas preview panel. Thanks @shakkernerd.
 - **Cron model selection:** choose an agent-turn model in Control UI Quick Create and show configured or default models in cron job rows and details. (#95341) Thanks @ly85206559.
 - **Control UI GitHub previews:** show issue and pull request state, title, author, activity, comments, and change statistics in hover and keyboard-focus cards. (#100434)
 - **Logbook work journal:** add a disabled-by-default bundled plugin that turns paired-node screen snapshots into a private timeline, daily standup, and timeline-grounded Q&A in a plugin-contributed Control UI tab. (#99930)
@@ -23,6 +25,16 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **OpenCode Zen model catalog:** refresh the provider-owned static seed for Claude Sonnet 5, Grok 4.5, Hy3 Free, Kimi K2.7 Code, and MiniMax M3 with verified routing, pricing, limits, and input capabilities, remove retired free-tier rows, and expose the same catalog through unauthenticated model listing. (#103184)
+- **Managed browser launch:** surface asynchronous Chrome bootstrap and runtime spawn failures as browser errors while keeping Gateway alive, and retain process error handling through later lifecycle failures.
+- **Gateway startup migrations:** release the shared migration lease before exiting when the selected config changes during startup, allowing immediate retries instead of blocking readiness until the five-minute lease expires. (#103145)
+- **Apple timeout recovery:** return promptly from shared operation deadlines and caller cancellation even when platform work ignores cancellation, while isolating late Gateway handshakes and cleaning up location and permission waiters. (#103066) Thanks @NianJiuZst.
+- **CLI plugin listing:** skip state-migration runtime loading when no legacy inputs exist, reducing packaged cold-start memory while preserving migrations for legacy plugin indexes and configured session stores.
+- **Unicode-safe bounded text:** preserve complete UTF-16 surrogate pairs when shortening previews, prompts, diagnostics, labels, session keys, link metadata, and identity values across Control UI, CLI, Gateway, plugins, QA, memory, and Android surfaces. (#102625, #102626, #102627, #102656, #102816, #102823, #102833, #102877, #102949, #102963, #102969, #102988, #103010, #103034) Thanks @zhangguiping-xydt, @wings1029, @wangyan2026, @Pandah97, @MoerAI, @SunnyShu0925, @zhangqueping, @zw-xysk, @cxbAsDev, @lzyyzznl, @coder-master-0915, @LeonidasLux, @mushuiyu886, @ly85206559, and @Simon-XYDT.
+- **CLI model tables:** sanitize, truncate, and pad model-list cells by rendered terminal width so emoji, CJK, and other wide graphemes keep columns aligned. (#102819) Thanks @Kevin23-design and @vincentkoc.
+- **Skills prompt compaction:** preserve every included skill identity before using the remaining prompt budget for shortened, UTF-16-safe descriptions, retaining trigger guidance without exceeding the hard limit. (#88426) Thanks @abel-zer0.
+- **Channel Markdown code tables:** size columns by rendered display width so CJK, emoji, and mixed-width cells stay aligned across shared Telegram and Discord output. (#55596, #55512) Thanks @sparkyrider.
+- **QQ Bot approval previews:** wrap long sanitized commands and metadata at grapheme boundaries with visible continuation markers and safe fences, keeping desktop QQ reviews readable without changing command content. (#102119, #101979) Thanks @Bartok9.
 - **Codex computer control:** publish fixed-length coordinate pairs as homogeneous array schemas so Codex app-server can start threads with the `computer` tool instead of rejecting tuple-valued `items`.
 - **Google Chat request deadlines:** bound control calls to 30 seconds while giving media transfers size-aware total budgets and a separate 30-second stalled-body guard, preventing hung Chat API requests without breaking large attachment uploads. (#102227) Thanks @hugenshen.
 - **Google Gemini prefixed model IDs:** recognize `google/gemini-*` and `models/gemini-*` when selecting multimodal function-response behavior, preserving the Gemini 2 image fallback without regressing Gemini 3 inline image responses. (#102382) Thanks @LiLan0125.

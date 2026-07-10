@@ -15,6 +15,11 @@ type PathPart = number | string;
 type ReportMutation = [string, (report: JsonObject) => void];
 
 const tempRoots: string[] = [];
+const malformedViolationLists: Array<[string, unknown]> = [
+  ["null", null],
+  ["object", {}],
+  ["string", "none"],
+];
 const SCRIPT_PATH = "scripts/lib/kova-report-gate.mjs";
 const SCENARIO = "agent-cold-warm-message";
 const STATE = "mock-openai-provider";
@@ -207,7 +212,6 @@ function partialReport(): JsonObject {
         state: { id: STATE },
         status: "PASS",
         surface: SURFACE,
-        violations: [],
       },
     ],
     schemaVersion: "kova.report.v1",
@@ -360,6 +364,28 @@ function blockingCard(report: JsonObject): JsonObject {
   return objectAt(card);
 }
 
+function addProfiledPassRecord(report: JsonObject): JsonObject {
+  const scenario = "passing-agent-message";
+  const records = arrayAt(report.records);
+  const passRecord = objectAt(structuredClone(records[0]));
+  passRecord.scenario = scenario;
+  passRecord.status = "PASS";
+  delete passRecord.violations;
+  records.push(passRecord);
+
+  const performance = objectAt(report.performance);
+  const groups = arrayAt(performance.groups);
+  const passGroup = objectAt(structuredClone(groups[0]));
+  passGroup.key = `${scenario}|${SURFACE}|${STATE}`;
+  passGroup.scenario = scenario;
+  passGroup.statuses = { PASS: 1 };
+  groups.push(passGroup);
+  performance.groupCount = 2;
+  performance.profiledRunCount = 2;
+  report.summary = { statuses: { FAIL: 1, PASS: 1 }, total: 2 };
+  return passRecord;
+}
+
 function writeReport(report: unknown): string {
   const root = mkdtempSync(join(tmpdir(), "openclaw-kova-report-"));
   tempRoots.push(root);
@@ -383,7 +409,7 @@ afterEach(() => {
 });
 
 describe("scripts/lib/kova-report-gate.mjs", () => {
-  it("accepts an exact filtered PARTIAL execution report", () => {
+  it("accepts omitted violations on a filtered PARTIAL PASS record", () => {
     expect(evaluateToleratedPartialKovaReport(partialReport())).toEqual({ ok: true });
     expect(evaluateToleratedKovaReport(partialReport())).toEqual({
       classification: "filtered-partial",
@@ -454,26 +480,38 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     expect(evaluateToleratedProfiledKovaReport(report)).toEqual({ ok: true });
   });
 
+  it("accepts omitted violations on a profiled PASS record", () => {
+    const report = profiledResourceReport();
+    addProfiledPassRecord(report);
+
+    expect(evaluateToleratedProfiledKovaReport(report)).toEqual({ ok: true });
+  });
+
+  it.each(malformedViolationLists)(
+    "rejects present non-array %s violations on a PARTIAL PASS record",
+    (_label, violations) => {
+      const report = partialReport();
+      setAt(report, ["records", 0, "violations"], violations);
+
+      expectPartialRejection(report);
+    },
+  );
+
+  it.each(malformedViolationLists)(
+    "rejects present non-array %s violations on a profiled PASS record",
+    (_label, violations) => {
+      const report = profiledResourceReport();
+      const passRecord = addProfiledPassRecord(report);
+      passRecord.violations = violations;
+
+      expectProfiledRejection(report);
+    },
+  );
+
   it("rejects hidden violations on PASS records", () => {
     const report = profiledResourceReport();
-    const scenario = "passing-agent-message";
-    const records = arrayAt(report.records);
-    const passRecord = objectAt(structuredClone(records[0]));
-    passRecord.scenario = scenario;
-    passRecord.status = "PASS";
+    const passRecord = addProfiledPassRecord(report);
     passRecord.violations = [{ message: "hidden violation" }];
-    records.push(passRecord);
-
-    const performance = objectAt(report.performance);
-    const groups = arrayAt(performance.groups);
-    const passGroup = objectAt(structuredClone(groups[0]));
-    passGroup.key = `${scenario}|${SURFACE}|${STATE}`;
-    passGroup.scenario = scenario;
-    passGroup.statuses = { PASS: 1 };
-    groups.push(passGroup);
-    performance.groupCount = 2;
-    performance.profiledRunCount = 2;
-    report.summary = { statuses: { FAIL: 1, PASS: 1 }, total: 2 };
 
     expectProfiledRejection(report);
   });
@@ -617,6 +655,14 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     [
       "rejects violations not bound to direct measurements",
       (report) => setAt(report, ["records", 0, "violations", 0, "actual"], 900),
+    ],
+    [
+      "rejects failed records with omitted violations",
+      (report) => deleteAt(report, ["records", 0, "violations"]),
+    ],
+    [
+      "rejects failed records with an empty violations list",
+      (report) => setAt(report, ["records", 0, "violations"], []),
     ],
     [
       "rejects violations without expectations",
@@ -805,6 +851,10 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     [
       "rejects PARTIAL records with violations",
       (report) => setAt(report, ["records", 0, "violations"], [{}]),
+    ],
+    [
+      "rejects PARTIAL records with null violations",
+      (report) => setAt(report, ["records", 0, "violations"], null),
     ],
     [
       "rejects PARTIAL reports without sampled RSS",
