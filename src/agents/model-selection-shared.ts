@@ -157,7 +157,7 @@ function sanitizeModelWarningValue(value: string): string {
   let controlBoundary = -1;
   for (let index = 0; index < stripped.length; index += 1) {
     const code = stripped.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) {
+    if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
       controlBoundary = index;
       break;
     }
