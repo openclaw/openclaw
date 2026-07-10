@@ -264,10 +264,10 @@ describe("embedded-agent runner run registry", () => {
 
     expect(result).toEqual({ aborted: true, drained: true, forceCleared: false });
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    expect(cancel).toHaveBeenCalledWith("superseded");
+    expect(cancel).toHaveBeenCalledWith("stuck_recovery");
   });
 
-  it("expires stuck recovery as run_stalled even with a live embedded handle", async () => {
+  it("delivers stuck recovery first when expiring a reply-owned live embedded handle", async () => {
     // The live-handle path is the common field case: the wedged run still owns
     // a registered handle, and its abort handler re-enters abortByUser. The
     // expiry must win the attribution race (run_stalled, not aborted_by_user).
@@ -276,14 +276,16 @@ describe("embedded-agent runner run registry", () => {
       sessionId: "session-reply-stuck-live",
       resetTriggered: false,
     });
-    const handle = createRunHandle({
-      abort: () => {
-        operation.abortByUser();
-      },
-    });
+    const cancellationReasons: unknown[] = [];
+    const handle = createRunHandle();
+    const cancel = (reason: unknown) => {
+      cancellationReasons.push(reason);
+      operation.abortByUser();
+      clearActiveEmbeddedRun("session-reply-stuck-live", handle);
+    };
     operation.attachBackend({
       kind: "embedded",
-      cancel: handle.abort,
+      cancel,
       isStreaming: handle.isStreaming,
     });
     operation.setPhase("running");
@@ -297,7 +299,45 @@ describe("embedded-agent runner run registry", () => {
       settleMs: 50,
     });
 
-    expect(result.aborted).toBe(true);
+    expect(result).toEqual({ aborted: true, drained: true, forceCleared: false });
+    expect(cancellationReasons).toEqual(["stuck_recovery"]);
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+  });
+
+  it("does not redeliver stuck recovery after reply expiry owns the backend cancellation", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:reply-stuck-pending-cleanup",
+      sessionId: "session-reply-stuck-pending-cleanup",
+      resetTriggered: false,
+    });
+    const cancellationReasons: unknown[] = [];
+    const embeddedAbort = vi.fn(() => {
+      operation.abortByUser();
+    });
+    const handle = createRunHandle({ abort: embeddedAbort });
+    const cancel = (reason: unknown) => {
+      cancellationReasons.push(reason);
+      operation.abortByUser();
+    };
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: handle.isStreaming,
+    });
+    operation.setPhase("running");
+    setActiveEmbeddedRun("session-reply-stuck-pending-cleanup", handle);
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId: "session-reply-stuck-pending-cleanup",
+      sessionKey: "agent:main:reply-stuck-pending-cleanup",
+      reason: "stuck_recovery",
+      forceClear: true,
+      settleMs: 0,
+    });
+
+    expect(result).toEqual({ aborted: true, drained: false, forceCleared: true });
+    expect(cancellationReasons).toEqual(["stuck_recovery"]);
+    expect(embeddedAbort).not.toHaveBeenCalled();
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
   });
 

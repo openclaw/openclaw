@@ -732,18 +732,20 @@ describe("reply run registry", () => {
       sessionId: "reentrant-session",
       resetTriggered: false,
     });
+    const cancel = vi.fn(() => {
+      operation.abortByUser();
+    });
     operation.attachBackend({
       kind: "embedded",
       // Mirrors the run loop's abort handler: backend cancellation propagates
       // synchronously back into a user-shaped abort on the same operation.
-      cancel: () => {
-        operation.abortByUser();
-      },
+      cancel,
       isStreaming: () => true,
     });
     operation.setPhase("running");
 
     expect(expireStaleReplyOperation(operation, "no_activity")).toBe(true);
+    expect(cancel).toHaveBeenCalledWith("superseded");
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
     expect(replyRunRegistry.get("agent:main:reentrant-expire")).toBeUndefined();
   });

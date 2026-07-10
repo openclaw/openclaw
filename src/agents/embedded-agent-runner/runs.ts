@@ -805,7 +805,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
     return { aborted: true, drained, forceCleared: false };
   }
-  const aborted = abortEmbeddedAgentRun(params.sessionId, abortOptions) || expiredReplyRun;
+  const aborted = expiredReplyRun || abortEmbeddedAgentRun(params.sessionId, abortOptions);
   const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)

@@ -901,7 +901,9 @@ export function createReplyOperation(params: {
       setResult({ kind: "failed", code: "run_stalled" });
       phase = "failed";
     }
-    getAttachedBackend(operation)?.cancel("superseded");
+    getAttachedBackend(operation)?.cancel(
+      reason === "stuck_recovery" ? "stuck_recovery" : "superseded",
+    );
     abortInternally(createAbortError("Reply operation expired as stale"));
     diag.warn(
       `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
