@@ -279,7 +279,10 @@ export const registerTelegramHandlers = ({
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(telegramDeps.resolveStorePath(cfg.session?.store)),
   });
-  const resolvePromptSender = (node: TelegramCachedMessageNode, ctx: TelegramContext): string => {
+  const resolvePromptSender = (
+    node: TelegramCachedMessageNode,
+    ctx: TelegramContext,
+  ): string | undefined => {
     const botInfo = ctx.me ?? opts.botInfo;
     if (botInfo?.id != null && node.senderId === String(botInfo.id)) {
       return buildTelegramSelfSenderName(telegramCfg.name, botInfo);
