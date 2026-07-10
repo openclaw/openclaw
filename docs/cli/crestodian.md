@@ -51,8 +51,8 @@ openclaw crestodian
 openclaw crestodian --json
 openclaw crestodian --message "models"
 openclaw crestodian --message "validate config"
-openclaw crestodian --message "setup workspace ~/Projects/work model openai/gpt-5.5" --yes
-openclaw crestodian --message "set default model openai/gpt-5.5" --yes
+openclaw crestodian --message "setup workspace ~/Projects/work model openai/gpt-5.6" --yes
+openclaw crestodian --message "set default model openai/gpt-5.6" --yes
 openclaw onboard --modern
 ```
 
@@ -65,7 +65,7 @@ doctor
 doctor fix
 validate config
 setup
-setup workspace ~/Projects/work model openai/gpt-5.5
+setup workspace ~/Projects/work model openai/gpt-5.6
 config set gateway.port 19001
 config set-ref gateway.auth.token env OPENCLAW_GATEWAY_TOKEN
 gateway status
@@ -73,7 +73,7 @@ restart gateway
 agents
 create agent work workspace ~/Projects/work
 models
-set default model openai/gpt-5.5
+set default model openai/gpt-5.6
 plugins list
 plugins search slack
 plugin install clawhub:openclaw-codex-app-server
@@ -149,17 +149,21 @@ config operations and asks for approval first.
 ```text
 setup
 setup workspace ~/Projects/work
-setup workspace ~/Projects/work model openai/gpt-5.5
+setup workspace ~/Projects/work model openai/gpt-5.6
 ```
 
 When no model is configured, setup selects the first usable backend in this
 order and tells you what it chose:
 
 - existing explicit model, if already configured
-- `OPENAI_API_KEY` -> `openai/gpt-5.5`
+- `OPENAI_API_KEY` -> `openai/gpt-5.6` (the bare direct-API id resolves to Sol)
 - `ANTHROPIC_API_KEY` -> `anthropic/claude-opus-4-8`
 - Claude Code CLI -> `claude-cli/claude-opus-4-8`
-- Codex -> `openai/gpt-5.5` through the Codex app-server harness
+- Codex -> `openai/gpt-5.6-sol` through the Codex app-server harness
+
+The first existing explicit model always wins, so setup preserves an existing
+`openai/gpt-5.5` primary. If an OpenAI account does not expose GPT-5.6, set
+`openai/gpt-5.5` explicitly instead; Crestodian does not silently downgrade.
 
 If none are available, setup still writes the default workspace and leaves the
 model unset. Install or log into Codex/Claude Code, or expose
@@ -174,7 +178,7 @@ configured OpenClaw model. If no configured model is usable yet, it can fall
 back to local runtimes already present on the machine:
 
 - Claude Code CLI: `claude-cli/claude-opus-4-8`
-- Codex app-server harness: `openai/gpt-5.5`
+- Codex app-server harness: `openai/gpt-5.6-sol`
 
 The model-assisted planner cannot mutate config directly. It must translate the
 request into one of Crestodian's typed commands, then the normal approval and

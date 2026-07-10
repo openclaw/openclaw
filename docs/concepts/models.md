@@ -23,7 +23,7 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can additionally be opted into the external GitHub Copilot agent runtime plugin — that path stays explicit (no `auto` fallback). Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai` OAuth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
+Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: official `openai/gpt-*` agent refs run through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can additionally be opted into the external GitHub Copilot agent runtime plugin — that path stays explicit (no `auto` fallback). Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai` OAuth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
 
 ## How model selection works
 
@@ -115,6 +115,13 @@ openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json
 
   </Accordion>
 </AccordionGroup>
+
+With no primary model configured, fresh OpenAI API-key setup selects
+`openai/gpt-5.6`; the bare direct-API id resolves to the Sol tier. Fresh
+ChatGPT/Codex OAuth setup selects the exact `openai/gpt-5.6-sol` catalog ref.
+Reauthentication preserves an existing explicit primary model, including
+`openai/gpt-5.5`. If GPT-5.6 is unavailable to the account, select
+`openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade it.
 
 ## "Model is not allowed" (and why replies stop)
 
