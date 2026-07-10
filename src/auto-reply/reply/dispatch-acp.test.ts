@@ -322,6 +322,7 @@ function createDispatcher(): {
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => counts),
     getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getCancelledCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
   return { dispatcher, counts };
@@ -2770,6 +2771,59 @@ describe("tryDispatchAcpReply", () => {
       "/tmp/openclaw-media/tts-caption.ogg",
     );
     expect(dispatcherCall(dispatcher.sendFinalReply, 1).text).toBe("Captioned fallback.");
+    expect(dispatcherCall(dispatcher.sendFinalReply, 1).mediaUrl).toBeUndefined();
+  });
+
+  it("delivers text fallback when a queued captioned-voice final is cancelled by a before-deliver hook on telegram", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.maybeApplyTtsToPayload
+      .mockResolvedValueOnce({
+        text: "Cancelled caption.",
+        mediaUrl: "/tmp/openclaw-media/tts-cancelled.ogg",
+        audioAsVoice: true,
+      })
+      .mockImplementation(async (paramsUnknown: unknown) => {
+        return (paramsUnknown as { payload: unknown }).payload;
+      });
+    mockVisibleTextTurn("Cancelled caption.");
+    const cfg = createAcpTestConfig({
+      acp: {
+        enabled: true,
+        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+      },
+    });
+
+    const { dispatcher } = createDispatcher();
+    (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true);
+    // enqueue() accepted the captioned voice, but a beforeDeliver /
+    // reply_payload_sending hook returned null and cancelled it before delivery:
+    // no failure, one cancellation, nothing reached the user.
+    (dispatcher.getFailedCounts as ReturnType<typeof vi.fn>).mockReturnValue({
+      tool: 0,
+      block: 0,
+      final: 0,
+    });
+    (dispatcher.getCancelledCounts as ReturnType<typeof vi.fn>).mockReturnValue({
+      tool: 0,
+      block: 0,
+      final: 1,
+    });
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      cfg,
+      dispatcher,
+      ttsChannel: "telegram",
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply, 0).mediaUrl).toBe(
+      "/tmp/openclaw-media/tts-cancelled.ogg",
+    );
+    expect(dispatcherCall(dispatcher.sendFinalReply, 1).text).toBe("Cancelled caption.");
     expect(dispatcherCall(dispatcher.sendFinalReply, 1).mediaUrl).toBeUndefined();
   });
 

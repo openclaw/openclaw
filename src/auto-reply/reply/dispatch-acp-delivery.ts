@@ -24,7 +24,10 @@ import {
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
-import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
+import {
+  readDispatcherCancelledCounts,
+  readDispatcherFailedCounts,
+} from "./reply-dispatcher.types.js";
 import {
   createReplyDeliveryContext,
   resolveReplyDeliveryAccountId,
@@ -319,14 +322,21 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     hasPendingDirectBlockReplyDelivery = false;
     await params.dispatcher.waitForIdle();
     const failedCounts = readDispatcherFailedCounts(params.dispatcher);
-    const failedVisibleCount = failedCounts.block + failedCounts.final;
-    if (failedVisibleCount > 0) {
+    // A beforeDeliver / reply_payload_sending hook that returns null cancels the
+    // send after enqueue() already reported acceptance. That is tracked as
+    // cancelled, not failed, yet nothing reached the user — so cancelled counts
+    // must fold into the undelivered accounting alongside failed counts.
+    const cancelledCounts = readDispatcherCancelledCounts(params.dispatcher);
+    const undeliveredVisibleCount =
+      failedCounts.block + failedCounts.final + cancelledCounts.block + cancelledCounts.final;
+    const undeliveredFinal = failedCounts.final + cancelledCounts.final;
+    if (undeliveredVisibleCount > 0) {
       state.failedVisibleTextDelivery = true;
     }
-    if (failedCounts.final > 0) {
+    if (undeliveredFinal > 0) {
       state.failedFinalDelivery = true;
     }
-    if (state.queuedDirectVisibleTextDeliveries > failedVisibleCount) {
+    if (state.queuedDirectVisibleTextDeliveries > undeliveredVisibleCount) {
       state.deliveredVisibleText = true;
     }
   };
