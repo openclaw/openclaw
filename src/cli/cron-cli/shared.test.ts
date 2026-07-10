@@ -96,6 +96,8 @@ describe("printCronList", () => {
     const prefix19 = "x".repeat(19);
     const prefix20 = "x".repeat(20);
     const prefix21 = "x".repeat(21);
+    const injectedMarker = "cron-table-injection";
+    const injectedControl = `\u001B]0;${injectedMarker}\u0007`;
     const cases = [
       { name: `${prefix20}🚀tail`, expected: `${prefix20}...` },
       { name: `${prefix21}Atail`, expected: `${prefix21}...` },
@@ -103,7 +105,7 @@ describe("printCronList", () => {
       { name: `${prefix20}e\u0301tail`, expected: `${prefix20}e\u0301...` },
       { name: `${prefix19}👨‍👩‍👧‍👦tail`, expected: `${prefix19}👨‍👩‍👧‍👦...` },
       { name: `${prefix20}👨‍👩‍👧‍👦`, expected: `${prefix20}👨‍👩‍👧‍👦` },
-      { name: `${prefix20}\u001B[31m🚀\u001B[0mtail`, expected: `${prefix20}...` },
+      { name: `${prefix20}${injectedControl}🚀tail`, expected: `${prefix20}...` },
     ];
 
     printCronList(
@@ -124,7 +126,30 @@ describe("printCronList", () => {
     const output = logs.join("\n");
     expect(Buffer.from(output, "utf8").toString("utf8")).toBe(output);
     expect(output).not.toContain("\uFFFD");
-    expect(output).not.toContain("\u001B");
+    expect(output).not.toContain(injectedMarker);
+  });
+
+  it("sanitizes and bounds named-session targets", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const injectedMarker = "cron-target-injection";
+    const sessionTarget = `session:${"x".repeat(20)}\u001B]0;${injectedMarker}\u0007`;
+    const job = createBaseJob({
+      id: "target-job",
+      sessionTarget: sessionTarget as CronJob["sessionTarget"],
+    });
+
+    printCronList([job], runtime, {
+      deliveryPreviews: new Map([[job.id, { label: "target-delivery", detail: "destination" }]]),
+    });
+
+    const header = logs[0] ?? "";
+    const row = logs[1] ?? "";
+    const deliveryColumn = visibleWidth(header.slice(0, header.indexOf("Delivery")));
+    const deliveryIndex = row.indexOf("target-delivery");
+    expect(deliveryIndex).toBeGreaterThan(-1);
+    expect(visibleWidth(row.slice(0, deliveryIndex))).toBe(deliveryColumn);
+    expect(row).toContain("sessio...");
+    expect(row).not.toContain(injectedMarker);
   });
 
   it("shows declaration metadata and existing run status", () => {
