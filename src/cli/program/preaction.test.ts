@@ -23,6 +23,9 @@ const routeLogsToStderrMock = vi.fn();
 const prepareGatewayRunBootstrapMock = vi.fn(async () => true);
 const recheckGatewayRunBootstrapMock = vi.fn(async () => true);
 const reloadTrustedGatewayRunEnvironmentMock = vi.fn(async () => true);
+const waitForDeferredGatewayActivationMock = vi.hoisted(() =>
+  vi.fn(async () => ({ mode: "disabled" as const })),
+);
 
 const runtimeMock = {
   log: vi.fn(),
@@ -66,6 +69,10 @@ vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
   reloadTrustedGatewayRunEnvironment: reloadTrustedGatewayRunEnvironmentMock,
 }));
 
+vi.mock("../gateway-cli/deferred-activation.js", () => ({
+  waitForDeferredGatewayActivation: waitForDeferredGatewayActivationMock,
+}));
+
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let originalProcessArgv: string[];
 let originalProcessTitle: string;
@@ -81,6 +88,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  waitForDeferredGatewayActivationMock.mockReset();
+  waitForDeferredGatewayActivationMock.mockResolvedValue({ mode: "disabled" });
   originalProcessArgv = [...process.argv];
   originalProcessTitle = process.title;
   originalProcessTitleDescriptor = Object.getOwnPropertyDescriptor(process, "title");
@@ -279,6 +288,41 @@ describe("registerPreActionHooks", () => {
     processTitleSetSpy.mockRestore();
   });
 
+  it.each([
+    ["gateway run", ["gateway", "run"], ["node", "openclaw", "gateway", "run"]],
+    ["bare gateway", ["gateway"], ["node", "openclaw", "gateway"]],
+  ])(
+    "waits for deferred activation before gateway bootstrap for %s",
+    async (_name, parseArgv, processArgv) => {
+      const events: string[] = [];
+      waitForDeferredGatewayActivationMock.mockImplementation(async () => {
+        events.push("activation:start");
+        await Promise.resolve();
+        events.push("activation:end");
+        return { mode: "disabled" };
+      });
+      prepareGatewayRunBootstrapMock.mockImplementation(async () => {
+        events.push("prepare");
+        return true;
+      });
+      ensureConfigReadyMock.mockImplementation(async () => {
+        events.push("ensureConfigReady");
+      });
+
+      await runPreAction({ parseArgv, processArgv });
+
+      expect(waitForDeferredGatewayActivationMock).toHaveBeenCalledTimes(1);
+      expect(prepareGatewayRunBootstrapMock).toHaveBeenCalledTimes(1);
+      const activationOrder = waitForDeferredGatewayActivationMock.mock.invocationCallOrder[0] ?? 0;
+      const prepareOrder = prepareGatewayRunBootstrapMock.mock.invocationCallOrder[0] ?? 0;
+      const ensureConfigReadyOrder = ensureConfigReadyMock.mock.invocationCallOrder[0] ?? 0;
+      expect(prepareOrder).toBeGreaterThan(activationOrder);
+      expect(ensureConfigReadyOrder).toBeGreaterThan(activationOrder);
+      expect(events.indexOf("activation:end")).toBeLessThan(events.indexOf("prepare"));
+      expect(events.indexOf("activation:end")).toBeLessThan(events.indexOf("ensureConfigReady"));
+    },
+  );
+
   it("runs gateway pre-bootstrap before full-CLI gateway bootstrap", async () => {
     prepareGatewayRunBootstrapMock.mockResolvedValueOnce(false);
     const gatewayRunCommand = resolveActionCommand(["gateway", "run"]);
@@ -302,6 +346,7 @@ describe("registerPreActionHooks", () => {
       gatewayRunCommand.setOptionValueWithSource("force", false, "default");
     }
 
+    expect(waitForDeferredGatewayActivationMock).toHaveBeenCalledTimes(1);
     expect(prepareGatewayRunBootstrapMock).toHaveBeenCalledWith({
       opts: { force: true, reset: false },
       runtime: runtimeMock,
@@ -394,6 +439,7 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "channels"],
     });
 
+    expect(waitForDeferredGatewayActivationMock).not.toHaveBeenCalled();
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(setVerboseMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
@@ -531,17 +577,30 @@ describe("registerPreActionHooks", () => {
     });
   });
 
-  it("skips help/version preaction and respects banner opt-out", async () => {
+  it("skips deferred activation for help/version and non-gateway command paths", async () => {
     await runPreAction({
       parseArgv: ["status"],
-      processArgv: ["node", "openclaw", "--version"],
+      processArgv: ["node", "openclaw", "--help"],
     });
 
+    expect(waitForDeferredGatewayActivationMock).not.toHaveBeenCalled();
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(setVerboseMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
+    waitForDeferredGatewayActivationMock.mockResolvedValue({ mode: "disabled" });
+
+    await runPreAction({
+      parseArgv: ["status"],
+      processArgv: ["node", "openclaw", "--version"],
+    });
+
+    expect(waitForDeferredGatewayActivationMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    waitForDeferredGatewayActivationMock.mockResolvedValue({ mode: "disabled" });
     process.env.OPENCLAW_HIDE_BANNER = "1";
 
     await runPreAction({
@@ -549,6 +608,7 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "status"],
     });
 
+    expect(waitForDeferredGatewayActivationMock).not.toHaveBeenCalled();
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
   });

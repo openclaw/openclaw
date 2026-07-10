@@ -126,6 +126,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (isHelpOrVersionInvocation(argv) || isBareParentDefaultHelpInvocation(actionCommand, argv)) {
       return;
     }
+    if (isGatewayRunAction(actionCommand)) {
+      const { waitForDeferredGatewayActivation } =
+        await import("../gateway-cli/deferred-activation.js");
+      await waitForDeferredGatewayActivation();
+    }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
