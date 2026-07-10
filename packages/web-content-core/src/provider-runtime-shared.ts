@@ -305,11 +305,19 @@ export function resolveWebProviderDefinition<
   if (!provider) {
     return null;
   }
+  const runtimeMetadata =
+    params.runtimeMetadata?.selectedProvider &&
+    params.runtimeMetadata.selectedProvider !== provider.id
+      ? ({
+          ...params.runtimeMetadata,
+          selectedProvider: provider.id,
+        } as TRuntimeMetadata)
+      : params.runtimeMetadata;
   const definition = params.createTool({
     provider,
     config: params.config,
     toolConfig: params.toolConfig,
-    runtimeMetadata: params.runtimeMetadata,
+    runtimeMetadata,
   });
   if (!definition) {
     return null;

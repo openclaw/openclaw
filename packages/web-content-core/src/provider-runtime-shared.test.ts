@@ -174,8 +174,9 @@ describe("resolveWebProviderDefinition", () => {
       ],
       resolveEnabled: () => true,
       resolveAutoProviderId: () => "custom",
-      createTool: ({ provider }) => ({
+      createTool: ({ provider, runtimeMetadata }) => ({
         name: provider.id,
+        runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
       }),
     });
 
@@ -185,6 +186,7 @@ describe("resolveWebProviderDefinition", () => {
       },
       definition: {
         name: "custom",
+        runtimeSelectedProvider: "custom",
       },
     });
   });
