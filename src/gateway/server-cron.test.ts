@@ -491,7 +491,7 @@ describe("buildGatewayCronService", () => {
 
   it("keeps detached cron_changed hooks root-admitted until they settle", async () => {
     resetGatewayWorkAdmission();
-    const deferred = createDeferred<void>();
+    const deferred = createDeferred();
     runCronChangedMock.mockImplementationOnce(async () => await deferred.promise);
     const cfg = createCronConfig("server-cron-hook-admission");
     loadConfigMock.mockReturnValue(cfg);
