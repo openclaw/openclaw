@@ -69,7 +69,7 @@ function makeLookupFn(): LookupFn {
   return vi.fn(async () => ({ address: "149.154.167.220", family: 4 })) as unknown as LookupFn;
 }
 
-function abortReasonError(signal?: AbortSignal): Error {
+function abortReasonError(signal?: AbortSignal | null): Error {
   return signal?.reason instanceof Error
     ? signal.reason
     : new Error("request aborted", { cause: signal?.reason });
