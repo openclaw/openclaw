@@ -428,6 +428,95 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.UntrustedContext).toBeUndefined();
   });
 
+  it("dispatches an authorized stop while the same Signal debounce key is active", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    dispatchInboundMessageMock
+      .mockImplementationOnce(async (params: DispatchInboundMessageMockParams) => {
+        capture.ctx = params.ctx;
+        await firstGate;
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
+      })
+      .mockImplementationOnce(async (params: DispatchInboundMessageMockParams) => {
+        capture.ctx = params.ctx;
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      });
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 5 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    const firstHandled = handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: { message: "start a long task", attachments: [] },
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    });
+
+    const stopHandled = handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000002,
+        dataMessage: { message: "stop", attachments: [] },
+      }),
+    );
+
+    try {
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      });
+      const stopContext = dispatchInboundMessageMock.mock.calls[1]?.[0].ctx;
+      expect(stopContext.CommandBody).toBe("stop");
+    } finally {
+      releaseFirst?.();
+      await Promise.allSettled([firstHandled, stopHandled]);
+    }
+  });
+
+  it("drops pending same-key Signal text when an authorized abort arrives", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 50 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: { message: "queued work", attachments: [] },
+      }),
+    );
+    await handler(
+      createSignalReceiveEvent({
+        timestamp: 1700000000001,
+        dataMessage: { message: "abort", attachments: [] },
+      }),
+    );
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessageMock.mock.calls[0]?.[0].ctx.CommandBody).toBe("abort");
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 75);
+    });
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+  });
+
   it("runs Telegram-parity Signal status reactions when explicitly enabled", async () => {
     dispatchInboundMessageMock.mockImplementationOnce(
       async (params: DispatchInboundMessageMockParams) => {

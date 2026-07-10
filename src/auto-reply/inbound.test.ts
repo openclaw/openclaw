@@ -635,6 +635,72 @@ describe("createInboundDebouncer", () => {
     }
   });
 
+  it("allows opted-in control work to bypass an active same-key flush", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{
+      key: string;
+      id: string;
+      debounce: boolean;
+      bypass?: boolean;
+    }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      shouldDebounce: (item) => item.debounce,
+      shouldBypassKeyedChain: (item) => item.bypass === true,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "1") {
+          await firstGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1", debounce: true });
+
+      const timerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 50);
+      expect(timerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(setTimeoutSpy.mock.results[timerIndex]?.value as ReturnType<typeof setTimeout>);
+      const firstFlush = (
+        setTimeoutSpy.mock.calls[timerIndex]?.[0] as (() => Promise<void>) | undefined
+      )?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1"]);
+      });
+
+      const controlEnqueue = debouncer.enqueue({
+        key: "a",
+        id: "stop",
+        debounce: false,
+        bypass: true,
+      });
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1", "stop"]);
+        expect(finished).toEqual(["stop"]);
+      });
+
+      if (!releaseFirst) {
+        throw new Error("Expected first inbound debounce release callback to be initialized");
+      }
+      releaseFirst();
+      await Promise.all([firstFlush, controlEnqueue]);
+
+      expect(finished).toEqual(["stop", "1"]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("keeps fire-and-forget keyed work ahead of a later buffered item", async () => {
     const started: string[] = [];
     const finished: string[] = [];

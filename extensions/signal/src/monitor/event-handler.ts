@@ -31,7 +31,8 @@ import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
@@ -657,16 +658,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
   }
 
+  const buildSignalInboundDebounceKey = (entry: SignalInboundEntry): string | null => {
+    const conversationId = entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId;
+    if (!conversationId || !entry.senderPeerId) {
+      return null;
+    }
+    return `signal:${deps.accountId}:${conversationId}:${entry.senderPeerId}`;
+  };
+
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
     channel: "signal",
-    buildKey: (entry) => {
-      const conversationId = entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId;
-      if (!conversationId || !entry.senderPeerId) {
-        return null;
-      }
-      return `signal:${deps.accountId}:${conversationId}:${entry.senderPeerId}`;
-    },
+    buildKey: buildSignalInboundDebounceKey,
+    shouldBypassKeyedChain: (entry) =>
+      entry.commandAuthorized && isControlCommandMessage(entry.commandBody, deps.cfg),
     shouldDebounce: (entry) => {
       return shouldDebounceTextInbound({
         text: entry.commandBody,
@@ -865,7 +870,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const messageText = normalizedMessage.trim();
     const groupId = dataMessage?.groupInfo?.groupId ?? reaction?.groupInfo?.groupId ?? undefined;
     const isGroup = Boolean(groupId);
-    const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
+    const hasControlCommandInMessage = isControlCommandMessage(messageText, deps.cfg);
 
     const senderDisplay = formatSignalSenderDisplay(sender);
     const { senderAccess, commandAccess } = await resolveSignalAccessState({
@@ -1190,7 +1195,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       typeof nativeReplyTargetTimestamp === "number"
         ? String(nativeReplyTargetTimestamp)
         : undefined;
-    await inboundDebouncer.enqueue({
+    const inboundEntry: SignalInboundEntry = {
       senderName,
       senderDisplay,
       senderRecipient,
@@ -1214,6 +1219,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
-    });
+    };
+    if (commandAuthorized && isAbortRequestText(messageText)) {
+      const debounceKey = buildSignalInboundDebounceKey(inboundEntry);
+      if (debounceKey) {
+        // Do not dispatch stale text that was still waiting in the debounce window when an
+        // authorized abort arrived. Active flushes cannot be cancelled, but the keyed-chain
+        // bypass above lets the abort reach reply admission immediately.
+        inboundDebouncer.cancelKey(debounceKey);
+      }
+    }
+    await inboundDebouncer.enqueue(inboundEntry);
   };
 }

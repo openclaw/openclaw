@@ -52,6 +52,7 @@ export type InboundDebounceCreateParams<T> = {
   maxTrackedKeys?: number;
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
+  shouldBypassKeyedChain?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
   serializeImmediate?: boolean;
   onFlush: (items: T[]) => Promise<void>;
@@ -217,6 +218,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const key = params.buildKey(item);
     const debounceMs = resolveDebounceMs(item);
     const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
+
+    if (params.shouldBypassKeyedChain?.(item) === true) {
+      // Urgent control work must be able to overtake a same-key flush that can encompass an
+      // entire agent run. Callers opt in explicitly; ordinary same-key ordering is unchanged.
+      await runFlush([item]);
+      return;
+    }
 
     if (!canDebounce || !key) {
       if (key) {
