@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
@@ -808,23 +809,12 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
 
-    const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
     await expect
       .poll(
-        async () => {
-          try {
-            const raw = await fs.readFile(approvalsPath, "utf8");
-            const parsed = JSON.parse(raw) as {
-              agents?: { main?: { allowlist?: Array<{ source?: string }> } };
-            };
-            return (
-              parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always") ===
-              true
-            );
-          } catch {
-            return false;
-          }
-        },
+        () =>
+          loadExecApprovals().agents?.main?.allowlist?.some(
+            (entry) => entry.source === "allow-always",
+          ) === true,
         { timeout: 2000, interval: 1 },
       )
       .toBe(true);
