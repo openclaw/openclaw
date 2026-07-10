@@ -104,6 +104,8 @@ export function applyQueueDropPolicy<T>(params: {
   summarize: (item: T) => string;
   summaryLimit?: number;
   onDrop?: (items: T[]) => void;
+  /** Items currently mid-delivery that must not be selected as overflow drop victims. */
+  inFlight?: Set<T>;
 }): boolean {
   const cap = params.queue.cap;
   if (cap <= 0 || params.queue.items.length < cap) {
@@ -112,8 +114,27 @@ export function applyQueueDropPolicy<T>(params: {
   if (params.queue.dropPolicy === "new") {
     return false;
   }
-  const dropCount = params.queue.items.length - cap + 1;
-  const dropped = params.queue.items.splice(0, dropCount);
+  const inFlight = params.inFlight;
+  // Compute how many non-in-flight items must be dropped to make room.
+  // In-flight items stay in the shared items array while a drain awaits,
+  // so the effective queue length for cap purposes excludes them.
+  const inFlightCount = inFlight ? params.queue.items.reduce((n, item) => n + (inFlight.has(item) ? 1 : 0), 0) : 0;
+  const effectiveLength = params.queue.items.length - inFlightCount;
+  if (effectiveLength < cap) {
+    return true;
+  }
+  const dropCount = effectiveLength - cap + 1;
+  const dropped: T[] = [];
+  // Splice from the front, skipping in-flight items so they remain for their
+  // active delivery rather than being recorded as overflow victims.
+  for (let i = 0; dropped.length < dropCount && i < params.queue.items.length; ) {
+    const item = params.queue.items[i];
+    if (inFlight?.has(item)) {
+      i += 1;
+      continue;
+    }
+    dropped.push(...params.queue.items.splice(i, 1));
+  }
   params.onDrop?.(dropped);
   if (params.queue.dropPolicy === "summarize") {
     for (const item of dropped) {
@@ -181,12 +202,20 @@ export function removeQueuedItemsByRef<T>(items: T[], processed: readonly T[]): 
 export async function drainNextQueueItem<T>(
   items: T[],
   run: (item: T) => Promise<void>,
+  inFlight?: Set<T>,
 ): Promise<boolean> {
   const next = items[0];
   if (!next) {
     return false;
   }
-  await run(next);
+  // Mark the item as in-flight so applyQueueDropPolicy skips it during the
+  // await window when the shared items array is still mutated by enqueuers.
+  inFlight?.add(next);
+  try {
+    await run(next);
+  } finally {
+    inFlight?.delete(next);
+  }
   removeQueuedItemsByRef(items, [next]);
   return true;
 }
@@ -198,6 +227,7 @@ async function drainCollectItemIfNeeded<T>(params: {
   setForceIndividualCollect?: (next: boolean) => void;
   items: T[];
   run: (item: T) => Promise<void>;
+  inFlight?: Set<T>;
 }): Promise<"skipped" | "drained" | "empty"> {
   if (!params.forceIndividualCollect && !params.isCrossChannel) {
     return "skipped";
@@ -206,7 +236,7 @@ async function drainCollectItemIfNeeded<T>(params: {
     // Once cross-channel items appear, future collection stays individual to preserve ordering.
     params.setForceIndividualCollect?.(true);
   }
-  const drained = await drainNextQueueItem(params.items, params.run);
+  const drained = await drainNextQueueItem(params.items, params.run, params.inFlight);
   return drained ? "drained" : "empty";
 }
 
@@ -216,6 +246,7 @@ export async function drainCollectQueueStep<T>(params: {
   isCrossChannel: boolean;
   items: T[];
   run: (item: T) => Promise<void>;
+  inFlight?: Set<T>;
 }): Promise<"skipped" | "drained" | "empty"> {
   return await drainCollectItemIfNeeded({
     forceIndividualCollect: params.collectState.forceIndividualCollect,
@@ -225,6 +256,7 @@ export async function drainCollectQueueStep<T>(params: {
     },
     items: params.items,
     run: params.run,
+    inFlight: params.inFlight,
   });
 }
 

@@ -132,6 +132,7 @@ export function enqueueFollowupRun(
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
+    inFlight: queue.inFlight,
     summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
     onDrop: (dropped) => {
       if (queue.dropPolicy === "summarize") {
