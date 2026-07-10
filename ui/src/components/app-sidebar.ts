@@ -1645,6 +1645,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               <openclaw-lobster-pet
                 .seed=${lobsterPetSeed(this.sessionKey)}
                 .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}
+                .runOutcome=${resolveLobsterRunOutcome(this.sessionsResult?.sessions)}
                 .visitsEnabled=${this.lobsterPetVisits}
               ></openclaw-lobster-pet>
             </div>

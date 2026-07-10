@@ -445,6 +445,7 @@ export const zh_CN: TranslationMap = {
       lobsterVisitsOff: "从不来访",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "已访问 {seen}/{total}",
+      lobsterdexFirstVisited: "{name} · 首次访问于 {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

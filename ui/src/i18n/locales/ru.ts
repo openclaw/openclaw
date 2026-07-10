@@ -452,6 +452,7 @@ export const ru: TranslationMap = {
       lobsterVisitsOff: "Никогда не заходит",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} посещено",
+      lobsterdexFirstVisited: "{name} · первое посещение {date}",
     },
     security: {
       browserEnabled: "Браузер включен",

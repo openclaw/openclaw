@@ -20,7 +20,7 @@ import {
   resolveLocalUserAvatarUrl,
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
-import { getLobsterdex } from "../../components/lobster-dex.ts";
+import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
@@ -810,14 +810,23 @@ function renderAppearanceCard(props: QuickSettingsProps) {
           </span>
           <div class="lobsterdex">
             ${LOBSTER_PET_PALETTES.map((palette) => {
-              const seen = getLobsterdex().has(palette.id);
+              const entry = getLobsterdexEntries().get(palette.id);
+              const seen = entry !== undefined;
+              const title = !seen
+                ? "?"
+                : entry.firstSeenAt !== null
+                  ? t("quickSettings.appearance.lobsterdexFirstVisited", {
+                      name: entry.name ?? palette.id,
+                      date: new Date(entry.firstSeenAt).toLocaleDateString(),
+                    })
+                  : (entry.name ?? palette.id);
               return html`
                 <span
                   class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
                     ? ""
                     : "lobsterdex__mini--unseen"}"
                   style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
-                  title=${seen ? palette.id : "?"}
+                  title=${title}
                 >
                   ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
                 </span>

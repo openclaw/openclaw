@@ -448,6 +448,7 @@ export const id: TranslationMap = {
       lobsterVisitsOff: "Tidak pernah berkunjung",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} dikunjungi",
+      lobsterdexFirstVisited: "{name} · pertama kali dikunjungi {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

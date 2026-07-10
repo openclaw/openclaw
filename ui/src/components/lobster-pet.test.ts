@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getLobsterdex } from "./lobster-dex.ts";
+import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import {
   LOBSTER_PET_ACT_DURATION_MS,
   LOBSTER_PET_MODE_ACTS,
@@ -567,8 +567,46 @@ describe("lobster pet element", () => {
     expect(getLobsterdex().size).toBe(0);
 
     await arrive(element);
-    const paletteId = createLobsterPetLook(42, new Date("2026-07-09T12:00:00")).palette.id;
-    expect(getLobsterdex().has(paletteId)).toBe(true);
+    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
+    expect(getLobsterdex().has(look.palette.id)).toBe(true);
+    // Memories: the first visitor's name and date stick to the entry.
+    const entry = getLobsterdexEntries().get(look.palette.id);
+    expect(entry?.name).toBe(lobsterPetName(look, 42));
+    expect(entry?.firstSeenAt).not.toBeNull();
+  });
+
+  it("old friends wave hello on their first arrival of the load", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem(
+      "openclaw.control.lobsterpet.familiarity.v1",
+      JSON.stringify({ visits: 30, shoos: 0 }),
+    );
+    const element = createPet(42);
+    await arrive(element);
+
+    // The greeting fires right after the entrance settles.
+    await vi.advanceTimersByTimeAsync(600);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-wave");
+  });
+
+  it("shooing is remembered in the familiarity counters", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const element = createPet(42);
+    await arrive(element);
+
+    element
+      .querySelector(".lobster-pet:not(.lobster-pet--shell)")
+      ?.dispatchEvent(new Event("contextmenu", { cancelable: true }));
+    await element.updateComplete;
+    const raw = JSON.parse(
+      localStorage.getItem("openclaw.control.lobsterpet.familiarity.v1") ?? "{}",
+    );
+    expect(raw.shoos).toBe(1);
   });
 
   it("pets on press-and-hold instead of poking", async () => {

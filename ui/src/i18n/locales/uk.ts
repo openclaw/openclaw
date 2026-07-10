@@ -448,6 +448,7 @@ export const uk: TranslationMap = {
       lobsterVisitsOff: "Ніколи не заходить",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "Відвідано {seen}/{total}",
+      lobsterdexFirstVisited: "{name} · уперше відвідано {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

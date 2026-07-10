@@ -448,6 +448,7 @@ export const fa: TranslationMap = {
       lobsterVisitsOff: "هرگز سر نمی‌زند",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} بازدیدشده",
+      lobsterdexFirstVisited: "{name} · نخستین بازدید در {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

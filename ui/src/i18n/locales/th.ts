@@ -445,6 +445,7 @@ export const th: TranslationMap = {
       lobsterVisitsOff: "ไม่เคยมาเยือน",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "เยี่ยมชมแล้ว {seen}/{total}",
+      lobsterdexFirstVisited: "{name} · เข้าชมครั้งแรกเมื่อ {date}",
     },
     security: {
       browserEnabled: "Browser enabled",
