@@ -11,6 +11,7 @@ export {
   isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,
   isExecCompletionEvent,
+  isHeartbeatOkResponse,
   isHeartbeatUserMessage,
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
