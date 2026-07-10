@@ -3663,8 +3663,65 @@ describe("cron service timer regressions", () => {
     expect(job.state.nextRunAtMs).toBe(expectedNextMs);
   });
 
-  it("persists and warns with last cron run diagnostics", () => {
-    const startedAt = Date.parse("2026-04-14T12:00:00.000Z");
+  it("auto-reassigns non-Anthropic provider lanes after three timeout errors in thirty minutes", () => {
+    const startedAt = Date.parse("2026-02-06T10:05:00.000Z");
+    const endedAt = startedAt + 500;
+    const triggerJob = createIsolatedRegressionJob({
+      id: "deepseek-trigger",
+      name: "deepseek-trigger",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+      payload: { kind: "agentTurn", message: "trigger", model: "deepseek/deepseek-chat" },
+      state: { runningAtMs: startedAt, consecutiveErrors: 2, lastRunAtMs: startedAt - 20 * 60_000 },
+    });
+    const siblingJob = createIsolatedRegressionJob({
+      id: "deepseek-sibling",
+      name: "deepseek-sibling",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+      payload: { kind: "agentTurn", message: "sibling", model: "deepseek/deepseek-chat" },
+      state: {},
+    });
+    const anthropicJob = createIsolatedRegressionJob({
+      id: "anthropic-control",
+      name: "anthropic-control",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+      payload: { kind: "agentTurn", message: "control", model: "anthropic/claude-sonnet-5" },
+      state: {},
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-dead-provider.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    state.store = { version: 1, jobs: [triggerJob, siblingJob, anthropicJob] };
+
+    applyJobResult(state, triggerJob, {
+      status: "error",
+      error: "model-call timeout after 120s",
+      provider: "deepseek",
+      startedAt,
+      endedAt,
+    });
+
+    expect(triggerJob.payload.kind === "agentTurn" ? triggerJob.payload.model : undefined).toBe(
+      "anthropic/claude-haiku-4-5-20251001",
+    );
+    expect(siblingJob.payload.kind === "agentTurn" ? siblingJob.payload.model : undefined).toBe(
+      "openai/gpt-5.5",
+    );
+    expect(anthropicJob.payload.kind === "agentTurn" ? anthropicJob.payload.model : undefined).toBe(
+      "anthropic/claude-sonnet-5",
+    );
+  });
+
+  it("persists bounded diagnostics from failed command payloads", () => {
+    const startedAt = Date.parse("2026-02-06T10:05:00.000Z");
     const endedAt = startedAt + 500;
     const job = createIsolatedRegressionJob({
       id: "diagnostics-job",

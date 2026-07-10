@@ -1,4 +1,6 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
+import fs from "node:fs";
+import path from "node:path";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
@@ -15,6 +17,7 @@ import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   registerActiveCronTaskRun,
   startActiveCronTaskRunSettlementGrace,
@@ -109,6 +112,25 @@ const MIN_REFIRE_GAP_MS = 2_000;
 const DEFAULT_MISSED_JOB_STAGGER_MS = 5_000;
 const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
 const DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS = 2 * 60_000;
+// Diverse, distinct-vendor pool. Never collapse every dead-provider job onto one model —
+// that just relocates the single point of failure. Jobs are spread round-robin across
+// whichever of these are NOT the dead provider (see reassignmentPoolFor below).
+const DEAD_PROVIDER_AUTO_REASSIGN_MODEL_POOL: readonly string[] = [
+  "anthropic/claude-haiku-4-5-20251001",
+  "openai/gpt-5.5",
+  "anthropic/claude-sonnet-4-6",
+];
+const DEAD_PROVIDER_AUTO_REASSIGN_MIN_ERRORS = 3;
+const DEAD_PROVIDER_AUTO_REASSIGN_WINDOW_MS = 30 * 60_000;
+const NON_ANTHROPIC_TIMEOUT_PROVIDERS = new Set(["deepseek", "ollama", "openai-gpt55"]);
+
+/** Fallback pool with the dead provider filtered out, so we never "reassign" onto the thing that's down. */
+function reassignmentPoolFor(deadProvider: string): string[] {
+  const pool = DEAD_PROVIDER_AUTO_REASSIGN_MODEL_POOL.filter(
+    (model) => normalizeDeadProviderCandidate(model, undefined) !== deadProvider,
+  );
+  return pool.length > 0 ? pool : [...DEAD_PROVIDER_AUTO_REASSIGN_MODEL_POOL];
+}
 
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
@@ -396,6 +418,127 @@ export function maybeNotifyIsolatedAgentSetupTimeout(
     return false;
   }
   return true;
+}
+
+function normalizeDeadProviderCandidate(
+  model: string | undefined,
+  provider: string | undefined,
+): string | undefined {
+  const candidate = (provider || model || "").trim();
+  if (!candidate) {
+    return undefined;
+  }
+  return candidate.split("/")[0]?.trim().toLowerCase() || undefined;
+}
+
+function isNonAnthropicTimeoutProvider(provider: string | undefined): boolean {
+  if (!provider) {
+    return false;
+  }
+  if (provider === "anthropic") {
+    return false;
+  }
+  return NON_ANTHROPIC_TIMEOUT_PROVIDERS.has(provider);
+}
+
+function isProviderTimeoutErrorText(error: string | undefined): boolean {
+  const normalized = (error || "").toLowerCase();
+  return normalized.includes("timeout") || normalized.includes("timed out");
+}
+
+function writeDeadProviderAutoReassignAlert(params: {
+  state: CronServiceState;
+  provider: string;
+  triggerJob: CronJob;
+  reassignments: Array<{ jobId: string; model: string }>;
+  nowMs: number;
+}): void {
+  const stateDir = path.dirname(resolveOpenClawStateSqlitePath());
+  const alertsDir = path.join(stateDir, "alerts");
+  const line = [
+    new Date(params.nowMs).toISOString(),
+    `provider=${params.provider}`,
+    `trigger_job=${params.triggerJob.id}`,
+    `reassigned=${params.reassignments.map((r) => `${r.jobId}:${r.model}`).join(",") || "none"}`,
+  ].join(" ");
+  try {
+    fs.mkdirSync(alertsDir, { recursive: true });
+    fs.appendFileSync(path.join(alertsDir, "dead-provider-auto-reassign.log"), `${line}\n`, "utf8");
+  } catch (err) {
+    params.state.deps.log.warn(
+      { jobId: params.triggerJob.id, err: String(err) },
+      "cron: failed to write dead-provider auto-reassign alert",
+    );
+  }
+}
+
+function maybeAutoReassignDeadProviderTimeouts(params: {
+  state: CronServiceState;
+  job: CronJob;
+  result: {
+    status: CronRunStatus;
+    error?: string;
+    provider?: string;
+    startedAt: number;
+  };
+}): void {
+  const { state, job, result } = params;
+  if (result.status !== "error" || !isProviderTimeoutErrorText(result.error)) {
+    return;
+  }
+  const provider = normalizeDeadProviderCandidate(
+    job.payload.kind === "agentTurn" ? job.payload.model : undefined,
+    result.provider,
+  );
+  if (!isNonAnthropicTimeoutProvider(provider)) {
+    return;
+  }
+  const consecutiveErrors = job.state.consecutiveErrors ?? 0;
+  const previousRunAtMs = job.state.lastRunAtMs;
+  const withinWindow =
+    typeof previousRunAtMs === "number" &&
+    Number.isFinite(previousRunAtMs) &&
+    result.startedAt - previousRunAtMs <= DEAD_PROVIDER_AUTO_REASSIGN_WINDOW_MS;
+  if (consecutiveErrors < DEAD_PROVIDER_AUTO_REASSIGN_MIN_ERRORS || !withinWindow) {
+    return;
+  }
+
+  const reassignments: Array<{ jobId: string; model: string }> = [];
+  const pool = reassignmentPoolFor(provider);
+  let poolIndex = 0;
+  for (const candidate of state.store?.jobs ?? []) {
+    if (candidate.payload.kind !== "agentTurn") {
+      continue;
+    }
+    const candidateProvider = normalizeDeadProviderCandidate(candidate.payload.model, undefined);
+    if (candidateProvider !== provider) {
+      continue;
+    }
+    if (pool.includes(candidate.payload.model)) {
+      // Already sitting on one of the diversity-pool models; leave it alone.
+      continue;
+    }
+    const nextModel = pool[poolIndex % pool.length];
+    poolIndex += 1;
+    candidate.payload = { ...candidate.payload, model: nextModel };
+    candidate.updatedAtMs = result.startedAt;
+    reassignments.push({ jobId: candidate.id, model: nextModel });
+  }
+
+  if (reassignments.length === 0) {
+    return;
+  }
+  writeDeadProviderAutoReassignAlert({
+    state,
+    provider,
+    triggerJob: job,
+    reassignments,
+    nowMs: result.startedAt,
+  });
+  state.deps.log.warn(
+    { provider, triggerJobId: job.id, reassignments },
+    "cron: auto-reassigned dead provider timeout lane across diverse fallback pool",
+  );
 }
 
 function resolveRunConcurrency(state: CronServiceState): number {
@@ -799,6 +942,8 @@ export function applyJobResult(
     job.state.consecutiveSkipped = 0;
     job.state.lastFailureAlertAtMs = undefined;
   }
+
+  maybeAutoReassignDeadProviderTimeouts({ state, job, result });
 
   const shouldDelete =
     job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";

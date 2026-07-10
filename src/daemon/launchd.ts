@@ -21,6 +21,11 @@ import {
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
+import {
+  buildGatewayDistEntrypointCandidates,
+  findFirstAccessibleGatewayEntrypoint,
+  isGatewayDistEntrypointPath,
+} from "./gateway-entrypoint.js";
 import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
@@ -1170,19 +1175,41 @@ export async function installLaunchAgent(
   return { plistPath };
 }
 
-async function rewriteLaunchAgentPlistForRestart({
-  env,
-  label,
-  plistPath,
-  stdout,
-  warn,
-}: {
+async function verifyLaunchAgentDistEntrypointForRestart(params: {
+  programArguments: string[];
+}): Promise<void> {
+  const entrypoint = params.programArguments.find((arg) => isGatewayDistEntrypointPath(arg));
+  if (!entrypoint) {
+    return;
+  }
+  const verified = await findFirstAccessibleGatewayEntrypoint(
+    buildGatewayDistEntrypointCandidates(entrypoint),
+    async (candidate) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  );
+  if (verified) {
+    return;
+  }
+  const expected = path.join(path.dirname(entrypoint), "index.js");
+  throw new Error(
+    `Cannot restart LaunchAgent: built gateway entrypoint missing at ${expected}. Run "pnpm build" first.`,
+  );
+}
+
+async function rewriteLaunchAgentPlistForRestart(params: {
   env: GatewayServiceEnv;
   label: string;
   plistPath: string;
   stdout?: NodeJS.WritableStream;
   warn?: (message: string) => void;
 }): Promise<boolean> {
+  const { env, label, plistPath, stdout, warn } = params;
   const existing = await readLaunchAgentProgramArgumentsFromFile(
     plistPath,
     resolveLaunchAgentEnvironmentReadOptions(env, label),
@@ -1190,6 +1217,7 @@ async function rewriteLaunchAgentPlistForRestart({
   if (!existing?.programArguments.length) {
     return false;
   }
+  await verifyLaunchAgentDistEntrypointForRestart({ programArguments: existing.programArguments });
 
   const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
   await ensureSecureDirectory(logDir);
@@ -1279,8 +1307,14 @@ export async function restartLaunchAgent({
     return { outcome: "scheduled" };
   }
 
+  let launchAgentBootedOut = false;
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
   if (cleanupPort !== null) {
+    const bootout = await execLaunchctl(["bootout", serviceTarget]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+    }
+    launchAgentBootedOut = true;
     cleanStaleGatewayProcessesSync(cleanupPort);
     const diagnostics = await inspectPortUsage(cleanupPort).catch(() => null);
     if (diagnostics?.status === "busy") {
@@ -1305,9 +1339,12 @@ export async function restartLaunchAgent({
   await execLaunchctl(["enable", serviceTarget]);
 
   if (plistReloadNeeded) {
-    const bootout = await execLaunchctl(["bootout", serviceTarget]);
-    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+    if (!launchAgentBootedOut) {
+      const bootout = await execLaunchctl(["bootout", serviceTarget]);
+      if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+        throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+      }
+      launchAgentBootedOut = true;
     }
     await bootstrapLaunchAgentOrThrow({
       domain,

@@ -1927,7 +1927,7 @@ describe("launchd install", () => {
     expect(output).toContain("boom red msg");
   });
 
-  it("restarts LaunchAgent with kickstart and no bootout", async () => {
+  it("restarts LaunchAgent by booting out before start when a gateway port is configured", async () => {
     const env = {
       ...createDefaultLaunchdEnv(),
       OPENCLAW_GATEWAY_PORT: "18789",
@@ -1943,11 +1943,10 @@ describe("launchd install", () => {
     expect(result).toEqual({ outcome: "completed" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789);
     expect(state.launchctlCalls).toEqual([
+      ["bootout", serviceId],
       ["enable", serviceId],
       ["kickstart", "-k", serviceId],
     ]);
-    expect(launchctlCommandNames()).not.toContain("bootout");
-    expect(launchctlCommandNames()).not.toContain("bootstrap");
   });
 
   it("reloads launchd after rewriting an existing plist", async () => {
@@ -1985,7 +1984,7 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>StandardInPath</key>");
     expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
-    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
+    expect(launchctlCommandNames()).toEqual(["bootout", "enable", "enable", "bootstrap"]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -2023,7 +2022,7 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap", "print"]);
+    expect(launchctlCommandNames()).toEqual(["bootout", "enable", "enable", "bootstrap", "print"]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
