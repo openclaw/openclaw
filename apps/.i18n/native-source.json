@@ -6091,7 +6091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 160,
+      "line": 188,
       "path": "apps/ios/Sources/Camera/CameraController.swift",
       "source": "Camera",
       "surface": "apple",
@@ -6099,7 +6099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 160,
+      "line": 188,
       "path": "apps/ios/Sources/Camera/CameraController.swift",
       "source": "Microphone",
       "surface": "apple",
@@ -12051,7 +12051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2942,
+      "line": 2983,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -12059,7 +12059,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2942,
+      "line": 2983,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -12067,7 +12067,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3504,
+      "line": 3545,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -12075,7 +12075,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3504,
+      "line": 3545,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -12083,7 +12083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3508,
+      "line": 3549,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -12091,7 +12091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3508,
+      "line": 3549,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -12099,7 +12099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3800,
+      "line": 3841,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -12107,7 +12107,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3800,
+      "line": 3841,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
