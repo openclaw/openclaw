@@ -674,6 +674,86 @@ test("sessions.delete limits plugin-runtime cleanup to sessions owned by that pl
   expect(deleted.payload?.deleted).toBe(true);
 });
 
+test("sessions.patch limits plugin-runtime mutations to sessions owned by that plugin", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-owned", "owned");
+  await writeSingleLineSession(dir, "sess-foreign", "foreign");
+
+  await writeSessionStore({
+    entries: {
+      "agent:main:dreaming-narrative-owned": sessionStoreEntry("sess-owned", {
+        pluginOwnerId: "memory-core",
+      }),
+      "agent:main:dreaming-narrative-foreign": sessionStoreEntry("sess-foreign", {
+        pluginOwnerId: "other-plugin",
+      }),
+    },
+  });
+
+  const pluginClient = {
+    connect: {
+      scopes: ["operator.admin"],
+    },
+    internal: {
+      pluginRuntimeOwnerId: "memory-core",
+    },
+  } as never;
+
+  const archiveDenied = await directSessionReq(
+    "sessions.patch",
+    {
+      key: "agent:main:dreaming-narrative-foreign",
+      archived: true,
+    },
+    {
+      client: pluginClient,
+    },
+  );
+  expect(archiveDenied.ok).toBe(false);
+  expect(archiveDenied.error?.message).toContain(
+    'cannot patch session "agent:main:dreaming-narrative-foreign" because it did not create it',
+  );
+
+  const unarchiveDenied = await directSessionReq(
+    "sessions.patch",
+    {
+      key: "agent:main:dreaming-narrative-foreign",
+      archived: false,
+    },
+    {
+      client: pluginClient,
+    },
+  );
+  expect(unarchiveDenied.ok).toBe(false);
+  expect(unarchiveDenied.error?.message).toContain("did not create it");
+
+  const labelDenied = await directSessionReq(
+    "sessions.patch",
+    {
+      key: "agent:main:dreaming-narrative-foreign",
+      label: "hijacked",
+    },
+    {
+      client: pluginClient,
+    },
+  );
+  expect(labelDenied.ok).toBe(false);
+  expect(labelDenied.error?.message).toContain("did not create it");
+
+  const ownedPatch = await directSessionReq<{ ok: true; entry?: { archivedAt?: number } }>(
+    "sessions.patch",
+    {
+      key: "agent:main:dreaming-narrative-owned",
+      archived: true,
+    },
+    {
+      client: pluginClient,
+    },
+  );
+  expect(ownedPatch.ok).toBe(true);
+  expect(ownedPatch.payload?.entry?.archivedAt).toBeDefined();
+});
+
 test("sessions.delete scopes selected global deletes to the requested agent", async () => {
   const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
 
