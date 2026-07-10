@@ -574,12 +574,31 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
     timestamp: resolveTimestampMsToIsoString(now),
     message: finalMessage,
-    ...(leafInfo.appendMode === "side" && isTranscriptOnlyOpenClawAssistantMessage(finalMessage)
+    // Side-append mode means an agent run owns the active leaf. Rows injected
+    // while it runs must not move that leaf, or the run's session-file fence
+    // reports a takeover and kills the attempt; the run adopts side entries
+    // into the chain on its next active append.
+    ...(leafInfo.appendMode === "side" && isSidelineTranscriptInjectedMessage(finalMessage)
       ? { appendMode: "side" as const }
       : {}),
   };
   await appendJsonlEntry(params.transcriptPath, entry);
   return { messageId, message: finalMessage, appended: true };
+}
+
+// Rows that may be injected while an agent run is in flight and therefore must
+// not steal the active leaf: gateway-injected assistant bookkeeping and
+// TUI-local `!`/`!!` shell command records. Provider model output never
+// arrives through this injected-append path.
+function isSidelineTranscriptInjectedMessage(message: unknown): boolean {
+  if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    return true;
+  }
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    (message as { role?: unknown }).role === "bashExecution"
+  );
 }
 
 function readMessageIdempotencyKey(message: unknown): string | undefined {
