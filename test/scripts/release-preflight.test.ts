@@ -35,9 +35,10 @@ afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-function makeFakePnpm(): { binDir: string; logPath: string } {
+function makeFakePnpm(): { binDir: string; eventsPath: string; logPath: string } {
   const root = makeTempDir(tempDirs, "openclaw-release-preflight-");
   const binDir = join(root, "bin");
+  const eventsPath = join(root, "pnpm-events.log");
   const logPath = join(root, "pnpm.log");
   mkdirSync(binDir);
   const pnpmPath = join(binDir, "pnpm");
@@ -48,17 +49,19 @@ import { appendFileSync } from "node:fs";
 
 const command = process.argv.slice(2).join(" ");
 appendFileSync(process.env.OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG, command + "\\n");
+appendFileSync(process.env.OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS, "start " + command + "\\n");
 const delayMs = Number(process.env.OPENCLAW_RELEASE_PREFLIGHT_DELAY_MS ?? "0");
 if (delayMs > 0) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
 }
+appendFileSync(process.env.OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS, "end " + command + "\\n");
 const failures = new Set((process.env.OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS ?? "").split(";").filter(Boolean));
 process.exit(failures.has(command) ? 7 : 0);
 `,
     { mode: 0o755 },
   );
   chmodSync(pnpmPath, 0o755);
-  return { binDir, logPath };
+  return { binDir, eventsPath, logPath };
 }
 
 function runPreflight(
@@ -76,6 +79,7 @@ function runPreflight(
       ...(fakePnpm
         ? {
             OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG: fakePnpm.logPath,
+            OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS: fakePnpm.eventsPath,
             PATH: `${fakePnpm.binDir}${delimiter}${process.env.PATH ?? ""}`,
           }
         : {}),
@@ -149,6 +153,7 @@ describe("scripts/release-preflight.mjs", () => {
       env: {
         ...process.env,
         OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS: "deps:shrinkwrap:changed:generate",
+        OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS: fakePnpm.eventsPath,
         OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG: fakePnpm.logPath,
         PATH: `${fakePnpm.binDir}${delimiter}${process.env.PATH ?? ""}`,
       },
@@ -158,6 +163,31 @@ describe("scripts/release-preflight.mjs", () => {
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(FIX_COMMANDS.toSorted());
     expect(result.stderr).toContain(
       "- npm shrinkwraps: exit 7 (pnpm deps:shrinkwrap:changed:generate)",
+    );
+  });
+
+  it("serializes the root package writer before generated-artifact readers", () => {
+    const fakePnpm = makeFakePnpm();
+    const root = makeReleaseFixture();
+    const result = runPreflight(
+      ["--fix", "--jobs", "8"],
+      fakePnpm,
+      {
+        OPENCLAW_RELEASE_PREFLIGHT_DELAY_MS: "40",
+      },
+      root,
+    );
+    const events = readPnpmLog(fakePnpm.eventsPath);
+
+    expect(result.status).toBe(0);
+    expect(events.indexOf("end plugins:sync")).toBeLessThan(
+      events.indexOf("start plugin-sdk:sync-exports"),
+    );
+    expect(events.indexOf("end plugin-sdk:sync-exports")).toBeLessThan(
+      events.indexOf("start deps:shrinkwrap:changed:generate"),
+    );
+    expect(events.indexOf("end plugin-sdk:sync-exports")).toBeLessThan(
+      events.indexOf("start plugins:inventory:gen"),
     );
   });
 
