@@ -214,6 +214,17 @@ describe("normalizeReplyPayload", () => {
     expect(expectNormalizedReply(result).text).toBe("The user is saying hello");
   });
 
+  it("strips newline-separated leading NO_REPLY without leaking the token (#103735)", () => {
+    const result = normalizeReplyPayload({
+      text: "NO_REPLY\n\nWait — the user mentioned me directly. I should respond.\n\nHi! How can I help?",
+    });
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toBe(
+      "Wait — the user mentioned me directly. I should respond.\n\nHi! How can I help?",
+    );
+    expect(reply.text).not.toContain("NO_REPLY");
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(expectNormalizedReply(result).text).toBe("NO_REPLY -- nope");
