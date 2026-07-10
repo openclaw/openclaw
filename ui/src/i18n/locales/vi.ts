@@ -181,6 +181,11 @@ export const vi: TranslationMap = {
     reason: "Lý do {reason}",
   },
   worktrees: {
+    newWorktree: "Worktree mới",
+    owner: "Chủ sở hữu",
+    ownerManual: "Thủ công",
+    ownerSession: "Phiên",
+    ownerWorkboard: "Workboard",
     title: "Worktree được quản lý",
     subtitle: "Các bản checkout kho lưu trữ được cô lập do OpenClaw sở hữu.",
     cleanNow: "Dọn dẹp ngay",
@@ -217,6 +222,10 @@ export const vi: TranslationMap = {
     createFailed: "Không thể tạo phiên.",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "{count} worktree phiên có công việc chưa commit hoặc chưa push đã được giữ lại ({branches}). Quản lý chúng trong Settings -> Worktrees.",
+    deletePreservedWorktreeConfirm:
+      "Worktree của phiên có công việc chưa commit hoặc chưa push, nên đã được giữ lại ({branch}). Vẫn xóa checkout?",
     title: "Phiên",
     subtitle: "Các khóa phiên đang hoạt động và ghi đè theo từng phiên.",
     store: "Kho lưu trữ: {path}",

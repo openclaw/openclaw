@@ -17,6 +17,10 @@ import {
   releaseNotesVersionForTag,
   renderGithubReleaseNotes,
 } from "./render-github-release-notes.mjs";
+import {
+  isShaPinnedReleaseValidationBranch,
+  validateFullReleaseValidationEvidence,
+} from "./validate-full-release-validation-evidence.mjs";
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
@@ -701,7 +705,10 @@ async function runInfo(repo, runId) {
   ]);
   return {
     databaseId: runData.id,
+    runAttempt: runData.run_attempt,
     workflowName: runData.name,
+    workflowPath: runData.path,
+    repository: runData.repository?.full_name,
     headBranch: runData.head_branch,
     headSha: runData.head_sha,
     event: runData.event,
@@ -778,7 +785,9 @@ async function waitForSuccessfulRun(repo, runId, expected) {
           `run ${runId} workflow mismatch: expected ${expected.workflowName}, got ${info.workflowName}`,
         );
       }
-      if (info.headBranch !== expected.workflowRef) {
+      const acceptsPinnedWorkflow =
+        expected.allowShaPinnedWorkflowRef && isShaPinnedReleaseValidationBranch(info.headBranch);
+      if (info.headBranch !== expected.workflowRef && !acceptsPinnedWorkflow) {
         throw new Error(
           `run ${runId} branch mismatch: expected ${expected.workflowRef}, got ${info.headBranch}`,
         );
@@ -852,6 +861,7 @@ export function buildPublishCommand(options) {
     ["tag", options.tag],
     ["preflight_run_id", options.npmPreflightRunId],
     ["full_release_validation_run_id", options.fullReleaseRunId],
+    ["full_release_validation_run_attempt", options.fullReleaseRunAttempt],
     ["npm_dist_tag", options.npmDistTag],
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
@@ -1080,15 +1090,14 @@ async function main() {
   const fullRun = await waitForSuccessfulRun(options.repo, options.fullReleaseRunId, {
     workflowName: "Full Release Validation",
     workflowRef: options.workflowRef,
+    allowShaPinnedWorkflowRef: true,
   });
   const npmRun = await waitForSuccessfulRun(options.repo, options.npmPreflightRunId, {
     workflowName: "OpenClaw NPM Release",
     workflowRef: options.workflowRef,
   });
-  if (fullRun.headSha !== targetSha || npmRun.headSha !== targetSha) {
-    throw new Error(
-      `run SHA mismatch: tag=${targetSha} full=${fullRun.headSha} npm=${npmRun.headSha}`,
-    );
+  if (npmRun.headSha !== targetSha) {
+    throw new Error(`run SHA mismatch: tag=${targetSha} npm=${npmRun.headSha}`);
   }
 
   const npmDir = join(options.outputDir, "npm-preflight");
@@ -1100,19 +1109,32 @@ async function main() {
     "openclaw-npm-preflight-",
     npmDir,
   );
-  const fullArtifactName = await downloadResolvedArtifact(
-    options.repo,
-    options.fullReleaseRunId,
-    `full-release-validation-${options.fullReleaseRunId}`,
-    "full-release-validation-",
-    fullDir,
-  );
+  if (!Number.isInteger(fullRun.runAttempt) || fullRun.runAttempt < 1) {
+    throw new Error(`Full Release Validation run ${options.fullReleaseRunId} has invalid attempt.`);
+  }
+  const fullArtifactName = `full-release-validation-${options.fullReleaseRunId}-${fullRun.runAttempt}`;
+  downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
 
   const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
   const fullManifest = readJson(
     join(fullDir, "full-release-validation-manifest.json"),
     "full validation manifest",
   );
+  run("git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], {
+    capture: true,
+  });
+  const fullValidationEvidence = validateFullReleaseValidationEvidence({
+    run: fullRun,
+    manifest: fullManifest,
+    expectedRepository: options.repo,
+    expectedRunId: options.fullReleaseRunId,
+    expectedTargetSha: targetSha,
+    expectedWorkflowBranch: options.workflowRef,
+    isTrustedMainAncestor: (sha) => gitIsAncestor(sha, "refs/remotes/origin/main"),
+  });
+  if (fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha) {
+    throw new Error(`run SHA mismatch: tag=${targetSha} full=${fullRun.headSha}`);
+  }
   validatePreflightManifest(npmManifest, {
     tag: options.tag,
     targetSha,
@@ -1157,7 +1179,10 @@ async function main() {
     "scripts/plugin-clawhub-release-plan.ts",
     options,
   );
-  const publishCommand = buildPublishCommand(options);
+  const publishCommand = buildPublishCommand({
+    ...options,
+    fullReleaseRunAttempt: fullRun.runAttempt,
+  });
   const evidence = {
     version: 1,
     tag: options.tag,
@@ -1165,6 +1190,7 @@ async function main() {
     workflowRef: options.workflowRef,
     npmDistTag: options.npmDistTag,
     fullReleaseValidationRunId: options.fullReleaseRunId,
+    fullReleaseValidationRunAttempt: fullRun.runAttempt,
     npmPreflightRunId: options.npmPreflightRunId,
     windowsNodeTag: options.windowsNodeTag || undefined,
     windowsNodeSourceRelease,

@@ -180,6 +180,11 @@ export const ko: TranslationMap = {
     reason: "사유 {reason}",
   },
   worktrees: {
+    newWorktree: "새 worktree",
+    owner: "소유자",
+    ownerManual: "수동",
+    ownerSession: "세션",
+    ownerWorkboard: "Workboard",
     title: "관리되는 Worktree",
     subtitle: "OpenClaw가 소유한 격리된 저장소 체크아웃입니다.",
     cleanNow: "지금 정리",
@@ -197,7 +202,7 @@ export const ko: TranslationMap = {
   },
   newSession: {
     title: "새 세션",
-    hint: "이 세션이 작업할 위치를 선택한 다음, 수행할 작업을 말하세요.",
+    hint: "이 세션이 작업할 위치를 선택한 다음, 수행할 작업을 입력하세요.",
     draftRow: "새 세션",
     agent: "에이전트",
     where: "위치",
@@ -209,13 +214,17 @@ export const ko: TranslationMap = {
     baseBranch: "기준 브랜치",
     worktreeName: "Worktree 이름",
     worktreeNamePlaceholder: "자동",
-    worktreeNameInvalid: "Worktree 이름에는 소문자, 숫자, 대시를 사용할 수 있습니다.",
-    messagePlaceholder: "이 세션에서 무엇을 작업할까요?",
+    worktreeNameInvalid: "Worktree 이름은 소문자, 숫자, 대시를 사용합니다.",
+    messagePlaceholder: "이 세션에서 어떤 작업을 해야 하나요?",
     start: "세션 시작",
     starting: "시작 중…",
     createFailed: "세션을 만들 수 없습니다.",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "커밋되지 않았거나 푸시되지 않은 작업이 있는 {count}개의 세션 worktree가 유지되었습니다({branches}). Settings -> Worktrees에서 관리하세요.",
+    deletePreservedWorktreeConfirm:
+      "세션의 worktree에 커밋되지 않았거나 푸시되지 않은 작업이 있어 유지되었습니다({branch}). 그래도 체크아웃을 삭제하시겠습니까?",
     title: "세션",
     subtitle: "활성 세션 키 및 세션별 재정의.",
     store: "저장소: {path}",

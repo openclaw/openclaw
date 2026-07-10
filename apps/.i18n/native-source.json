@@ -2547,7 +2547,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2641,
+      "line": 2639,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "The code may have expired or been generated for another Gateway.",
       "surface": "android",
@@ -2555,7 +2555,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2645,
+      "line": 2643,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway password is required. Enter it again or edit this connection.",
       "surface": "android",
@@ -2563,7 +2563,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2646,
+      "line": 2644,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway password is invalid. Re-enter it or reset this gateway connection.",
       "surface": "android",
@@ -2571,7 +2571,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2647,
+      "line": 2645,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway token is required. Enter it again or edit this connection.",
       "surface": "android",
@@ -2579,7 +2579,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2649,
+      "line": 2647,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway requires this device identity. Re-authenticate or reset this gateway connection.",
       "surface": "android",
@@ -2587,7 +2587,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2653,
+      "line": 2651,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
       "surface": "android",
@@ -2595,7 +2595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2654,
+      "line": 2652,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway authentication is not configured. Edit this connection and try again.",
       "surface": "android",
@@ -2603,7 +2603,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2655,
+      "line": 2653,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway authentication needs review. Check gateway settings, then retry.",
       "surface": "android",
@@ -2611,7 +2611,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2672,
+      "line": 2670,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "$summary $it",
       "surface": "android",
@@ -2619,7 +2619,7 @@
     },
     {
       "kind": "ui-toast",
-      "line": 2803,
+      "line": 2801,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Approval command copied",
       "surface": "android",
@@ -2627,7 +2627,7 @@
     },
     {
       "kind": "ui-toast",
-      "line": 2812,
+      "line": 2810,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Command copied",
       "surface": "android",
@@ -2635,7 +2635,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2874,
+      "line": 2872,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Granted",
       "surface": "android",
@@ -2643,7 +2643,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2874,
+      "line": 2872,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Not granted",
       "surface": "android",
@@ -18147,7 +18147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 103,
+      "line": 102,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Settings...",
       "surface": "apple",
@@ -18155,7 +18155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 122,
+      "line": 121,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -18163,7 +18163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 122,
+      "line": 121,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw - Voice Wake live meter active",
       "surface": "apple",
@@ -18171,7 +18171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 317,
+      "line": 316,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -18179,7 +18179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 317,
+      "line": 316,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Open Canvas",
       "surface": "apple",

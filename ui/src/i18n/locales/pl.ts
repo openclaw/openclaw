@@ -182,6 +182,11 @@ export const pl: TranslationMap = {
     reason: "Powód {reason}",
   },
   worktrees: {
+    newWorktree: "Nowy worktree",
+    owner: "Właściciel",
+    ownerManual: "Ręcznie",
+    ownerSession: "Sesja",
+    ownerWorkboard: "Workboard",
     title: "Zarządzane worktree",
     subtitle: "Izolowane kopie robocze repozytoriów należące do OpenClaw.",
     cleanNow: "Wyczyść teraz",
@@ -218,6 +223,10 @@ export const pl: TranslationMap = {
     createFailed: "Nie udało się utworzyć sesji.",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "Zachowano worktree sesji z niezatwierdzonymi lub niewysłanymi zmianami: {count} ({branches}). Zarządzaj nimi w Ustawienia -> Worktrees.",
+    deletePreservedWorktreeConfirm:
+      "Worktree sesji ma niezatwierdzone lub niewysłane zmiany, więc został zachowany ({branch}). Mimo to usunąć checkout?",
     title: "Sesje",
     subtitle: "Aktywne klucze sesji i nadpisania dla poszczególnych sesji.",
     store: "Magazyn: {path}",

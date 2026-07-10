@@ -180,6 +180,11 @@ export const ar: TranslationMap = {
     reason: "السبب {reason}",
   },
   worktrees: {
+    newWorktree: "شجرة عمل جديدة",
+    owner: "المالك",
+    ownerManual: "يدوي",
+    ownerSession: "الجلسة",
+    ownerWorkboard: "Workboard",
     title: "مساحات العمل المُدارة",
     subtitle: "نسخ مستودعات معزولة مملوكة لـ OpenClaw.",
     cleanNow: "تنظيف الآن",
@@ -216,6 +221,10 @@ export const ar: TranslationMap = {
     createFailed: "تعذّر إنشاء الجلسة.",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "تم الاحتفاظ بـ {count} شجرة/أشجار عمل للجلسة تحتوي على عمل غير ملتزم به أو غير مدفوع ({branches}). أدرها من الإعدادات -> أشجار العمل.",
+    deletePreservedWorktreeConfirm:
+      "تحتوي شجرة العمل الخاصة بالجلسة على عمل غير ملتزم به أو غير مدفوع، لذا تم الاحتفاظ بها ({branch}). هل تريد حذف نسخة checkout على أي حال؟",
     title: "الجلسات",
     subtitle: "مفاتيح الجلسات النشطة والتجاوزات لكل جلسة.",
     store: "المخزن: {path}",

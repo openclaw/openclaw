@@ -183,6 +183,11 @@ export const it: TranslationMap = {
     reason: "Motivo {reason}",
   },
   worktrees: {
+    newWorktree: "Nuovo worktree",
+    owner: "Proprietario",
+    ownerManual: "Manuale",
+    ownerSession: "Sessione",
+    ownerWorkboard: "Workboard",
     title: "Worktree gestiti",
     subtitle: "Checkout di repository isolati di proprietà di OpenClaw.",
     cleanNow: "Pulisci ora",
@@ -213,12 +218,16 @@ export const it: TranslationMap = {
     worktreeName: "Nome del worktree",
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "I nomi dei worktree usano lettere minuscole, cifre e trattini.",
-    messagePlaceholder: "Su cosa deve lavorare questa sessione?",
+    messagePlaceholder: "Su cosa dovrebbe lavorare questa sessione?",
     start: "Avvia sessione",
     starting: "Avvio…",
     createFailed: "Impossibile creare la sessione.",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "{count} worktree della sessione con lavoro non committato o non inviato sono stati mantenuti ({branches}). Gestiscili in Impostazioni -> Worktrees.",
+    deletePreservedWorktreeConfirm:
+      "Il worktree della sessione contiene lavoro non committato o non inviato, quindi è stato mantenuto ({branch}). Eliminare comunque il checkout?",
     title: "Sessioni",
     subtitle: "Chiavi di sessione attive e override per sessione.",
     store: "Archivio: {path}",

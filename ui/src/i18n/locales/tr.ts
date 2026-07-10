@@ -183,6 +183,11 @@ export const tr: TranslationMap = {
     reason: "Neden {reason}",
   },
   worktrees: {
+    newWorktree: "Yeni worktree",
+    owner: "Sahip",
+    ownerManual: "Manuel",
+    ownerSession: "Oturum",
+    ownerWorkboard: "Workboard",
     title: "Yönetilen Worktree'ler",
     subtitle: "OpenClaw tarafından sahip olunan yalıtılmış depo checkout'ları.",
     cleanNow: "Şimdi temizle",
@@ -207,12 +212,12 @@ export const tr: TranslationMap = {
     where: "Nerede",
     gateway: "Gateway · yerel",
     folder: "Klasör",
-    folderPlaceholder: "Agent çalışma alanı",
+    folderPlaceholder: "Agent workspace",
     worktree: "Worktree",
-    worktreeUnavailable: "Agent çalışma alanı bir git checkout değil",
-    baseBranch: "Temel dal",
+    worktreeUnavailable: "Agent workspace bir git checkout değil",
+    baseBranch: "Temel branch",
     worktreeName: "Worktree adı",
-    worktreeNamePlaceholder: "otomatik",
+    worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Worktree adları küçük harfler, rakamlar ve tireler kullanır.",
     messagePlaceholder: "Bu oturum ne üzerinde çalışmalı?",
     start: "Oturumu başlat",
@@ -220,6 +225,10 @@ export const tr: TranslationMap = {
     createFailed: "Oturum oluşturulamadı.",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "Commit edilmemiş veya push edilmemiş çalışmaları olan {count} oturum worktree'si korundu ({branches}). Bunları Settings -> Worktrees altında yönetin.",
+    deletePreservedWorktreeConfirm:
+      "Oturumun worktree'sinde commit edilmemiş veya push edilmemiş çalışma var, bu yüzden korundu ({branch}). Checkout yine de silinsin mi?",
     title: "Oturumlar",
     subtitle: "Etkin oturum anahtarları ve oturum bazlı geçersiz kılmalar.",
     store: "Depo: {path}",
@@ -1913,7 +1922,7 @@ export const tr: TranslationMap = {
       sortSessions: "Oturumları sırala",
       sortUpdated: "Son güncelleme",
       sessionMenu: "Actions for {session}",
-      workSessions: "İş",
+      workSessions: "Çalışma",
     },
     welcome: {
       ready: "Ready to chat",
@@ -1928,7 +1937,7 @@ export const tr: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
-      newSessionDisconnected: "Yeni bir oturum oluşturmak için bağlanın",
+      newSessionDisconnected: "Yeni oturum oluşturmak için bağlanın",
       newSessionWorktree: "Çalışma ağacında yeni sohbet",
       export: "Dışa aktar",
       exportChat: "Export chat",

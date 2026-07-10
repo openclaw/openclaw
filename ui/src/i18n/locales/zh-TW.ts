@@ -179,6 +179,11 @@ export const zh_TW: TranslationMap = {
     reason: "原因 {reason}",
   },
   worktrees: {
+    newWorktree: "新增 worktree",
+    owner: "擁有者",
+    ownerManual: "手動",
+    ownerSession: "工作階段",
+    ownerWorkboard: "Workboard",
     title: "受管理的 Worktrees",
     subtitle: "由 OpenClaw 擁有的隔離儲存庫簽出。",
     cleanNow: "立即清理",
@@ -215,6 +220,10 @@ export const zh_TW: TranslationMap = {
     createFailed: "無法建立工作階段。",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "{count} 個含有未提交或未推送工作的 session worktree 已保留（{branches}）。請在 Settings -> Worktrees 下管理。",
+    deletePreservedWorktreeConfirm:
+      "此 session 的 worktree 含有未提交或未推送的工作，因此已保留（{branch}）。仍要刪除 checkout 嗎？",
     title: "工作階段",
     subtitle: "作用中的工作階段金鑰與各工作階段覆寫。",
     store: "儲存位置：{path}",

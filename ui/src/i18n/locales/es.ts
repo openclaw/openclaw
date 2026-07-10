@@ -182,6 +182,11 @@ export const es: TranslationMap = {
     reason: "Motivo {reason}",
   },
   worktrees: {
+    newWorktree: "Nuevo worktree",
+    owner: "Propietario",
+    ownerManual: "Manual",
+    ownerSession: "Sesión",
+    ownerWorkboard: "Workboard",
     title: "Worktrees administrados",
     subtitle: "Checkouts de repositorios aislados propiedad de OpenClaw.",
     cleanNow: "Limpiar ahora",
@@ -218,6 +223,10 @@ export const es: TranslationMap = {
     createFailed: "No se pudo crear la sesión.",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "Se conservaron {count} worktree(s) de sesión con trabajo sin confirmar o sin enviar ({branches}). Gestiónalos en Settings -> Worktrees.",
+    deletePreservedWorktreeConfirm:
+      "El worktree de la sesión tiene trabajo sin confirmar o sin enviar, por lo que se conservó ({branch}). ¿Eliminar el checkout de todos modos?",
     title: "Sesiones",
     subtitle: "Claves de sesión activas y anulaciones por sesión.",
     store: "Almacén: {path}",

@@ -182,6 +182,11 @@ export const uk: TranslationMap = {
     reason: "Причина {reason}",
   },
   worktrees: {
+    newWorktree: "Новий worktree",
+    owner: "Власник",
+    ownerManual: "Вручну",
+    ownerSession: "Сесія",
+    ownerWorkboard: "Workboard",
     title: "Керовані Worktrees",
     subtitle: "Ізольовані копії репозиторію, що належать OpenClaw.",
     cleanNow: "Очистити зараз",
@@ -218,6 +223,10 @@ export const uk: TranslationMap = {
     createFailed: "Не вдалося створити сеанс.",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "{count} робочих дерев сеансу з незакоміченими або невідправленими змінами було збережено ({branches}). Керуйте ними в Settings -> Worktrees.",
+    deletePreservedWorktreeConfirm:
+      "Робоче дерево сеансу має незакомічені або невідправлені зміни, тому його було збережено ({branch}). Усе одно видалити checkout?",
     title: "Сеанси",
     subtitle: "Активні ключі сеансів і перевизначення для окремих сеансів.",
     store: "Сховище: {path}",
