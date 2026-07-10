@@ -80,12 +80,22 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow).toContain("Optional parent workflow dispatch identifier");
   });
 
-  it("pins the Kova evaluator that reads agent payloads", () => {
+  it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "a2dd84e7d65507e614afaff850d3932d18c859b6";
+    const kovaRef = "24c26969e57d4d49f9d1a5071af85dd3d79daa2d";
+    const install = findStep("Install OCM and Kova");
+    const installRun = install.run ?? "";
 
     expect(workflow).toContain(`default: ${kovaRef}`);
     expect(workflow).toContain(`inputs.kova_ref || '${kovaRef}'`);
+    expect(installRun).toContain(
+      'npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund',
+    );
+    expect(installRun).toContain('for (const dependency of ["mock-ai-provider", "zod"])');
+    expect(installRun).toContain("require.resolve(dependency, { paths: [root] })");
+    expect(
+      installRun.indexOf('npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund'),
+    ).toBeLessThan(installRun.indexOf('cat > "$HOME/.local/bin/kova"'));
   });
 
   it("resolves each target once before benchmark and publication fan out", () => {
@@ -144,7 +154,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(publisher?.needs).toEqual(["resolve_target", "kova"]);
     expect(publisher?.if).toBe(
-      "${{ always() && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' }}",
+      "${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' }}",
     );
     expect(publisher?.["runs-on"]).toBe("ubuntu-24.04");
     expect(publisher?.permissions?.actions).toBe("read");
@@ -158,6 +168,32 @@ describe("OpenClaw performance workflow", () => {
     expect(prepareIndex).toBeGreaterThan(downloadIndex);
     expect(appTokenIndex).toBeGreaterThan(prepareIndex);
     expect(pushIndex).toBeGreaterThan(appTokenIndex);
+  });
+
+  it("keeps report publication opt-out artifact-only for final release validation", () => {
+    const workflowText = readFileSync(WORKFLOW, "utf8");
+    const fullReleaseText = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+    const publisher = readWorkflow().jobs?.publish;
+
+    expect(workflowText).toContain("publish_reports:");
+    expect(workflowText).toContain("default: true");
+    expect(publisher?.if).toContain("inputs.publish_reports == true");
+    expect(fullReleaseText).toContain("-f publish_reports=false");
+    expect(fullReleaseText).toContain("Report publication: disabled (artifacts only)");
+  });
+
+  it("fails closed when artifact-only mode does not keep the publisher skipped", () => {
+    const guard = readWorkflow().jobs?.artifact_only_guard;
+    const verify = findStep("Verify report publisher stayed disabled", "artifact_only_guard");
+
+    expect(guard?.needs).toEqual(["resolve_target", "kova", "publish"]);
+    expect(guard?.if).toBe(
+      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish_reports != true }}",
+    );
+    expect(guard?.permissions?.contents).toBe("read");
+    expect(verify.env?.PUBLISH_RESULT).toBe("${{ needs.publish.result }}");
+    expect(verify.run).toContain('[[ "$PUBLISH_RESULT" != "skipped" ]]');
+    expect(verify.run).toContain("Artifact-only performance mode requires");
   });
 
   it("mints only a short-lived repo-scoped ClawSweeper app token", () => {

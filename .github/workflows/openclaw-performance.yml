@@ -42,10 +42,15 @@ on:
         required: false
         default: false
         type: boolean
+      publish_reports:
+        description: Publish completed reports to openclaw/clawgrit-reports
+        required: false
+        default: true
+        type: boolean
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: a2dd84e7d65507e614afaff850d3932d18c859b6
+        default: 24c26969e57d4d49f9d1a5071af85dd3d79daa2d
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -148,7 +153,7 @@ jobs:
             include_filters: "scenario:agent-cold-warm-message"
             expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || 'a2dd84e7d65507e614afaff850d3932d18c859b6' }}
+      KOVA_REF: ${{ inputs.kova_ref || '24c26969e57d4d49f9d1a5071af85dd3d79daa2d' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -281,6 +286,13 @@ jobs:
           git -C "$KOVA_SRC" remote add origin "https://github.com/${KOVA_REPOSITORY}.git"
           git -C "$KOVA_SRC" fetch --filter=blob:none --depth 1 origin "$KOVA_REF"
           git -C "$KOVA_SRC" checkout --detach FETCH_HEAD
+          npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund
+          node - "$KOVA_SRC" <<'NODE'
+          const root = process.argv[2];
+          for (const dependency of ["mock-ai-provider", "zod"]) {
+            require.resolve(dependency, { paths: [root] });
+          }
+          NODE
           cat > "$HOME/.local/bin/kova" <<EOF
           #!/usr/bin/env bash
           export KOVA_HOME="${KOVA_HOME}"
@@ -740,7 +752,7 @@ jobs:
   publish:
     name: Publish ${{ matrix.title }} report
     needs: [resolve_target, kova]
-    if: ${{ always() && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' }}
+    if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -1104,3 +1116,28 @@ jobs:
             write_publish_failure "$attempt"
             exit 1
           done
+
+  artifact_only_guard:
+    name: Verify artifact-only report mode
+    needs: [resolve_target, kova, publish]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish_reports != true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify report publisher stayed disabled
+        env:
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH_RESULT" != "skipped" ]]; then
+            echo "::error::Artifact-only performance mode requires the report publisher to stay skipped; got ${PUBLISH_RESULT}."
+            exit 1
+          fi
+          {
+            echo "### Artifact-only report mode"
+            echo
+            echo "Clawgrit report publication stayed disabled; Kova evidence is available only as workflow artifacts."
+          } >> "$GITHUB_STEP_SUMMARY"

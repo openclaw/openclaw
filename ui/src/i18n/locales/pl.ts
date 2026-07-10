@@ -1829,6 +1829,20 @@ export const pl: TranslationMap = {
       adminRequired:
         "Dostęp administratora jest wymagany, aby utworzyć drzewo robocze z tego projektu.",
     },
+    pullRequests: {
+      linkLabel: "Pull request #{number}: {title}",
+      dismiss: "Dismiss pull request #{number}",
+      open: "Open",
+      draft: "Draft",
+      merged: "Merged",
+      closed: "Closed",
+      checks: "CI",
+      checksPassing: "CI checks passing",
+      checksFailing: "CI checks failing",
+      checksPending: "CI checks running",
+      rateLimited:
+        "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
+    },
     refreshTitle: "Odśwież dane czatu",
     settings: "Ustawienia czatu",
     usageRemaining: "Pozostałe użycie",
