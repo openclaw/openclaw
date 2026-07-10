@@ -8,6 +8,20 @@ import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
 const QA_SMOKE_PROFILE = "smoke-ci";
 const QA_SMOKE_CI_PARTS = ["profile-1", "profile-2"] as const;
 const QA_SMOKE_CI_CHANNELS = ["matrix", OPENCLAW_CRABLINE_DEFAULT_CHANNEL] as const;
+const QA_SMOKE_CI_SCENARIO_IDS = new Set([
+  "control-ui-chat-flow-playwright",
+  "crestodian-ring-zero-setup",
+  "dreaming-shadow-trial-report",
+  "gateway-smoke",
+  "gpt55-thinking-visibility-switch",
+  "group-visible-reply-tool",
+  "long-running-release-audit",
+  "matrix-restart-resume",
+  "personal-task-followthrough-status",
+  "plugin-lifecycle-hot-reload",
+  "subagent-completion-direct-fallback",
+  "telegram-commands-command",
+]);
 
 type QaSmokeCiPartId = (typeof QA_SMOKE_CI_PARTS)[number];
 
@@ -49,16 +63,11 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
   if (!profile) {
     throw new Error(`taxonomy.yaml does not define QA run profile ${QA_SMOKE_PROFILE}.`);
   }
-  const categoryScenarioRefs = new Set(
-    scorecardReport.categories
-      .filter((category) => category.profiles.includes(QA_SMOKE_PROFILE))
-      .flatMap((category) => category.scenarioRefs),
-  );
   const providerMode = normalizeQaProviderMode("mock-openai");
   const primaryModel = defaultQaModelForMode(providerMode);
   const scenarios = scenarioPack.scenarios.filter(
     (scenario) =>
-      categoryScenarioRefs.has(scenario.sourcePath) &&
+      QA_SMOKE_CI_SCENARIO_IDS.has(scenario.id) &&
       scenarioMatchesQaProviderLane({
         scenario,
         providerMode,
@@ -100,7 +109,7 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
     partition.cost += estimateScenarioCost(scenario);
   }
 
-  const matrixPartIndex = 0;
+  const matrixPartIndex = 1;
   const partIndex = QA_SMOKE_CI_PARTS.indexOf(partId);
   const runs: QaSmokeCiRun[] = [
     {
