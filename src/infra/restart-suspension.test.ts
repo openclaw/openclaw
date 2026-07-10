@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getActiveGatewayRootWorkCount,
+  isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
@@ -10,7 +11,13 @@ import {
   resetGatewaySuspendCoordinatorForTest,
   resumeGatewaySuspend,
 } from "./gateway-suspend-coordinator.js";
-import { scheduleGatewaySigusr1Restart, testing } from "./restart.js";
+import {
+  isGatewaySigusr1RestartExternallyAllowed,
+  scheduleGatewaySigusr1Restart,
+  setGatewaySigusr1RestartPolicy,
+  setPreRestartDeferralCheck,
+  testing,
+} from "./restart.js";
 
 function inspectors(): GatewayActiveWorkInspectors {
   return {
@@ -39,17 +46,17 @@ describe("scheduled restart during gateway suspension", () => {
 
   beforeEach(() => {
     testing.resetSigusr1State();
-    resetGatewayWorkAdmission();
     resetGatewaySuspendCoordinatorForTest();
+    resetGatewayWorkAdmission();
     vi.useFakeTimers();
     process.on("SIGUSR1", sigusr1Handler);
   });
 
   afterEach(() => {
     process.removeListener("SIGUSR1", sigusr1Handler);
+    testing.resetSigusr1State();
     resetGatewaySuspendCoordinatorForTest();
     resetGatewayWorkAdmission();
-    testing.resetSigusr1State();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -126,5 +133,93 @@ describe("scheduled restart during gateway suspension", () => {
       status: "busy",
       reason: "gateway-draining",
     });
+  });
+
+  it("resets transient restart state without dropping live runtime bindings", async () => {
+    const emitSpy = vi.spyOn(process, "emit");
+    const preRestartCheck = vi.fn(() => 0);
+    setPreRestartDeferralCheck(preRestartCheck);
+    setGatewaySigusr1RestartPolicy({ allowExternal: true });
+
+    scheduleGatewaySigusr1Restart({ delayMs: 0, skipCooldown: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(1);
+    expect(preRestartCheck).toHaveBeenCalledOnce();
+    expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+    testing.resetSigusr1TransientState();
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(true);
+
+    scheduleGatewaySigusr1Restart({ delayMs: 0, skipCooldown: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
+    expect(preRestartCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels delayed restart work during a transient reset", async () => {
+    const emitSpy = vi.spyOn(process, "emit");
+    scheduleGatewaySigusr1Restart({ delayMs: 1_000, skipCooldown: true });
+
+    testing.resetSigusr1TransientState();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(0);
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
+  it("cancels a due restart waiting behind a prepared suspension", async () => {
+    const emitSpy = vi.spyOn(process, "emit");
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-reset-waiting-restart",
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        inspect: inspectors(),
+      }),
+    ).toMatchObject({ status: "ready" });
+    scheduleGatewaySigusr1Restart({ delayMs: 0, skipCooldown: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(0);
+
+    resetGatewaySuspendCoordinatorForTest();
+    testing.resetSigusr1TransientState();
+    resetGatewayWorkAdmission();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(0);
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
+  it("rejects prepared hooks that finish after a transient reset", async () => {
+    const emitSpy = vi.spyOn(process, "emit");
+    const preparationStarted = vi.fn();
+    const afterEmitRejected = vi.fn();
+    let releasePreparation = () => {};
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    scheduleGatewaySigusr1Restart({
+      delayMs: 0,
+      skipCooldown: true,
+      emitHooks: {
+        beforeEmit: async () => {
+          preparationStarted();
+          await preparation;
+        },
+        afterEmitRejected,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(preparationStarted).toHaveBeenCalledOnce();
+
+    testing.resetSigusr1TransientState();
+    resetGatewayWorkAdmission();
+    releasePreparation();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(afterEmitRejected).toHaveBeenCalledOnce();
+    expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(0);
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 });

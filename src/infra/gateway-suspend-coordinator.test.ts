@@ -36,16 +36,36 @@ function inspectors(
 }
 
 beforeEach(() => {
-  resetGatewayWorkAdmission();
   resetGatewaySuspendCoordinatorForTest();
+  resetGatewayWorkAdmission();
 });
 
 afterEach(() => {
-  resetGatewayWorkAdmission();
   resetGatewaySuspendCoordinatorForTest();
+  resetGatewayWorkAdmission();
 });
 
 describe("gateway suspend coordinator", () => {
+  it("test reset resumes a held scheduler before admission is cleared", () => {
+    const resumeScheduling = vi.fn(() => {
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+    });
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-test-reset",
+        pauseScheduling: vi.fn(),
+        resumeScheduling,
+        inspect: inspectors(),
+      }),
+    ).toMatchObject({ status: "ready" });
+
+    resetGatewaySuspendCoordinatorForTest();
+    resetGatewayWorkAdmission();
+
+    expect(resumeScheduling).toHaveBeenCalledOnce();
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
   it("reopens admission in the same turn when active work refuses preparation", () => {
     const events: string[] = [];
     const result = prepareGatewaySuspend({

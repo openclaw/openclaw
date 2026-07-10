@@ -295,12 +295,12 @@ export function resetGatewaySuspendCoordinatorForTest(): void {
   if (held) {
     clearHeldTimer(held);
     COORDINATOR_STATE.held = null;
-    held.admission.release();
     try {
       held.resumeScheduling();
     } catch (err) {
       held.warn?.(`gateway scheduler resume failed during test reset: ${String(err)}`);
     }
+    held.admission.release();
   }
   COORDINATOR_STATE.held = null;
 }

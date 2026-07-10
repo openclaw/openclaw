@@ -65,6 +65,7 @@ let pendingRestartSessionKey: string | undefined;
 let pendingRestartSkipDeferral = false;
 let pendingRestartPreparing = false;
 let pendingRestartSignalAdmission: GatewayRestartSignalAdmissionLease | null = null;
+let restartTransientGeneration = 0;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
 function shouldPreferRestartReason(next?: string, current?: string): boolean {
@@ -580,11 +581,21 @@ function updatePendingRestartEmitHooks(
   return true;
 }
 
+async function rejectPreparedRestartHook(hooks: RestartEmitHooks | undefined): Promise<void> {
+  try {
+    await hooks?.afterEmitRejected?.();
+  } catch {}
+}
+
 async function emitPreparedGatewayRestartUnderAdmission(
   hooks?: RestartEmitHooks,
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
+  transientGeneration = restartTransientGeneration,
 ): Promise<void> {
+  if (transientGeneration !== restartTransientGeneration) {
+    return;
+  }
   let nextHooks = hooks ?? pendingRestartEmitHooks;
   // Keep pendingRestartSessionKey alive across the await beforeEmit() window:
   // a different-session caller that coalesces while preparation runs would
@@ -596,8 +607,11 @@ async function emitPreparedGatewayRestartUnderAdmission(
   let preparedHooks: RestartEmitHooks | undefined;
   while (nextHooks) {
     if (preparedHooks) {
-      await preparedHooks.afterEmitRejected?.().catch(() => undefined);
+      await rejectPreparedRestartHook(preparedHooks);
       preparedHooks = undefined;
+      if (transientGeneration !== restartTransientGeneration) {
+        return;
+      }
     }
     try {
       await nextHooks.beforeEmit?.();
@@ -606,6 +620,10 @@ async function emitPreparedGatewayRestartUnderAdmission(
       restartLog.warn(
         `restart preparation failed; restart will continue without it: ${String(err)}`,
       );
+    }
+    if (transientGeneration !== restartTransientGeneration) {
+      await rejectPreparedRestartHook(preparedHooks);
+      return;
     }
     if (hooks) {
       break;
@@ -627,7 +645,7 @@ async function emitPreparedGatewayRestartUnderAdmission(
     preferredReason && intent ? { ...intent, reason: preferredReason } : intent,
   );
   if (!emitted) {
-    await preparedHooks?.afterEmitRejected?.().catch(() => undefined);
+    await rejectPreparedRestartHook(preparedHooks);
   }
 }
 
@@ -636,13 +654,22 @@ async function emitPreparedGatewayRestart(
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
 ): Promise<void> {
+  const transientGeneration = restartTransientGeneration;
   try {
     // A delayed restart can become due after host suspension prepared. Independent
     // root admission makes the transition atomic: due restarts block preparation,
     // while a prepared suspension defers emission until it resumes.
-    await runWithGatewayIndependentRootWorkAdmission(async () =>
-      emitPreparedGatewayRestartUnderAdmission(hooks, reasonOverride, intent),
-    );
+    await runWithGatewayIndependentRootWorkAdmission(async () => {
+      if (transientGeneration !== restartTransientGeneration) {
+        return;
+      }
+      await emitPreparedGatewayRestartUnderAdmission(
+        hooks,
+        reasonOverride,
+        intent,
+        transientGeneration,
+      );
+    });
   } catch (err) {
     if (!isGatewayRestartDraining()) {
       throw err;
@@ -1067,21 +1094,27 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   };
 }
 
+function resetSigusr1TransientStateForTest(): void {
+  restartTransientGeneration += 1;
+  sigusr1AuthorizedCount = 0;
+  sigusr1AuthorizedUntil = 0;
+  restartCycleToken = 0;
+  emittedRestartToken = 0;
+  consumedRestartToken = 0;
+  emittedRestartReason = undefined;
+  emittedRestartIntent = undefined;
+  lastRestartEmittedAt = 0;
+  clearActiveDeferralPolls();
+  clearPendingScheduledRestart();
+  clearPendingRestartSignalAdmission();
+}
+
 export const testing = {
+  resetSigusr1TransientState: resetSigusr1TransientStateForTest,
   resetSigusr1State() {
-    sigusr1AuthorizedCount = 0;
-    sigusr1AuthorizedUntil = 0;
+    resetSigusr1TransientStateForTest();
     sigusr1ExternalAllowed = false;
     preRestartCheck = null;
-    restartCycleToken = 0;
-    emittedRestartToken = 0;
-    consumedRestartToken = 0;
-    emittedRestartReason = undefined;
-    emittedRestartIntent = undefined;
-    lastRestartEmittedAt = 0;
-    clearActiveDeferralPolls();
-    clearPendingScheduledRestart();
-    clearPendingRestartSignalAdmission();
   },
 };
 export { testing as __testing };
