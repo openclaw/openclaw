@@ -25,6 +25,7 @@ import {
 } from "../../../agents/auth-profiles/state.js";
 import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../../agents/provider-auth-aliases.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
 
@@ -37,6 +38,7 @@ type LoadedAuthStores =
   | {
       status: "ready";
       stores: AuthProfileStore[];
+      activeStores: AuthProfileStore[];
       runtimeProfileIds: Set<string>;
     }
   | { status: "blocked"; warnings: string[] };
@@ -131,6 +133,49 @@ function loadCompletePersistedStore(
   };
 }
 
+function listRetainedStateAgentDirs(env: NodeJS.ProcessEnv): string[] | null {
+  const agentsRoot = path.join(resolveStateDir(env), "agents");
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? [] : null;
+  }
+
+  const agentDirs: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) {
+      continue;
+    }
+    const agentDir = path.join(agentsRoot, entry.name, "agent");
+    try {
+      if (fs.statSync(agentDir).isDirectory()) {
+        agentDirs.push(path.resolve(agentDir));
+      } else {
+        return null;
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (entry.isSymbolicLink() || (code !== "ENOENT" && code !== "ENOTDIR")) {
+        return null;
+      }
+      try {
+        // A dangling `agents/<id>/agent` symlink is an unavailable store, not
+        // proof that the retained agent has no credentials.
+        fs.lstatSync(agentDir);
+        return null;
+      } catch (lstatError) {
+        const lstatCode = (lstatError as NodeJS.ErrnoException).code;
+        if (lstatCode !== "ENOENT" && lstatCode !== "ENOTDIR") {
+          return null;
+        }
+      }
+    }
+  }
+  return agentDirs;
+}
+
 function loadConfiguredAgentAuthStores(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -142,15 +187,20 @@ function loadConfiguredAgentAuthStores(
   // Every secondary agent inherits the legacy main store at runtime, even when
   // `agents.list` names a different default agent.
   const mainAgentDir = path.resolve(resolveDefaultAgentDir({}, env));
-  const agentDirs = new Set([
+  const activeAgentDirs = new Set([
     mainAgentDir,
     ...listAgentIds(cfg).map((agentId) => path.resolve(resolveAgentDir(cfg, agentId, env))),
   ]);
   const envAgentDir =
     env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim() || undefined;
   if (envAgentDir) {
-    agentDirs.add(path.resolve(resolveUserPath(envAgentDir, env)));
+    activeAgentDirs.add(path.resolve(resolveUserPath(envAgentDir, env)));
   }
+  const retainedAgentDirs = listRetainedStateAgentDirs(env);
+  if (!retainedAgentDirs) {
+    return undefined;
+  }
+  const agentDirs = new Set([...activeAgentDirs, ...retainedAgentDirs]);
 
   const entries: Array<{ agentDir: string; store: AuthProfileStore | null }> = [];
   for (const agentDir of agentDirs) {
@@ -174,6 +224,9 @@ function loadConfiguredAgentAuthStores(
           preserveBaseRuntimeExternalProfiles: true,
         });
   });
+  const activeStores = entries.flatMap((entry, index) =>
+    activeAgentDirs.has(entry.agentDir) ? [stores[index] ?? emptyStore] : [],
+  );
 
   const providerIds = Object.keys(order);
   const profileIds = Object.values(order).flat();
@@ -201,7 +254,7 @@ function loadConfiguredAgentAuthStores(
     // config if it cannot be inspected without prompting.
     return undefined;
   }
-  return { status: "ready", stores, runtimeProfileIds };
+  return { status: "ready", stores, activeStores, runtimeProfileIds };
 }
 
 function removeAuthOrderKeys(cfg: OpenClawConfig, providers: ReadonlySet<string>): OpenClawConfig {
@@ -223,6 +276,7 @@ function removeAuthOrderKeys(cfg: OpenClawConfig, providers: ReadonlySet<string>
 export function scanStaleConfiguredAuthOrders(params: {
   cfg: OpenClawConfig;
   stores: readonly AuthProfileStore[];
+  activeStores?: readonly AuthProfileStore[];
   runtimeProfileIds?: ReadonlySet<string>;
 }): StaleConfiguredAuthOrder[] {
   const order = readValidConfiguredAuthOrder(params.cfg);
@@ -260,7 +314,7 @@ export function scanStaleConfiguredAuthOrders(params: {
     // the canonical key can merely expose another stale alias underneath it.
     const staleProviders = new Set(staleEntries.map((entry) => entry.provider));
     const cfgWithoutStaleOrder = removeAuthOrderKeys(params.cfg, staleProviders);
-    const hasAutomaticFallback = params.stores.some((store) => {
+    const hasAutomaticFallback = (params.activeStores ?? params.stores).some((store) => {
       const selectionStore = structuredClone(store);
       return (
         resolveAuthProfileOrder({
@@ -281,6 +335,7 @@ export function scanStaleConfiguredAuthOrders(params: {
 export function repairStaleConfiguredAuthOrders(params: {
   cfg: OpenClawConfig;
   stores: readonly AuthProfileStore[];
+  activeStores?: readonly AuthProfileStore[];
   runtimeProfileIds?: ReadonlySet<string>;
 }): { config: OpenClawConfig; changes: string[] } {
   const hits = scanStaleConfiguredAuthOrders(params);
