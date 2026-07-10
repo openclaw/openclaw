@@ -588,6 +588,7 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ".github/workflows/openclaw-release-publish.yml",
     ["test/scripts/package-acceptance-workflow.test.ts"],
   ],
+  [".github/workflows/release-ledger.yml", ["test/scripts/release-ledger-workflow.test.ts"]],
   [
     ".github/workflows/openclaw-scheduled-live-checks.yml",
     [
@@ -1540,6 +1541,15 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/package-changelog.mjs", ["test/scripts/package-changelog.test.ts"]],
   ["scripts/render-github-release-notes.mjs", ["test/scripts/render-github-release-notes.test.ts"]],
+  ["scripts/release-candidate-checklist.mjs", ["test/scripts/release-candidate-checklist.test.ts"]],
+  [
+    "scripts/validate-release-ledger-evidence.mjs",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/release-candidate-checklist.test.ts",
+      "test/scripts/validate-release-ledger-evidence.test.ts",
+    ],
+  ],
   ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
   ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
   [

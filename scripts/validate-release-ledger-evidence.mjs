@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
   downloadActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
 } from "./lib/actions-artifact-archive.mjs";
+import {
+  dedicatedSectionVersionForTag,
+  releaseNotesSectionForTag,
+  releaseNotesVersionForTag,
+} from "./render-github-release-notes.mjs";
 
 const WORKFLOW_PATH = ".github/workflows/release-ledger.yml";
 const ARTIFACT_NAME = "release-ledger-evidence";
@@ -78,7 +84,7 @@ function exactSha256(value, label) {
   return digest;
 }
 
-function parseArgs(argv) {
+function parseFlagValues(argv) {
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
@@ -90,6 +96,10 @@ function parseArgs(argv) {
     assert(!values.has(flag), `duplicate argument: ${flag}`);
     values.set(flag, value);
   }
+  return values;
+}
+
+function parseArgs(values) {
   const allowed = new Set([
     "--artifact-digest",
     "--artifact-id",
@@ -124,9 +134,10 @@ function parseArgs(argv) {
   const version = required("--version");
   assert(VERSION_RE.test(version), "--version must be a stable or correction release version");
   const releaseTag = required("--release-tag");
-  const escapedVersion = version.replaceAll(".", "\\.");
+  const baseVersion = releaseNotesVersionForTag(releaseTag);
+  const dedicatedVersion = dedicatedSectionVersionForTag(releaseTag);
   assert(
-    new RegExp(`^v${escapedVersion}(?:-(?:alpha|beta)\\.[1-9][0-9]*)?$`, "u").test(releaseTag),
+    version === baseVersion || version === dedicatedVersion,
     "--release-tag must match the ledger version",
   );
   return {
@@ -150,14 +161,36 @@ function parseArgs(argv) {
   };
 }
 
-export function validateReleaseLedgerManifest(bytes, expected) {
+function parseRunArgs(values) {
+  const allowed = new Set([
+    "--changelog",
+    "--release-sha",
+    "--release-tag",
+    "--repository",
+    "--run-id",
+  ]);
+  for (const flag of values.keys()) {
+    assert(allowed.has(flag), `unknown argument: ${flag}`);
+  }
+  const required = (flag) => exactString(values.get(flag), flag);
+  return {
+    changelogPath: values.has("--changelog")
+      ? exactString(values.get("--changelog"), "--changelog")
+      : "CHANGELOG.md",
+    expectedReleaseSha: exactSha(required("--release-sha"), "--release-sha"),
+    releaseTag: required("--release-tag"),
+    repository: required("--repository"),
+    runId: positiveInteger(required("--run-id"), "--run-id"),
+  };
+}
+
+function parseManifest(bytes) {
   assert(
     Buffer.isBuffer(bytes) || bytes instanceof Uint8Array,
     "ledger manifest bytes are required",
   );
   const raw = Buffer.from(bytes);
   assert(raw.length > 0 && raw.length <= 4 * 1024 * 1024, "ledger manifest size is invalid");
-  assert(sha256(raw) === expected.manifestSha256, "ledger manifest SHA-256 mismatch");
   let manifest;
   try {
     manifest = JSON.parse(raw.toString("utf8"));
@@ -170,6 +203,12 @@ export function validateReleaseLedgerManifest(bytes, expected) {
     manifest && typeof manifest === "object" && !Array.isArray(manifest),
     "ledger manifest must be an object",
   );
+  return { manifest, raw };
+}
+
+export function validateReleaseLedgerManifest(bytes, expected) {
+  const { manifest, raw } = parseManifest(bytes);
+  assert(sha256(raw) === expected.manifestSha256, "ledger manifest SHA-256 mismatch");
   assert(
     JSON.stringify(Object.keys(manifest).toSorted()) === JSON.stringify(EXPECTED_TOP_LEVEL_KEYS),
     "ledger manifest top-level schema mismatch",
@@ -253,7 +292,46 @@ export function validateReleaseLedgerManifest(bytes, expected) {
   return manifest;
 }
 
-async function githubJson(repository, path, token, fetchImpl) {
+export function validateReleaseLedgerChangelog(manifest, changelog, releaseTag) {
+  assert(typeof changelog === "string" && changelog.length > 0, "release changelog is required");
+  const baseVersion = releaseNotesVersionForTag(exactString(releaseTag, "release tag"));
+  const releaseSection = releaseNotesSectionForTag(changelog, baseVersion, releaseTag);
+  const version = releaseSection.match(/^## (?<version>\S+)\r?$/mu)?.groups?.version;
+  assert(
+    typeof version === "string" && VERSION_RE.test(version),
+    "release tag does not select a ledger version",
+  );
+  const provenance = releaseSection.match(
+    /^This audited record covers the complete (?<base>\S+)\.\.(?<source>[0-9a-f]{40}) history: (?:0|[1-9][0-9]*) merged PRs?\./mu,
+  );
+  assert(provenance?.groups?.base, "release contribution record base is missing");
+  assert(provenance?.groups?.source, "release contribution record source is missing");
+  assert(manifest.version === version, "ledger version does not match the release tag");
+  assert(
+    manifest.base === provenance.groups.base,
+    "ledger base does not match the release changelog",
+  );
+  assert(
+    manifest.target === provenance.groups.source,
+    "ledger source does not match the release changelog",
+  );
+  assert(
+    manifest.artifacts?.changelogSha256 === sha256(Buffer.from(changelog, "utf8")),
+    "ledger changelog hash does not match the release tag",
+  );
+  assert(
+    manifest.artifacts?.releaseSectionSha256 === sha256(Buffer.from(releaseSection, "utf8")),
+    "ledger release section hash does not match the release tag",
+  );
+  return {
+    baseRef: provenance.groups.base,
+    releaseRef: `release/${baseVersion}`,
+    sourceSha: provenance.groups.source,
+    version,
+  };
+}
+
+async function githubJson(repository, path, token, fetchImpl, maxBytes = 2 * 1024 * 1024) {
   const response = await fetchImpl(`https://api.github.com/repos/${repository}/${path}`, {
     headers: {
       accept: "application/vnd.github+json",
@@ -266,7 +344,7 @@ async function githubJson(repository, path, token, fetchImpl) {
   });
   assert(response.ok, `GitHub ${path} returned HTTP ${response.status}`);
   const text = await response.text();
-  assert(text.length > 0 && text.length <= 2 * 1024 * 1024, `GitHub ${path} response is invalid`);
+  assert(text.length > 0 && text.length <= maxBytes, `GitHub ${path} response is invalid`);
   const value = JSON.parse(text);
   assert(
     value && typeof value === "object" && !Array.isArray(value),
@@ -287,6 +365,44 @@ async function resolveRefCommit(repository, ref, token, fetchImpl) {
     object = (await githubJson(repository, `git/tags/${object.sha}`, token, fetchImpl)).object;
   }
   return fail(`GitHub ref ${ref} exceeds the annotated tag depth limit`);
+}
+
+async function assertTrustedMainAncestor(repository, workflowSha, token, fetchImpl) {
+  const mainSha = await resolveRefCommit(repository, "heads/main", token, fetchImpl);
+  const comparison = await githubJson(
+    repository,
+    `compare/${workflowSha}...${mainSha}`,
+    token,
+    fetchImpl,
+    16 * 1024 * 1024,
+  );
+  assert(
+    comparison.merge_base_commit?.sha === workflowSha,
+    "release ledger workflow SHA is not on trusted main",
+  );
+}
+
+function inspectLedgerArchive(archiveBytes) {
+  const files = inspectActionsArtifactZipWithPolicy(archiveBytes, {
+    expectedEntries: [ARTIFACT_MEMBER],
+    maxArchiveBytes: 8 * 1024 * 1024,
+    maxCompressedEntryBytes: () => 4 * 1024 * 1024,
+    maxEntryBytes: () => 4 * 1024 * 1024,
+    maxExpandedBytes: 4 * 1024 * 1024,
+  });
+  return files.get(ARTIFACT_MEMBER);
+}
+
+async function verifyLiveReleaseRefs(params, fetchImpl) {
+  const [branchSha, tagSha] = await Promise.all([
+    resolveRefCommit(params.repository, `heads/${params.releaseRef}`, params.token, fetchImpl),
+    resolveRefCommit(params.repository, `tags/${params.releaseTag}`, params.token, fetchImpl),
+  ]);
+  assert(
+    branchSha === params.releaseSha,
+    "live release branch does not match the ledger release SHA",
+  );
+  assert(tagSha === params.releaseSha, "release tag does not match the ledger release SHA");
 }
 
 export async function consumeReleaseLedgerEvidence(params) {
@@ -310,50 +426,166 @@ export async function consumeReleaseLedgerEvidence(params) {
     maxArchiveBytes: 8 * 1024 * 1024,
     token: params.token,
   });
-  const files = inspectActionsArtifactZipWithPolicy(downloaded.archiveBytes, {
-    expectedEntries: [params.artifactMember],
-    maxArchiveBytes: 8 * 1024 * 1024,
-    maxCompressedEntryBytes: () => 4 * 1024 * 1024,
-    maxEntryBytes: () => 4 * 1024 * 1024,
-    maxExpandedBytes: 4 * 1024 * 1024,
-  });
-  const manifest = validateReleaseLedgerManifest(files.get(params.artifactMember), params);
-  const fetchImpl = params.fetchImpl ?? fetch;
-  const [branchSha, tagSha] = await Promise.all([
-    resolveRefCommit(params.repository, `heads/${params.releaseRef}`, params.token, fetchImpl),
-    resolveRefCommit(params.repository, `tags/${params.releaseTag}`, params.token, fetchImpl),
-  ]);
-  assert(
-    branchSha === params.releaseSha,
-    "live release branch does not match the ledger release SHA",
+  const manifest = validateReleaseLedgerManifest(
+    inspectLedgerArchive(downloaded.archiveBytes),
+    params,
   );
-  assert(tagSha === params.releaseSha, "release tag does not match the ledger release SHA");
+  const fetchImpl = params.fetchImpl ?? fetch;
+  await verifyLiveReleaseRefs(params, fetchImpl);
   return {
+    artifactDigest: params.artifactDigest,
     artifactId: params.artifactId,
+    artifactMember: params.artifactMember,
+    artifactName: params.artifactName,
+    artifactSizeBytes: params.artifactSizeBytes,
+    baseRef: params.baseRef,
     manifestSha256: params.manifestSha256,
+    releaseRef: params.releaseRef,
     releaseSha: params.releaseSha,
     releaseTag: params.releaseTag,
+    repository: params.repository,
     runAttempt: params.runAttempt,
     runId: params.runId,
     sourceSha: params.sourceSha,
+    toolingTree: params.toolingTree,
+    version: params.version,
     workflowSha: params.workflowSha,
     manifest,
   };
 }
 
+export async function consumeReleaseLedgerRunEvidence(params) {
+  const repository = exactString(params.repository, "repository");
+  const releaseTag = exactString(params.releaseTag, "release tag");
+  const expectedReleaseSha = exactSha(params.expectedReleaseSha, "expected release SHA");
+  const runId = positiveInteger(params.runId, "release ledger run ID");
+  const token = exactString(params.token, "GitHub token");
+  const fetchImpl = params.fetchImpl ?? fetch;
+  const run = await githubJson(repository, `actions/runs/${runId}`, token, fetchImpl);
+  assert(
+    run.id === runId &&
+      run.run_attempt === 1 &&
+      run.head_branch === "main" &&
+      SHA_RE.test(run.head_sha ?? "") &&
+      run.event === "workflow_dispatch" &&
+      run.path === WORKFLOW_PATH &&
+      run.status === "completed" &&
+      run.conclusion === "success" &&
+      run.repository?.full_name === repository &&
+      run.head_repository?.full_name === repository,
+    "release ledger run is not an exact successful trusted-main attempt-1 producer",
+  );
+  if (params.isTrustedMainAncestor) {
+    assert(
+      await params.isTrustedMainAncestor(run.head_sha),
+      "release ledger workflow SHA is not on trusted main",
+    );
+  } else {
+    await assertTrustedMainAncestor(repository, run.head_sha, token, fetchImpl);
+  }
+
+  const artifactInventory = await githubJson(
+    repository,
+    `actions/runs/${runId}/artifacts?per_page=100`,
+    token,
+    fetchImpl,
+  );
+  assert(
+    Number.isSafeInteger(artifactInventory.total_count) &&
+      Array.isArray(artifactInventory.artifacts) &&
+      artifactInventory.total_count === 1 &&
+      artifactInventory.artifacts.length === 1,
+    "release ledger artifact inventory is incomplete",
+  );
+  const artifacts = artifactInventory.artifacts.filter(
+    (artifact) => artifact?.name === ARTIFACT_NAME && artifact.expired === false,
+  );
+  assert(artifacts.length === 1, "release ledger run must have one live evidence artifact");
+  const [artifact] = artifacts;
+  const artifactId = positiveInteger(artifact.id, "release ledger artifact ID");
+  const artifactSizeBytes = positiveInteger(artifact.size_in_bytes, "release ledger artifact size");
+  const artifactDigest = exactString(artifact.digest, "release ledger artifact digest");
+  assert(DIGEST_RE.test(artifactDigest), "release ledger artifact digest is invalid");
+  const downloaded = await downloadActionsArtifactArchive({
+    expected: {
+      artifactDigest,
+      artifactId,
+      artifactName: ARTIFACT_NAME,
+      artifactSizeBytes,
+      repository,
+      runAttempt: 1,
+      runId,
+      runStatePolicy: "completed-success",
+      workflowEvent: "workflow_dispatch",
+      workflowHeadBranch: "main",
+      workflowPath: WORKFLOW_PATH,
+      workflowSha: run.head_sha,
+    },
+    fetchImpl,
+    maxArchiveBytes: 8 * 1024 * 1024,
+    token,
+  });
+  const manifestBytes = inspectLedgerArchive(downloaded.archiveBytes);
+  const { manifest } = parseManifest(manifestBytes);
+  const changelog = params.changelog;
+  assert(typeof changelog === "string" && changelog.length > 0, "release changelog is required");
+  const changelogBinding = validateReleaseLedgerChangelog(manifest, changelog, releaseTag);
+  const releaseSha = await resolveRefCommit(repository, `tags/${releaseTag}`, token, fetchImpl);
+  assert(
+    releaseSha === expectedReleaseSha,
+    "live release tag does not match the checked-out release SHA",
+  );
+  const expected = {
+    artifactDigest,
+    artifactId,
+    artifactMember: ARTIFACT_MEMBER,
+    artifactName: ARTIFACT_NAME,
+    artifactSizeBytes,
+    ...changelogBinding,
+    manifestSha256: sha256(manifestBytes),
+    releaseSha,
+    releaseTag,
+    repository,
+    runAttempt: 1,
+    runId,
+    toolingTree: exactSha(manifest.tooling?.trustedSource?.tree, "ledger tooling tree"),
+    workflowSha: run.head_sha,
+  };
+  validateReleaseLedgerManifest(manifestBytes, expected);
+  await verifyLiveReleaseRefs({ ...expected, token }, fetchImpl);
+  return { ...expected, manifest };
+}
+
 export async function main(argv = process.argv.slice(2)) {
-  const params = parseArgs(argv);
+  const values = parseFlagValues(argv);
   const token = exactString(process.env.GH_TOKEN, "GH_TOKEN");
-  const result = await consumeReleaseLedgerEvidence({ ...params, token });
+  const runMode = values.size <= 5 && values.has("--run-id");
+  const runParams = runMode ? parseRunArgs(values) : undefined;
+  const result = runMode
+    ? await consumeReleaseLedgerRunEvidence({
+        ...runParams,
+        changelog: readFileSync(runParams.changelogPath, "utf8"),
+        token,
+      })
+    : await consumeReleaseLedgerEvidence({ ...parseArgs(values), token });
   process.stdout.write(
     `${JSON.stringify({
+      artifactDigest: result.artifactDigest,
       artifactId: result.artifactId,
+      artifactMember: result.artifactMember,
+      artifactName: result.artifactName,
+      artifactSizeBytes: result.artifactSizeBytes,
+      baseRef: result.baseRef,
       manifestSha256: result.manifestSha256,
+      releaseRef: result.releaseRef,
       releaseSha: result.releaseSha,
       releaseTag: result.releaseTag,
+      repository: result.repository,
       runAttempt: result.runAttempt,
       runId: result.runId,
       sourceSha: result.sourceSha,
+      toolingTree: result.toolingTree,
+      version: result.version,
       workflowSha: result.workflowSha,
     })}\n`,
   );

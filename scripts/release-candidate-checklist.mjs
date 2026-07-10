@@ -22,6 +22,7 @@ import {
   isShaPinnedReleaseValidationBranch,
   validateFullReleaseValidationEvidence,
 } from "./validate-full-release-validation-evidence.mjs";
+import { consumeReleaseLedgerRunEvidence } from "./validate-release-ledger-evidence.mjs";
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
@@ -56,6 +57,7 @@ Options:
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
+  --release-ledger-run <id>           Successful immutable Release Ledger run. Required for regular releases.
   --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
@@ -102,6 +104,7 @@ export function parseArgs(argv) {
     workflowRef: "",
     fullReleaseRunId: "",
     npmPreflightRunId: "",
+    releaseLedgerRunId: "",
     windowsNodeTag: "",
     windowsNodeInstallerDigests: "",
     outputDir: "",
@@ -133,6 +136,9 @@ export function parseArgs(argv) {
         break;
       case "--npm-preflight-run":
         setOnce(arg, "npmPreflightRunId", requireValue(args, ++index, arg));
+        break;
+      case "--release-ledger-run":
+        setOnce(arg, "releaseLedgerRunId", requireValue(args, ++index, arg));
         break;
       case "--windows-node-tag":
         setOnce(arg, "windowsNodeTag", requireValue(args, ++index, arg));
@@ -224,6 +230,13 @@ export function parseArgs(argv) {
     !options.windowsNodeTag
   ) {
     throw new Error("stable release candidates require --windows-node-tag");
+  }
+  if (options.tag.includes("-alpha.")) {
+    if (options.releaseLedgerRunId) {
+      throw new Error("Tideclaw alpha release candidates do not use Release Ledger evidence");
+    }
+  } else if (!/^[1-9][0-9]*$/u.test(options.releaseLedgerRunId)) {
+    throw new Error("regular release candidates require --release-ledger-run <id>");
   }
   if (!["mock-openai", "live-frontier"].includes(options.telegramProviderMode)) {
     throw new Error("--telegram-provider-mode must be mock-openai or live-frontier");
@@ -960,6 +973,7 @@ export function buildPublishCommand(options) {
     ["preflight_run_id", options.npmPreflightRunId],
     ["full_release_validation_run_id", options.fullReleaseRunId],
     ["full_release_validation_run_attempt", options.fullReleaseRunAttempt],
+    ["release_ledger_run_id", options.releaseLedgerRunId],
     ["npm_dist_tag", options.npmDistTag],
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
@@ -1163,6 +1177,39 @@ async function main() {
     tag: options.tag,
     targetSha,
   });
+  const releaseLedger = options.releaseLedgerRunId
+    ? await consumeReleaseLedgerRunEvidence({
+        changelog: releaseChangelog,
+        expectedReleaseSha: targetSha,
+        isTrustedMainAncestor: (sha) => gitIsAncestor(sha, trustedToolingSha),
+        releaseTag: options.tag,
+        repository: options.repo,
+        runId: Number(options.releaseLedgerRunId),
+        token: run("gh", ["auth", "token"], { capture: true }).trim(),
+      })
+    : undefined;
+  if (releaseLedger && releaseLedger.releaseSha !== targetSha) {
+    throw new Error(
+      `release ledger SHA mismatch: expected candidate ${targetSha}, got ${releaseLedger.releaseSha}`,
+    );
+  }
+  const releaseLedgerEvidence = releaseLedger
+    ? {
+        artifactDigest: releaseLedger.artifactDigest,
+        artifactId: releaseLedger.artifactId,
+        artifactSizeBytes: releaseLedger.artifactSizeBytes,
+        baseRef: releaseLedger.baseRef,
+        manifestSha256: releaseLedger.manifestSha256,
+        releaseRef: releaseLedger.releaseRef,
+        releaseSha: releaseLedger.releaseSha,
+        runAttempt: releaseLedger.runAttempt,
+        runId: releaseLedger.runId,
+        sourceSha: releaseLedger.sourceSha,
+        toolingTree: releaseLedger.toolingTree,
+        version: releaseLedger.version,
+        workflowSha: releaseLedger.workflowSha,
+      }
+    : undefined;
   const windowsNodeSourceRelease = options.windowsNodeTag
     ? await validateWindowsSourceRelease(options.windowsNodeTag)
     : undefined;
@@ -1302,6 +1349,7 @@ async function main() {
     fullReleaseValidationRunId: options.fullReleaseRunId,
     fullReleaseValidationRunAttempt: fullRun.runAttempt,
     npmPreflightRunId: options.npmPreflightRunId,
+    releaseLedger: releaseLedgerEvidence,
     windowsNodeTag: options.windowsNodeTag || undefined,
     windowsNodeSourceRelease,
     fullReleaseValidationUrl: fullRun.url,
@@ -1337,6 +1385,11 @@ async function main() {
       `- target SHA: ${targetSha}`,
       `- full release validation: ${options.fullReleaseRunId} ${fullRun.url}`,
       `- npm preflight: ${options.npmPreflightRunId} ${npmRun.url}`,
+      ...(releaseLedgerEvidence
+        ? [
+            `- release ledger: ${releaseLedgerEvidence.runId} (artifact ${releaseLedgerEvidence.artifactId}, manifest ${releaseLedgerEvidence.manifestSha256})`,
+          ]
+        : []),
       ...(windowsNodeSourceRelease
         ? [
             `- Windows Node source release: ${windowsNodeSourceRelease.tag} ${windowsNodeSourceRelease.url}`,

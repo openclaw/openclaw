@@ -2852,11 +2852,37 @@ describe("package artifact reuse", () => {
     const resolveDownload = workflowStep(resolveJob, "Download full release validation manifest");
     const trustedTooling = workflowStep(resolveJob, "Download trusted release validation tooling");
     const validateManifest = workflowStep(resolveJob, "Validate full release validation manifest");
+    const ledgerTooling = workflowStep(resolveJob, "Checkout trusted release ledger tooling");
+    const validateLedger = workflowStep(resolveJob, "Validate immutable release ledger evidence");
     const publishDownload = workflowStep(publishJob, "Download full release validation manifest");
+    const revalidateLedger = workflowStep(
+      publishJob,
+      "Revalidate immutable release ledger evidence",
+    );
     const publishOrchestration = workflowStep(publishJob, "Dispatch publish workflows");
     const npmPublishJob = workflowJob(
       ".github/workflows/openclaw-npm-release.yml",
       "publish_openclaw_npm",
+    );
+    const npmValidateJob = workflowJob(
+      ".github/workflows/openclaw-npm-release.yml",
+      "validate_publish_request",
+    );
+    const npmLedgerTooling = workflowStep(
+      npmValidateJob,
+      "Checkout trusted release ledger tooling",
+    );
+    const npmLedgerCandidate = workflowStep(
+      npmValidateJob,
+      "Checkout release candidate for ledger validation",
+    );
+    const npmValidateLedger = workflowStep(
+      npmValidateJob,
+      "Validate immutable release ledger evidence",
+    );
+    const npmRevalidateLedger = workflowStep(
+      npmPublishJob,
+      "Revalidate immutable release ledger evidence",
     );
     const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation run metadata");
     const npmDownload = workflowStep(npmPublishJob, "Download full release validation manifest");
@@ -2872,6 +2898,65 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("+refs/heads/main:refs/remotes/origin/main");
     expect(workflow).toContain("full_release_validation_run_attempt");
     expect(workflow).toContain("full_release_validation_run_id");
+    expect(workflow).toContain("release_ledger_run_id:");
+    expect(workflow).toContain(
+      "Regular release publication requires release_ledger_run_id from a successful immutable Release Ledger run.",
+    );
+    expect(publishJob.needs).toEqual(["resolve_release_target"]);
+    expect(ledgerTooling.if).toBe("${{ !startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}");
+    expect(ledgerTooling.with?.ref).toBe("${{ github.sha }}");
+    expect(validateLedger.env).toMatchObject({
+      GH_TOKEN: "${{ github.token }}",
+      RELEASE_LEDGER_RUN_ID: "${{ inputs.release_ledger_run_id }}",
+      RELEASE_TAG: "${{ inputs.tag }}",
+    });
+    expect(validateLedger.run).toContain(
+      "node .release-ledger-tooling/scripts/validate-release-ledger-evidence.mjs",
+    );
+    expect(validateLedger.run).toContain('--release-sha "$(git rev-parse HEAD)"');
+    expect(revalidateLedger.run).toContain(
+      "node .release-harness/scripts/validate-release-ledger-evidence.mjs",
+    );
+    const resolveSteps = (resolveJob.steps ?? []).map((step) => step.name);
+    expect(resolveSteps.indexOf("Validate immutable release ledger evidence")).toBeGreaterThan(
+      resolveSteps.indexOf("Resolve checked-out release ref"),
+    );
+    const ledgerPublishSteps = (publishJob.steps ?? []).map((step) => step.name);
+    expect(ledgerPublishSteps.indexOf("Revalidate immutable release ledger evidence")).toBeLessThan(
+      ledgerPublishSteps.indexOf("Resolve ClawHub release plan"),
+    );
+    expect(npmWorkflow).toContain(
+      "Regular OpenClaw npm publish requires release_publish_run_id from the ledger-gated OpenClaw Release Publish workflow.",
+    );
+    expect(npmWorkflow).toContain(
+      '[[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${tideclaw_alpha_publish}" != "true" && -z "${RELEASE_PUBLISH_RUN_ID// }" ]]',
+    );
+    expect(npmWorkflow).toContain(
+      '[[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${tideclaw_alpha_publish}" != "true" && ! "${RELEASE_LEDGER_RUN_ID}" =~ ^[1-9][0-9]*$ ]]',
+    );
+    expect(npmLedgerTooling.with?.ref).toBe("refs/heads/main");
+    expect(npmLedgerCandidate.with?.ref).toBe("refs/tags/${{ inputs.tag }}");
+    expect(npmValidateLedger.env).toMatchObject({
+      GH_TOKEN: "${{ github.token }}",
+      RELEASE_LEDGER_RUN_ID: "${{ inputs.release_ledger_run_id }}",
+      RELEASE_TAG: "${{ inputs.tag }}",
+    });
+    expect(npmValidateLedger.run).toContain(
+      "node .release-ledger-tooling/scripts/validate-release-ledger-evidence.mjs",
+    );
+    expect(npmValidateLedger.run).toContain("--changelog .release-ledger-candidate/CHANGELOG.md");
+    expect(npmValidateLedger.run).toContain(
+      '--release-sha "$(git -C .release-ledger-candidate rev-parse HEAD)"',
+    );
+    expect(npmRevalidateLedger.run).toContain(
+      "node .release-ledger-tooling/scripts/validate-release-ledger-evidence.mjs",
+    );
+    expect(npmRevalidateLedger.run).toContain('--release-sha "$(git rev-parse HEAD)"');
+    const npmPublishSteps = (npmPublishJob.steps ?? []).map((step) => step.name);
+    expect(npmPublishSteps.indexOf("Revalidate immutable release ledger evidence")).toBeLessThan(
+      npmPublishSteps.indexOf("Setup Node environment"),
+    );
+    expect(workflow).toContain('-f release_ledger_run_id="${RELEASE_LEDGER_RUN_ID}"');
     expect(resolveFullRun.id).toBe("full_run");
     expect(resolveFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",

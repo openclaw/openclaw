@@ -378,10 +378,19 @@ describe("release candidate checklist", () => {
   });
 
   it("infers validation profiles from candidate tags", () => {
-    expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
-    expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
-      "stable",
-    );
+    expect(
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--release-ledger-run", "333"]).releaseProfile,
+    ).toBe("beta");
+    expect(
+      parseArgs([
+        "--tag",
+        "v2026.5.14",
+        "--windows-node-tag",
+        "v0.6.3",
+        "--release-ledger-run",
+        "333",
+      ]).releaseProfile,
+    ).toBe("stable");
     expect(
       parseArgs([
         "--tag",
@@ -390,6 +399,8 @@ describe("release candidate checklist", () => {
         "v0.6.3",
         "--release-profile",
         "full",
+        "--release-ledger-run",
+        "333",
       ]).releaseProfile,
     ).toBe("full");
   });
@@ -481,10 +492,30 @@ describe("release candidate checklist", () => {
   });
 
   it("uses trusted main for regular release workflow tooling", () => {
-    expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).workflowRef).toBe("main");
+    expect(
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--release-ledger-run", "333"]).workflowRef,
+    ).toBe("main");
     expect(() =>
       parseArgs(["--tag", "v2026.5.14-beta.3", "--workflow-ref", "release/2026.5.14"]),
     ).toThrow("--workflow-ref must be main");
+  });
+
+  it("requires immutable Release Ledger evidence for regular candidates only", () => {
+    expect(() => parseArgs(["--tag", "v2026.5.14-beta.3"])).toThrow(
+      "regular release candidates require --release-ledger-run <id>",
+    );
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.1-alpha.3",
+        "--workflow-ref",
+        "tideclaw/alpha/2026-07-10-1200Z",
+        "--npm-dist-tag",
+        "alpha",
+        "--release-ledger-run",
+        "333",
+      ]),
+    ).toThrow("Tideclaw alpha release candidates do not use Release Ledger evidence");
   });
 
   it("preserves the matching Tideclaw alpha workflow source", () => {
@@ -523,6 +554,7 @@ describe("release candidate checklist", () => {
       duplicateOption("--repo", "openclaw/openclaw", "fork/openclaw"),
       duplicateOption("--full-release-run", "111", "222"),
       duplicateOption("--npm-preflight-run", "111", "222"),
+      duplicateOption("--release-ledger-run", "111", "222"),
       duplicateOption("--windows-node-tag", "v0.6.3", "v0.6.4"),
       duplicateFlag("--skip-dispatch"),
       duplicateFlag("--skip-local-generated-check"),
@@ -607,6 +639,8 @@ describe("release candidate checklist", () => {
       "111",
       "--npm-preflight-run",
       "222",
+      "--release-ledger-run",
+      "333",
       "--skip-dispatch",
       "--",
       "--plugin-publish-scope",
@@ -625,6 +659,8 @@ describe("release candidate checklist", () => {
       "111",
       "--npm-preflight-run",
       "222",
+      "--release-ledger-run",
+      "333",
       "--skip-dispatch",
       "--skip-parallels",
     ]);
@@ -644,6 +680,8 @@ describe("release candidate checklist", () => {
         "111",
         "--npm-preflight-run",
         "222",
+        "--release-ledger-run",
+        "333",
         "--skip-dispatch",
       ]),
       workflowRef: "main",
@@ -654,6 +692,7 @@ describe("release candidate checklist", () => {
     expect(command).toContain("'full_release_validation_run_id=111'");
     expect(command).toContain("'full_release_validation_run_attempt=2'");
     expect(command).toContain("'preflight_run_id=222'");
+    expect(command).toContain("'release_ledger_run_id=333'");
     expect(command).toContain("'tag=v2026.5.14-beta.3'");
     expect(command).toContain("'plugin_publish_scope=all-publishable'");
     expect(command).toContain("'--ref' 'main'");
@@ -686,6 +725,8 @@ describe("release candidate checklist", () => {
         "v0.6.3",
         "--workflow-ref",
         "main",
+        "--release-ledger-run",
+        "333",
       ]),
       workflowRef: "main",
       windowsNodeInstallerDigests: JSON.stringify({
@@ -811,6 +852,8 @@ describe("release candidate checklist", () => {
         "111",
         "--npm-preflight-run",
         "222",
+        "--release-ledger-run",
+        "333",
         "--skip-dispatch",
       ]),
       workflowRef: "main",

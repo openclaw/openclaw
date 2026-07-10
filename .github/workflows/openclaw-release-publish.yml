@@ -19,6 +19,10 @@ on:
         description: Exact Full Release Validation run attempt; when omitted, the current attempt is resolved once before publish
         required: false
         type: string
+      release_ledger_run_id:
+        description: Successful immutable Release Ledger run id; required for regular releases
+        required: false
+        type: string
       windows_node_tag:
         description: Exact openclaw-windows-node release tag, required for stable OpenClaw publish
         required: false
@@ -103,6 +107,7 @@ jobs:
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+          RELEASE_LEDGER_RUN_ID: ${{ inputs.release_ledger_run_id }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
@@ -173,6 +178,10 @@ jobs:
           fi
           if [[ "${WORKFLOW_REF}" != "refs/heads/main" && "${tideclaw_alpha_publish}" != "true" ]]; then
             echo "OpenClaw Release Publish must use trusted main workflow tooling, except for a matching Tideclaw alpha branch." >&2
+            exit 1
+          fi
+          if [[ "${tideclaw_alpha_publish}" != "true" && ! "${RELEASE_LEDGER_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Regular release publication requires release_ledger_run_id from a successful immutable Release Ledger run." >&2
             exit 1
           fi
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PLUGIN_PUBLISH_SCOPE}" != "all-publishable" ]]; then
@@ -372,6 +381,30 @@ jobs:
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout trusted release ledger tooling
+        if: ${{ !startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: .release-ledger-tooling
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate immutable release ledger evidence
+        if: ${{ !startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_LEDGER_RUN_ID: ${{ inputs.release_ledger_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          node .release-ledger-tooling/scripts/validate-release-ledger-evidence.mjs \
+            --changelog CHANGELOG.md \
+            --release-sha "$(git rev-parse HEAD)" \
+            --release-tag "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$RELEASE_LEDGER_RUN_ID"
+
       - name: Validate OpenClaw npm preflight manifest
         id: manifest
         if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
@@ -551,6 +584,23 @@ jobs:
           path: .release-harness
           fetch-depth: 1
           persist-credentials: false
+
+      # Re-resolve the live tag and release branch after the environment wait;
+      # a moved ref must not inherit the earlier resolve job's authority.
+      - name: Revalidate immutable release ledger evidence
+        if: ${{ !startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_LEDGER_RUN_ID: ${{ inputs.release_ledger_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/validate-release-ledger-evidence.mjs \
+            --changelog CHANGELOG.md \
+            --release-sha "$(git rev-parse HEAD)" \
+            --release-tag "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$RELEASE_LEDGER_RUN_ID"
 
       - name: Download full release validation manifest
         if: ${{ inputs.publish_openclaw_npm }}
@@ -740,6 +790,7 @@ jobs:
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
+          RELEASE_LEDGER_RUN_ID: ${{ inputs.release_ledger_run_id }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
@@ -2049,6 +2100,7 @@ jobs:
                 -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}" \
                 -f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" \
                 -f release_publish_run_id="${GITHUB_RUN_ID}" \
+                -f release_ledger_run_id="${RELEASE_LEDGER_RUN_ID}" \
                 -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
               echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
             fi
