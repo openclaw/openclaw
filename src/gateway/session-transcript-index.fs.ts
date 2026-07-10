@@ -2,6 +2,7 @@
 // Streams JSONL transcript files into byte-offset indexes for history paging.
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
@@ -120,7 +121,7 @@ function buildOversizedIndexedRawEntry(params: {
 }): IndexedRawEntry | null {
   // Oversized lines may contain huge message arrays, so recover only metadata
   // from a bounded prefix and synthesize a visible placeholder record.
-  const prefix = params.line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
+  const prefix = truncateUtf16Safe(params.line, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
   const messageMatch = /"message"\s*:/.exec(prefix);
   const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
   const id = extractJsonStringFieldPrefix(prefix, "id");
