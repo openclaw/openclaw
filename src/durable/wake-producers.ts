@@ -142,7 +142,7 @@ export function recordDurableWakeObligation(params: {
   });
 }
 
-export function recordDurableWakeForSubagentParentBindingMissing(params: {
+export function recordDurableWakeForDelegationBindingMissing(params: {
   store: DurableRuntimeStore;
   childRun: DurableRuntimeRun;
   requesterSessionKey?: string;
@@ -154,9 +154,9 @@ export function recordDurableWakeForSubagentParentBindingMissing(params: {
   return recordDurableWakeObligation({
     store: params.store,
     reason: "no_handler",
-    dedupeKey: `wake:v1:subagent-parent-binding-missing:${params.childRun.runtimeRunId}`,
+    dedupeKey: `wake:v1:delegation-binding-missing:${params.childRun.runtimeRunId}`,
     sourceRunId: params.childRun.runtimeRunId,
-    factsRef: `run:${params.childRun.runtimeRunId}:subagent.parent.binding_missing`,
+    factsRef: `run:${params.childRun.runtimeRunId}:delegation.binding_missing`,
     facts: {
       sourceRunId: params.childRun.runtimeRunId,
       explicitWorkOwners: [missingAgentSessionCandidate(params.requesterSessionKey)].filter(
@@ -164,7 +164,8 @@ export function recordDurableWakeForSubagentParentBindingMissing(params: {
       ),
     },
     evidence: {
-      kind: "subagent_parent_binding_missing",
+      kind: "delegation_binding_missing",
+      delegationKind: "subagent_child",
       requesterSessionKey: params.requesterSessionKey,
       requesterRunId: params.requesterRunId,
       reason: params.reason,
