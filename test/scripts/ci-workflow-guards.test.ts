@@ -1485,7 +1485,7 @@ describe("ci workflow guards", () => {
     expect(restoreStep.with.path).toContain("dist-runtime/");
     expect(restoreStep.with.path).toContain("packages/*/dist/");
     expect(saveStep.with.path).toContain("packages/*/dist/");
-    expect(restoreStep.with.key).toContain("dist-build-v2-");
+    expect(restoreStep.with.key).toContain("dist-build-v3-");
     expect(
       buildArtifactSteps.find((step) => step.name === "Pack built runtime artifacts").run,
     ).toContain("packages/*/dist");
@@ -2105,14 +2105,16 @@ describe("ci workflow guards", () => {
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
-    const smokeShardJob = workflow.jobs["qa-smoke-ci-shard"];
-    const smokeRunStep = smokeShardJob.steps.find(
-      (step) => step.name === "Run smoke profile shard",
+    const smokeProfileJob = workflow.jobs["qa-smoke-ci-profile"];
+    const smokeBuildStep = smokeProfileJob.steps.find(
+      (step) => step.name === "Build QA smoke runtime",
     );
-    const smokeUploadStep = smokeShardJob.steps.find(
+    const smokeRunStep = smokeProfileJob.steps.find(
+      (step) => step.name === "Run smoke profile part",
+    );
+    const smokeUploadStep = smokeProfileJob.steps.find(
       (step) => step.name === "Upload QA smoke profile evidence",
     );
-    const smokeAggregateJob = workflow.jobs["qa-smoke-ci"];
 
     const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
 
@@ -2127,23 +2129,41 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
-    expect(smokeShardJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
-    expect(smokeShardJob.strategy["max-parallel"]).toBe(3);
-    expect(smokeShardJob.strategy.matrix.include.map((entry) => entry.slug)).toEqual([
-      "matrix",
-      "telegram-1-of-2",
-      "telegram-2-of-2",
+    expect(smokeProfileJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
+    expect(smokeBuildStep.run).toContain("node scripts/build-all.mjs qaRuntime");
+    expect(smokeBuildStep.run).toContain("pnpm ui:build");
+    expect(smokeBuildStep.env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+    expect(smokeBuildStep.run).toContain("--skip-build");
+    expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
+    expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
+    expect(smokeProfileJob.needs).toEqual(["preflight"]);
+    expect(smokeProfileJob.strategy["max-parallel"]).toBe(2);
+    expect(smokeProfileJob.strategy.matrix.include.map((entry) => entry.slug)).toEqual([
+      "profile-1-of-2",
+      "profile-2-of-2",
     ]);
-    expect(smokeShardJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
-    expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
+    expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
+    expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
+    expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");
     expect(smokeRunStep.run).toContain("--qa-profile smoke-ci");
-    expect(smokeRunStep.run).toContain("--concurrency 8");
+    expect(smokeRunStep.run).toContain("--concurrency 10");
+    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain(
+      "github.event_name != 'workflow_dispatch'",
+    );
+    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain(
+      "github.repository == 'openclaw/openclaw'",
+    );
+    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain("'0'");
+    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain("'1500'");
     expect(smokeRunStep.run).toContain('scenario_args+=(--scenario "$scenario_id")');
+    expect(smokeRunStep.run).toContain('done <<< "$PROFILE_RUNS_TSV"');
+    expect(smokeRunStep.run).not.toContain('pids+=("$!")');
+    expect(smokeRunStep.run).not.toContain('wait "${pids[$index]}"');
     expect(smokeRunStep.run).not.toContain("--category");
     expect(smokeRunStep.run).not.toContain("--allow-failures");
     expect(smokeRunStep.run).toContain("qa_exit_code=0");
     expect(smokeRunStep.run).toContain('exit "$qa_exit_code"');
-    expect(smokeRunStep.run).toContain("scripts/package-openclaw-for-docker.mjs");
     expect(smokeRunStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
     expect(smokeRunStep.run).toContain("--max-old-space-size=16384");
     expect(smokeRunStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
@@ -2153,9 +2173,6 @@ describe("ci workflow guards", () => {
       path: ".artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/",
       "if-no-files-found": "warn",
     });
-    expect(smokeAggregateJob.name).toBe("QA Smoke CI");
-    expect(smokeAggregateJob.needs).toEqual(["preflight", "qa-smoke-ci-shard"]);
-    expect(smokeAggregateJob["runs-on"]).toBe("ubuntu-24.04");
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 

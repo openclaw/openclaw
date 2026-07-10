@@ -3759,6 +3759,42 @@ ${JSON.stringify({
     expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("bypassPermissions");
   });
 
+  it("cleans live-turn resources when capture activation fails before spawn", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "sonnet",
+      runId: "run-live-capture-activation-failure",
+      mcpDeliveryCapture: true,
+    });
+
+    await expect(
+      runClaudeLiveSessionTurn({
+        context,
+        args: [],
+        env: {},
+        prompt: "hi",
+        useResume: false,
+        noOutputTimeoutMs: 1_000,
+        getProcessSupervisor: () => ({
+          spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+            supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+          cancel: vi.fn(),
+          cancelScope: vi.fn(),
+          getRecord: vi.fn(),
+        }),
+        onAssistantDelta: () => {},
+        onMcpCaptureReady: () => {
+          throw new Error("grant activation failed");
+        },
+        cleanup,
+      }),
+    ).rejects.toThrow("grant activation failed");
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(supervisorSpawnMock).not.toHaveBeenCalled();
+  });
+
   it("uses a fresh Claude live process and capture key for every captured turn", async () => {
     const logWarnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
     const cancels: Array<ReturnType<typeof vi.fn>> = [];
