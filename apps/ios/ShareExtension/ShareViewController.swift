@@ -313,9 +313,10 @@ final class ShareViewController: UIViewController {
                 if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
                     if attachments.count < maxImageAttachments, attachmentError == nil {
                         do {
-                            attachments.append(try await self.loadImageAttachment(
+                            let attachment = try await self.loadImageAttachment(
                                 from: provider,
-                                index: attachments.count))
+                                index: attachments.count)
+                            attachments.append(attachment)
                         } catch {
                             attachmentError = error.localizedDescription
                         }
