@@ -213,7 +213,13 @@ function mapClaudeCliThinkingLevelToEffort(
     case "minimal":
     case "low":
       return "low";
+    // Adaptive reasoning is the Claude CLI's flagless default, so omit
+    // `--effort` instead of pinning a fixed level (#103245). The spawn lanes
+    // clamp "adaptive" to a concrete level for models without adaptive
+    // support, so this branch normally fires only for adaptive-capable models;
+    // a flagless invocation stays valid either way.
     case "adaptive":
+      return undefined;
     case "medium":
       return "medium";
     case "high":

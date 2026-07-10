@@ -130,11 +130,21 @@ describe("resolveClaudeCliExecutionArgs", () => {
         workspaceDir: "/tmp",
         provider: "claude-cli",
         modelId: "claude-opus-4-7",
-        thinkingLevel: "adaptive",
+        thinkingLevel: "medium",
         useResume: false,
         baseArgs: ["-p"],
       }),
     ).toEqual(["-p", "--effort", "medium"]);
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        thinkingLevel: "high",
+        useResume: false,
+        baseArgs: ["-p"],
+      }),
+    ).toEqual(["-p", "--effort", "high"]);
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",
@@ -145,6 +155,37 @@ describe("resolveClaudeCliExecutionArgs", () => {
         baseArgs: ["-p", "--resume", "{sessionId}"],
       }),
     ).toEqual(["-p", "--resume", "{sessionId}", "--effort", "xhigh"]);
+  });
+
+  it("omits effort args for adaptive so the Claude CLI's native default applies (issue #103245)", () => {
+    // Before fix, adaptive was silently pinned to `--effort medium`. Models
+    // without adaptive support get "adaptive" clamped to a concrete level on
+    // the spawn lanes first (see "maps unsupported adaptive to medium" in
+    // src/auto-reply/thinking.test.ts), which still yields a concrete
+    // `--effort` flag here.
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-8",
+        thinkingLevel: "adaptive",
+        useResume: false,
+        baseArgs: ["-p", "--output-format", "stream-json"],
+      }),
+    ).toEqual(["-p", "--output-format", "stream-json"]);
+  });
+
+  it("keeps operator-supplied effort args when thinking is adaptive", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-8",
+        thinkingLevel: "adaptive",
+        useResume: false,
+        baseArgs: ["-p", "--effort", "xhigh"],
+      }),
+    ).toEqual(["-p", "--effort", "xhigh"]);
   });
 
   it("replaces static effort args when a session thinking level is active", () => {
