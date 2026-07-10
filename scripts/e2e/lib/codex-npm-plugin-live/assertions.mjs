@@ -1,6 +1,7 @@
 // Assertions for Codex npm plugin live E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import {
   assertPathInside,
@@ -13,6 +14,34 @@ import {
   realPathMaybe,
   stateDir,
 } from "../codex-install-utils.mjs";
+
+// #101210 moved Codex app-server bindings from the retired
+// <sessionFile>.codex-app-server.json sidecar into SQLite plugin state.
+function readCodexAppServerBindingFromPluginState(sessionId) {
+  const dbPath = path.join(stateDir(), "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`missing state database: ${dbPath}`);
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db
+      .prepare(
+        "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+      )
+      .get("codex", "app-server-thread-bindings", `session:main:${sessionId}`);
+    if (!row || typeof row.value_json !== "string") {
+      throw new Error(`missing Codex app-server binding in plugin state for session ${sessionId}`);
+    }
+    const stored = JSON.parse(row.value_json);
+    if (stored.state !== "active" || typeof stored.binding !== "object" || !stored.binding) {
+      throw new Error(`invalid Codex app-server binding row: ${JSON.stringify(stored)}`);
+    }
+    return stored.binding;
+  } finally {
+    db?.close();
+  }
+}
 
 const command = process.argv[2];
 const allowBetaCompatDiagnostics =
@@ -419,9 +448,10 @@ function assertAgentTurn() {
     throw new Error(`missing OpenClaw session file: ${entry.sessionFile}`);
   }
 
-  const bindingPath = `${entry.sessionFile}.codex-app-server.json`;
-  const binding = readJson(bindingPath);
-  if (![1, 2].includes(binding.schemaVersion) || typeof binding.threadId !== "string") {
+  // #101210 moved Codex app-server bindings from the retired
+  // <sessionFile>.codex-app-server.json sidecar into SQLite plugin state.
+  const binding = readCodexAppServerBindingFromPluginState(sessionId);
+  if (typeof binding.threadId !== "string") {
     throw new Error(`invalid Codex app-server binding: ${JSON.stringify(binding)}`);
   }
   if (binding.model !== modelRef.split("/").slice(1).join("/")) {
