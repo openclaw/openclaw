@@ -4189,6 +4189,139 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "A personalized daily briefing: news, weather, and tasks in one message."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Control lights, climate, and automations across your whole home."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Crash alerts explained and triaged the moment they fire."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Flight and hotel search with fare watching and trip memory."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Live stocks and crypto with price alerts and daily digests."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Mailbox triage, summaries, and drafts with send-on-approval."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Mood lighting on command — scenes, schedules, and color moods."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "PR review queues, issue triage, and repo Q&A through the official GitHub MCP."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Query dashboards and alerts; get anomaly summaries in chat."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Read, create, and get briefed on events — your agent owns your schedule."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Search, create, and update pages and databases in your Notion workspace."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Search, queue, and soundtrack your day with mood-based playlists."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Search, summarize, and pull transcripts from any video."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Triage issues, update cycles, and file bugs straight from chat."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/presentation.ts",
+      "text": "Whole-home audio: play, group rooms, and queue by chat."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/plugins/view.ts",
+      "text": "context7"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/plugins/view.ts",
+      "text": "https://mcp.example.com/mcp · npx some-mcp-server"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/view.ts",
+      "text": "MCP"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/view.ts",
+      "text": "OAuth"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/profile/profile-page.ts",
