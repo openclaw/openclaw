@@ -99,7 +99,7 @@ function sanitizeForSingleLineDisplay(value: string): string {
 function hasUnsafeControlChars(value: string): boolean {
   return Array.from(value).some((char) => {
     const codePoint = char.codePointAt(0) ?? 0;
-    return codePoint < 0x20 || codePoint === 0x7f;
+    return codePoint < 0x20 || codePoint === 0x7f || (codePoint >= 0x80 && codePoint <= 0x9f);
   });
 }
 
