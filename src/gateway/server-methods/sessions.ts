@@ -35,13 +35,13 @@ import {
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
@@ -196,7 +196,11 @@ function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   return normalized;
 }
 
-function rejectPluginRuntimeDeleteMismatch(params: {
+// In-process plugin-runtime callers are fenced to sessions their plugin created.
+// Both delete and patch enforce it: patch flips archive state and rewrites
+// key/label/category, so an unfenced patch would bypass the delete fence.
+function rejectPluginRuntimeSessionMismatch(params: {
+  action: "delete" | "patch";
   client: GatewayClient | null;
   key: string;
   entry: SessionEntry | undefined;
@@ -214,7 +218,7 @@ function rejectPluginRuntimeDeleteMismatch(params: {
     undefined,
     errorShape(
       ErrorCodes.INVALID_REQUEST,
-      `Plugin "${pluginOwnerId}" cannot delete session "${params.key}" because it did not create it.`,
+      `Plugin "${pluginOwnerId}" cannot ${params.action} session "${params.key}" because it did not create it.`,
     ),
   );
   return true;
@@ -2008,6 +2012,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
     const canonicalKey = target.canonicalKey ?? key;
     const lifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+    if (
+      rejectPluginRuntimeSessionMismatch({
+        action: "patch",
+        client,
+        key: canonicalKey,
+        entry: lifecycleEntry,
+        respond,
+      })
+    ) {
+      return;
+    }
     const lifecycleIdentities = [canonicalKey, key, lifecycleEntry?.sessionId];
     if (p.archived === true && isSessionLifecycleMutationActive(storePath, lifecycleIdentities)) {
       respond(
@@ -2036,6 +2051,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`),
         );
+        return null;
+      }
+      // Recheck under the lifecycle lock, mirroring delete: ownership must not
+      // change hands between the pre-lock check and the mutation.
+      if (
+        rejectPluginRuntimeSessionMismatch({
+          action: "patch",
+          client,
+          key: canonicalKey,
+          entry: currentLifecycleEntry,
+          respond,
+        })
+      ) {
         return null;
       }
       if (p.archived === true) {
@@ -2363,7 +2391,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      rejectPluginRuntimeDeleteMismatch({
+      rejectPluginRuntimeSessionMismatch({
+        action: "delete",
         client,
         key: target.canonicalKey ?? key,
         entry: initialDeleteEntry,
@@ -2428,7 +2457,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         if (
-          rejectPluginRuntimeDeleteMismatch({
+          rejectPluginRuntimeSessionMismatch({
+            action: "delete",
             client,
             key: canonicalKey ?? key,
             entry,
@@ -2852,8 +2882,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               spawnedBy: latestEntry.spawnedBy,
               workspaceDir: latestEntry.spawnedWorkspaceDir,
               cwd: latestEntry.spawnedCwd,
-            }) ??
-            resolveAgentWorkspaceDir(cfg, target.agentId);
+            }) ?? resolveAgentWorkspaceDir(cfg, target.agentId);
           const operationId = randomUUID();
           emitSessionOperation(context, {
             operationId,
