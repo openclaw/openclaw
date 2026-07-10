@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -12,8 +13,16 @@ type Step = {
   run?: string;
   uses?: string;
   with?: Record<string, string>;
+  "working-directory"?: string;
 };
-type Job = { environment?: string; steps?: Step[] };
+type Job = {
+  environment?: string;
+  if?: string;
+  needs?: string[];
+  outputs?: Record<string, string>;
+  permissions?: Record<string, string>;
+  steps?: Step[];
+};
 type Workflow = {
   on?: {
     workflow_dispatch?: {
@@ -53,6 +62,8 @@ describe("minimal npm extended-stable workflow", () => {
       "release-policy",
       "policyMode",
       "release-operation-verifier",
+      "release_delta_contract",
+      "delta evidence",
       "external_contract_revision",
       "stable-lines.json",
     ]) {
@@ -65,24 +76,24 @@ describe("minimal npm extended-stable workflow", () => {
     const raw = readFileSync(workflowPath, "utf8");
     expect(raw).toContain("version: 1");
     expect(raw).toContain("openclaw-npm-preflight-${{ inputs.tag }}");
-    expect(raw.match(/openclaw-npm-extended-stable-release\.mjs validate-request/g)).toHaveLength(
-      3,
+    const preflight = parsed.jobs?.preflight_openclaw_npm;
+    const validate = parsed.jobs?.validate_publish_request;
+    const publish = parsed.jobs?.publish_openclaw_npm;
+    const requestValidationSteps = [
+      step(preflight, "Validate npm release request"),
+      step(validate, "Validate npm release request"),
+      step(publish, "Recheck npm release request"),
+    ];
+    for (const requestValidation of requestValidationSteps) {
+      expect(requestValidation.run).toContain("openclaw-npm-extended-stable-release.mjs");
+      expect(requestValidation.run).toContain("validate-request");
+    }
+    expect(step(preflight, "Validate npm release request").env?.PREFLIGHT_ONLY).toBe(
+      "${{ inputs.preflight_only }}",
     );
-    expect(step(parsed.jobs?.preflight_openclaw_npm, "Validate npm release request").run).toContain(
-      "openclaw-npm-extended-stable-release.mjs validate-request",
+    expect(validate?.steps?.map((candidate) => candidate.name)).not.toContain(
+      "Setup Node environment",
     );
-    expect(
-      step(parsed.jobs?.preflight_openclaw_npm, "Validate npm release request").env?.PREFLIGHT_ONLY,
-    ).toBe("${{ inputs.preflight_only }}");
-    expect(
-      step(parsed.jobs?.validate_publish_request, "Validate npm release request").run,
-    ).toContain("openclaw-npm-extended-stable-release.mjs validate-request");
-    expect(step(parsed.jobs?.publish_openclaw_npm, "Recheck npm release request").run).toContain(
-      "openclaw-npm-extended-stable-release.mjs validate-request",
-    );
-    expect(
-      parsed.jobs?.validate_publish_request?.steps?.map((candidate) => candidate.name),
-    ).not.toContain("Setup Node environment");
   });
 
   it("threads an explicit, default-off extended-stable bypass through every policy gate", () => {
@@ -109,10 +120,7 @@ describe("minimal npm extended-stable workflow", () => {
     expect(trustedRef.run).not.toContain("BYPASS_EXTENDED_STABLE_GUARD");
     expect(trustedRef.run).toContain('"${WORKFLOW_REF}" == refs/heads/extended-stable/*');
 
-    const summary = step(
-      parsed.jobs?.publish_openclaw_npm,
-      "Summarize extended-stable npm publication",
-    );
+    const summary = step(parsed.jobs?.verify_openclaw_npm, "Summarize npm publication");
     expect(summary.env?.BYPASS_EXTENDED_STABLE_GUARD).toBe(
       "${{ inputs.bypass_extended_stable_guard }}",
     );
@@ -191,6 +199,142 @@ describe("minimal npm extended-stable workflow", () => {
     expect(raw).toContain("openclaw-npm-extended-stable-release.mjs verify-manifest");
   });
 
+  it("requires fresh full validation and binds both exact npm artifacts before mutation", () => {
+    const parsed = workflow();
+    const raw = readFileSync(workflowPath, "utf8");
+    expect(raw).not.toMatch(/release[_ -]delta/iu);
+
+    const promotion = step(
+      parsed.jobs?.validate_publish_request,
+      "Require preflight artifact promotion on real publish",
+    );
+    expect(promotion.run).toContain(
+      "Real publish requires full_release_validation_run_id from a successful Full Release Validation run.",
+    );
+    expect(promotion.run).not.toContain(
+      "::warning::Beta publish is proceeding from npm preflight only",
+    );
+
+    const publish = parsed.jobs?.publish_openclaw_npm;
+    const download = step(publish, "Download prepared npm tarball");
+    expect(download.if).toBeUndefined();
+
+    const provenance = step(publish, "Verify prepared tarball provenance");
+    expect(provenance.run).toContain(".dependencyTarballs[0].tarballName");
+    expect(provenance.run).toContain("printf 'ai_tarball_path=%s");
+    expect(provenance.run).toContain('[[ ! "$ARTIFACT_TARBALL_NAME" =~ ^openclaw-[0-9A-Za-z]');
+    expect(provenance.run).toContain('"$ARTIFACT_PACKAGE_NAME" != "openclaw"');
+    expect(provenance.run).toContain('"$ai_package_name" != "@openclaw/ai"');
+    expect(provenance.run).toContain("manifest_sha256=");
+    expect(provenance.run).toContain("ai_tarball_sha256=");
+    expect(provenance.run).toContain("root_npm_integrity=");
+    expect(provenance.run).toContain("ai_npm_integrity=");
+
+    const mutation = step(publish, "Publish");
+    const syntax = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: mutation.run ?? "",
+    });
+    expect(syntax.status, syntax.stderr).toBe(0);
+    expect(mutation.run).toContain("recheck_publish_inputs");
+    expect(mutation.run).toContain("Trusted npm tooling or inert release target changed");
+    expect(mutation.run).toContain("Prepared npm package bytes changed before npm mutation.");
+    expect(mutation.run).toContain("resolveNpmPublicationReadinessFromRegistry");
+    expect(mutation.run).toContain('OPENCLAW_NPM_EXPECTED_PACKAGE_NAME="$package_name"');
+    expect(mutation.run).toContain('bash "$TRUSTED_PUBLISH_SCRIPT" --validate "$tarball_path"');
+    expect(mutation.run).toContain("Pre-mutation npm state:");
+    expect(mutation.env).toMatchObject({
+      EXPECTED_AI_TARBALL_SHA256: "${{ steps.preflight_provenance.outputs.ai_tarball_sha256 }}",
+      EXPECTED_MANIFEST_SHA256: "${{ steps.preflight_provenance.outputs.manifest_sha256 }}",
+      EXPECTED_ROOT_TARBALL_SHA256: "${{ steps.preflight_provenance.outputs.tarball_sha256 }}",
+    });
+    const mutationScript = mutation.run ?? "";
+    const helperStart = mutationScript.indexOf("publish_if_missing() {");
+    const helperValidation = mutationScript.indexOf(
+      'validate_publish_target "$package_name" "$tarball_path" "$expected_sha256"',
+      helperStart,
+    );
+    const helperState = mutationScript.indexOf(
+      'state="$(publication_state "$package_name" "$expected_integrity" "$expected_shasum")"',
+      helperValidation,
+    );
+    const helperPublish = mutationScript.indexOf(
+      'bash "$TRUSTED_PUBLISH_SCRIPT" --publish "$tarball_path"',
+      helperState,
+    );
+    const preMutationMarker = mutationScript.indexOf(
+      "# npm cannot publish two packages transactionally.",
+      helperPublish,
+    );
+    const firstPublishCall = mutationScript.indexOf("publish_if_missing \\", preMutationMarker);
+    const preMutation = mutationScript.slice(preMutationMarker, firstPublishCall);
+    const aiPublish = mutationScript.indexOf('"@openclaw/ai"', firstPublishCall);
+    const rootPublish = mutationScript.indexOf('"openclaw"', aiPublish + 1);
+    expect(helperValidation).toBeGreaterThan(helperStart);
+    expect(helperState).toBeGreaterThan(helperValidation);
+    expect(helperPublish).toBeGreaterThan(helperState);
+    expect(preMutationMarker).toBeGreaterThan(helperPublish);
+    expect(preMutation).toMatch(/validate_publish_target \\\n\s+"openclaw"/u);
+    expect(preMutation).toMatch(/validate_publish_target \\\n\s+"@openclaw\/ai"/u);
+    expect(preMutation).toMatch(/publication_state \\\n\s+"openclaw"/u);
+    expect(preMutation).toMatch(/publication_state \\\n\s+"@openclaw\/ai"/u);
+    expect(aiPublish).toBeGreaterThan(helperPublish);
+    expect(rootPublish).toBeGreaterThan(aiPublish);
+    expect(mutationScript.slice(aiPublish, rootPublish)).toContain('"$EXPECTED_AI_NPM_INTEGRITY"');
+    expect(mutationScript.slice(rootPublish)).toContain('"$EXPECTED_ROOT_NPM_INTEGRITY"');
+  });
+
+  it("keeps the release target inert and all executable tooling pinned to the workflow SHA", () => {
+    const parsed = workflow();
+    const publish = parsed.jobs?.publish_openclaw_npm;
+    const trustedCheckout = step(publish, "Checkout trusted npm release tooling");
+    expect(trustedCheckout.with).toMatchObject({
+      repository: "${{ fromJSON(toJSON(job)).workflow_repository }}",
+      ref: "${{ fromJSON(toJSON(job)).workflow_sha }}",
+      "fetch-depth": 1,
+      "persist-credentials": false,
+    });
+
+    const targetCheckout = step(publish, "Checkout inert release target");
+    expect(targetCheckout.with).toMatchObject({
+      ref: "refs/tags/${{ inputs.tag }}",
+      path: ".release-target",
+      "fetch-depth": 0,
+      "persist-credentials": false,
+      "sparse-checkout": "package.json",
+      "sparse-checkout-cone-mode": false,
+    });
+    const targetIdentity = step(publish, "Resolve inert release target identity");
+    expect(targetIdentity.env).toMatchObject({
+      TARGET_ROOT: "${{ github.workspace }}/.release-target",
+      TRUSTED_WORKFLOW_SHA: "${{ fromJSON(toJSON(job)).workflow_sha }}",
+    });
+    expect(targetIdentity.run).toContain('"$RELEASE_TAG" != "v${target_version}"');
+    expect(targetIdentity.run).toContain('echo "sha=$target_sha"');
+    expect(targetIdentity.run).toContain('echo "version=$target_version"');
+
+    const recheck = step(publish, "Recheck npm release request");
+    expect(recheck["working-directory"]).toBe(".release-target");
+    expect(recheck.run).toBe(
+      'node "$GITHUB_WORKSPACE/scripts/openclaw-npm-extended-stable-release.mjs" validate-request',
+    );
+    const mutation = step(publish, "Publish");
+    expect(mutation.env).toMatchObject({
+      TARGET_ROOT: "${{ github.workspace }}/.release-target",
+      TRUSTED_PUBLISH_SCRIPT: "${{ github.workspace }}/scripts/openclaw-npm-publish.sh",
+    });
+    expect(mutation.run).toContain('cd "$TARGET_ROOT"');
+    expect(mutation.run).toContain('bash "$TRUSTED_PUBLISH_SCRIPT"');
+    expect(mutation.run).not.toContain("bash .release-target/");
+    expect(mutation.run).not.toContain("node .release-target/");
+    for (const candidate of publish?.steps ?? []) {
+      expect(candidate.uses ?? "", candidate.name).not.toContain(".release-target/");
+      expect(candidate.run ?? "", candidate.name).not.toMatch(
+        /(?:bash|node|pnpm)\s+["']?\.release-target\//u,
+      );
+    }
+  });
+
   it("requires and authenticates the plugin npm run before an extended-stable core publish", () => {
     const parsed = workflow();
     expect(parsed.on?.workflow_dispatch?.inputs?.plugin_npm_run_id).toMatchObject({
@@ -218,16 +362,42 @@ describe("minimal npm extended-stable workflow", () => {
   it("captures selector fail closed, publishes extended-stable, retries, and summarizes", () => {
     const parsed = workflow();
     const publish = parsed.jobs?.publish_openclaw_npm;
+    const verify = parsed.jobs?.verify_openclaw_npm;
     const capture = step(publish, "Capture previous extended-stable selector");
-    const readback = step(publish, "Verify extended-stable registry readback");
-    const summary = step(publish, "Summarize extended-stable npm publication");
+    const readback = step(verify, "Verify published npm artifact identities");
+    const summary = step(verify, "Summarize npm publication");
     expect(capture.run).toContain("openclaw-npm-extended-stable-release.mjs capture-selector");
     expect(step(publish, "Publish").run).toContain("openclaw-npm-publish.sh");
-    expect(readback.run).toContain("openclaw-npm-extended-stable-release.mjs verify-readback");
-    expect(summary.if).toContain("always()");
+    expect(readback.run).toContain("verifyPublishedNpmArtifactIdentities");
+    expect(verify?.if).toContain("needs.publish_openclaw_npm.result == 'success'");
     expect(summary.run).toContain("openclaw-npm-extended-stable-release.mjs repair-command");
     expect(summary.run).toContain('EXPECTED_VERSION="$RELEASE_TAG"');
     expect(publish?.environment).toBe("npm-release");
+    expect(verify?.environment).toBeUndefined();
+    expect(verify?.permissions).toEqual({ contents: "read" });
+    expect(verify?.permissions?.["id-token"]).toBeUndefined();
+  });
+
+  it("runs postpublish package and runtime verification without the npm release environment", () => {
+    const verify = workflow().jobs?.verify_openclaw_npm;
+    expect(verify?.needs).toEqual(["publish_openclaw_npm"]);
+    expect(verify?.environment).toBeUndefined();
+    expect(verify?.permissions).toEqual({ contents: "read" });
+    const trustedCheckout = step(verify, "Checkout trusted npm postpublish verifier");
+    expect(trustedCheckout.with?.ref).toBe("${{ fromJSON(toJSON(job)).workflow_sha }}");
+    const identity = step(verify, "Verify published npm artifact identities");
+    expect(identity.env).toMatchObject({
+      PACKAGE_VERSION: "${{ needs.publish_openclaw_npm.outputs.package_version }}",
+      RELEASE_SHA: "${{ needs.publish_openclaw_npm.outputs.release_sha }}",
+      ROOT_NPM_INTEGRITY: "${{ needs.publish_openclaw_npm.outputs.root_npm_integrity }}",
+      AI_NPM_INTEGRITY: "${{ needs.publish_openclaw_npm.outputs.ai_npm_integrity }}",
+    });
+    expect(identity.run).toContain("fetchNpmRegistryPackumentWithRetry");
+    expect(identity.run).toContain("verifyPublishedNpmArtifactIdentities");
+    expect(identity.run).toContain("attempts: 3");
+    const runtime = step(verify, "Verify published OpenClaw runtime");
+    expect(runtime.if).toBe("${{ inputs.npm_dist_tag != 'extended-stable' }}");
+    expect(runtime.run).toContain("release:openclaw:npm:verify-published");
   });
 
   it("publishes only the tarball path verified from the preflight manifest", () => {
@@ -237,7 +407,7 @@ describe("minimal npm extended-stable workflow", () => {
     expect(provenance.run).toContain(
       'ARTIFACT_TARBALL_PATH="preflight-tarball/$ARTIFACT_TARBALL_NAME"',
     );
-    expect(provenance.run).toContain('echo "tarball_path=$ARTIFACT_TARBALL_PATH"');
+    expect(provenance.run).toContain("printf 'tarball_path=%s");
     expect(publishStep.env?.PUBLISH_TARBALL_PATH).toBe(
       "${{ steps.preflight_provenance.outputs.tarball_path }}",
     );

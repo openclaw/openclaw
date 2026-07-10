@@ -3,7 +3,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
+import {
+  fetchNpmRegistryPackumentWithRetry,
+  parseReleaseVersion,
+} from "./lib/npm-publish-plan.mjs";
 
 const SUPPORTED_DIST_TAGS = new Set(["alpha", "beta", "latest", "extended-stable"]);
 
@@ -299,6 +302,181 @@ export async function verifyExtendedStableRegistryReadback({
   throw new Error(
     `npm registry did not converge to openclaw@${expectedVersion} and openclaw@extended-stable=${expectedVersion} after ${attempts} attempts (exact=${exactVersion}, extended-stable=${extendedStableSelector}).`,
   );
+}
+
+export async function verifyPublishedNpmArtifactIdentities({
+  expectedVersion,
+  npmDistTag,
+  packages,
+  query,
+  sleep,
+  attempts = 12,
+  delayMs = 10_000,
+}) {
+  let pending = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    pending = [];
+    for (const pkg of packages) {
+      const packument = await query(pkg.name);
+      const dist = packument?.versions?.[expectedVersion]?.dist;
+      if (!dist) {
+        pending.push(`${pkg.name}@${expectedVersion}`);
+        continue;
+      }
+      if (dist.integrity !== pkg.integrity || dist.shasum !== pkg.shasum) {
+        throw new Error(
+          `${pkg.name}@${expectedVersion} exists with bytes that do not match the approved artifact.`,
+        );
+      }
+      if (packument?.["dist-tags"]?.[npmDistTag] !== expectedVersion) {
+        pending.push(`${pkg.name}@${npmDistTag}`);
+      }
+    }
+    if (pending.length === 0) {
+      return { attemptsUsed: attempt };
+    }
+    if (attempt < attempts) {
+      await sleep(delayMs);
+    }
+  }
+  throw new Error(
+    `npm registry did not converge after ${attempts} attempts: ${pending.join(", ")}.`,
+  );
+}
+
+export async function validateNpmPublicationReadiness({
+  expectedVersion,
+  npmDistTag,
+  packages,
+  query,
+  sleep,
+  attempts = 12,
+  delayMs = 10_000,
+}) {
+  if (
+    typeof expectedVersion !== "string" ||
+    expectedVersion.trim() === "" ||
+    !SUPPORTED_DIST_TAGS.has(npmDistTag) ||
+    !Array.isArray(packages) ||
+    packages.length === 0 ||
+    packages.some(
+      (pkg) =>
+        !["openclaw", "@openclaw/ai"].includes(pkg?.name) ||
+        typeof pkg.integrity !== "string" ||
+        pkg.integrity.trim() === "" ||
+        typeof pkg.shasum !== "string" ||
+        pkg.shasum.trim() === "",
+    )
+  ) {
+    throw new Error("npm publication readiness requires an exact package identity.");
+  }
+  let states = [];
+  let pending = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    states = [];
+    pending = [];
+    for (const pkg of packages) {
+      const packument = await query(pkg.name);
+      if (packument === null) {
+        states.push({ name: pkg.name, state: "missing" });
+        continue;
+      }
+      if (
+        typeof packument !== "object" ||
+        Array.isArray(packument) ||
+        packument === null ||
+        typeof packument.versions !== "object" ||
+        Array.isArray(packument.versions) ||
+        packument.versions === null
+      ) {
+        throw new Error(`${pkg.name}: npm registry returned a malformed packument.`);
+      }
+      const distTags = packument["dist-tags"];
+      if (typeof distTags !== "object" || distTags === null || Array.isArray(distTags)) {
+        throw new Error(`${pkg.name}: npm registry returned malformed dist-tags.`);
+      }
+      const taggedVersion = distTags[npmDistTag];
+      if (taggedVersion !== undefined && typeof taggedVersion !== "string") {
+        throw new Error(`${pkg.name}: npm registry returned a malformed ${npmDistTag} dist-tag.`);
+      }
+      const published = packument.versions[expectedVersion];
+      if (published === undefined) {
+        if (taggedVersion === expectedVersion) {
+          states.push({ name: pkg.name, state: "pending" });
+          pending.push(`${pkg.name}@${expectedVersion} metadata`);
+          continue;
+        }
+        states.push({ name: pkg.name, state: "missing" });
+        continue;
+      }
+      const dist =
+        typeof published === "object" && published !== null && !Array.isArray(published)
+          ? published.dist
+          : null;
+      if (
+        typeof dist !== "object" ||
+        dist === null ||
+        Array.isArray(dist) ||
+        typeof dist.integrity !== "string" ||
+        typeof dist.shasum !== "string"
+      ) {
+        throw new Error(
+          `${pkg.name}@${expectedVersion} exists without a complete immutable artifact identity.`,
+        );
+      }
+      if (dist.integrity !== pkg.integrity || dist.shasum !== pkg.shasum) {
+        throw new Error(
+          `${pkg.name}@${expectedVersion} exists with bytes that do not match the approved artifact.`,
+        );
+      }
+      if (taggedVersion !== expectedVersion) {
+        states.push({ name: pkg.name, state: "pending" });
+        pending.push(`${pkg.name}@${npmDistTag}`);
+        continue;
+      }
+      states.push({ name: pkg.name, state: "published" });
+    }
+    if (pending.length === 0) {
+      return { attemptsUsed: attempt, packages: states };
+    }
+    if (attempt < attempts) {
+      await sleep(delayMs);
+    }
+  }
+  throw new Error(
+    `npm registry did not converge before publication after ${attempts} attempts: ${pending.join(", ")}.`,
+  );
+}
+
+export async function resolveNpmPublicationReadinessFromRegistry({
+  expectedVersion,
+  npmDistTag,
+  packages,
+  fetchPackument = fetchNpmRegistryPackumentWithRetry,
+  sleep = (delayMs) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    }),
+}) {
+  return validateNpmPublicationReadiness({
+    expectedVersion,
+    npmDistTag,
+    packages,
+    query: async (packageName) => {
+      const response = await fetchPackument({
+        packageName,
+        packageUrl: `https://registry.npmjs.org/${encodeURIComponent(packageName)}`,
+      });
+      if (response.status === 404) {
+        return null;
+      }
+      if (!response.ok) {
+        throw new Error(`${packageName}: npm registry returned HTTP ${response.status}.`);
+      }
+      return response.packument;
+    },
+    sleep,
+  });
 }
 
 export function extendedStableSelectorRepairCommand(expectedVersion) {

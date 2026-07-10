@@ -5,11 +5,14 @@ import {
   extendedStableSelectorRepairCommand,
   parseExtendedStableGuardBypass,
   parsePriorExtendedStableSelector,
+  resolveNpmPublicationReadinessFromRegistry,
   validateFullReleaseValidationManifest,
+  validateNpmPublicationReadiness,
   validateNpmPublishBoundary,
   validateExtendedStableNpmReleaseRequest,
   validateExtendedStableRunIdentity,
   verifyExtendedStableRegistryReadback,
+  verifyPublishedNpmArtifactIdentities,
 } from "../../scripts/openclaw-npm-extended-stable-release.mjs";
 
 const sha = "a".repeat(40);
@@ -472,6 +475,306 @@ describe("extended-stable registry readback", () => {
     expect(query).toHaveBeenCalledTimes(24);
     expect(sleep).toHaveBeenCalledTimes(11);
     expect(sleep.mock.calls.every(([delay]) => delay === 10_000)).toBe(true);
+  });
+});
+
+describe("published npm artifact identity readback", () => {
+  const packages = [
+    {
+      name: "openclaw",
+      integrity: "sha512-root",
+      shasum: "root-shasum",
+    },
+    {
+      name: "@openclaw/ai",
+      integrity: "sha512-ai",
+      shasum: "ai-shasum",
+    },
+  ];
+
+  function packument(name: string, version = "2026.7.1-beta.3", distTag = "2026.7.1-beta.3") {
+    const identity = packages.find((pkg) => pkg.name === name);
+    return {
+      "dist-tags": { beta: distTag },
+      versions: {
+        [version]: {
+          dist: {
+            integrity: identity?.integrity,
+            shasum: identity?.shasum,
+          },
+        },
+      },
+    };
+  }
+
+  it("retries stale packuments until both packages and the dist-tag converge", async () => {
+    let attempt = 0;
+    const sleep = vi.fn(async () => {
+      attempt += 1;
+    });
+    const result = await verifyPublishedNpmArtifactIdentities({
+      expectedVersion: "2026.7.1-beta.3",
+      npmDistTag: "beta",
+      packages,
+      query: async (name: string) =>
+        attempt === 0 ? packument(name, "2026.7.1-beta.2", "2026.7.1-beta.2") : packument(name),
+      sleep,
+    });
+
+    expect(result).toEqual({ attemptsUsed: 2 });
+    expect(sleep).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledWith(10_000);
+  });
+
+  it("retries when immutable bytes exist before the requested dist-tag converges", async () => {
+    let attempt = 0;
+    const sleep = vi.fn(async () => {
+      attempt += 1;
+    });
+    const result = await verifyPublishedNpmArtifactIdentities({
+      expectedVersion: "2026.7.1-beta.3",
+      npmDistTag: "beta",
+      packages,
+      query: async (name: string) =>
+        packument(name, "2026.7.1-beta.3", attempt === 0 ? "2026.7.1-beta.2" : undefined),
+      sleep,
+    });
+
+    expect(result).toEqual({ attemptsUsed: 2 });
+    expect(sleep).toHaveBeenCalledOnce();
+  });
+
+  it("fails immediately when immutable published bytes differ", async () => {
+    const query = vi.fn(async (name: string) => {
+      const value = packument(name);
+      value.versions["2026.7.1-beta.3"].dist.integrity = "sha512-wrong";
+      return value;
+    });
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      verifyPublishedNpmArtifactIdentities({
+        expectedVersion: "2026.7.1-beta.3",
+        npmDistTag: "beta",
+        packages,
+        query,
+        sleep,
+      }),
+    ).rejects.toThrow(/do not match the approved artifact/u);
+    expect(query).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("exhausts exactly 12 attempts when registry state never appears", async () => {
+    const query = vi.fn(async () => null);
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      verifyPublishedNpmArtifactIdentities({
+        expectedVersion: "2026.7.1-beta.3",
+        npmDistTag: "beta",
+        packages,
+        query,
+        sleep,
+      }),
+    ).rejects.toThrow(/after 12 attempts/u);
+    expect(query).toHaveBeenCalledTimes(24);
+    expect(sleep).toHaveBeenCalledTimes(11);
+  });
+});
+
+describe("npm publication readiness", () => {
+  const packages = [
+    {
+      name: "openclaw",
+      integrity: "sha512-root",
+      shasum: "root-shasum",
+    },
+    {
+      name: "@openclaw/ai",
+      integrity: "sha512-ai",
+      shasum: "ai-shasum",
+    },
+  ];
+
+  function packument(name: string, distTag = "2026.7.1-beta.3") {
+    const identity = packages.find((pkg) => pkg.name === name);
+    return {
+      "dist-tags": { beta: distTag },
+      versions: {
+        "2026.7.1-beta.3": {
+          dist: {
+            integrity: identity?.integrity,
+            shasum: identity?.shasum,
+          },
+        },
+      },
+    };
+  }
+
+  it("requires an exact package identity before reading the registry", async () => {
+    const query = vi.fn(async () => null);
+
+    await expect(
+      validateNpmPublicationReadiness({
+        expectedVersion: "",
+        npmDistTag: "beta",
+        packages,
+        query,
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/requires an exact package identity/u);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("accepts a mix of exact published and genuinely missing packages", async () => {
+    const result = await validateNpmPublicationReadiness({
+      expectedVersion: "2026.7.1-beta.3",
+      npmDistTag: "beta",
+      packages,
+      query: async (name: string) => (name === "openclaw" ? packument(name) : null),
+      sleep: async () => {},
+    });
+
+    expect(result).toEqual({
+      attemptsUsed: 1,
+      packages: [
+        { name: "openclaw", state: "published" },
+        { name: "@openclaw/ai", state: "missing" },
+      ],
+    });
+  });
+
+  it("fails before checking later packages when root bytes conflict", async () => {
+    const query = vi.fn(async (name: string) => {
+      const value = packument(name);
+      value.versions["2026.7.1-beta.3"].dist.integrity = "sha512-wrong";
+      return value;
+    });
+
+    await expect(
+      validateNpmPublicationReadiness({
+        expectedVersion: "2026.7.1-beta.3",
+        npmDistTag: "beta",
+        packages,
+        query,
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/do not match the approved artifact/u);
+    expect(query).toHaveBeenCalledOnce();
+    expect(query).toHaveBeenCalledWith("openclaw");
+  });
+
+  it("retries exact published bytes until the requested tag converges", async () => {
+    let attempt = 0;
+    const sleep = vi.fn(async () => {
+      attempt += 1;
+    });
+    const result = await validateNpmPublicationReadiness({
+      expectedVersion: "2026.7.1-beta.3",
+      npmDistTag: "beta",
+      packages: [packages[0]],
+      query: async (name: string) =>
+        packument(name, attempt === 0 ? "2026.7.1-beta.2" : "2026.7.1-beta.3"),
+      sleep,
+    });
+
+    expect(result).toEqual({
+      attemptsUsed: 2,
+      packages: [{ name: "openclaw", state: "published" }],
+    });
+    expect(sleep).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledWith(10_000);
+  });
+
+  it("never treats a target dist-tag without its version record as missing", async () => {
+    const query = vi.fn(async () => ({
+      "dist-tags": { beta: "2026.7.1-beta.3" },
+      versions: {},
+    }));
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      validateNpmPublicationReadiness({
+        expectedVersion: "2026.7.1-beta.3",
+        npmDistTag: "beta",
+        packages: [packages[0]],
+        query,
+        sleep,
+        attempts: 2,
+        delayMs: 1,
+      }),
+    ).rejects.toThrow(/did not converge before publication/u);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["malformed packument", {}, "malformed packument"],
+    ["missing dist-tags", { versions: {} }, "malformed dist-tags"],
+    [
+      "incomplete immutable identity",
+      {
+        "dist-tags": { beta: "2026.7.1-beta.3" },
+        versions: { "2026.7.1-beta.3": {} },
+      },
+      "complete immutable artifact identity",
+    ],
+  ])("fails closed on %s", async (_label, registryValue, error) => {
+    await expect(
+      validateNpmPublicationReadiness({
+        expectedVersion: "2026.7.1-beta.3",
+        npmDistTag: "beta",
+        packages: [packages[0]],
+        query: async () => registryValue,
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(error);
+  });
+
+  it("treats only an npm registry 404 as a missing package", async () => {
+    const fetchPackument = vi.fn(async () => ({
+      status: 404,
+      ok: false,
+      packument: null,
+    }));
+    const result = await resolveNpmPublicationReadinessFromRegistry({
+      expectedVersion: "2026.7.1-beta.3",
+      npmDistTag: "beta",
+      packages: [packages[1]],
+      fetchPackument,
+      sleep: async () => {},
+    });
+
+    expect(result.packages).toEqual([{ name: "@openclaw/ai", state: "missing" }]);
+    expect(fetchPackument).toHaveBeenCalledWith({
+      packageName: "@openclaw/ai",
+      packageUrl: "https://registry.npmjs.org/%40openclaw%2Fai",
+    });
+  });
+
+  it("fails closed on non-404 registry responses and transport errors", async () => {
+    await expect(
+      resolveNpmPublicationReadinessFromRegistry({
+        expectedVersion: "2026.7.1-beta.3",
+        npmDistTag: "beta",
+        packages: [packages[0]],
+        fetchPackument: async () => ({ status: 403, ok: false, packument: null }),
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/HTTP 403/u);
+
+    await expect(
+      resolveNpmPublicationReadinessFromRegistry({
+        expectedVersion: "2026.7.1-beta.3",
+        npmDistTag: "beta",
+        packages: [packages[0]],
+        fetchPackument: async () => {
+          throw new Error("network unavailable");
+        },
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/network unavailable/u);
   });
 });
 
