@@ -1438,5 +1438,21 @@
   {
     "source": "openclaw nodes approve",
     "target": "openclaw nodes approve"
+  },
+  {
+    "source": "Native UI mobile KMP migration plan",
+    "target": "原生 UI 移动端 KMP 迁移计划"
+  },
+  {
+    "source": "Android app",
+    "target": "Android 应用"
+  },
+  {
+    "source": "iOS app",
+    "target": "iOS 应用"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "Gateway 协议"
   }
 ]
