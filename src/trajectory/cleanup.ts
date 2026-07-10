@@ -12,6 +12,8 @@ import {
 import {
   canonicalizeTrajectoryPath as canonicalizePathForComparison,
   claimTrajectoryPathIncarnation,
+  findTrajectoryPathOwnedBySession,
+  mayTrajectoryPathBeRemovedBySession,
   reassignTrajectoryPathOwner,
   withTrajectoryPathLock,
 } from "./writer-lifecycle.js";
@@ -200,9 +202,22 @@ export async function removeSessionTrajectoryArtifacts(params: {
   if (pointer?.runtimeFile) {
     runtimeCandidates.add(pointer.runtimeFile);
   }
+  // The one shared, authoritative derivation for a collision-disambiguated
+  // path: ask the registry what canonicalPath this exact sessionId owns,
+  // rather than re-deriving the (wrong, un-suffixed) default candidate. Ownership
+  // records are in-process-trusted, unlike a persisted pointer file, so this
+  // candidate skips the basename/content heuristic below and is validated by
+  // owner match alone, inside the lock.
+  const registryOwnedPath = findTrajectoryPathOwnedBySession(params.sessionId);
+  if (registryOwnedPath) {
+    runtimeCandidates.add(registryOwnedPath);
+  }
 
   for (const runtimePath of runtimeCandidates) {
+    const canonicalRuntimePath = canonicalizePathForComparison(runtimePath);
+    const isRegistryOwnedCandidate = canonicalRuntimePath === registryOwnedPath;
     if (
+      !isRegistryOwnedCandidate &&
       !mayRemoveRuntimeTarget({
         defaultRuntimePath,
         filePath: runtimePath,
@@ -213,8 +228,14 @@ export async function removeSessionTrajectoryArtifacts(params: {
     ) {
       continue;
     }
-    const canonicalRuntimePath = canonicalizePathForComparison(runtimePath);
     const deleted = await withTrajectoryPathLock(canonicalRuntimePath, async () => {
+      // Validate ownership from the registry's own record, not just the
+      // pre-lock heuristic above: a concurrent reassignment could have moved
+      // this canonical path to a different owner between that check and
+      // lock admission, and no cross-session delete may ever go through.
+      if (!mayTrajectoryPathBeRemovedBySession(canonicalRuntimePath, params.sessionId)) {
+        return null;
+      }
       // Retire before unlinking, in the same locked turn: a writer's flush
       // turn queued behind this one must observe "retired" and no-op instead
       // of recreating the file we are about to remove (F1/F2/F5). Acquisition

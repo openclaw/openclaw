@@ -199,6 +199,41 @@ export function reapRetiredTrajectoryPathEntries(): void {
   }
 }
 
+/**
+ * Reverse lookup: the canonical path currently on file for sessionId, if any.
+ * This is the ONE shared derivation collision-aware callers (cleanup.ts) must
+ * use to find the exact path a disambiguated owner holds, instead of
+ * re-deriving the (wrong, un-suffixed) default candidate path — the previous
+ * shape left a disambiguated owner's own runtime file unreachable by its own
+ * delete, orphaning it right back through the collision branch it exists to
+ * guard.
+ */
+export function findTrajectoryPathOwnedBySession(sessionId: string): string | undefined {
+  for (const [canonicalPath, entry] of registry) {
+    if (entry.ownerSessionId === sessionId) {
+      return canonicalPath;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The same-turn ownership check collision-aware removal validates inside
+ * withTrajectoryPathLock before claiming+removing: true when canonicalPath's
+ * registry entry is absent (no in-process memory, e.g. the writer lived in a
+ * prior process run — the pre-existing candidate-matching heuristics in
+ * cleanup.ts remain the authority for that case) or is owned by sessionId.
+ * False when a DIFFERENT session's owner record is on file, which must block
+ * removal so no cross-session delete becomes possible.
+ */
+export function mayTrajectoryPathBeRemovedBySession(
+  canonicalPath: string,
+  sessionId: string,
+): boolean {
+  const entry = registry.get(canonicalPath);
+  return !entry || entry.ownerSessionId === sessionId;
+}
+
 /** Test-only: does not reset nextIncarnation — see its module-level comment. */
 export function clearTrajectoryWriterLifecycleRegistryForTest(): void {
   registry.clear();
