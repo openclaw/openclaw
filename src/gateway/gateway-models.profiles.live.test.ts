@@ -30,6 +30,7 @@ import {
   getHighSignalLiveModelProviders,
   isHighSignalLiveModelRef,
   isSmallLiveModelRef,
+  listPrioritizedHighSignalLiveModelRefs,
   listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
@@ -217,6 +218,24 @@ function filterGatewayLiveModelRefsByProvider(
     [...providerFilter].map((provider) => normalizeProviderId(provider)).filter(Boolean),
   );
   return refs.filter((ref) => providers.has(normalizeProviderId(ref.provider)));
+}
+
+function resolvePrioritizedGatewayLiveModelRefs(params: {
+  providerFilter: ReadonlySet<string> | null;
+  useExplicit: boolean;
+  useSmall: boolean;
+}): Array<{ provider: string; id: string }> {
+  if (params.useExplicit) {
+    return [];
+  }
+  // High-signal refs can be plugin-resolved models absent from the static
+  // catalog; omitting them leaves provider-scoped live lanes with zero coverage.
+  return filterGatewayLiveModelRefsByProvider(
+    params.useSmall
+      ? listPrioritizedSmallLiveModelRefs()
+      : listPrioritizedHighSignalLiveModelRefs(),
+    params.providerFilter,
+  );
 }
 
 function isWantedSmallGatewayLiveModel(params: {
@@ -1546,6 +1565,37 @@ describe("providerScopedModelRegistryProviders", () => {
         new Set(["ollama"]),
       ),
     ).toEqual([{ provider: "ollama", id: "gemma3:4b" }]);
+  });
+
+  it("loads provider-scoped dynamic refs for default high-signal sweeps", () => {
+    expect(
+      resolvePrioritizedGatewayLiveModelRefs({
+        providerFilter: new Set(["openrouter"]),
+        useExplicit: false,
+        useSmall: false,
+      }),
+    ).toEqual([
+      { provider: "openrouter", id: "openai/gpt-5.2-chat" },
+      { provider: "openrouter", id: "minimax/minimax-m2.7" },
+      { provider: "openrouter", id: "ai21/jamba-large-1.7" },
+    ]);
+    expect(
+      resolvePrioritizedGatewayLiveModelRefs({
+        providerFilter: new Set(["fireworks"]),
+        useExplicit: false,
+        useSmall: false,
+      }),
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }]);
+  });
+
+  it("leaves explicit gateway model refs to targeted registry lookup", () => {
+    expect(
+      resolvePrioritizedGatewayLiveModelRefs({
+        providerFilter: new Set(["openrouter"]),
+        useExplicit: true,
+        useSmall: false,
+      }),
+    ).toEqual([]);
   });
 
   it("does not count small models outside a provider-scoped gateway sweep", () => {
@@ -4468,7 +4518,12 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           modelRegistry = authBacked.modelRegistry;
           all = authBacked.all;
         }
-        if (useSmall) {
+        const prioritizedRefs = resolvePrioritizedGatewayLiveModelRefs({
+          providerFilter: PROVIDERS,
+          useExplicit,
+          useSmall,
+        });
+        if (prioritizedRefs.length > 0) {
           const augmented = await withGatewayLiveSetupTimeout(
             appendPrioritizedDynamicLiveModels({
               models: all,
@@ -4477,16 +4532,13 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               workspaceDir,
               env: process.env,
               modelRegistry,
-              refs: filterGatewayLiveModelRefsByProvider(
-                listPrioritizedSmallLiveModelRefs(),
-                PROVIDERS,
-              ),
+              refs: prioritizedRefs,
             }),
-            "[all-models] load dynamic small model refs",
+            `[all-models] load dynamic ${useSmall ? "small" : "high-signal"} model refs`,
           );
           if (augmented.added.length > 0) {
             logProgress(
-              `[all-models] loaded ${augmented.added.length} prioritized dynamic small model refs`,
+              `[all-models] loaded ${augmented.added.length} prioritized dynamic ${useSmall ? "small" : "high-signal"} model refs`,
             );
             all = augmented.models;
             modelRegistry = createStaticLiveModelRegistry(all);
