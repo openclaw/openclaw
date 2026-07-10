@@ -9,13 +9,15 @@ import {
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 const fetchGuardMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string; timeoutMs?: number }) => {
-    return {
-      response: await globalThis.fetch(params.url),
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  }),
+  fetchWithSsrFGuard: vi.fn(
+    async (params: { url: string; timeoutMs?: number; requireHttps?: boolean }) => {
+      return {
+        response: await globalThis.fetch(params.url),
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  ),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -258,50 +260,7 @@ describe("nodes camera helpers", () => {
       });
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-content");
       expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-        expect.objectContaining({ timeoutMs: 15 * 60_000 }),
-      );
-    });
-  });
-
-  it("aborts stalled url response bodies and removes partial files", async () => {
-    fetchGuardMocks.fetchWithSsrFGuard.mockImplementationOnce(
-      async (params: { url: string; timeoutMs?: number }) => {
-        const controller = new AbortController();
-        const timeoutMs = params.timeoutMs ?? 0;
-        const timeoutId = setTimeout(
-          () => controller.abort(new Error(`timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-        timeoutId.unref?.();
-        const body = new ReadableStream<Uint8Array>({
-          start(streamController) {
-            streamController.enqueue(new TextEncoder().encode("partial"));
-            controller.signal.addEventListener(
-              "abort",
-              () => streamController.error(controller.signal.reason),
-              { once: true },
-            );
-          },
-        });
-        return {
-          response: new Response(body, { status: 200 }),
-          finalUrl: params.url,
-          release: async () => clearTimeout(timeoutId),
-        };
-      },
-    );
-
-    await withCameraTempDir(async (dir) => {
-      const out = path.join(dir, "stalled.bin");
-      await expect(
-        writeUrlToFile(out, "https://198.51.100.42/stalled.bin", {
-          expectedHost: "198.51.100.42",
-          timeoutMs: 25,
-        }),
-      ).rejects.toThrow(/timed out after 25ms/i);
-      await expectPathMissing(out);
-      expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-        expect.objectContaining({ timeoutMs: 25 }),
+        expect.objectContaining({ requireHttps: true, timeoutMs: 15 * 60_000 }),
       );
     });
   });

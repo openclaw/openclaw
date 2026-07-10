@@ -96,7 +96,7 @@ export function cameraTempPath(opts: {
 export async function writeUrlToFile(
   filePath: string,
   url: string,
-  opts: { expectedHost: string; timeoutMs?: number },
+  opts: { expectedHost: string },
 ) {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
@@ -126,15 +126,12 @@ export async function writeUrlToFile(
       url,
       auditContext: "writeUrlToFile",
       policy,
-      timeoutMs: opts.timeoutMs ?? CAMERA_URL_DOWNLOAD_TIMEOUT_MS,
+      requireHttps: true,
+      timeoutMs: CAMERA_URL_DOWNLOAD_TIMEOUT_MS,
     });
     release = guarded.release;
     const res = guarded.response;
     const finalUrl = new URL(guarded.finalUrl);
-    if (finalUrl.protocol !== "https:") {
-      await cancelIgnoredResponseBody(res);
-      throw new Error(`writeUrlToFile: redirect resolved to non-https URL ${guarded.finalUrl}`);
-    }
     if (normalizeHostname(finalUrl.hostname) !== expectedHost) {
       await cancelIgnoredResponseBody(res);
       throw new Error(
