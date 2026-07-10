@@ -382,22 +382,33 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("safeAreaPadding(.bottom"))
     }
 
-    @Test func `phone hub stays task first without duplicating root tabs`() throws {
+    @Test func `phone hub promotes chat and talk while filtering root tabs from its destination list`() throws {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 
-        #expect(source.contains("private var gatewayRow: some View"))
-        #expect(source.contains(".accessibilityLabel(\"Gateway \\(self.gatewayStateText),"))
+        #expect(source.contains("private var gatewayHeader: some View"))
+        #expect(source.contains("private var gatewayIdentityTitle: some View"))
+        #expect(source.contains("Text(verbatim: gatewayDisplayLabel)"))
+        #expect(source.contains("Text(\"Gateway\")"))
+        #expect(source.contains(".accessibilityLabel(self.gatewayAccessibilityLabel)"))
+        #expect(source.contains("private var chatTalkRow: some View"))
+        #expect(source.contains(
+            ".listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))"))
+        #expect(source.contains("self.prominentDestinationCard(\n                .chat,"))
+        #expect(source.contains("self.prominentDestinationCard(\n                .talk,"))
+        #expect(source.contains("private var phoneDestinations: [RootTabs.SidebarDestination]"))
+        #expect(source.contains("self.groups.flatMap(\\.destinations).filter { !self.opensRootTab($0) }"))
+        #expect(source.contains("private struct ControlCircleIcon: View"))
+        #expect(source.contains(".foregroundStyle(self.iconForegroundStyle)"))
         #expect(!source.contains("ProValuePill(value: self.gatewayStateText"))
         #expect(!source.contains("destination.subtitle"))
         #expect(source.contains("self.openGatewayDetail()"))
         #expect(!source.contains("self.openPhoneRootDestination(.gateway)"))
-        #expect(source.contains("group.destinations.filter { !self.opensRootTab($0) }"))
         #expect(!source.contains("phoneDetailBackAction"))
         #expect(!source.contains(".navigationBarBackButtonHidden(true)"))
         #expect(!source.contains(".toolbar(.hidden, for: .navigationBar)"))
         #expect(source.matches(of: /usesNativeNavigationChrome: true/).count == 7)
         #expect(!source.contains("directRoute: .agents"))
-        #expect(!source.contains("Image(systemName: \"gearshape\")"))
+        #expect(source.contains("Image(systemName: \"slider.horizontal.3\")"))
         #expect(!source.contains("self.metric(label:"))
         #expect(!source.contains("private func metric(label:"))
     }
@@ -759,12 +770,33 @@ struct RootTabsSourceGuardTests {
         let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
 
         #expect(appSource.contains("PushEnrollmentConsent.disclosureAccepted"))
+        #expect(appSource.contains("NotificationServingPreference.isEnabled()"))
         #expect(appSource.contains("await Self.isNotificationAuthorizationAllowed()"))
         #expect(actionsSource.contains("PushEnrollmentConsent.markDisclosureAccepted()"))
         #expect(actionsSource.contains("self.registerForRemoteNotificationsIfEnrollmentReady()"))
         #expect(modelSource.contains("PushEnrollmentConsent.disclosureAccepted"))
         #expect(modelSource.contains("notifications_not_authorized"))
         #expect(modelSource.contains("enrollment_disclosure_not_accepted"))
+    }
+
+    @Test func `notification preference lives in privacy and keeps system authority separate`() throws {
+        let sectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let settingsList = try Self.extract(
+            sectionsSource,
+            from: "@ViewBuilder var settingsListSection: some View",
+            to: "func settingsListRow(")
+        let privacyDestination = try Self.extract(
+            sectionsSource,
+            from: "var privacyDestination: some View",
+            to: "var notificationsDestination: some View")
+
+        #expect(!settingsList.contains("route: .notifications"))
+        #expect(privacyDestination.contains("self.notificationsSection"))
+        #expect(sectionsSource.contains("Toggle(\"Notifications\", isOn: self.notificationToggleBinding)"))
+        #expect(actionsSource.contains("UIApplication.shared.unregisterForRemoteNotifications()"))
+        #expect(actionsSource.contains("UIApplication.openNotificationSettingsURLString"))
+        #expect(!actionsSource.contains("UIApplication.openSettingsURLString"))
     }
 
     @Test func `gateway settings keeps pairing trust diagnostics and tailscale actions`() throws {
@@ -835,6 +867,14 @@ struct RootTabsSourceGuardTests {
             onboardingSource,
             from: "private func connectStagedGatewaySetupLink()",
             to: "private func clearStagedGatewaySetupLink()")
+        let stagedSetupClear = try Self.extract(
+            onboardingSource,
+            from: "private func clearStagedGatewaySetupLink()",
+            to: "private func applyGatewayLink(")
+        let connectionFailure = try Self.extract(
+            onboardingSource,
+            from: "private func setConnectionFailure(_ message: String)",
+            to: "var body: some View")
         let stagedValidation = try #require(stagedSetupConnect.range(of: "guard link.isValidEndpoint"))
         let stagedConsumption = try #require(stagedSetupConnect.range(of: "self.setupLinkStaging.take()"))
         let stagedReset = try #require(
@@ -871,6 +911,10 @@ struct RootTabsSourceGuardTests {
             onboardingSource,
             from: "private func connectCurrentManualGateway(",
             to: "private func retryLastAttempt(")
+        let onboardingRetry = try Self.extract(
+            onboardingSource,
+            from: "private func retryLastAttempt(",
+            to: "private func gatewayProblemPrimaryActionTitle(")
         let settingsManualConnect = try Self.extract(
             actionsSource,
             from: "func connectManual(setupAttemptID: UUID? = nil) async",
@@ -930,7 +974,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("resetTitle: \"Reset onboarding\""))
         #expect(rootSource.contains("GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)"))
         #expect(rootSource.contains("self.gatewayController.trustRotatedGatewayCertificate(from: problem)"))
-        #expect(rootSource.contains("GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem)"))
+        #expect(rootSource.contains("GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem)"))
         #expect(rootSource.contains("await self.gatewayController.connectActiveGateway()"))
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
@@ -977,6 +1021,17 @@ struct RootTabsSourceGuardTests {
         #expect(stagedSetupConnect.contains(
             "self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)"))
         #expect(stagedSetupConnect.contains("guard self.connectingGatewayID == nil else { return }"))
+        #expect(stagedSetupConnect.contains("self.setConnectionFailure(message)"))
+        #expect(connectionFailure.contains("self.localConnectionFailure = message"))
+        #expect(!connectionFailure.contains("self.connectMessage = message"))
+        #expect(connectionFailure.contains("self.statusLine = message"))
+        #expect(onboardingSource.contains(".failedStatus(message: message, allowsRetry: false)"))
+        #expect(onboardingSource.contains("primaryActionTitle: allowsRetry ? \"Retry\" : nil"))
+        #expect(onboardingSource.contains("onPrimaryAction: onRetry"))
+        #expect(stagedSetupClear.contains("self.localConnectionFailure = nil"))
+        #expect(onboardingRetry.contains("self.localConnectionFailure = nil"))
+        #expect(onboardingRetry.contains(
+            "self.setConnectionFailure(\"No connection to retry. Check the gateway host and port.\")"))
         #expect(onboardingSource.contains("self.setupLinkStaging.link == nil else { return }"))
         #expect(onboardingGatewayLink.contains("self.gatewayToken = setupAuth.token"))
         #expect(onboardingGatewayLink.contains("self.gatewayPassword = setupAuth.password"))

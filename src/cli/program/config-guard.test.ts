@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import { ExitError } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
@@ -164,6 +165,11 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for plugin listing without legacy state",
+      commandPath: ["plugins", "list"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "runs doctor flow for commands that may mutate state without legacy state",
       commandPath: ["message"],
       expectedDoctorCalls: 1,
@@ -206,6 +212,48 @@ describe("ensureConfigReady", () => {
     });
   });
 
+  it("requires a startup migration checkpoint for foreground gateway startup", async () => {
+    await runEnsureConfigReady(["gateway"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+    });
+  });
+
+  it("honors a deferred migration exit after preflight resources unwind", async () => {
+    let preflightUnwound = false;
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
+      try {
+        throw new ExitError(78);
+      } finally {
+        preflightUnwound = true;
+      }
+    });
+    const runtime = makeRuntime();
+    runtime.exit.mockImplementation(() => {
+      expect(preflightUnwound).toBe(true);
+    });
+
+    await expect(
+      ensureConfigReady({ runtime: runtime as never, commandPath: ["gateway"] }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 78 });
+
+    expect(runtime.exit).toHaveBeenCalledWith(78);
+  });
+
+  it("does not require a startup migration checkpoint for gateway probes", async () => {
+    await runEnsureConfigReady(["gateway", "health"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
   it("runs doctor flow for legacy sessions without task sidecars", async () => {
     const root = useTempOpenClawHome();
     fs.mkdirSync(path.join(root, ".openclaw", "sessions"), { recursive: true });
@@ -229,13 +277,21 @@ describe("ensureConfigReady", () => {
     });
   });
 
-  it("runs doctor flow before agent commands when default exec approvals must move to a custom state dir", async () => {
+  it("preserves plugin listing migrations when the legacy plugin install index exists", async () => {
     const root = useTempOpenClawHome();
-    const stateDir = path.join(root, "custom-state");
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    writeStateMarker(root, "exec-approvals.json");
+    writeStateMarker(root, "plugins/installs.json");
+    const migratedSnapshot = {
+      ...makeSnapshot(),
+      config: { plugins: { entries: { legacy: { enabled: true } } } },
+      runtimeConfig: { plugins: { entries: { legacy: { enabled: true } } } },
+      sourceConfig: { plugins: { entries: { legacy: { enabled: true } } } },
+    };
+    loadAndMaybeMigrateDoctorConfigMock.mockResolvedValue({
+      snapshot: migratedSnapshot,
+      baseConfig: {},
+    });
 
-    await runEnsureConfigReady(["agent"]);
+    await runEnsureConfigReady(["plugins", "list"]);
 
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
@@ -243,6 +299,32 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
     });
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
+      migratedSnapshot.runtimeConfig,
+      migratedSnapshot.sourceConfig,
+    );
+  });
+
+  it("preserves plugin listing migrations when the shared state database exists", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "state/openclaw.sqlite");
+
+    await runEnsureConfigReady(["plugins", "list"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not run doctor flow for default-state-dir exec approvals when a custom state dir is set", async () => {
+    // Cross-state-dir imports are doctor-owned; the implicit preflight must not
+    // trigger (and must never archive) files that belong to the default dir.
+    const root = useTempOpenClawHome();
+    const stateDir = path.join(root, "custom-state");
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    writeStateMarker(root, "exec-approvals.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -280,24 +362,30 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
 
-  it("runs doctor flow for read-only commands with configured custom session stores", async () => {
-    const root = useTempOpenClawHome();
-    const customStore = path.join(root, "sessions", "sessions.json");
-    const snapshot = {
-      ...makeSnapshot(),
-      config: { session: { store: customStore } },
-      runtimeConfig: { session: { store: customStore } },
-    };
-    readConfigFileSnapshotMock.mockResolvedValue(snapshot);
-    loadAndMaybeMigrateDoctorConfigMock.mockResolvedValue({
-      snapshot,
-      baseConfig: {},
-    });
+  it.each([
+    { name: "status", commandPath: ["status"] },
+    { name: "plugin listing", commandPath: ["plugins", "list"] },
+  ])(
+    "runs doctor flow for $name with configured custom session stores",
+    async ({ commandPath }) => {
+      const root = useTempOpenClawHome();
+      const customStore = path.join(root, "sessions", "sessions.json");
+      const snapshot = {
+        ...makeSnapshot(),
+        config: { session: { store: customStore } },
+        runtimeConfig: { session: { store: customStore } },
+      };
+      readConfigFileSnapshotMock.mockResolvedValue(snapshot);
+      loadAndMaybeMigrateDoctorConfigMock.mockResolvedValue({
+        snapshot,
+        baseConfig: {},
+      });
 
-    await runEnsureConfigReady(["status"]);
+      await runEnsureConfigReady(commandPath);
 
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
-  });
+      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("pins a valid preflight snapshot for command code reuse", async () => {
     const snapshot = {
@@ -310,6 +398,24 @@ describe("ensureConfigReady", () => {
 
     await runEnsureConfigReady(["health"]);
 
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
+      snapshot.runtimeConfig,
+      snapshot.sourceConfig,
+    );
+  });
+
+  it("pins plugin listing config without loading state migration runtime", async () => {
+    const snapshot = {
+      ...makeSnapshot(),
+      config: { plugins: { entries: { alpha: { enabled: true } } } },
+      runtimeConfig: { plugins: { entries: { alpha: { enabled: true } } } },
+      sourceConfig: { plugins: { entries: { alpha: { enabled: true } } } },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue(snapshot);
+
+    await runEnsureConfigReady(["plugins", "list"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
       snapshot.runtimeConfig,
       snapshot.sourceConfig,

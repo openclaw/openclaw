@@ -108,7 +108,9 @@ describe("xai provider plugin", () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
-          { id: "grok-4.3", object: "model" },
+          { id: "grok-4.5", object: "model" },
+          { id: "grok-4.20-0309-reasoning", object: "model" },
+          { id: "grok-4.20-0309-non-reasoning", object: "model" },
           { id: "not-in-manifest", object: "model" },
         ],
       }),
@@ -122,7 +124,9 @@ describe("xai provider plugin", () => {
     });
 
     expect(provider.apiKey).toBe("xai-key");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.3");
+    expect(provider.models.map((model) => model.id)).toContain("grok-4.5");
+    expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-reasoning");
+    expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-non-reasoning");
     expect(provider.models.map((model) => model.id)).not.toContain("not-in-manifest");
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(fetchParams?.url).toBe("https://api.x.ai/v1/models");
@@ -550,6 +554,19 @@ describe("xai provider plugin", () => {
     expect(resolved?.reasoning).toBe(true);
     expect(resolved?.input).toEqual(["text", "image"]);
     expect(resolved?.contextWindow).toBe(1_000_000);
+
+    const buildAlias = provider.resolveDynamicModel?.({
+      provider: "xai",
+      modelId: "grok-build-latest",
+      modelRegistry: { find: () => null } as never,
+      providerConfig: {
+        api: "openai-responses",
+        baseUrl: "https://api.x.ai/v1",
+      },
+    } as never);
+    expect(buildAlias?.id).toBe("grok-4.5");
+    expect(buildAlias?.reasoning).toBe(true);
+    expect(buildAlias?.contextWindow).toBe(500_000);
   });
 
   it("marks modern Grok refs without accepting multi-agent ids", async () => {
@@ -578,7 +595,7 @@ describe("xai provider plugin", () => {
       model: createProviderModel({ id: "grok-4.3" }),
     } as never);
     expect(normalized?.thinkingLevelMap).toEqual({
-      off: null,
+      off: "none",
       minimal: "low",
       low: "low",
       medium: "medium",
@@ -603,10 +620,12 @@ describe("xai provider plugin", () => {
           toolSchemaProfile?: string;
           nativeWebSearchTool?: boolean;
           toolCallArgumentsEncoding?: string;
+          unsupportedToolSchemaKeywords?: string[];
         }
       | undefined;
     expect(normalizedCompat?.toolSchemaProfile).toBe("xai");
     expect(normalizedCompat?.nativeWebSearchTool).toBe(true);
     expect(normalizedCompat?.toolCallArgumentsEncoding).toBe("html-entities");
+    expect(normalizedCompat?.unsupportedToolSchemaKeywords).toEqual(["minContains", "maxContains"]);
   });
 });

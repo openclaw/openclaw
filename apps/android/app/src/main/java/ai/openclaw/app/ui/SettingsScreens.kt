@@ -1,14 +1,19 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
+import ai.openclaw.app.AppLanguage
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.CronEditorDraftState
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
+import ai.openclaw.app.GatewayCronActionState
 import ai.openclaw.app.GatewayCronJobDetail
 import ai.openclaw.app.GatewayCronJobDetailState
+import ai.openclaw.app.GatewayCronJobEdit
 import ai.openclaw.app.GatewayCronJobSummary
+import ai.openclaw.app.GatewayCronRunHistoryState
 import ai.openclaw.app.GatewayExecApprovalSummary
 import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.GatewayTalkSetupState
@@ -17,7 +22,10 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.appLanguageRowSubtitle
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.currentSystemLanguageTag
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
@@ -27,6 +35,8 @@ import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
+import ai.openclaw.app.reconcileRestoredAction
+import ai.openclaw.app.setAppLanguage
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
@@ -44,6 +54,8 @@ import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.TalkWaveform
+import ai.openclaw.app.ui.design.TalkWaveformPhase
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -59,6 +71,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -96,6 +109,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
@@ -151,6 +165,7 @@ internal enum class SettingsRoute {
   CronJobs,
   Usage,
   Skills,
+  SkillWorkshop,
   NodesDevices,
   Channels,
   Dreaming,
@@ -184,6 +199,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.SkillWorkshop -> SkillWorkshopSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -289,7 +305,7 @@ private fun CronJobsSettingsScreen(
     )
     ClawSecondaryButton(text = if (cronRefreshing) "Refreshing" else "Refresh", onClick = viewModel::refreshCronJobs, enabled = isConnected && !cronRefreshing, modifier = Modifier.fillMaxWidth())
     ClawPanel {
-      Text(text = "Android shows scheduled work status. Create and edit schedules from the desktop app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Text(text = "Open a job to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
     cronErrorText?.let { errorText ->
       ClawPanel {
@@ -305,7 +321,7 @@ private fun CronJobsSettingsScreen(
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = "No scheduled jobs.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = "Create recurring OpenClaw work from the desktop app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            Text(text = "Scheduled work created on the gateway will appear here.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
       else -> CronJobsPanel(jobs = cronJobs, onJobClick = { selectedJobId = it.id })
@@ -320,13 +336,29 @@ private fun CronJobDetailSettingsScreen(
   jobName: String?,
   onBack: () -> Unit,
 ) {
-  BackHandler(onBack = onBack)
+  fun leaveDetail() {
+    viewModel.cronEditorDraftMemory.clear(jobId)
+    viewModel.dismissCronActionNotice(jobId)
+    onBack()
+  }
+  BackHandler(onBack = ::leaveDetail)
 
   val detailState by viewModel.cronJobDetailState.collectAsState()
+  val historyState by viewModel.cronRunHistoryState.collectAsState()
+  val actionState by viewModel.cronActionState.collectAsState()
+  val pendingCronRunJobIds by viewModel.pendingCronRunJobIds.collectAsState()
+  val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  val activity = LocalActivity.current
 
-  DisposableEffect(viewModel, jobId) {
-    onDispose { viewModel.clearCronJobDetail() }
+  DisposableEffect(activity, viewModel, jobId) {
+    onDispose {
+      viewModel.clearCronJobDetail()
+      if (cronDetailDisposalClearsTransientState(activity?.isChangingConfigurations == true)) {
+        viewModel.cronEditorDraftMemory.clear(jobId)
+        viewModel.dismissCronActionNotice(jobId)
+      }
+    }
   }
 
   LaunchedEffect(isConnected, jobId) {
@@ -336,18 +368,75 @@ private fun CronJobDetailSettingsScreen(
   }
 
   val current = (detailState as? GatewayCronJobDetailState.Loaded)?.job?.takeIf { it.id == jobId }
+  var editorDraft by remember(viewModel, jobId) {
+    mutableStateOf(viewModel.cronEditorDraftMemory.get(jobId))
+  }
+  var restoredDraftNeedsActionCheck by remember(viewModel, jobId) {
+    mutableStateOf(editorDraft?.savePending == true)
+  }
+
+  fun updateEditorDraft(value: CronEditorDraftState?) {
+    editorDraft = value
+    viewModel.cronEditorDraftMemory.set(jobId, value)
+  }
+  LaunchedEffect(isConnected, actionState, restoredDraftNeedsActionCheck) {
+    if (restoredDraftNeedsActionCheck) {
+      updateEditorDraft(
+        editorDraft?.reconcileRestoredAction(
+          isConnected = isConnected,
+          jobId = jobId,
+          actionState = actionState,
+        ),
+      )
+      restoredDraftNeedsActionCheck = false
+    }
+  }
+  LaunchedEffect(isConnected) {
+    if (!isConnected) updateEditorDraft(editorDraft?.saveAborted())
+  }
+  LaunchedEffect(current) {
+    current?.let { job ->
+      updateEditorDraft(editorDraft?.observeJob(job) ?: CronEditorDraftState.from(job))
+    }
+  }
+  LaunchedEffect(actionState, current) {
+    val notice = actionState as? GatewayCronActionState.Notice
+    if (notice?.id == jobId) {
+      val observed = editorDraft?.observeSaveNotice(notice.kind)
+      updateEditorDraft(
+        current?.let { job ->
+          observed?.observeJob(job) ?: CronEditorDraftState.from(job)
+        } ?: observed,
+      )
+    }
+  }
   val loading = (detailState as? GatewayCronJobDetailState.Loading)?.id == jobId
   val errorText = (detailState as? GatewayCronJobDetailState.Error)?.takeIf { it.id == jobId }?.message
+  val deleted =
+    (actionState as? GatewayCronActionState.Notice)
+      ?.takeIf { it.id == jobId }
+      ?.deleted == true
+
+  LaunchedEffect(deleted) {
+    if (deleted) leaveDetail()
+  }
   SettingsDetailFrame(
     title = current?.name ?: jobName ?: "Cron Job",
     subtitle = "Inspect scheduled gateway work.",
     icon = Icons.Default.Bolt,
-    onBack = onBack,
+    onBack = ::leaveDetail,
   ) {
     ClawSecondaryButton(
       text = if (loading) "Refreshing" else "Refresh",
       onClick = { viewModel.loadCronJobDetail(jobId) },
-      enabled = isConnected && !loading,
+      enabled =
+        cronDetailRefreshEnabled(
+          isConnected = isConnected,
+          loading = loading,
+          hasCurrentJob = current != null,
+          draftRequiresResolution = editorDraft?.requiresResolution == true,
+          saveSucceeded = editorDraft?.saveSucceeded == true,
+        ),
       modifier = Modifier.fillMaxWidth(),
     )
 
@@ -364,10 +453,39 @@ private fun CronJobDetailSettingsScreen(
         ClawPanel {
           Text(text = if (loading) "Loading cron job…" else "Cron job not loaded.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      else -> CronJobDetailPanel(current)
+      else ->
+        CronJobDetailPanel(
+          job = current,
+          editorDraft = editorDraft ?: CronEditorDraftState.from(current),
+          onEditorDraftChange = ::updateEditorDraft,
+          historyState = historyState,
+          actionState = actionState,
+          runPending = jobId in pendingCronRunJobIds,
+          operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+          onRun = { viewModel.runCronJob(current.id) },
+          onToggleEnabled = {
+            viewModel.setCronJobEnabled(id = current.id, enabled = !current.enabled)
+          },
+          onSave = { edit -> viewModel.updateCronJob(original = current, edit = edit) },
+          onRefreshHistory = { viewModel.refreshCronRunHistory(current.id) },
+          onDelete = { viewModel.deleteCronJob(current.id) },
+        )
     }
   }
 }
+
+internal fun cronDetailRefreshEnabled(
+  isConnected: Boolean,
+  loading: Boolean,
+  hasCurrentJob: Boolean,
+  draftRequiresResolution: Boolean,
+  saveSucceeded: Boolean,
+): Boolean =
+  isConnected &&
+    !loading &&
+    (!hasCurrentJob || !draftRequiresResolution || saveSucceeded)
+
+internal fun cronDetailDisposalClearsTransientState(isChangingConfigurations: Boolean): Boolean = !isChangingConfigurations
 
 @Composable
 private fun AgentsSettingsScreen(
@@ -620,16 +738,12 @@ private fun SettingsWaveformPanel(
       horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
       Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp), tint = ClawTheme.colors.text)
-      Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-        listOf(6, 12, 18, 11, 28, 34, 18, 10, 8, 24, 38, 31, 12, 8, 18, 30, 40, 22, 12, 8, 20, 29, 16, 8).forEachIndexed { index, height ->
-          Box(
-            modifier =
-              Modifier
-                .size(width = 2.dp, height = (if (active) height else 7 + index % 4 * 4).dp)
-                .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle, RoundedCornerShape(999.dp)),
-          )
-        }
-      }
+      // Thinking is the preview phase: no capture runs on this screen, so the
+      // synthetic swell demonstrates the animation without touching the mic.
+      TalkWaveform(
+        phase = if (active) TalkWaveformPhase.Thinking else TalkWaveformPhase.Idle,
+        modifier = Modifier.weight(1f).height(48.dp),
+      )
     }
   }
 }
@@ -1156,6 +1270,13 @@ private fun GatewaySettingsScreen(
   var showSetupCodeHelp by remember { mutableStateOf(false) }
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
   var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
+  val transport =
+    remember(hostInput, tlsInput) {
+      gatewayManualTransportPresentation(
+        hostInput = hostInput,
+        requestedTls = tlsInput,
+      )
+    }
 
   fun saveAndConnect(plan: GatewayConnectPlan) {
     validationText = null
@@ -1308,11 +1429,26 @@ private fun GatewaySettingsScreen(
           ClawTextField(value = hostInput, onValueChange = { hostInput = it }, placeholder = "Host", modifier = Modifier.weight(1f))
           ClawTextField(value = portInput, onValueChange = { portInput = it }, placeholder = "Port", modifier = Modifier.weight(0.62f))
         }
+        Text(text = "Connection security", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        val securityOptions = listOf("Unencrypted", "Secure (TLS)")
         ClawSegmentedControl(
-          options = listOf("Local", "TLS"),
-          selected = if (tlsInput) "TLS" else "Local",
-          onSelect = { selected -> tlsInput = selected == "TLS" },
+          options = securityOptions,
+          selected = if (transport.effectiveTls) "Secure (TLS)" else "Unencrypted",
+          onSelect = { selected -> tlsInput = selected == "Secure (TLS)" },
+          enabledOptions =
+            if (transport.requiresTls) {
+              setOf("Secure (TLS)")
+            } else {
+              securityOptions.toSet()
+            },
         )
+        transport.helperText?.let { helperText ->
+          Text(
+            text = helperText,
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           ClawTextField(value = tokenInput, onValueChange = { tokenInput = it }, placeholder = "Token", modifier = Modifier.weight(1f))
           ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = "Bootstrap", modifier = Modifier.weight(1.05f))
@@ -1333,7 +1469,7 @@ private fun GatewaySettingsScreen(
                 savedManualTls = manualTls,
                 manualHostInput = hostInput,
                 manualPortInput = portInput,
-                manualTlsInput = tlsInput,
+                manualTlsInput = transport.effectiveTls,
                 tokenInput = tokenInput,
                 bootstrapTokenInput = bootstrapTokenInput,
                 passwordInput = passwordInput,
@@ -1361,12 +1497,16 @@ private fun AppearanceSettingsScreen(
   onBack: () -> Unit,
 ) {
   val themeMode by viewModel.appearanceThemeMode.collectAsState()
+  val context = LocalContext.current
+  var appLanguage by remember { mutableStateOf(currentAppLanguage()) }
+  val systemLanguageTag = currentSystemLanguageTag(context)
 
-  SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
+  SettingsDetailFrame(title = "Appearance", subtitle = "Theme and translated Android text.", icon = Icons.Default.Palette, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
           SettingsMetric("Theme", appearanceThemeSummary(themeMode)),
+          SettingsMetric("Language", appLanguage.displayName),
           SettingsMetric("Contrast", "High"),
           SettingsMetric("Typography", "Readable"),
         ),
@@ -1381,7 +1521,57 @@ private fun AppearanceSettingsScreen(
         )
       }
     }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = "App language", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(
+          text = "Changes Android text that OpenClaw has translated. Screens with English-only copy stay unchanged.",
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+        AppLanguage.entries.forEachIndexed { index, language ->
+          if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+          AppLanguageRow(
+            language = language,
+            selected = language == appLanguage,
+            systemLanguageTag = systemLanguageTag,
+            onClick = {
+              appLanguage = language
+              setAppLanguage(language)
+            },
+          )
+        }
+      }
+    }
   }
+}
+
+@Composable
+private fun AppLanguageRow(
+  language: AppLanguage,
+  selected: Boolean,
+  systemLanguageTag: String,
+  onClick: () -> Unit,
+) {
+  ClawListItem(
+    title = language.displayName,
+    subtitle = appLanguageRowSubtitle(language = language, systemLanguageTag = systemLanguageTag),
+    leading = { ClawIconBadge(Icons.Default.Language) },
+    trailing =
+      if (selected) {
+        {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = "Selected",
+            modifier = Modifier.size(18.dp),
+            tint = ClawTheme.colors.primary,
+          )
+        }
+      } else {
+        null
+      },
+    onClick = onClick,
+  )
 }
 
 internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = mode.displayLabel
@@ -1823,7 +2013,7 @@ private fun CronJobListRow(
   ClawDetailRow(
     title = job.name,
     subtitle = cronJobSubtitle(job),
-    modifier = Modifier.clickable(onClick = onClick),
+    modifier = Modifier.clickable(onClickLabel = "Open cron job detail", onClick = onClick),
     leading = { ClawIconBadge(icon = Icons.Default.Bolt) },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1837,7 +2027,32 @@ private fun CronJobListRow(
 @Composable
 private fun CronJobDetailPanel(
   job: GatewayCronJobDetail,
+  editorDraft: CronEditorDraftState,
+  onEditorDraftChange: (CronEditorDraftState) -> Unit,
+  historyState: GatewayCronRunHistoryState,
+  actionState: GatewayCronActionState,
+  runPending: Boolean,
+  operatorAdminScopeAvailable: Boolean,
+  onRun: () -> Unit,
+  onToggleEnabled: () -> Unit,
+  onSave: (GatewayCronJobEdit) -> Unit,
+  onRefreshHistory: () -> Unit,
+  onDelete: () -> Unit,
 ) {
+  CronJobManagementPanel(
+    job = job,
+    editorDraft = editorDraft,
+    onEditorDraftChange = onEditorDraftChange,
+    historyState = historyState,
+    actionState = actionState,
+    runPending = runPending,
+    operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+    onRun = onRun,
+    onToggleEnabled = onToggleEnabled,
+    onSave = onSave,
+    onRefreshHistory = onRefreshHistory,
+    onDelete = onDelete,
+  )
   SettingsMetricPanel(
     rows =
       listOf(

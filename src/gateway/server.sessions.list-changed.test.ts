@@ -985,6 +985,42 @@ test("sessions.compact passes the selected global agent into embedded compaction
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
+test("sessions.compact mounts a dashboard managed worktree as its workspace", async () => {
+  const { dir } = await createSessionStoreDir();
+  const sessionFile = path.join(dir, "sess-suggested.jsonl");
+  await fs.writeFile(
+    sessionFile,
+    createLinearSessionTranscript("sess-suggested", ["one", "two"]),
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      "dashboard:suggested": sessionStoreEntry("sess-suggested", {
+        sessionFile,
+        spawnedCwd: "/tmp/suggested-worktree",
+      }),
+    },
+  });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+
+  const { responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig,
+    params: { key: "agent:main:dashboard:suggested" },
+    subscribedConnIds: new Set(),
+  });
+
+  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
+  expectFields(responsePayload, {
+    ok: true,
+    key: "agent:main:dashboard:suggested",
+    compacted: true,
+  });
+  expect(embeddedRunMock.compactEmbeddedAgentSession.mock.calls[0]?.[0]).toMatchObject({
+    workspaceDir: "/tmp/suggested-worktree",
+    cwd: "/tmp/suggested-worktree",
+  });
+});
+
 test("sessions.changed mutation events include subagent ownership metadata", async () => {
   await createSessionStoreDir();
   await writeSessionStore({

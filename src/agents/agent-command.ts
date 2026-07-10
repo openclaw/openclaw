@@ -61,6 +61,10 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -73,6 +77,7 @@ import {
   resolveMessageChannel,
 } from "../utils/message-channel.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -249,6 +254,37 @@ function parseAgentCommandModelRef(
 
 type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
 type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
+
+function resolveAgentRunLifecycleEndLogLevel(meta: {
+  aborted?: unknown;
+  error?: unknown;
+  stopReason?: unknown;
+  livenessState?: unknown;
+  timeoutPhase?: unknown;
+  providerStarted?: unknown;
+}): "info" | "warn" | "error" | undefined {
+  const status =
+    meta.stopReason === "timeout" || meta.timeoutPhase
+      ? "timeout"
+      : meta.aborted === true || meta.error || meta.stopReason === "error"
+        ? "error"
+        : "ok";
+  const outcome = buildAgentRunTerminalOutcome({
+    status,
+    error: meta.error,
+    stopReason: meta.stopReason,
+    livenessState: meta.livenessState,
+    timeoutPhase: meta.timeoutPhase,
+    providerStarted: meta.providerStarted,
+  });
+  if (!outcome.stopReason || outcome.stopReason === "end_turn") {
+    return undefined;
+  }
+  if (outcome.reason === "completed") {
+    return "info";
+  }
+  return outcome.status === "timeout" ? "warn" : "error";
+}
 
 function applyAgentRunAbortMetadata<T extends { meta: object }>(
   result: T,
@@ -1874,8 +1910,9 @@ async function agentCommandInternal(
         }
         attemptLifecycleState.lifecycleEnded = true;
         const stopReason = runResult.meta.stopReason;
-        if (stopReason && stopReason !== "end_turn") {
-          console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
+        const logLevel = resolveAgentRunLifecycleEndLogLevel(runResult.meta);
+        if (logLevel) {
+          log[logLevel](`[agent] run ${runId} ended with stopReason=${stopReason}`);
         }
         emitAgentEvent({
           runId,
@@ -1981,8 +2018,12 @@ async function agentCommandInternal(
         modelId: model,
         workspaceDir,
       });
+      let liveSwitchMediaTaskIds: ReadonlySet<string> = new Set();
       for (;;) {
         try {
+          liveSwitchMediaTaskIds = sessionKey
+            ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
+            : new Set<string>();
           const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
           const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
             cfg,
@@ -1999,6 +2040,11 @@ async function agentCommandInternal(
           let fallbackAttemptIndex = 0;
           const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
           attemptLifecycleState.currentTurnUserMessagePersisted = false;
+          let attemptMediaTaskIds = liveSwitchMediaTaskIds;
+          const currentAttemptCommittedCronMedia = () =>
+            Boolean(
+              sessionKey && hasNewGeneratedMediaTaskForSessionKey(sessionKey, attemptMediaTaskIds),
+            );
           const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
             cfg,
             provider,
@@ -2028,15 +2074,27 @@ async function agentCommandInternal(
             onFallbackStep: (step) => {
               fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
             },
-            classifyResult: ({ provider: providerLocal, model: modelLocal, result: resultLocal }) =>
-              classifyEmbeddedAgentRunResultForModelFallback({
+            classifyResult: ({
+              provider: providerLocal,
+              model: modelLocal,
+              result: resultLocal,
+            }) => {
+              const classification = classifyEmbeddedAgentRunResultForModelFallback({
                 provider: providerLocal,
                 model: modelLocal,
                 result: resultLocal,
-              }),
+              });
+              return classification && currentAttemptCommittedCronMedia()
+                ? undefined
+                : classification;
+            },
+            canFallbackAfterError: () => !currentAttemptCommittedCronMedia(),
             mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
             abortSignal: opts.abortSignal,
             run: async (providerOverride, modelOverride, runOptions) => {
+              attemptMediaTaskIds = sessionKey
+                ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
+                : new Set<string>();
               attemptLifecycleState.lifecycleError = undefined;
               attemptLifecycleState.lifecycleFinishing = false;
               attemptLifecycleState.lifecycleEnded = false;
@@ -2058,7 +2116,7 @@ async function agentCommandInternal(
               }
               const isFallbackRetry = fallbackAttemptIndex > 0;
               fallbackAttemptIndex += 1;
-              opts.onActiveModelSelected?.({
+              await opts.onActiveModelSelected?.({
                 provider: providerOverride,
                 model: modelOverride,
               });
@@ -2203,6 +2261,12 @@ async function agentCommandInternal(
           break;
         } catch (err) {
           if (err instanceof LiveSessionModelSwitchError) {
+            if (
+              sessionKey &&
+              hasNewGeneratedMediaTaskForSessionKey(sessionKey, liveSwitchMediaTaskIds)
+            ) {
+              throw err;
+            }
             liveSwitchRetries++;
             if (liveSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
               log.error(
@@ -2736,6 +2800,7 @@ export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
   resolveExplicitAgentCommandSessionKey,
+  resolveAgentRunLifecycleEndLogLevel,
   ingressDiagnosticChannel,
   emitIngressModelUsageDiagnostic,
 };

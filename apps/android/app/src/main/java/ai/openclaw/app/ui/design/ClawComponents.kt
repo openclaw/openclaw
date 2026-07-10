@@ -45,6 +45,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -458,6 +460,7 @@ internal fun ClawSegmentedControl(
   selected: String,
   onSelect: (String) -> Unit,
   modifier: Modifier = Modifier,
+  enabledOptions: Set<String> = options.toSet(),
 ) {
   Row(
     modifier =
@@ -469,20 +472,26 @@ internal fun ClawSegmentedControl(
   ) {
     options.forEach { option ->
       val active = option == selected
+      val enabled = option in enabledOptions
       Box(
         modifier =
           Modifier
             .weight(1f)
             .clip(RoundedCornerShape(ClawTheme.radii.control))
             .background(if (active) ClawTheme.colors.primary else Color.Transparent)
-            .clickable { onSelect(option) }
+            .clickable(enabled = enabled) { onSelect(option) }
             .padding(horizontal = 9.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
       ) {
         Text(
           text = option,
           style = ClawTheme.type.caption,
-          color = if (active) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,
+          color =
+            when {
+              active -> ClawTheme.colors.primaryText
+              enabled -> ClawTheme.colors.textMuted
+              else -> ClawTheme.colors.textSubtle
+            },
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
@@ -499,26 +508,39 @@ internal fun ClawTextField(
   placeholder: String,
   modifier: Modifier = Modifier,
   minLines: Int = 1,
+  label: String? = null,
+  enabled: Boolean = true,
 ) {
+  val fieldModifier =
+    if (label == null) modifier else modifier.semantics { contentDescription = label }
   BasicTextField(
     value = value,
     onValueChange = onValueChange,
+    enabled = enabled,
     modifier =
-      modifier
+      fieldModifier
         .fillMaxWidth()
         .clip(RoundedCornerShape(ClawTheme.radii.control))
         .background(ClawTheme.colors.surfaceRaised)
         .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
         .padding(horizontal = 11.dp, vertical = 8.dp),
-    textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
+    textStyle =
+      ClawTheme.type.body.copy(
+        color = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
+      ),
     cursorBrush = SolidColor(ClawTheme.colors.primary),
     minLines = minLines,
     decorationBox = { innerTextField ->
-      Box(modifier = Modifier.fillMaxWidth()) {
-        if (value.isEmpty()) {
-          Text(text = placeholder, style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        label?.let {
+          Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
         }
-        innerTextField()
+        Box(modifier = Modifier.fillMaxWidth()) {
+          if (value.isEmpty()) {
+            Text(text = placeholder, style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+          }
+          innerTextField()
+        }
       }
     },
   )

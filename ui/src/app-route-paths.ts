@@ -1,13 +1,14 @@
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 
-export const APP_ROUTE_DEFINITIONS = {
+const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
   overview: { path: "/overview" },
   activity: { path: "/activity" },
   agents: { path: "/agents" },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   config: { path: "/settings/general", aliases: ["/config"] },
+  profile: { path: "/settings/profile", aliases: ["/profile"] },
   communications: { path: "/settings/communications", aliases: ["/communications"] },
   appearance: { path: "/settings/appearance", aliases: ["/appearance"] },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
