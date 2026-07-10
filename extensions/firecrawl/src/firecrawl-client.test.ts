@@ -772,9 +772,15 @@ describe("runFirecrawlSearch", () => {
           !error.message.includes("\ud83d"),
       );
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
     }
   });
 });
