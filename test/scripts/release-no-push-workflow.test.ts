@@ -581,7 +581,11 @@ describe("release validation no-push transport", () => {
       const build = step(dockerProducer, name);
       expect(build.if).toContain("shared_image_policy == 'no-push-artifact'");
       expect(build.run).toContain("--load");
+      expect(build.run).toContain("--sbom=false");
+      expect(build.run).toContain("--provenance=false");
       expect(build.run).not.toContain("--push");
+      expect(build.run).not.toContain("--sbom=true");
+      expect(build.run).not.toContain("--provenance=mode=max");
     }
     const packDockerArtifact = step(dockerProducer, "Pack Docker E2E image artifact");
     expect(packDockerArtifact.env?.PACKAGE_SHA256).toBe("${{ steps.package.outputs.sha256 }}");
@@ -654,7 +658,9 @@ describe("release validation no-push transport", () => {
     });
     expect(step(liveProducer, "Build shared live-test image").with).toMatchObject({
       load: true,
+      provenance: false,
       push: false,
+      sbom: false,
     });
     const dockerLoginCondition = step(dockerProducer, "Log in to GHCR").if;
     expect(dockerLoginCondition).toContain("shared_image_policy == 'existing-only'");

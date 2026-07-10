@@ -2122,14 +2122,15 @@ jobs:
           IMAGE_REF: ${{ steps.image.outputs.bare_image }}
         run: |
           set -euo pipefail
+          # Docker's local image exporter cannot load attestation manifest lists.
           timeout --kill-after=30s 45m docker buildx build \
             --load \
             --file ./scripts/e2e/Dockerfile \
             --target bare \
             --platform linux/amd64 \
             --tag "$IMAGE_REF" \
-            --sbom=true \
-            --provenance=mode=max \
+            --sbom=false \
+            --provenance=false \
             .
 
       - name: Build functional Docker E2E image artifact
@@ -2139,6 +2140,7 @@ jobs:
           IMAGE_REF: ${{ steps.image.outputs.functional_image }}
         run: |
           set -euo pipefail
+          # Docker's local image exporter cannot load attestation manifest lists.
           timeout --kill-after=30s 45m docker buildx build \
             --load \
             --file ./scripts/e2e/Dockerfile \
@@ -2146,8 +2148,8 @@ jobs:
             --build-context openclaw_package=.artifacts/docker-e2e-package \
             --platform linux/amd64 \
             --tag "$IMAGE_REF" \
-            --sbom=true \
-            --provenance=mode=max \
+            --sbom=false \
+            --provenance=false \
             .
 
       - name: Pack Docker E2E image artifact
@@ -2316,8 +2318,9 @@ jobs:
             OPENCLAW_EXTENSIONS=${{ steps.image.outputs.live_image_extensions }}
           platforms: linux/amd64
           tags: ${{ steps.image.outputs.live_image }}
-          sbom: true
-          provenance: mode=max
+          # Attestations remain on registry-published images; this path loads a local artifact.
+          sbom: false
+          provenance: false
           load: true
           push: false
 
