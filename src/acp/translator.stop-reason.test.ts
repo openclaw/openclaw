@@ -672,7 +672,7 @@ describe("acp translator stop reason mapping", () => {
       (p) => p?.update?.sessionUpdate === "agent_message_chunk",
     );
     expect(appendChunks).toHaveLength(1);
-    expect(appendChunks[0].update.content.text).toBe("Hello world");
+    expect(appendChunks[0]!.update!.content!.text).toBe("Hello world");
 
     // Replace delta: "Hello world" → "Goodbye world" (non-append revision)
     await agent.handleGatewayEvent(
@@ -695,7 +695,7 @@ describe("acp translator stop reason mapping", () => {
     expect(allChunks).toHaveLength(2);
     // The replace delta must emit the FULL new text, not a byte-offset slice.
     // "Goodbye world".slice(11) would be "d" (corrupted), but the fix emits all 13 chars.
-    expect(allChunks[1].update.content.text).toBe("Goodbye world");
+    expect(allChunks[1]!.update!.content!.text).toBe("Goodbye world");
 
     // Cleanup: send a final event to settle the prompt.
     await agent.handleGatewayEvent(
@@ -761,7 +761,7 @@ describe("acp translator stop reason mapping", () => {
       (p) => p?.update?.sessionUpdate === "agent_message_chunk",
     );
     expect(appendChunks).toHaveLength(1);
-    expect(appendChunks[0].update.content.text).toBe("Hello world!");
+    expect(appendChunks[0]!.update!.content!.text).toBe("Hello world!");
 
     // Replace delta: "Hello world!" → "Hi" (shorter revision)
     await agent.handleGatewayEvent(
@@ -784,7 +784,7 @@ describe("acp translator stop reason mapping", () => {
     expect(allChunks).toHaveLength(2);
     // Before the fix, "Hi".length (2) <= sentSoFar (12) would return early and
     // emit nothing. After the fix, the full "Hi" is emitted.
-    expect(allChunks[1].update.content.text).toBe("Hi");
+    expect(allChunks[1]!.update!.content!.text).toBe("Hi");
 
     await agent.handleGatewayEvent(
       createChatEvent({
