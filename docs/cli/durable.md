@@ -103,5 +103,7 @@ decisions by itself in this foundation slice.
 ## Related
 
 - [Gateway protocol](/gateway/protocol#durable-coordination-rpcs)
+- [Durable Core Beta 3 Architecture](/specs/durable-core-beta3-architecture)
+- [Durable Core Beta 3 Test Plan](/specs/durable-core-beta3-test-plan)
 - [Durable Session and Task Runtime RFC](/specs/durable-session-task-runtime-rfc)
 - [CLI reference](/cli)

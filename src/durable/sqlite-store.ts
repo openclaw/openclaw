@@ -652,6 +652,20 @@ function isTerminalRunStatus(status: DurableRuntimeRunStatus): boolean {
   );
 }
 
+function isTerminalStepStatus(status: DurableRuntimeStepStatus): boolean {
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "lost" ||
+    status === "skipped"
+  );
+}
+
+function isSameSqlValue(left: SQLInputValue | null, right: SQLInputValue | null): boolean {
+  return left === right;
+}
+
 export function openDurableRuntimeSqliteStore(options?: {
   path?: string;
   env?: NodeJS.ProcessEnv;
@@ -772,6 +786,44 @@ export function openDurableRuntimeSqliteStore(options?: {
             : input.completedAt === null
               ? null
               : input.completedAt;
+        const nextStatus = input.status ?? current.status;
+        const nextRecoveryState = input.recoveryState ?? current.recovery_state;
+        const nextCheckpointRef =
+          input.checkpointRef === undefined
+            ? current.checkpoint_ref
+            : optionalText(input.checkpointRef ?? undefined);
+        const nextWorkUnitId =
+          input.workUnitId === undefined
+            ? current.work_unit_id
+            : optionalText(input.workUnitId ?? undefined);
+        const nextReportRouteId =
+          input.reportRouteId === undefined
+            ? current.report_route_id
+            : optionalText(input.reportRouteId ?? undefined);
+        const nextClaimedBy =
+          input.claimedBy === undefined
+            ? current.claimed_by
+            : optionalText(input.claimedBy ?? undefined);
+        const nextClaimExpiresAt =
+          input.claimExpiresAt === undefined ? current.claim_expires_at : input.claimExpiresAt;
+        const nextHeartbeatAt =
+          input.heartbeatAt === undefined ? current.heartbeat_at : input.heartbeatAt;
+        const nextMetadataJson =
+          input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
+        if (isTerminalRunStatus(current.status)) {
+          const isNoOp =
+            nextStatus === current.status &&
+            nextRecoveryState === current.recovery_state &&
+            isSameSqlValue(completedAt, current.completed_at) &&
+            isSameSqlValue(nextCheckpointRef, current.checkpoint_ref) &&
+            isSameSqlValue(nextWorkUnitId, current.work_unit_id) &&
+            isSameSqlValue(nextReportRouteId, current.report_route_id) &&
+            isSameSqlValue(nextClaimedBy, current.claimed_by) &&
+            isSameSqlValue(nextClaimExpiresAt, current.claim_expires_at) &&
+            isSameSqlValue(nextHeartbeatAt, current.heartbeat_at) &&
+            isSameSqlValue(nextMetadataJson, current.metadata_json);
+          return isNoOp ? rowToRun(current) : undefined;
+        }
         db.prepare(
           `UPDATE durable_runtime_runs
               SET status = ?,
@@ -787,25 +839,17 @@ export function openDurableRuntimeSqliteStore(options?: {
                   metadata_json = ?
             WHERE runtime_run_id = ?`,
         ).run(
-          input.status ?? current.status,
-          input.recoveryState ?? current.recovery_state,
+          nextStatus,
+          nextRecoveryState,
           now,
           completedAt,
-          input.checkpointRef === undefined
-            ? current.checkpoint_ref
-            : optionalText(input.checkpointRef ?? undefined),
-          input.workUnitId === undefined
-            ? current.work_unit_id
-            : optionalText(input.workUnitId ?? undefined),
-          input.reportRouteId === undefined
-            ? current.report_route_id
-            : optionalText(input.reportRouteId ?? undefined),
-          input.claimedBy === undefined
-            ? current.claimed_by
-            : optionalText(input.claimedBy ?? undefined),
-          input.claimExpiresAt === undefined ? current.claim_expires_at : input.claimExpiresAt,
-          input.heartbeatAt === undefined ? current.heartbeat_at : input.heartbeatAt,
-          input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata),
+          nextCheckpointRef,
+          nextWorkUnitId,
+          nextReportRouteId,
+          nextClaimedBy,
+          nextClaimExpiresAt,
+          nextHeartbeatAt,
+          nextMetadataJson,
           input.runtimeRunId,
         );
         const row = db
@@ -1048,40 +1092,86 @@ export function openDurableRuntimeSqliteStore(options?: {
           return undefined;
         }
         const expectedClaimedBy = optionalText(input.expectedClaimedBy);
-        const updateValues: SQLInputValue[] = [
-          input.status ?? current.status,
-          input.recoveryState ?? current.recovery_state,
-          input.attempt ?? current.attempt,
-          input.maxAttempts === undefined ? current.max_attempts : input.maxAttempts,
+        const nextStatus = input.status ?? current.status;
+        const nextRecoveryState = input.recoveryState ?? current.recovery_state;
+        const nextAttempt = input.attempt ?? current.attempt;
+        const nextMaxAttempts =
+          input.maxAttempts === undefined ? current.max_attempts : input.maxAttempts;
+        const nextInputRef =
           input.inputRef === undefined
             ? current.input_ref
-            : optionalText(input.inputRef ?? undefined),
+            : optionalText(input.inputRef ?? undefined);
+        const nextOutputRef =
           input.outputRef === undefined
             ? current.output_ref
-            : optionalText(input.outputRef ?? undefined),
+            : optionalText(input.outputRef ?? undefined);
+        const nextErrorRef =
           input.errorRef === undefined
             ? current.error_ref
-            : optionalText(input.errorRef ?? undefined),
+            : optionalText(input.errorRef ?? undefined);
+        const nextCheckpointRef =
           input.checkpointRef === undefined
             ? current.checkpoint_ref
-            : optionalText(input.checkpointRef ?? undefined),
+            : optionalText(input.checkpointRef ?? undefined);
+        const nextClaimedBy =
           input.claimedBy === undefined
             ? current.claimed_by
-            : optionalText(input.claimedBy ?? undefined),
-          input.claimExpiresAt === undefined ? current.claim_expires_at : input.claimExpiresAt,
-          input.heartbeatAt === undefined ? current.heartbeat_at : input.heartbeatAt,
+            : optionalText(input.claimedBy ?? undefined);
+        const nextClaimExpiresAt =
+          input.claimExpiresAt === undefined ? current.claim_expires_at : input.claimExpiresAt;
+        const nextHeartbeatAt =
+          input.heartbeatAt === undefined ? current.heartbeat_at : input.heartbeatAt;
+        const nextStartedAt =
           input.startedAt === undefined
             ? current.started_at
             : input.startedAt === null
               ? null
-              : input.startedAt,
+              : input.startedAt;
+        const nextCompletedAt =
           input.completedAt === undefined
             ? current.completed_at
             : input.completedAt === null
               ? null
-              : input.completedAt,
+              : input.completedAt;
+        const nextMetadataJson =
+          input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
+        if (isTerminalStepStatus(current.status)) {
+          if (expectedClaimedBy && current.claimed_by !== expectedClaimedBy) {
+            return undefined;
+          }
+          const isNoOp =
+            nextStatus === current.status &&
+            nextRecoveryState === current.recovery_state &&
+            isSameSqlValue(nextAttempt, current.attempt) &&
+            isSameSqlValue(nextMaxAttempts, current.max_attempts) &&
+            isSameSqlValue(nextInputRef, current.input_ref) &&
+            isSameSqlValue(nextOutputRef, current.output_ref) &&
+            isSameSqlValue(nextErrorRef, current.error_ref) &&
+            isSameSqlValue(nextCheckpointRef, current.checkpoint_ref) &&
+            isSameSqlValue(nextClaimedBy, current.claimed_by) &&
+            isSameSqlValue(nextClaimExpiresAt, current.claim_expires_at) &&
+            isSameSqlValue(nextHeartbeatAt, current.heartbeat_at) &&
+            isSameSqlValue(nextStartedAt, current.started_at) &&
+            isSameSqlValue(nextCompletedAt, current.completed_at) &&
+            isSameSqlValue(nextMetadataJson, current.metadata_json);
+          return isNoOp ? rowToStep(current) : undefined;
+        }
+        const updateValues: SQLInputValue[] = [
+          nextStatus,
+          nextRecoveryState,
+          nextAttempt,
+          nextMaxAttempts,
+          nextInputRef,
+          nextOutputRef,
+          nextErrorRef,
+          nextCheckpointRef,
+          nextClaimedBy,
+          nextClaimExpiresAt,
+          nextHeartbeatAt,
+          nextStartedAt,
+          nextCompletedAt,
           now,
-          input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata),
+          nextMetadataJson,
           input.runtimeRunId,
           input.stepId,
         ];

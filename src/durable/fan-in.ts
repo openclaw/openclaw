@@ -207,13 +207,18 @@ export function reconcileDurableFanIn(params: {
   const outcomes = summarizeTerminalOutcomes(childLinks);
   const parentRun = params.store.getRun(params.parentRuntimeRunId);
   const parentAlreadyTerminal = isTerminalRun(parentRun);
+  const terminalizesParent =
+    result.status === "failed" && params.policy === "fail_parent_on_child_failure";
+  const terminalizeFanInStep = parentAlreadyTerminal || terminalizesParent;
+  const stepStatus = terminalizeFanInStep ? result.status : "waiting";
+  const stepRecoveryState = terminalizeFanInStep ? "terminal" : "waiting_child";
 
   params.store.updateStep({
     runtimeRunId: params.parentRuntimeRunId,
     stepId: params.parentStepId,
-    status: result.status,
-    recoveryState: result.status === "waiting" ? "waiting_child" : "terminal",
-    completedAt: result.ready ? now : null,
+    status: stepStatus,
+    recoveryState: stepRecoveryState,
+    completedAt: terminalizeFanInStep && result.ready ? now : null,
     metadata: {
       ...existingMetadata,
       policy: params.policy,
@@ -222,6 +227,7 @@ export function reconcileDurableFanIn(params: {
       succeeded: result.succeeded,
       failed: result.failed,
       terminal: result.terminal,
+      ready: result.ready,
       outcomes,
     },
     now,

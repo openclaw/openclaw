@@ -444,7 +444,18 @@ export async function durableCommand(opts: DurableCliOptions, runtime: RuntimeEn
     return;
   }
 
-  const store = openDurableRuntimeStore({ env });
+  let store: DurableRuntimeStore;
+  try {
+    store = openDurableRuntimeStore({ env });
+  } catch (err) {
+    if (opts.json) {
+      writeJson(runtime, { enabled: true, error: String(err) });
+    } else {
+      runtime.error(`Durable runtime store unavailable: ${String(err)}`);
+    }
+    runtime.exit(1);
+    return;
+  }
   try {
     if (opts.action === "stats") {
       const stats = store.getStats();

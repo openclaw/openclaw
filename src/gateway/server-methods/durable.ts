@@ -29,7 +29,17 @@ export const durableHandlers: GatewayRequestHandlers = {
       return;
     }
     const { runtimeRunId } = params;
-    const store = openDurableRuntimeStore();
+    let store: ReturnType<typeof openDurableRuntimeStore>;
+    try {
+      store = openDurableRuntimeStore();
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `Durable runtime store unavailable: ${String(err)}`),
+      );
+      return;
+    }
     try {
       const run = store.getRun(runtimeRunId);
       if (!run) {
