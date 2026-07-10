@@ -28,9 +28,16 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import { consumeSessionSkillSuggestion } from "../../config/sessions/skill-suggestions.js";
+import {
+  consumeSessionSkillProposalNotice,
+  consumeSessionSkillSuggestion,
+} from "../../config/sessions/skill-suggestions.js";
 import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
-import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
+import type {
+  PendingSkillProposalNotice,
+  PendingSkillSuggestion,
+  SessionEntry,
+} from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -178,21 +185,27 @@ function normalizeMessageTimestampMs(value: unknown): number | undefined {
   return asDateTimestampMs(timestampMs);
 }
 
-function projectSkillSuggestionForTurn(
+function projectSkillWorkshopNoticesForTurn(
   entry: SessionEntry | undefined,
   suggestion: PendingSkillSuggestion | undefined,
+  proposalNotice: PendingSkillProposalNotice | undefined,
 ): SessionEntry | undefined {
   if (!entry) {
     return undefined;
   }
-  if (suggestion) {
-    return { ...entry, pendingSkillSuggestion: suggestion };
+  if (suggestion || proposalNotice) {
+    return {
+      ...entry,
+      ...(suggestion ? { pendingSkillSuggestion: suggestion } : {}),
+      ...(proposalNotice ? { pendingSkillProposalNotice: proposalNotice } : {}),
+    };
   }
-  if (!entry.pendingSkillSuggestion) {
+  if (!entry.pendingSkillSuggestion && !entry.pendingSkillProposalNotice) {
     return entry;
   }
   const projected = { ...entry };
   delete projected.pendingSkillSuggestion;
+  delete projected.pendingSkillProposalNotice;
   return projected;
 }
 
@@ -816,6 +829,7 @@ export async function runPreparedReply(
       }
     : { ...sessionCtx, ThreadStarterBody: undefined };
   let consumedSkillSuggestion: PendingSkillSuggestion | undefined;
+  let consumedSkillProposalNotice: PendingSkillProposalNotice | undefined;
   const resolveContextSessionEntry = async (
     entry: SessionEntry | undefined,
   ): Promise<SessionEntry | undefined> => {
@@ -823,6 +837,26 @@ export async function runPreparedReply(
       return undefined;
     }
     let currentEntry = entry;
+    if (!consumedSkillProposalNotice && currentEntry?.pendingSkillProposalNotice) {
+      try {
+        const consumed = await consumeSessionSkillProposalNotice({
+          agentId,
+          sessionKey,
+          storePath,
+        });
+        if (consumed) {
+          currentEntry = consumed.entry;
+          consumedSkillProposalNotice = consumed.notice;
+          sessionEntry = consumed.entry;
+          sessionEntryHandle?.replaceCurrent(consumed.entry);
+          if (sessionStore) {
+            sessionStore[sessionKey] = consumed.entry;
+          }
+        }
+      } catch (error) {
+        logVerbose(`Skill proposal notice consume failed: ${String(error)}`);
+      }
+    }
     if (!consumedSkillSuggestion && currentEntry?.pendingSkillSuggestion) {
       try {
         const consumed = await consumeSessionSkillSuggestion({
@@ -843,7 +877,11 @@ export async function runPreparedReply(
         logVerbose(`Skill suggestion consume failed: ${String(error)}`);
       }
     }
-    return projectSkillSuggestionForTurn(currentEntry, consumedSkillSuggestion);
+    return projectSkillWorkshopNoticesForTurn(
+      currentEntry,
+      consumedSkillSuggestion,
+      consumedSkillProposalNotice,
+    );
   };
   let inboundContextSessionEntry = await resolveContextSessionEntry(
     sessionStore?.[sessionKey] ?? sessionEntryHandle?.getCurrent() ?? sessionEntry,

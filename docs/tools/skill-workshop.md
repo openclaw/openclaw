@@ -236,6 +236,11 @@ the most recent detected workflow through `skill_workshop`; the user decides whe
 proposal. This built-in suggestion does not create or change a skill by itself. Enable
 `skills.workshop.autonomous.enabled` to create pending proposals directly instead.
 
+When autonomous capture creates or revises a pending proposal, OpenClaw stores a
+one-shot review notice for the next interactive turn. The agent should tell the
+user which proposal id is pending and that it can be applied, rejected, or
+quarantined through `skill_workshop` or the CLI.
+
 ## Approval and autonomy
 
 ```json5
@@ -244,6 +249,10 @@ proposal. This built-in suggestion does not create or change a skill by itself. 
     workshop: {
       autonomous: {
         enabled: false,
+        agents: {
+          allow: [],
+          deny: [],
+        },
       },
       allowSymlinkTargetWrites: false,
       approvalPolicy: "pending",
@@ -257,6 +266,8 @@ proposal. This built-in suggestion does not create or change a skill by itself. 
 | Setting                    | Default     | Effect                                                                                                                                                                 |
 | -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `autonomous.enabled`       | `false`     | Creates pending proposals directly instead of offering the most recent detected workflow on the next turn.                                                             |
+| `autonomous.agents.allow`  | `[]`        | Optional agent ID allowlist for autonomous capture. Empty means all agents unless denied.                                                                              |
+| `autonomous.agents.deny`   | `[]`        | Optional agent ID denylist. Denied agents do not create pending proposals or skill-save suggestions from captured signals.                                             |
 | `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
 | `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
 | `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
@@ -266,6 +277,9 @@ Autonomous capture recognizes prospective rules (for example, “from now on”)
 corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
 to three proposals per turn, routes vocabulary matches to existing writable workspace skills, and
 revises its own pending proposal when another correction targets the same skill.
+Each created or revised proposal also schedules a one-shot review notice for
+the next interactive turn so chat surfaces do not silently accumulate pending
+Skill Workshop proposals.
 
 Proposal descriptions are always capped at 160 bytes, independent of
 `maxSkillBytes`.

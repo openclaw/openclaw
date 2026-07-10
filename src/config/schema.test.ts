@@ -836,6 +836,27 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
   });
 
+  it("accepts Skill Workshop autonomous agent policy in the runtime zod schema", () => {
+    const parsed = OpenClawSchema.parse({
+      skills: {
+        workshop: {
+          autonomous: {
+            enabled: true,
+            agents: {
+              allow: ["planner"],
+              deny: ["chat"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(parsed.skills?.workshop?.autonomous?.agents).toEqual({
+      allow: ["planner"],
+      deny: ["chat"],
+    });
+  });
+
   it("accepts WhatsApp Web Baileys socket timing in the runtime zod schema", () => {
     const parsed = OpenClawSchema.parse({
       web: {

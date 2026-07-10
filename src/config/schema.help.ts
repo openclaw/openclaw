@@ -887,6 +887,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Debounce window in milliseconds for coalescing rapid skill file changes before reload logic runs. Increase to reduce reload churn on frequent writes, or lower for faster edit feedback.",
   "skills.workshop.allowSymlinkTargetWrites":
     "Allows Skill Workshop apply to write through symlinked workspace skill paths whose real target is already trusted by skills.load.allowSymlinkTargets. Keep disabled unless operators intentionally want generated proposal applies to mutate those shared skill roots.",
+  "skills.workshop.autonomous.enabled":
+    "Allows runtime skill evolution to turn durable agent-session signals into pending Skill Workshop proposals automatically. Keep disabled when operators want agents to suggest workflows without creating proposals.",
+  "skills.workshop.autonomous.agents.allow":
+    "Optional agent ID allowlist for runtime skill evolution. Leave empty to let all configured agents participate unless they are listed in skills.workshop.autonomous.agents.deny.",
+  "skills.workshop.autonomous.agents.deny":
+    "Optional agent ID denylist for runtime skill evolution. Denied agents do not create pending proposals or record skill-save suggestions from conversation signals.",
   approvals:
     "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":

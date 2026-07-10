@@ -41,6 +41,7 @@ const updateSessionStore = vi.hoisted(() => vi.fn());
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const consumeSessionSkillSuggestionMock = vi.hoisted(() => vi.fn());
+const consumeSessionSkillProposalNoticeMock = vi.hoisted(() => vi.fn());
 
 vi.mock(import("../../config/sessions/session-accessor.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
@@ -55,6 +56,7 @@ vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
 }));
 
 vi.mock("../../config/sessions/skill-suggestions.js", () => ({
+  consumeSessionSkillProposalNotice: consumeSessionSkillProposalNoticeMock,
   consumeSessionSkillSuggestion: consumeSessionSkillSuggestionMock,
 }));
 
@@ -323,6 +325,7 @@ describe("runPreparedReply media-only handling", () => {
     storeRuntimeLoads.mockClear();
     updateSessionStore.mockReset();
     loadSessionEntryMock.mockReset();
+    consumeSessionSkillProposalNoticeMock.mockReset();
     consumeSessionSkillSuggestionMock.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
@@ -1656,6 +1659,62 @@ describe("runPreparedReply media-only handling", () => {
     expect(
       requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text ?? "",
     ).not.toContain("A reusable workflow");
+  });
+
+  it("consumes a pending skill proposal notice once for the next interactive turn", async () => {
+    const notice = {
+      proposalId: "proposal-github-pr-workflow-v1",
+      skillName: "github-pr-workflow",
+      detectedAt: 1,
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "skill-proposal-notice-session",
+      updatedAt: 1,
+      pendingSkillProposalNotice: notice,
+    };
+    const clearedEntry: SessionEntry = {
+      ...sessionEntry,
+      pendingSkillProposalNotice: undefined,
+    };
+    const sessionStore = { "session-key": sessionEntry };
+    consumeSessionSkillProposalNoticeMock.mockResolvedValueOnce({
+      entry: clearedEntry,
+      notice,
+    });
+    vi.mocked(buildInboundUserContextPrefix).mockImplementation((_ctx, _envelope, entry) =>
+      entry?.pendingSkillProposalNotice
+        ? 'Skill Workshop created pending proposal "proposal-github-pr-workflow-v1" for "github-pr-workflow" last turn — tell the user it is pending review and can be applied, rejected, or quarantined through skill_workshop.'
+        : "",
+    );
+
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-session-store.json",
+      }),
+    );
+
+    expect(consumeSessionSkillProposalNoticeMock).toHaveBeenCalledOnce();
+    expect(sessionStore["session-key"].pendingSkillProposalNotice).toBeUndefined();
+    expect(requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text).toContain(
+      'Skill Workshop created pending proposal "proposal-github-pr-workflow-v1"',
+    );
+
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-session-store.json",
+      }),
+    );
+
+    expect(consumeSessionSkillProposalNoticeMock).toHaveBeenCalledOnce();
+    expect(
+      requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text ?? "",
+    ).not.toContain("pending proposal");
   });
   it("treats reset-triggered followup mode as interrupt when the session lane is empty", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");

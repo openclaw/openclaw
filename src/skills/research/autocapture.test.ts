@@ -7,6 +7,7 @@ import {
   consumeSessionSkillSuggestion,
   recordSessionSkillCaptureSignals,
 } from "../../config/sessions/skill-suggestions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -92,6 +93,75 @@ describe("skill research auto-capture", () => {
     const proposal = await inspectSkillProposal(proposals.proposals[0].id, { workspaceDir });
     expect(proposal?.content).toContain("status: proposal");
     expect(proposal?.content).toContain("always check CI before final response");
+  });
+
+  it("records a one-shot review notice when autonomous capture queues a pending proposal", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on, when working on GitHub PRs, always check CI before final response.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const proposals = await listSkillProposals({ workspaceDir });
+    expect(proposals.proposals).toHaveLength(1);
+    const notice = readSession()?.pendingSkillProposalNotice;
+    expect(notice).toEqual({
+      proposalId: proposals.proposals[0].id,
+      skillName: "github-pr-workflow",
+      detectedAt: expect.any(Number),
+    });
+  });
+
+  it("skips pending proposals when autonomous capture excludes the agent", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on, when working on GitHub PRs, always check CI before final response.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+              agents: {
+                allow: ["planner"],
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
+    expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
   });
 
   it("records one suggestion for the most recent group when autonomy is disabled", async () => {

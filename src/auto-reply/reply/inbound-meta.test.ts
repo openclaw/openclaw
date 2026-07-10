@@ -312,6 +312,25 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text.split("\n")).toHaveLength(1);
   });
 
+  it("injects a pending skill proposal review notice into the current user-role context", () => {
+    const entry: SessionEntry = {
+      sessionId: "skill-proposal-notice-session",
+      updatedAt: 1,
+      pendingSkillProposalNotice: {
+        proposalId: "proposal-github-pr-workflow-v1",
+        skillName: "github-pr-workflow",
+        detectedAt: 1,
+      },
+    };
+
+    const text = buildInboundUserContextPrefix({} as TemplateContext, undefined, entry);
+
+    expect(text).toBe(
+      'Skill Workshop created pending proposal "proposal-github-pr-workflow-v1" for "github-pr-workflow" last turn — tell the user it is pending review and can be applied, rejected, or quarantined through skill_workshop.',
+    );
+    expect(text.split("\n")).toHaveLength(1);
+  });
+
   it("injects an active goal into the current user-role context", () => {
     const text = buildInboundUserContextPrefix(
       {} as TemplateContext,
