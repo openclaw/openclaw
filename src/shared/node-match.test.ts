@@ -7,6 +7,7 @@ describe("shared/node-match", () => {
     expect(normalizeNodeKey(" Mac Studio! ")).toBe("mac-studio");
     expect(normalizeNodeKey("---PI__Node---")).toBe("pi-node");
     expect(normalizeNodeKey("工作站 01")).toBe("工作站-01");
+    expect(normalizeNodeKey("Cafe\u0301 01")).toBe("café-01");
     expect(normalizeNodeKey("###")).toBe("");
   });
 
@@ -144,12 +145,16 @@ describe("shared/node-match", () => {
     const nodes = [
       { nodeId: "mac-compact", displayName: "Mac Studio" },
       { nodeId: "mac-exact", displayName: "MacStudio" },
-      { nodeId: "cafe-node", displayName: "Café 01" },
+      { nodeId: "cafe-compact", displayName: "Cafe\u0301 01" },
+      { nodeId: "cafe-exact", displayName: "Cafe\u030101" },
     ];
     expect(resolveNodeIdFromCandidates(nodes, "MacStudio")).toBe("mac-exact");
     expect(resolveNodeIdFromCandidates([nodes[0]!, nodes[2]!], "MacStudio")).toBe(
       "mac-compact",
     );
-    expect(resolveNodeIdFromCandidates([nodes[2]!], "Café01")).toBe("cafe-node");
+    expect(resolveNodeIdFromCandidates([nodes[2]!, nodes[3]!], "Café01")).toBe(
+      "cafe-exact",
+    );
+    expect(resolveNodeIdFromCandidates([nodes[2]!], "Café01")).toBe("cafe-compact");
   });
 });
