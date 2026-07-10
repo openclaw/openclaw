@@ -27,7 +27,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **CLI loopback sandbox scope:** apply configured sandbox allow/deny policy to loopback tools and bind each bundled CLI MCP grant to its Gateway runtime, session/delivery context, and active execution attempt, preventing child-rewritten headers or stale bearers from widening tool visibility. (#103074) Thanks @pgondhi987.
 - **Agent abort cleanup:** serialize prompt lock reacquisition with terminal cleanup so canceled embedded runs do not self-contend on session locks for up to 60 seconds.
 - **Chutes OAuth deadlines:** bound token exchange, profile lookup, and refresh requests, and keep issued tokens when optional userinfo enrichment stalls. (#102026) Thanks @Alix-007.
 - **Control UI workspace avatars:** inline validated agent avatar files in bootstrap and identity responses so Personal card images render without unauthenticated avatar-route requests, while preserving configured emoji precedence. (#102892, #97602) Thanks @LZY3538.
