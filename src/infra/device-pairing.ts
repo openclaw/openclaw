@@ -542,6 +542,9 @@ function buildApprovedPairedDevice(params: {
     ...(params.existing?.pendingNodeSurface
       ? { pendingNodeSurface: params.existing.pendingNodeSurface }
       : {}),
+    // Operator-assigned label is owner-side state; device repair or role
+    // re-approval must not silently drop it.
+    ...(params.existing?.operatorLabel ? { operatorLabel: params.existing.operatorLabel } : {}),
     createdAtMs: params.existing?.createdAtMs ?? params.now,
     approvedAtMs: params.now,
     lastSeenAtMs: params.accessMetadata?.lastSeenAtMs ?? params.existing?.lastSeenAtMs,

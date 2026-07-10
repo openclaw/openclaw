@@ -8665,19 +8665,19 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
 
 public struct DevicePairRenameParams: Codable, Sendable {
     public let deviceid: String
-    public let displayname: String
+    public let label: String
 
     public init(
         deviceid: String,
-        displayname: String)
+        label: String)
     {
         self.deviceid = deviceid
-        self.displayname = displayname
+        self.label = label
     }
 
     private enum CodingKeys: String, CodingKey {
         case deviceid = "deviceId"
-        case displayname = "displayName"
+        case label
     }
 }
 

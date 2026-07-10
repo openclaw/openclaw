@@ -515,13 +515,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { deviceId, displayName } = params as {
+    const { deviceId, label } = params as {
       deviceId: string;
-      displayName: string;
+      label: string;
     };
-    const trimmed = displayName.trim();
+    const trimmed = label.trim();
     if (!trimmed) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "displayName required"));
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "label required"));
       return;
     }
     const authz = resolveDeviceManagementAuthz(client, deviceId);
@@ -575,7 +575,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       targetDeviceId: deviceId,
       controlId: "device.pair.rename",
     });
-    respond(true, { deviceId, displayName: trimmed }, undefined);
+    respond(true, { deviceId, label: trimmed }, undefined);
   },
   "device.token.rotate": async ({ params, respond, context, client }) => {
     if (!validateDeviceTokenRotateParams(params)) {
