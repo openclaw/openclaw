@@ -181,9 +181,9 @@ export const vi: TranslationMap = {
     reason: "Lý do {reason}",
   },
   worktrees: {
-    newWorktree: "New worktree",
-    owner: "Owner",
-    ownerManual: "Manual",
+    newWorktree: "Worktree mới",
+    owner: "Chủ sở hữu",
+    ownerManual: "Thủ công",
     ownerSession: "Phiên",
     ownerWorkboard: "Workboard",
     title: "Worktree được quản lý",
@@ -223,9 +223,9 @@ export const vi: TranslationMap = {
   },
   sessionsView: {
     deletePreservedWorktrees:
-      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
+      "{count} worktree phiên có công việc chưa commit hoặc chưa push đã được giữ lại ({branches}). Quản lý chúng trong Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
-      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
+      "Worktree của phiên có công việc chưa commit hoặc chưa push, nên đã được giữ lại ({branch}). Vẫn xóa checkout?",
     title: "Phiên",
     subtitle: "Các khóa phiên đang hoạt động và ghi đè theo từng phiên.",
     store: "Kho lưu trữ: {path}",

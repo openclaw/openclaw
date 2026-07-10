@@ -181,8 +181,8 @@ export const id: TranslationMap = {
     reason: "Alasan {reason}",
   },
   worktrees: {
-    newWorktree: "New worktree",
-    owner: "Owner",
+    newWorktree: "Worktree baru",
+    owner: "Pemilik",
     ownerManual: "Manual",
     ownerSession: "Sesi",
     ownerWorkboard: "Workboard",
@@ -223,9 +223,9 @@ export const id: TranslationMap = {
   },
   sessionsView: {
     deletePreservedWorktrees:
-      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
+      "{count} worktree sesi dengan pekerjaan yang belum di-commit atau belum di-push tetap disimpan ({branches}). Kelola di Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
-      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
+      "Worktree sesi ini memiliki pekerjaan yang belum di-commit atau belum di-push, sehingga tetap disimpan ({branch}). Tetap hapus checkout?",
     title: "Sesi",
     subtitle: "Kunci sesi aktif dan penggantian per sesi.",
     store: "Penyimpanan: {path}",

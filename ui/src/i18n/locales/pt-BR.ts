@@ -181,8 +181,8 @@ export const pt_BR: TranslationMap = {
     reason: "Motivo {reason}",
   },
   worktrees: {
-    newWorktree: "New worktree",
-    owner: "Owner",
+    newWorktree: "Novo worktree",
+    owner: "Proprietário",
     ownerManual: "Manual",
     ownerSession: "Sessão",
     ownerWorkboard: "Workboard",
@@ -203,7 +203,7 @@ export const pt_BR: TranslationMap = {
   },
   newSession: {
     title: "Nova sessão",
-    hint: "Escolha onde esta sessão funciona e depois diga o que fazer.",
+    hint: "Escolha onde esta sessão trabalha e diga o que fazer.",
     draftRow: "Nova sessão",
     agent: "Agente",
     where: "Onde",
@@ -211,11 +211,11 @@ export const pt_BR: TranslationMap = {
     folder: "Pasta",
     folderPlaceholder: "Workspace do agente",
     worktree: "Worktree",
-    worktreeUnavailable: "O workspace do agente não é um checkout git",
+    worktreeUnavailable: "O workspace do agente não é um checkout do git",
     baseBranch: "Branch base",
-    worktreeName: "Nome da worktree",
+    worktreeName: "Nome do worktree",
     worktreeNamePlaceholder: "auto",
-    worktreeNameInvalid: "Nomes de worktree usam letras minúsculas, dígitos e hífens.",
+    worktreeNameInvalid: "Nomes de worktree usam letras minúsculas, dígitos e hifens.",
     messagePlaceholder: "Em que esta sessão deve trabalhar?",
     start: "Iniciar sessão",
     starting: "Iniciando…",
@@ -223,9 +223,9 @@ export const pt_BR: TranslationMap = {
   },
   sessionsView: {
     deletePreservedWorktrees:
-      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
+      "{count} worktree(s) de sessão com trabalho não commitado ou não enviado foram mantidas ({branches}). Gerencie-as em Configurações -> Worktrees.",
     deletePreservedWorktreeConfirm:
-      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
+      "A worktree da sessão tem trabalho não commitado ou não enviado, por isso foi mantida ({branch}). Excluir o checkout mesmo assim?",
     title: "Sessões",
     subtitle: "Chaves de sessão ativas e substituições por sessão.",
     store: "Armazenamento: {path}",

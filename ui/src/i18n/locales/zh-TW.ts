@@ -179,9 +179,9 @@ export const zh_TW: TranslationMap = {
     reason: "原因 {reason}",
   },
   worktrees: {
-    newWorktree: "New worktree",
-    owner: "Owner",
-    ownerManual: "Manual",
+    newWorktree: "新增 worktree",
+    owner: "擁有者",
+    ownerManual: "手動",
     ownerSession: "工作階段",
     ownerWorkboard: "Workboard",
     title: "受管理的 Worktrees",
@@ -221,9 +221,9 @@ export const zh_TW: TranslationMap = {
   },
   sessionsView: {
     deletePreservedWorktrees:
-      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
+      "{count} 個含有未提交或未推送工作的 session worktree 已保留（{branches}）。請在 Settings -> Worktrees 下管理。",
     deletePreservedWorktreeConfirm:
-      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
+      "此 session 的 worktree 含有未提交或未推送的工作，因此已保留（{branch}）。仍要刪除 checkout 嗎？",
     title: "工作階段",
     subtitle: "作用中的工作階段金鑰與各工作階段覆寫。",
     store: "儲存位置：{path}",

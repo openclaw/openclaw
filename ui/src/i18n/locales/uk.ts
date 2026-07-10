@@ -182,9 +182,9 @@ export const uk: TranslationMap = {
     reason: "Причина {reason}",
   },
   worktrees: {
-    newWorktree: "New worktree",
-    owner: "Owner",
-    ownerManual: "Manual",
+    newWorktree: "Новий worktree",
+    owner: "Власник",
+    ownerManual: "Вручну",
     ownerSession: "Сесія",
     ownerWorkboard: "Workboard",
     title: "Керовані Worktrees",
@@ -224,9 +224,9 @@ export const uk: TranslationMap = {
   },
   sessionsView: {
     deletePreservedWorktrees:
-      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
+      "{count} робочих дерев сеансу з незакоміченими або невідправленими змінами було збережено ({branches}). Керуйте ними в Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
-      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
+      "Робоче дерево сеансу має незакомічені або невідправлені зміни, тому його було збережено ({branch}). Усе одно видалити checkout?",
     title: "Сеанси",
     subtitle: "Активні ключі сеансів і перевизначення для окремих сеансів.",
     store: "Сховище: {path}",

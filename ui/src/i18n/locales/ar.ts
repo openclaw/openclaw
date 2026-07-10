@@ -180,9 +180,9 @@ export const ar: TranslationMap = {
     reason: "السبب {reason}",
   },
   worktrees: {
-    newWorktree: "New worktree",
-    owner: "Owner",
-    ownerManual: "Manual",
+    newWorktree: "شجرة عمل جديدة",
+    owner: "المالك",
+    ownerManual: "يدوي",
     ownerSession: "الجلسة",
     ownerWorkboard: "Workboard",
     title: "مساحات العمل المُدارة",
@@ -222,9 +222,9 @@ export const ar: TranslationMap = {
   },
   sessionsView: {
     deletePreservedWorktrees:
-      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
+      "تم الاحتفاظ بـ {count} شجرة/أشجار عمل للجلسة تحتوي على عمل غير ملتزم به أو غير مدفوع ({branches}). أدرها من الإعدادات -> أشجار العمل.",
     deletePreservedWorktreeConfirm:
-      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
+      "تحتوي شجرة العمل الخاصة بالجلسة على عمل غير ملتزم به أو غير مدفوع، لذا تم الاحتفاظ بها ({branch}). هل تريد حذف نسخة checkout على أي حال؟",
     title: "الجلسات",
     subtitle: "مفاتيح الجلسات النشطة والتجاوزات لكل جلسة.",
     store: "المخزن: {path}",

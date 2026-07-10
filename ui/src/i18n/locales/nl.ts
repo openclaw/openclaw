@@ -183,9 +183,9 @@ export const nl: TranslationMap = {
     reason: "Reden {reason}",
   },
   worktrees: {
-    newWorktree: "New worktree",
-    owner: "Owner",
-    ownerManual: "Manual",
+    newWorktree: "Nieuwe worktree",
+    owner: "Eigenaar",
+    ownerManual: "Handmatig",
     ownerSession: "Sessie",
     ownerWorkboard: "Workboard",
     title: "Beheerde worktrees",
@@ -225,9 +225,9 @@ export const nl: TranslationMap = {
   },
   sessionsView: {
     deletePreservedWorktrees:
-      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
+      "{count} sessieworktree(s) met niet-gecommitte of niet-gepushte wijzigingen zijn behouden ({branches}). Beheer ze onder Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
-      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
+      "De worktree van de sessie bevat niet-gecommitte of niet-gepushte wijzigingen en is daarom behouden ({branch}). De checkout toch verwijderen?",
     title: "Sessies",
     subtitle: "Actieve sessiesleutels en overrides per sessie.",
     store: "Opslag: {path}",

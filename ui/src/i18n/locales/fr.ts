@@ -184,9 +184,9 @@ export const fr: TranslationMap = {
     reason: "Raison {reason}",
   },
   worktrees: {
-    newWorktree: "New worktree",
-    owner: "Owner",
-    ownerManual: "Manual",
+    newWorktree: "Nouveau worktree",
+    owner: "Propriétaire",
+    ownerManual: "Manuel",
     ownerSession: "Session",
     ownerWorkboard: "Workboard",
     title: "Worktrees gérés",
@@ -228,9 +228,9 @@ export const fr: TranslationMap = {
   },
   sessionsView: {
     deletePreservedWorktrees:
-      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
+      "{count} worktree(s) de session avec des modifications non validées ou non envoyées ont été conservés ({branches}). Gérez-les dans Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
-      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
+      "Le worktree de la session contient des modifications non validées ou non envoyées, il a donc été conservé ({branch}). Supprimer quand même le checkout ?",
     title: "Sessions",
     subtitle: "Clés de session actives et remplacements par session.",
     store: "Stockage : {path}",
