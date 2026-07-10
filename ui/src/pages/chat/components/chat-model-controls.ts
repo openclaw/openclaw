@@ -459,10 +459,16 @@ function renderChatModelReasoningSelect(params: {
   const selectedThinkingOption = thinkingOptions.find(
     (option) => option.value === selectedThinkingValue,
   );
-  const reasoningValueLabel = hasThinkingOverride
+  // Visible state is just the level word; inherited defaults render muted with
+  // no reset affordance, overrides render strong with an icon reset. Screen
+  // readers keep the verbose default phrasing via aria-valuetext.
+  const reasoningValueText = hasThinkingOverride
     ? formatCombinedPickerThinkingLabel(
         selectedThinkingOption?.label ?? formatThinkingOverrideLabel(selectedThinkingValue),
       )
+    : defaultLevelLabel;
+  const reasoningValueLabel = hasThinkingOverride
+    ? reasoningValueText
     : `Default (${defaultLevelLabel})`;
   // Selections commit immediately; the picker stays open so model, reasoning,
   // and speed can be adjusted together. The extra onRequestUpdate re-renders
@@ -477,20 +483,25 @@ function renderChatModelReasoningSelect(params: {
     void onThinkingSelect(value, sessionKey).finally(() => onRequestUpdate?.());
     onRequestUpdate?.();
   };
+  const commitFastMode = (value: ChatFastModeSelectValue) => {
+    void onFastModeSelect(value, sessionKey).finally(() => onRequestUpdate?.());
+    onRequestUpdate?.();
+  };
+  const speedTooltip = fastMode.supported
+    ? "Fast responses finish sooner and can use more of your usage limits."
+    : "Speed control is not supported for this model.";
   const onSliderDrag = (event: Event) => {
     const input = event.currentTarget as HTMLInputElement;
     const stop = sliderStops[Number(input.value)];
     if (!stop) {
       return;
     }
+    // Style/attribute-only drag preview; change commits on release and the
+    // re-render refreshes the visible value label. Never write into rendered
+    // text here: setting textContent on a Lit-managed span ejects the
+    // ChildPart markers and permanently breaks every later menu render.
     input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
-    // Live drag preview without committing; change commits on release.
-    const valueLabel = input
-      .closest(".chat-controls__reasoning-panel")
-      ?.querySelector(".chat-controls__reasoning-value");
-    if (valueLabel) {
-      valueLabel.textContent = formatCombinedPickerThinkingLabel(stop.label);
-    }
+    input.setAttribute("aria-valuetext", formatCombinedPickerThinkingLabel(stop.label));
   };
   const onSliderCommit = (event: Event) => {
     if (thinkingDisabled) {
@@ -520,7 +531,7 @@ function renderChatModelReasoningSelect(params: {
   const onlyStop = sliderStops.length === 1 ? sliderStops[0] : undefined;
   const effectiveThinkingValue = selectedThinkingValue || thinkingDefaultValue;
   const onlyStopSelected = onlyStop?.value === effectiveThinkingValue;
-  const showReasoningPanel = showReasoning || fastMode.options.length > 0;
+  const showReasoningPanel = true;
   const providerGroups = new Map<string, ChatModelProviderOption[]>();
   for (const option of modelOptions) {
     if (option.value === "") {
@@ -682,27 +693,41 @@ function renderChatModelReasoningSelect(params: {
                 ${showReasoning
                   ? html`
                       <div class="chat-controls__reasoning-head">
-                        <div class="chat-controls__reasoning-heading">
-                          <span class="chat-controls__inline-select-section-label">Reasoning</span>
-                          <button
-                            class="chat-controls__reasoning-default"
-                            data-chat-thinking-option=""
-                            type="button"
-                            aria-label=${`Use default reasoning (${defaultLevelLabel})`}
-                            ?disabled=${thinkingDisabled || !hasThinkingOverride}
-                            @click=${(event: MouseEvent) => {
-                              event.stopPropagation();
-                              if (thinkingDisabled || !hasThinkingOverride) {
-                                event.preventDefault();
-                                return;
-                              }
-                              commitThinking("");
-                            }}
+                        <span class="chat-controls__inline-select-section-label">Reasoning</span>
+                        <span class="chat-controls__reasoning-state">
+                          <span
+                            class="chat-controls__reasoning-value ${hasThinkingOverride
+                              ? ""
+                              : "chat-controls__reasoning-value--inherit"}"
                           >
-                            (Default is ${defaultLevelLabel})
-                          </button>
-                        </div>
-                        <span class="chat-controls__reasoning-value">${reasoningValueLabel}</span>
+                            ${reasoningValueText}
+                          </span>
+                          ${hasThinkingOverride
+                            ? html`
+                                <openclaw-tooltip
+                                  .content=${`Reset to default (${defaultLevelLabel})`}
+                                >
+                                  <button
+                                    class="chat-controls__reasoning-reset"
+                                    data-chat-thinking-option=""
+                                    type="button"
+                                    aria-label=${`Use default reasoning (${defaultLevelLabel})`}
+                                    ?disabled=${thinkingDisabled}
+                                    @click=${(event: MouseEvent) => {
+                                      event.stopPropagation();
+                                      if (thinkingDisabled) {
+                                        event.preventDefault();
+                                        return;
+                                      }
+                                      commitThinking("");
+                                    }}
+                                  >
+                                    ${icons.x}
+                                  </button>
+                                </openclaw-tooltip>
+                              `
+                            : ""}
+                        </span>
                       </div>
                       ${sliderStops.length > 1
                         ? html`
@@ -744,10 +769,6 @@ function renderChatModelReasoningSelect(params: {
                                 @keydown=${onUnanchoredSliderKeyDown}
                               />
                             </div>
-                            <div class="chat-controls__reasoning-scale" aria-hidden="true">
-                              <span>${t("chat.modelPicker.faster")}</span>
-                              <span>${t("chat.modelPicker.smarter")}</span>
-                            </div>
                           `
                         : onlyStop
                           ? html`
@@ -784,57 +805,34 @@ function renderChatModelReasoningSelect(params: {
                           : ""}
                     `
                   : ""}
-                <div class="chat-controls__inline-select-section-label">Speed</div>
-                <div
-                  class="chat-controls__reasoning-options chat-controls__reasoning-options--speed"
-                  role="group"
-                  aria-label="Speed"
-                >
-                  ${repeat(
-                    fastMode.options,
-                    (speed) => speed.value,
-                    (speed) => {
-                      const speedValue = speed.value as ChatFastModeSelectValue;
-                      const speedSelected = speedValue === fastMode.currentOverride;
-                      return html`
-                        <button
-                          class="chat-controls__reasoning-option ${speedSelected
-                            ? "chat-controls__reasoning-option--selected"
-                            : ""}"
-                          data-chat-speed-option=${speed.value}
-                          aria-pressed=${speedSelected ? "true" : "false"}
-                          type="button"
-                          ?disabled=${fastMode.disabled}
-                          @click=${(event: MouseEvent) => {
-                            event.stopPropagation();
-                            if (fastMode.disabled || speedSelected) {
-                              event.preventDefault();
-                              return;
-                            }
-                            void onFastModeSelect(speedValue, sessionKey).finally(() =>
-                              onRequestUpdate?.(),
-                            );
-                            // Instant toggle feedback: effectiveFastMode masks the
-                            // optimistic fastMode patch until the session list refreshes.
-                            const currentButton = event.currentTarget as HTMLButtonElement;
-                            currentButton
-                              .closest(".chat-controls__reasoning-options--speed")
-                              ?.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]")
-                              .forEach((button) => {
-                                const selected = button.dataset.chatSpeedOption === speed.value;
-                                button.setAttribute("aria-pressed", selected ? "true" : "false");
-                                button.classList.toggle(
-                                  "chat-controls__reasoning-option--selected",
-                                  selected,
-                                );
-                              });
-                          }}
-                        >
-                          <span>${speed.label}</span>
-                        </button>
-                      `;
-                    },
-                  )}
+                <div class="chat-controls__speed-row">
+                  <span class="chat-controls__inline-select-section-label">Speed</span>
+                  <openclaw-tooltip .content=${speedTooltip}>
+                    <button
+                      class="chat-controls__speed-toggle ${fastMode.active
+                        ? "chat-controls__speed-toggle--active"
+                        : ""}"
+                      data-chat-speed-toggle=${fastMode.nextValue}
+                      type="button"
+                      role="switch"
+                      aria-checked=${fastMode.active ? "true" : "false"}
+                      aria-label=${`Fast responses: ${fastMode.label}`}
+                      ?disabled=${fastMode.disabled}
+                      @click=${(event: MouseEvent) => {
+                        event.stopPropagation();
+                        if (fastMode.disabled) {
+                          event.preventDefault();
+                          return;
+                        }
+                        commitFastMode(fastMode.nextValue);
+                      }}
+                    >
+                      <span class="chat-controls__speed-toggle-icon" aria-hidden="true">
+                        ${icons.zap}
+                      </span>
+                      <span>${fastMode.label}</span>
+                    </button>
+                  </openclaw-tooltip>
                 </div>
               </div>
             `
