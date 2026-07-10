@@ -285,9 +285,18 @@ export function githubApiWithSnapshot(args, fetchApi, snapshotState) {
     snapshotState.hits += 1;
     return structuredClone(cached);
   }
-  const response = fetchApi(args);
-  snapshotState.responses[key] = structuredClone(response);
   snapshotState.misses += 1;
+  const response = fetchApi(args);
+  if (
+    !response ||
+    typeof response !== "object" ||
+    Array.isArray(response) ||
+    response.data === undefined ||
+    (Array.isArray(response.errors) && response.errors.length > 0)
+  ) {
+    return response;
+  }
+  snapshotState.responses[key] = structuredClone(response);
   snapshotState.dirty = true;
   return response;
 }

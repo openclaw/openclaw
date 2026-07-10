@@ -43,7 +43,7 @@ describe("release-note verification", () => {
       let fetches = 0;
       const fetchApi = (args: string[]) => {
         fetches += 1;
-        return { request: args, fetches };
+        return { data: { request: args, fetches } };
       };
       const first = createGithubSnapshotState({
         base: "a".repeat(40),
@@ -52,14 +52,18 @@ describe("release-note verification", () => {
       });
 
       expect(githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, first)).toEqual({
-        request: ["graphql", "-f", "query=one"],
-        fetches: 1,
+        data: {
+          request: ["graphql", "-f", "query=one"],
+          fetches: 1,
+        },
       });
       expect(
         githubApiWithSnapshot(["repos/openclaw/openclaw/releases/tags/v1"], fetchApi, first),
       ).toEqual({
-        request: ["repos/openclaw/openclaw/releases/tags/v1"],
-        fetches: 2,
+        data: {
+          request: ["repos/openclaw/openclaw/releases/tags/v1"],
+          fetches: 2,
+        },
       });
       persistGithubSnapshot(first);
 
@@ -69,11 +73,46 @@ describe("release-note verification", () => {
         target: "b".repeat(40),
       });
       expect(githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, second)).toEqual({
-        request: ["graphql", "-f", "query=one"],
-        fetches: 1,
+        data: {
+          request: ["graphql", "-f", "query=one"],
+          fetches: 1,
+        },
       });
       expect(second.hits).toBe(1);
       expect(second.misses).toBe(0);
+      expect(fetches).toBe(2);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not cache transient GraphQL errors", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
+    try {
+      const filePath = join(cwd, "snapshot.json");
+      const state = createGithubSnapshotState({
+        base: "a".repeat(40),
+        filePath,
+        target: "b".repeat(40),
+      });
+      let fetches = 0;
+      const fetchApi = () => {
+        fetches += 1;
+        return fetches === 1
+          ? { errors: [{ message: "rate limited" }] }
+          : { data: { repository: { id: "repository-id" } } };
+      };
+      const args = ["graphql", "-f", "query=one"];
+
+      expect(githubApiWithSnapshot(args, fetchApi, state)).toEqual({
+        errors: [{ message: "rate limited" }],
+      });
+      expect(state.dirty).toBe(false);
+      expect(state.responses).toEqual({});
+      expect(githubApiWithSnapshot(args, fetchApi, state)).toEqual({
+        data: { repository: { id: "repository-id" } },
+      });
+      expect(state.misses).toBe(2);
       expect(fetches).toBe(2);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
