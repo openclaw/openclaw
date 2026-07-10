@@ -511,5 +511,7 @@ describe("embedded gateway stub", () => {
       }),
     ).rejects.toThrow("offset must be a non-negative integer");
     expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
+    expect(runtime.readRecentSessionMessagesWithStatsAsync).not.toHaveBeenCalled();
+    expect(runtime.readSessionMessagesPageWithStatsAsync).not.toHaveBeenCalled();
   });
 });
