@@ -208,9 +208,9 @@ final class ShareViewController: UIViewController {
         do {
             try await gateway.connect(
                 url: url,
-                token: config.token,
-                bootstrapToken: nil,
-                password: config.password,
+                credentials: GatewayNodeSessionCredentials(
+                    token: config.token,
+                    password: config.password),
                 connectOptions: makeOptions("openclaw-ios"),
                 sessionBox: nil,
                 onConnected: {},
@@ -228,9 +228,9 @@ final class ShareViewController: UIViewController {
             guard expectsLegacyClientId else { throw error }
             try await gateway.connect(
                 url: url,
-                token: config.token,
-                bootstrapToken: nil,
-                password: config.password,
+                credentials: GatewayNodeSessionCredentials(
+                    token: config.token,
+                    password: config.password),
                 connectOptions: makeOptions("moltbot-ios"),
                 sessionBox: nil,
                 onConnected: {},

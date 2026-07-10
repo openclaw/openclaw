@@ -492,16 +492,12 @@ actor GatewayConnection {
         }
         if let deviceToken = lastSnapshot?.auth["deviceToken"]?.value as? String {
             let trimmed = deviceToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
+            if !trimmed.isEmpty { return trimmed }
         }
         let identity = DeviceIdentityStore.loadOrCreate()
         if let entry = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator") {
             let trimmed = entry.token.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
+            if !trimmed.isEmpty { return trimmed }
         }
         return nil
     }
@@ -1042,7 +1038,10 @@ extension GatewayConnection {
 
     func chatAbort(sessionKey: String, runId: String) async throws -> Bool {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        struct AbortResponse: Decodable { let ok: Bool?; let aborted: Bool? }
+        struct AbortResponse: Decodable {
+            let ok: Bool?
+            let aborted: Bool?
+        }
         let res: AbortResponse = try await requestDecoded(
             method: .chatAbort,
             params: ["sessionKey": AnyCodable(resolvedKey), "runId": AnyCodable(runId)])

@@ -63,6 +63,7 @@ export class ChatPage extends OpenClawLightDomElement {
   private dragDepth = 0;
   private dragFrame = 0;
   private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
+  private consumedDraftData: ChatRouteData | null = null;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -92,8 +93,24 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown>) {
+    const data = this.data;
+    const activePane = this.layout ? findPane(this.layout, this.layout.activePaneId)?.pane : null;
+    const routeDraftWasRendered =
+      Boolean(data?.draft) &&
+      this.consumedDraftData !== data &&
+      (!this.layout || activePane?.sessionKey === data.sessionKey);
     if (changedProperties.has("data")) {
       this.syncRouteToActivePane();
+    }
+    if (data && routeDraftWasRendered) {
+      // Let the matching child process the route-provided draft once, then stop
+      // later focus changes from handing the same draft to another split pane.
+      queueMicrotask(() => {
+        if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
+          this.consumedDraftData = data;
+          this.requestUpdate();
+        }
+      });
     }
   }
 
@@ -376,61 +393,25 @@ export class ChatPage extends OpenClawLightDomElement {
     }
   };
 
-  private renderPaneHeader(pane: ChatSplitPane, active: boolean) {
+  private routeDraftForActivePane(sessionKey = this.data?.sessionKey): string | undefined {
+    const data = this.data;
+    // Route data can render before the split layout catches up. Never hand the
+    // new route's draft to the previously active pane during that transition.
+    if (!data || sessionKey !== data.sessionKey || this.consumedDraftData === data) {
+      return undefined;
+    }
+    return data.draft;
+  }
+
+  /** Header + pane travel together so each pane owns its title bar in-flow —
+   * no fixed toolbar layer mirroring the split geometry. The pane renders its
+   * own header so the workspace toggle can read per-pane workspace state. */
+  private renderPaneCell(pane: ChatSplitPane, active: boolean, weight: number) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
     const title = resolveSessionDisplayName(
       pane.sessionKey,
       sessions.find((row) => row.key === pane.sessionKey),
     );
-    return html`
-      <div class="chat-pane__header ${active ? "chat-pane__header--active" : ""}">
-        <!-- Static text on purpose: an interactive session picker here would
-             fight pane focus. Panes change sessions via the sessions panel or
-             drag-and-drop. -->
-        <span class="chat-pane__session-title" title=${title}>${title}</span>
-        <div class="chat-pane__actions">
-          ${!this.narrow
-            ? html`
-                <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitDown")}
-                    @click=${() => this.handleSplitDown(pane.id)}
-                  >
-                    ${icons.panelBottomOpen}
-                  </button>
-                </openclaw-tooltip>
-                <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitRight")}
-                    @click=${() => this.handleSplitRight(pane.id)}
-                  >
-                    ${icons.panelRightOpen}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : nothing}
-          <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-            <button
-              class="btn btn--ghost btn--icon"
-              type="button"
-              aria-label=${t("chat.splitView.closePane")}
-              @click=${() => this.handleClosePane(pane.id)}
-            >
-              ${icons.x}
-            </button>
-          </openclaw-tooltip>
-        </div>
-      </div>
-    `;
-  }
-
-  /** Header + pane travel together so each pane owns its title bar in-flow —
-   * no fixed toolbar layer mirroring the split geometry. */
-  private renderPaneCell(pane: ChatSplitPane, active: boolean, weight: number) {
     return html`
       <div
         class="chat-split-view__cell ${active ? "chat-split-view__cell--active" : ""}"
@@ -438,13 +419,18 @@ export class ChatPage extends OpenClawLightDomElement {
         @pointerdown=${() => this.handleFocusPane(pane.id)}
         @focusin=${() => this.handleFocusPane(pane.id)}
       >
-        ${this.renderPaneHeader(pane, active)}
         <openclaw-chat-pane
           class="chat-split-view__pane"
           .paneId=${pane.id}
           .sessionKey=${pane.sessionKey}
           .active=${active}
-          .draft=${active ? this.data?.draft : undefined}
+          .draft=${active ? this.routeDraftForActivePane(pane.sessionKey) : undefined}
+          .showPaneHeader=${true}
+          .paneTitle=${title}
+          .narrow=${this.narrow}
+          .onSplitDown=${this.handleSplitDown}
+          .onSplitRight=${this.handleSplitRight}
+          .onClosePane=${this.handleClosePane}
           .onFocusPane=${this.handleFocusPane}
           .onPaneSessionChange=${this.handlePaneSessionChange}
         ></openclaw-chat-pane>
@@ -539,7 +525,8 @@ export class ChatPage extends OpenClawLightDomElement {
                 .paneId=${"single"}
                 .sessionKey=${this.data?.sessionKey ?? ""}
                 .active=${true}
-                .draft=${this.data?.draft}
+                .draft=${this.routeDraftForActivePane()}
+                .showPaneHeader=${false}
                 .onFocusPane=${this.handleFocusPane}
                 .onPaneSessionChange=${this.handlePaneSessionChange}
               ></openclaw-chat-pane>

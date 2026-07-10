@@ -108,6 +108,9 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "environments.list", scope: "operator.read" },
   { name: "environments.status", scope: "operator.read" },
   { name: "worktrees.list", scope: "operator.read" },
+  // Read-only git probe, but it accepts arbitrary host paths; keep it at the
+  // same bar as starting worktree sessions instead of plain read scope.
+  { name: "worktrees.branches", scope: "operator.write" },
   { name: "worktrees.create", scope: "operator.admin", controlPlaneWrite: true },
   { name: "worktrees.remove", scope: "operator.admin", controlPlaneWrite: true },
   { name: "worktrees.restore", scope: "operator.admin", controlPlaneWrite: true },
@@ -183,6 +186,10 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // admin keeps unrestricted delete. Policy in method-scopes.ts + handler.
   { name: "sessions.delete", scope: "dynamic" },
   { name: "sessions.compact", scope: "operator.admin" },
+  { name: "sessions.groups.list", scope: "operator.read" },
+  { name: "sessions.groups.put", scope: "operator.write" },
+  { name: "sessions.groups.rename", scope: "operator.write" },
+  { name: "sessions.groups.delete", scope: "operator.write" },
   { name: "last-heartbeat", scope: "operator.read" },
   { name: "set-heartbeats", scope: "operator.admin" },
   { name: "wake", scope: "operator.write" },
@@ -194,6 +201,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "device.pair.approve", scope: "operator.pairing" },
   { name: "device.pair.reject", scope: "operator.pairing" },
   { name: "device.pair.remove", scope: "operator.pairing" },
+  { name: "device.pair.rename", scope: "operator.pairing" },
   { name: "device.token.rotate", scope: "operator.pairing" },
   { name: "device.token.revoke", scope: "operator.pairing" },
   { name: "device.pair.setupCode", scope: "operator.admin", advertise: false },
@@ -272,6 +280,23 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.workspace.list", scope: "operator.read" },
   { name: "agents.workspace.get", scope: "operator.read" },
   { name: "tts.speak", scope: "operator.write" },
+  { name: "plugins.list", scope: "operator.read" },
+  { name: "plugins.search", scope: "operator.read" },
+  { name: "plugins.install", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.setEnabled", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.uninstall", scope: "operator.admin", controlPlaneWrite: true },
+  // Session PR chips read the session's own checkout metadata, matching the
+  // sessions.files.* trusted-operator read domain.
+  { name: "controlUi.sessionPullRequests", scope: "operator.read" },
+  {
+    name: "gateway.suspend.prepare",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
+  { name: "gateway.suspend.status", scope: "operator.read" },
+  // Resume is the safety escape hatch and must not sit behind write-rate limiting.
+  { name: "gateway.suspend.resume", scope: "operator.admin" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

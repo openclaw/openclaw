@@ -58,6 +58,7 @@ import type {
   CronUpdatePrecondition,
   CronWakeMode,
 } from "./state.js";
+import { emit } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 import {
@@ -65,7 +66,6 @@ import {
   applyTriggerNoFireResult,
   applyTriggerRunResult,
   armTimer,
-  emit,
   executeJobCoreWithTimeout,
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
@@ -316,7 +316,33 @@ export async function start(state: CronServiceState) {
 /** Stops the cron service timer without mutating persisted job state. */
 export function stop(state: CronServiceState) {
   state.stopped = true;
+  state.schedulerStarted = false;
   stopTimer(state);
+}
+
+/** Temporarily stops automatic ticks without running startup recovery on resume. */
+export function pauseScheduling(state: CronServiceState) {
+  state.schedulingPaused = true;
+  stopTimer(state);
+}
+
+export function resumeScheduling(state: CronServiceState) {
+  if (!state.schedulingPaused) {
+    return;
+  }
+  state.schedulingPaused = false;
+  if (!state.schedulerStarted) {
+    return;
+  }
+  try {
+    armTimer(state);
+  } catch (err) {
+    // armTimer can install a timer before a later dependency throws. Roll the
+    // whole transition back so a suspension retry cannot reopen without cron.
+    state.schedulingPaused = true;
+    stopTimer(state);
+    throw err;
+  }
 }
 
 /** Returns cron service status after a read-only maintenance pass. */
@@ -501,16 +527,24 @@ type CronRollbackSnapshot = {
 async function persistOrRestore(
   state: CronServiceState,
   snapshot: CronRollbackSnapshot,
-  postPersistAutoDisableNotifications: Array<() => void> = [],
+  opts: {
+    postPersistAutoDisableNotifications?: Array<() => void>;
+    suppressScheduledJobId?: string;
+  } = {},
 ) {
   try {
-    await persist(state);
+    await persist(
+      state,
+      opts.suppressScheduledJobId === undefined
+        ? undefined
+        : { suppressScheduledJobId: opts.suppressScheduledJobId },
+    );
   } catch (err) {
     state.store = snapshot.store;
     state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
     throw err;
   }
-  for (const notify of postPersistAutoDisableNotifications) {
+  for (const notify of opts.postPersistAutoDisableNotifications ?? []) {
     notify();
   }
 }
@@ -596,7 +630,7 @@ async function persistUpdatedJob(params: {
     }
   }
 
-  await persistOrRestore(state, snapshot);
+  await persistOrRestore(state, snapshot, { suppressScheduledJobId: nextJob.id });
   armTimer(state);
   emit(state, {
     jobId: nextJob.id,
@@ -685,7 +719,10 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
     });
 
-    await persistOrRestore(state, snapshot, postPersistAutoDisableNotifications);
+    await persistOrRestore(state, snapshot, {
+      postPersistAutoDisableNotifications,
+      suppressScheduledJobId: job.id,
+    });
     armTimer(state);
 
     state.deps.log.info(
@@ -775,7 +812,10 @@ export async function remove(state: CronServiceState, id: string) {
       deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
     });
 
-    await persistOrRestore(state, snapshot, postPersistAutoDisableNotifications);
+    await persistOrRestore(state, snapshot, {
+      postPersistAutoDisableNotifications,
+      suppressScheduledJobId: id,
+    });
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed", job: removedJob });

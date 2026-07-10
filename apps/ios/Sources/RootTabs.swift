@@ -953,7 +953,9 @@ struct RootTabs: View {
         UIApplication.shared.isIdleTimerDisabled =
             self.scenePhase == .active && (self.preventSleep || self.appModel.talkMode.isEnabled)
     }
+}
 
+extension RootTabs {
     private func updateCanvasState() {
         self.updateHomeCanvasState()
         self.updateCanvasDebugStatus()
