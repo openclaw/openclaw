@@ -21,6 +21,7 @@ import {
   buildLiveXaiProvider,
   buildXaiProvider,
 } from "./provider-catalog.js";
+import { isXaiProviderId } from "./provider-id.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
@@ -103,7 +104,7 @@ function shouldExposeXaiBilledTool(params: {
   }
   // Cross-provider billing requires explicit consent; xAI models retain the
   // credential-backed default. Unknown providers fail closed.
-  return activeProvider === PROVIDER_ID || params.enabled === true;
+  return isXaiProviderId(activeProvider) || params.enabled === true;
 }
 
 function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {

@@ -11,7 +11,11 @@ import { pathExists } from "../utils.js";
 import { writePackageDistInventory } from "./package-dist-inventory.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
-import { resolveUpdateDoctorExecutionPolicy, runGatewayUpdate } from "./update-runner.js";
+import {
+  resolveUpdateDoctorExecutionPolicy,
+  resolveUpdateInstallSurface,
+  runGatewayUpdate,
+} from "./update-runner.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 
@@ -44,6 +48,28 @@ function createRunner(responses: Record<string, CommandResponse>) {
     return toCommandResult(responses[key]);
   };
   return { runner, calls };
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return true;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  return !isProcessAlive(pid);
 }
 
 describe("resolveUpdateDoctorExecutionPolicy", () => {
@@ -167,6 +193,52 @@ describe("runGatewayUpdate", () => {
     }
     await fs.writeFile(path.join(tempDir, "package.json"), JSON.stringify(pkg), "utf-8");
   }
+
+  it.runIf(process.platform !== "win32")(
+    "kills nested updater subprocesses when a default command times out",
+    { timeout: 10_000 },
+    async () => {
+      await setupGitCheckout();
+      const fakeBinDir = path.join(tempDir, "fake-bin");
+      const fakeGitPath = path.join(fakeBinDir, "git");
+      const childPidPath = path.join(tempDir, "nested-child.pid");
+      await fs.mkdir(fakeBinDir, { recursive: true });
+      await fs.writeFile(
+        fakeGitPath,
+        `#!${process.execPath}\n` +
+          `const { spawn } = require("node:child_process");\n` +
+          `const fs = require("node:fs");\n` +
+          `const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });\n` +
+          `fs.writeFileSync(process.env.OPENCLAW_UPDATE_TEST_CHILD_PID_PATH, String(child.pid));\n` +
+          `setInterval(() => {}, 1000);\n`,
+        "utf-8",
+      );
+      await fs.chmod(fakeGitPath, 0o755);
+
+      let childPid: number | null = null;
+      let childExited = false;
+      try {
+        await withEnvAsync(
+          {
+            OPENCLAW_UPDATE_TEST_CHILD_PID_PATH: childPidPath,
+            PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          },
+          async () => {
+            await resolveUpdateInstallSurface({ cwd: tempDir, timeoutMs: 500 });
+          },
+        );
+        childPid = Number.parseInt(await fs.readFile(childPidPath, "utf-8"), 10);
+        expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
+        childExited = await waitForProcessExit(childPid);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+
+      expect(childExited).toBe(true);
+    },
+  );
 
   async function setupUiIndex() {
     const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");

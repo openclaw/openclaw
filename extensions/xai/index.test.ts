@@ -488,7 +488,7 @@ describe("xai provider plugin", () => {
 
     const mediaProvider = requireEntry(mediaProviders, "xai");
     expect(mediaProvider.capabilities).toEqual(["audio"]);
-    expect(mediaProvider.defaultModels).toEqual({ audio: "grok-stt" });
+    expect(mediaProvider.defaultModels).toBeUndefined();
     const realtimeProvider = requireEntry(realtimeTranscriptionProviders, "xai");
     expect(realtimeProvider.label).toBe("xAI Realtime Transcription");
     expect(realtimeProvider.aliases).toContain("xai-realtime");
@@ -499,6 +499,12 @@ describe("xai provider plugin", () => {
       {
         label: "exposes by default for an xAI model with auth",
         provider: "xai",
+        hasAuth: true,
+        expected: true,
+      },
+      {
+        label: "exposes by default for the shipped xAI provider alias with auth",
+        provider: "x-ai",
         hasAuth: true,
         expected: true,
       },

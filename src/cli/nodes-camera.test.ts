@@ -431,6 +431,7 @@ describe("nodes screen helpers", () => {
       parseScreenSnapshotPayload({
         format: "png",
         base64: "Zm9v",
+        displayFrameId: "display-42-frame",
         screenIndex: 1,
         width: 1200,
         height: 800,
@@ -438,6 +439,7 @@ describe("nodes screen helpers", () => {
     ).toEqual({
       format: "png",
       base64: "Zm9v",
+      displayFrameId: "display-42-frame",
       screenIndex: 1,
       width: 1200,
       height: 800,

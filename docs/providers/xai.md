@@ -315,8 +315,12 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     The bundled `xai` plugin registers text-to-speech through the shared `tts`
     provider surface.
 
-    - Voices: `eve`, `ara`, `rex`, `sal`, `leo`, `una`
+    - Voices: authenticated live catalog from xAI; list it with
+      `openclaw infer tts voices --provider xai`
+    - Offline fallback voices: `ara`, `eve`, `leo`, `rex`, `sal`
     - Default voice: `eve`
+    - Account custom voice IDs are forwarded even when they are absent from the
+      built-in catalog response
     - Formats: `mp3`, `wav`, `pcm`, `mulaw`, `alaw`
     - Language: BCP-47 code or `auto`
     - Speed: provider-native speed override
@@ -340,9 +344,9 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     ```
 
     <Note>
-    OpenClaw uses xAI's batch `/v1/tts` endpoint. xAI also offers streaming
-    TTS over WebSocket, but the bundled xAI provider does not implement that
-    streaming hook yet.
+    OpenClaw uses xAI's batch `/v1/tts` endpoint and authenticated
+    `/v1/tts/voices` catalog. xAI also offers streaming TTS over WebSocket, but
+    the bundled xAI provider does not implement that streaming hook yet.
     </Note>
 
   </Accordion>
@@ -351,9 +355,10 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     The bundled `xai` plugin registers batch speech-to-text through OpenClaw's
     media-understanding transcription surface.
 
-    - Default model: `grok-stt`
     - Endpoint: xAI REST `/v1/stt`
     - Input path: multipart audio file upload
+    - Model selection: xAI chooses the transcription model internally; the
+      endpoint has no model selector
     - Used wherever inbound audio transcription reads `tools.media.audio`,
       including Discord voice-channel segments and channel audio attachments
 
@@ -368,7 +373,6 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
               {
                 type: "provider",
                 provider: "xai",
-                model: "grok-stt",
               },
             ],
           },
@@ -379,9 +383,8 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
     Language can be supplied through the shared audio media config or per-call
     transcription request. Prompt hints are accepted by the shared OpenClaw
-    surface, but the xAI REST STT integration forwards only file, model, and
-    language because those map cleanly to the current public xAI
-    endpoint.
+    surface, but the xAI REST STT integration forwards only file and language
+    because those map to the current public xAI endpoint.
 
   </Accordion>
 

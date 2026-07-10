@@ -746,6 +746,9 @@ async function buildUpdateCommandRunner(
       const res = await runCommandWithTimeout(argv, {
         ...options,
         env: mergeCommandEnvironments(defaultCommandEnv, options.env),
+        // Update steps invoke package-manager trees; timeout must retire the
+        // whole tree or detached build workers can outlive the updater.
+        killProcessTree: true,
       });
       return res;
     },
