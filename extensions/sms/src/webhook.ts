@@ -41,8 +41,9 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return value;
 }
 
-function rateLimitKey(req: IncomingMessage): string {
-  return req.socket?.remoteAddress ?? "unknown";
+function rateLimitKey(params: { account: ResolvedSmsAccount; req: IncomingMessage }): string {
+  const remoteAddress = params.req.socket?.remoteAddress ?? "unknown";
+  return `${params.account.accountId}:${params.account.webhookPath}:${remoteAddress}`;
 }
 
 function rememberWebhookMessage(params: {
@@ -69,17 +70,14 @@ export function resetSmsWebhookReplayCacheForTest(): void {
   replayCache.clear();
 }
 
+export function resetSmsWebhookRateLimiterForTest(): void {
+  rateLimiter.clear();
+}
+
 export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== "POST") {
       respondTwiml(res, 405, "Method not allowed");
-      return true;
-    }
-
-    const key = rateLimitKey(req);
-    if (rateLimiter.isRateLimited(key)) {
-      params.log?.warn?.(`SMS webhook rate limit exceeded for ${key}`);
-      respondTwiml(res, 429, "Rate limit exceeded");
       return true;
     }
 
@@ -116,6 +114,12 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     if (msg.accountSid && msg.accountSid !== params.account.accountSid) {
       params.log?.warn?.("SMS webhook rejected mismatched Twilio AccountSid");
       respondTwiml(res, 403, "Invalid account");
+      return true;
+    }
+    const key = rateLimitKey({ account: params.account, req });
+    if (rateLimiter.isRateLimited(key)) {
+      params.log?.warn?.(`SMS webhook rate limit exceeded for ${key}`);
+      respondTwiml(res, 429, "Rate limit exceeded");
       return true;
     }
     if (

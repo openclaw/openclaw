@@ -5,7 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { computeTwilioSignature, parseTwilioFormBody } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
-import { createSmsWebhookHandler, resetSmsWebhookReplayCacheForTest } from "./webhook.js";
+import {
+  createSmsWebhookHandler,
+  resetSmsWebhookRateLimiterForTest,
+  resetSmsWebhookReplayCacheForTest,
+} from "./webhook.js";
 
 const dispatchSmsInboundEvent = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -13,7 +17,7 @@ vi.mock("./inbound.js", () => ({
   dispatchSmsInboundEvent,
 }));
 
-function createAccount(): ResolvedSmsAccount {
+function createAccount(overrides?: Partial<ResolvedSmsAccount>): ResolvedSmsAccount {
   return {
     accountId: "default",
     enabled: true,
@@ -28,15 +32,39 @@ function createAccount(): ResolvedSmsAccount {
     dmPolicy: "pairing",
     allowFrom: [],
     textChunkLimit: 1500,
+    ...overrides,
   };
 }
 
-function createRequest(body: string, signature: string): IncomingMessage {
+function createSignedBody(params?: {
+  account?: ResolvedSmsAccount;
+  body?: string;
+  messageSid?: string;
+}): { body: string; signature: string } {
+  const account = params?.account ?? createAccount();
+  const body =
+    params?.body ??
+    `AccountSid=${encodeURIComponent(account.accountSid)}&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=${encodeURIComponent(params?.messageSid ?? "SM123")}`;
+  return {
+    body,
+    signature: computeTwilioSignature({
+      url: account.publicWebhookUrl,
+      authToken: account.authToken,
+      form: parseTwilioFormBody(body),
+    }),
+  };
+}
+
+function createRequest(
+  body: string,
+  signature: string,
+  options?: { remoteAddress?: string },
+): IncomingMessage {
   const req = Readable.from([body]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "x-twilio-signature": signature };
   Object.defineProperty(req, "socket", {
-    value: { remoteAddress: "127.0.0.1" },
+    value: { remoteAddress: options?.remoteAddress ?? "127.0.0.1" },
   });
   return req;
 }
@@ -56,6 +84,7 @@ describe("createSmsWebhookHandler", () => {
   beforeEach(() => {
     dispatchSmsInboundEvent.mockClear();
     resetSmsWebhookReplayCacheForTest();
+    resetSmsWebhookRateLimiterForTest();
   });
 
   it("dedupes replayed signed Twilio webhooks by message SID", async () => {
@@ -101,5 +130,74 @@ describe("createSmsWebhookHandler", () => {
 
     expect(res.statusCode).toBe(403);
     expect(dispatchSmsInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not let unsigned requests consume the signed webhook rate limit", async () => {
+    const account = createAccount();
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+    const unsignedBody =
+      "AccountSid=AC123&From=%2B15550000000&To=%2B15557654321&Body=bad&MessageSid=SM-bad";
+    for (let i = 0; i < 31; i += 1) {
+      const rejected = createResponse();
+      await handler(createRequest(unsignedBody, "not-a-valid-signature"), rejected);
+      expect(rejected.statusCode).toBe(403);
+    }
+
+    const valid = createSignedBody({ account, messageSid: "SM-valid-after-invalid-burst" });
+    const accepted = createResponse();
+    await handler(createRequest(valid.body, valid.signature), accepted);
+
+    expect(accepted.statusCode).toBe(200);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes signed webhook rate limits to one SMS account and route", async () => {
+    const supportAccount = createAccount({
+      accountId: "support",
+      accountSid: "AC-support",
+      webhookPath: "/webhooks/sms/support",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms/support",
+    });
+    const defaultAccount = createAccount();
+    const supportHandler = createSmsWebhookHandler({
+      cfg: {},
+      account: supportAccount,
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+    const defaultHandler = createSmsWebhookHandler({
+      cfg: {},
+      account: defaultAccount,
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      const valid = createSignedBody({
+        account: supportAccount,
+        messageSid: `SM-support-${i}`,
+      });
+      const res = createResponse();
+      await supportHandler(createRequest(valid.body, valid.signature), res);
+      expect(res.statusCode).toBe(200);
+    }
+    const rateLimited = createSignedBody({
+      account: supportAccount,
+      messageSid: "SM-support-rate-limited",
+    });
+    const rateLimitedRes = createResponse();
+    await supportHandler(createRequest(rateLimited.body, rateLimited.signature), rateLimitedRes);
+    expect(rateLimitedRes.statusCode).toBe(429);
+
+    const defaultValid = createSignedBody({
+      account: defaultAccount,
+      messageSid: "SM-default-after-support-limit",
+    });
+    const defaultRes = createResponse();
+    await defaultHandler(createRequest(defaultValid.body, defaultValid.signature), defaultRes);
+
+    expect(defaultRes.statusCode).toBe(200);
   });
 });
