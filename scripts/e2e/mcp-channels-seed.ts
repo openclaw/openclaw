@@ -10,6 +10,7 @@ async function main() {
     process.env.OPENCLAW_CONFIG_PATH?.trim() || path.join(stateDir, "openclaw.json");
   const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
   const sessionFile = path.join(sessionsDir, "sess-main.jsonl");
+  const archivedSessionFile = path.join(sessionsDir, "sess-codex-archived.jsonl");
   const storePath = path.join(sessionsDir, "sessions.json");
   const now = Date.now();
 
@@ -58,6 +59,15 @@ async function main() {
           derivedTitle: "Docker MCP Channel Smoke",
           lastMessagePreview: "seeded transcript",
         },
+        "agent:main:codex-archived": {
+          sessionId: "sess-codex-archived",
+          sessionFile: archivedSessionFile,
+          updatedAt: now - 60_000,
+          archivedAt: now - 30_000,
+          label: "Docker MCP Archived",
+          derivedTitle: "Docker MCP Archived",
+          lastMessagePreview: "archived seeded transcript",
+        },
       },
       null,
       2,
@@ -99,6 +109,12 @@ async function main() {
     "utf-8",
   );
 
+  await fs.writeFile(
+    archivedSessionFile,
+    `${JSON.stringify({ type: "session", version: 1, id: "sess-codex-archived" })}\n`,
+    "utf-8",
+  );
+
   process.stdout.write(
     JSON.stringify({
       ok: true,
@@ -106,6 +122,7 @@ async function main() {
       configPath,
       storePath,
       sessionFile,
+      archivedSessionFile,
     }) + "\n",
   );
 }

@@ -310,6 +310,37 @@ describe("plugin npm package manifest staging", () => {
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
   });
 
+  it("includes Codex plugin artifacts in the staged npm pack", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-codex-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeJsonFile(join(packageDir, ".codex-plugin", "plugin.json"), {
+      name: "diffs",
+      version: "2026.5.3",
+    });
+    writeJsonFile(join(packageDir, ".mcp.json"), { mcpServers: {} });
+    writeFileText(join(packageDir, "assets", "session-app.html"), "<!doctype html>\n");
+
+    const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
+    withAugmentedPluginNpmManifestForPackage({ repoRoot: repoDir, packageDir }, () => {
+      const stagedPackageJson = JSON.parse(
+        readFileSync(join(packageDir, "package.json"), "utf8"),
+      );
+      expect(stagedPackageJson.files).toEqual(
+        expect.arrayContaining([".codex-plugin/**", ".mcp.json", "assets/**"]),
+      );
+      expect(listNpmPackDryRunFiles(packageDir)).toEqual(
+        expect.arrayContaining([
+          ".codex-plugin/plugin.json",
+          ".mcp.json",
+          "assets/session-app.html",
+        ]),
+      );
+    });
+    expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+  });
+
   it("installs and cleans package-local bundled dependencies while packing", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-bundled-deps-");
     const packageDir = writePublishablePluginPackage(repoDir);

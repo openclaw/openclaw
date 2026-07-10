@@ -120,4 +120,17 @@ describe("plugin npm runtime build planning", () => {
     expect(plan.runtimeSetupEntry).toBe("./dist/setup-api.js");
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
   });
+
+  it("includes Codex metadata and app assets in the Codex package", () => {
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
+        repoRoot,
+        packageDir: path.join(repoRoot, "extensions", "codex"),
+      }),
+    );
+
+    expect(plan.packageFiles).toEqual(
+      expect.arrayContaining([".codex-plugin/**", ".mcp.json", "assets/**"]),
+    );
+  });
 });

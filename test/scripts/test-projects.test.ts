@@ -2464,6 +2464,7 @@ describe("scripts/test-projects changed-target routing", () => {
     const targets = [
       "scripts/e2e/mcp-channels-docker.sh",
       "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
+      "test/e2e/qa-lab/runtime/mcp-channels-codex-profile.fixture.ts",
       "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
       "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
       "scripts/e2e/mcp-channels-seed.ts",

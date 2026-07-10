@@ -24,6 +24,10 @@ type SyncPluginVersionsOptions = {
   write?: boolean;
 };
 
+type CodexPluginManifest = {
+  version?: string;
+};
+
 const OPENCLAW_VERSION_RANGE_RE = /^>=\d{4}\.\d{1,2}\.\d{1,2}(?:[-.][^"\s]+)?$/u;
 const VERSION_ALIGNED_PACKAGE_DIRS = ["packages/ai"] as const;
 
@@ -67,6 +71,26 @@ function syncBuildOpenClawVersion(pkg: PackageJson, targetVersion: string): bool
     return false;
   }
   build.openclawVersion = targetVersion;
+  return true;
+}
+
+function syncCodexPluginManifestVersion(
+  extensionDir: string,
+  targetVersion: string,
+  write: boolean,
+): boolean {
+  const manifestPath = join(extensionDir, ".codex-plugin", "plugin.json");
+  if (!existsSync(manifestPath)) {
+    return false;
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CodexPluginManifest;
+  if (manifest.version === targetVersion) {
+    return false;
+  }
+  manifest.version = targetVersion;
+  if (write) {
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
   return true;
 }
 
@@ -135,7 +159,8 @@ export function syncPluginVersions(
   }
 
   for (const dir of dirs) {
-    const packagePath = join(extensionsDir, dir.name, "package.json");
+    const extensionDir = join(extensionsDir, dir.name);
+    const packagePath = join(extensionDir, "package.json");
     let pkg: PackageJson;
     try {
       pkg = JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
@@ -161,12 +186,18 @@ export function syncPluginVersions(
     // Keep it stable unless the owning plugin intentionally raises it.
     const pluginApiChanged = syncPluginApiVersion(pkg, targetVersion);
     const buildOpenClawVersionChanged = syncBuildOpenClawVersion(pkg, targetVersion);
+    const codexPluginManifestChanged = syncCodexPluginManifestVersion(
+      extensionDir,
+      targetVersion,
+      write,
+    );
     const packageChanged =
       versionChanged ||
       devDependencyChanged ||
       peerDependencyChanged ||
       pluginApiChanged ||
-      buildOpenClawVersionChanged;
+      buildOpenClawVersionChanged ||
+      codexPluginManifestChanged;
     if (!packageChanged) {
       skipped.push(pkg.name);
       continue;

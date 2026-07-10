@@ -1,6 +1,7 @@
 // MCP channels Docker client drives the QA-owned channel bridge smoke.
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { runCodexSessionProfile } from "./mcp-channels-codex-profile.fixture.ts";
 import {
   assert,
   assertGatewayScopes,
@@ -447,6 +448,12 @@ async function main() {
     }
     assert(permission.behavior === "allow", "expected allow permission reply");
 
+    const codexSessions = await runCodexSessionProfile({
+      gateway,
+      gatewayUrl,
+      gatewayToken,
+    });
+
     process.stdout.write(
       JSON.stringify(
         {
@@ -455,6 +462,7 @@ async function main() {
           nonOwnerReplyForwarded: true,
           nonOwnerPermissionBlocked: true,
           ownerPermissionAllowed: permission.behavior === "allow",
+          codexSessions,
           rawNotifications: mcpHandle.rawMessages.filter(
             (entry) =>
               ClaudeChannelNotificationSchema.safeParse(entry).success ||

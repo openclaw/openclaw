@@ -914,6 +914,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/plugin-prerelease-test-plan.test.ts"],
   ],
   [
+    "test/e2e/qa-lab/runtime/mcp-channels-codex-profile.fixture.ts",
+    ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
     "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
     [
       "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",

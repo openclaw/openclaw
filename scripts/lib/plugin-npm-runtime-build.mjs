@@ -143,6 +143,15 @@ function resolvePluginNpmRuntimePackageFiles(plan) {
   if (packageRelativePathExists(plan.packageDir, "skills")) {
     merged.add("skills/**");
   }
+  if (packageRelativePathExists(plan.packageDir, ".codex-plugin/plugin.json")) {
+    merged.add(".codex-plugin/**");
+    if (packageRelativePathExists(plan.packageDir, ".mcp.json")) {
+      merged.add(".mcp.json");
+    }
+    if (packageRelativePathExists(plan.packageDir, "assets")) {
+      merged.add("assets/**");
+    }
+  }
   return [...merged];
 }
 

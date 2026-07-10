@@ -1,0 +1,39 @@
+{
+  "name": "codex",
+  "version": "2026.6.11",
+  "description": "Bring OpenClaw sessions and Gateway-backed chat into Codex.",
+  "author": {
+    "name": "OpenClaw contributors",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "homepage": "https://openclaw.ai/",
+  "repository": "https://github.com/openclaw/openclaw",
+  "license": "MIT",
+  "keywords": [
+    "openclaw",
+    "agents",
+    "sessions",
+    "gateway",
+    "chat"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "OpenClaw",
+    "shortDescription": "OpenClaw sessions and chat inside Codex",
+    "longDescription": "Browse, create, monitor, and talk to OpenClaw sessions without leaving Codex. Newer Codex hosts place sessions directly in the sidebar; the same app includes a master-detail session rail for older hosts.",
+    "developerName": "OpenClaw",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://openclaw.ai/",
+    "composerIcon": "./assets/openclaw-outline.svg",
+    "logo": "./assets/openclaw-outline.svg",
+    "defaultPrompt": [
+      "Show my OpenClaw sessions",
+      "Start a new OpenClaw session",
+      "Continue my most recent OpenClaw session"
+    ]
+  }
+}

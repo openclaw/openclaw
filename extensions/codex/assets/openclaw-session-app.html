@@ -1,0 +1,2331 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family:
+          ui-sans-serif,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        --safe-top: 0px;
+        --bg: #fbfbfa;
+        --panel: #ffffff;
+        --panel-subtle: #f5f5f3;
+        --hover: #eeeeeb;
+        --selected: #e8e8e4;
+        --line: #dededa;
+        --line-soft: #ecece8;
+        --text: #242422;
+        --muted: #6f6f69;
+        --quiet: #92928b;
+        --accent: #d65343;
+        --accent-ink: #ffffff;
+        --good: #278354;
+        --warn: #a76818;
+        --bad: #b93f3a;
+        --radius: 8px;
+      }
+
+      :root[data-theme="dark"] {
+        --bg: #171716;
+        --panel: #1e1e1c;
+        --panel-subtle: #252523;
+        --hover: #2a2a27;
+        --selected: #30302d;
+        --line: #3a3a36;
+        --line-soft: #2b2b28;
+        --text: #f1f1ed;
+        --muted: #acaca4;
+        --quiet: #84847e;
+        --accent: #ee6958;
+        --accent-ink: #171716;
+        --good: #5cb989;
+        --warn: #d79d4f;
+        --bad: #ed716a;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #171716;
+          --panel: #1e1e1c;
+          --panel-subtle: #252523;
+          --hover: #2a2a27;
+          --selected: #30302d;
+          --line: #3a3a36;
+          --line-soft: #2b2b28;
+          --text: #f1f1ed;
+          --muted: #acaca4;
+          --quiet: #84847e;
+          --accent: #ee6958;
+          --accent-ink: #171716;
+          --good: #5cb989;
+          --warn: #d79d4f;
+          --bad: #ed716a;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-width: 0;
+        min-height: 100%;
+        margin: 0;
+        color: var(--text);
+        background: var(--bg);
+      }
+
+      body {
+        min-height: 100vh;
+      }
+
+      button,
+      input,
+      select,
+      textarea {
+        color: inherit;
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      button:disabled,
+      textarea:disabled {
+        cursor: default;
+        opacity: 0.48;
+      }
+
+      .app {
+        display: grid;
+        min-height: 100vh;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        padding-top: var(--safe-top);
+      }
+
+      .toolbar {
+        display: flex;
+        min-width: 0;
+        min-height: 52px;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .brand {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 8px;
+        margin-right: auto;
+      }
+
+      .brand-mark {
+        width: 24px;
+        height: 24px;
+        flex: 0 0 auto;
+        color: var(--text);
+      }
+
+      .brand-copy {
+        min-width: 0;
+      }
+
+      .brand-title {
+        overflow: hidden;
+        font-size: 14px;
+        font-weight: 650;
+        letter-spacing: -0.01em;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .connection-button,
+      .icon-button,
+      .secondary-button,
+      .primary-button,
+      .agent-picker {
+        min-height: 32px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel);
+      }
+
+      .connection-button {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 9px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .connection-dot,
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 auto;
+        border-radius: 999px;
+        background: var(--quiet);
+      }
+
+      .connection-dot[data-state="online"] {
+        background: var(--good);
+      }
+
+      .connection-dot[data-state="connecting"] {
+        background: var(--warn);
+      }
+
+      .connection-dot[data-state="offline"] {
+        background: var(--bad);
+      }
+
+      .agent-picker {
+        position: relative;
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 3px;
+        padding: 0 4px 0 5px;
+      }
+
+      .agent-picker .avatar {
+        width: 20px;
+        height: 20px;
+        border: 0;
+        font-size: 9px;
+      }
+
+      .agent-select {
+        max-width: 124px;
+        min-height: 30px;
+        padding: 0 24px 0 3px;
+        border: 0;
+        outline-offset: 0;
+        background: transparent;
+        font-size: 12px;
+      }
+
+      .agent-picker .agent-select:focus-visible {
+        outline: 0;
+      }
+
+      .icon-button,
+      .secondary-button,
+      .primary-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 0 10px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .icon-button {
+        width: 32px;
+        padding: 0;
+        color: var(--muted);
+      }
+
+      .primary-button {
+        border-color: var(--accent);
+        color: var(--accent-ink);
+        background: var(--accent);
+      }
+
+      .connection-button:hover,
+      .icon-button:hover,
+      .secondary-button:hover,
+      .agent-picker:hover {
+        background: var(--hover);
+      }
+
+      .agent-picker:focus-within {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .stale-banner,
+      .restore-bar {
+        display: flex;
+        min-height: 36px;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 7px 12px;
+        border-bottom: 1px solid var(--line-soft);
+        color: var(--muted);
+        background: var(--panel-subtle);
+        font-size: 12px;
+      }
+
+      .stale-banner[hidden],
+      .restore-bar[hidden] {
+        display: none;
+      }
+
+      .text-button {
+        padding: 0;
+        border: 0;
+        color: var(--text);
+        background: transparent;
+        font-size: inherit;
+        font-weight: 650;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .workspace {
+        display: grid;
+        min-width: 0;
+        min-height: 0;
+        grid-template-columns: minmax(228px, 31%) minmax(0, 1fr);
+      }
+
+      .rail {
+        min-width: 0;
+        overflow: auto;
+        border-right: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .rail-controls {
+        position: sticky;
+        z-index: 2;
+        top: 0;
+        padding: 10px;
+        border-bottom: 1px solid var(--line-soft);
+        background: var(--panel);
+      }
+
+      .search-input {
+        width: 100%;
+        height: 32px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel-subtle);
+        font-size: 12px;
+      }
+
+      .session-section {
+        padding: 10px 8px 2px;
+      }
+
+      .section-label {
+        margin: 0 6px 6px;
+        color: var(--quiet);
+        font-size: 10px;
+        font-weight: 650;
+        letter-spacing: 0.075em;
+        text-transform: uppercase;
+      }
+
+      .session-row {
+        display: grid;
+        width: 100%;
+        min-width: 0;
+        grid-template-columns: 30px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 9px;
+        padding: 8px;
+        border: 0;
+        border-radius: var(--radius);
+        text-align: left;
+        background: transparent;
+      }
+
+      .session-row:hover {
+        background: var(--hover);
+      }
+
+      .session-row[aria-current="true"] {
+        background: var(--selected);
+      }
+
+      .avatar {
+        position: relative;
+        display: grid;
+        width: 30px;
+        height: 30px;
+        flex: 0 0 auto;
+        place-items: center;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        color: var(--muted);
+        background: var(--panel-subtle);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .avatar img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .session-copy {
+        min-width: 0;
+      }
+
+      .session-title,
+      .session-preview {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .session-title {
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .session-preview {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .session-meta {
+        display: grid;
+        justify-items: end;
+        gap: 5px;
+        color: var(--quiet);
+        font-size: 10px;
+      }
+
+      .row-state {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .status-dot[data-state="working"] {
+        border: 1.5px solid var(--line);
+        border-top-color: var(--accent);
+        background: transparent;
+        animation: spin 900ms linear infinite;
+      }
+
+      .status-dot[data-state="waiting"] {
+        background: var(--warn);
+      }
+
+      .status-dot[data-state="error"] {
+        background: var(--bad);
+      }
+
+      .status-dot[data-state="idle"] {
+        background: var(--quiet);
+      }
+
+      .unread-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--accent);
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .conversation {
+        display: grid;
+        min-width: 0;
+        min-height: 0;
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
+        background: var(--bg);
+      }
+
+      .conversation-header {
+        display: flex;
+        min-width: 0;
+        min-height: 58px;
+        align-items: center;
+        gap: 9px;
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .mobile-back {
+        display: none;
+      }
+
+      .conversation-heading {
+        min-width: 0;
+        margin-right: auto;
+      }
+
+      .conversation-title {
+        overflow: hidden;
+        font-size: 14px;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .conversation-subtitle {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .transcript {
+        min-height: 0;
+        overflow: auto;
+        padding: 18px clamp(14px, 4vw, 34px);
+      }
+
+      .messages {
+        width: min(720px, 100%);
+        margin: 0 auto;
+      }
+
+      .message {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 10px;
+        margin: 0 0 18px;
+      }
+
+      .message[data-role="user"] {
+        grid-template-columns: minmax(0, 1fr) 28px;
+      }
+
+      .message[data-role="user"] .message-content {
+        grid-column: 1;
+        grid-row: 1;
+        justify-self: end;
+        border-color: transparent;
+        background: var(--selected);
+      }
+
+      .message[data-role="user"] .avatar {
+        grid-column: 2;
+      }
+
+      .message-content {
+        max-width: min(610px, 100%);
+        padding: 9px 11px;
+        border: 1px solid var(--line-soft);
+        border-radius: var(--radius);
+        background: var(--panel);
+        font-size: 13px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .empty-state {
+        display: grid;
+        min-height: 100%;
+        place-content: center;
+        justify-items: center;
+        padding: 32px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .empty-mark {
+        width: 46px;
+        height: 46px;
+        margin-bottom: 14px;
+        color: var(--quiet);
+      }
+
+      .empty-title {
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 650;
+      }
+
+      .empty-copy {
+        max-width: 340px;
+        margin-top: 6px;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .composer {
+        padding: 10px 12px 12px;
+        border-top: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .composer-box {
+        display: grid;
+        max-width: 760px;
+        min-height: 46px;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: end;
+        gap: 7px;
+        margin: 0 auto;
+        padding: 6px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel-subtle);
+      }
+
+      .composer textarea {
+        width: 100%;
+        min-height: 32px;
+        max-height: 132px;
+        resize: none;
+        padding: 6px 7px;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .composer-hint {
+        max-width: 760px;
+        margin: 5px auto 0;
+        color: var(--quiet);
+        font-size: 10px;
+        text-align: right;
+      }
+
+      .gateway-dialog {
+        width: min(360px, calc(100vw - 24px));
+        margin: 60px 12px auto auto;
+        padding: 0;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        color: var(--text);
+        background: var(--panel);
+      }
+
+      .gateway-dialog::backdrop {
+        background: rgba(0, 0, 0, 0.18);
+      }
+
+      .drawer-header,
+      .drawer-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .drawer-header {
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .drawer-row {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .capability-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        padding: 12px 14px 14px;
+      }
+
+      .capability {
+        padding: 3px 7px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--quiet);
+        font-size: 10px;
+      }
+
+      .capability[data-enabled="true"] {
+        color: var(--good);
+      }
+
+      .app[data-mode="detail"] .workspace {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .app[data-mode="detail"] .rail {
+        display: none;
+      }
+
+      @media (max-width: 720px) {
+        .connection-label {
+          display: none;
+        }
+
+        .agent-picker {
+          width: 32px;
+          min-width: 32px;
+          justify-content: center;
+          padding: 0;
+        }
+
+        .agent-picker .agent-select {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          padding: 0;
+          opacity: 0;
+        }
+
+        .agent-picker .avatar {
+          pointer-events: none;
+        }
+
+        .workspace {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .conversation {
+          display: none;
+        }
+
+        .app[data-selected="true"] .rail,
+        .app[data-mode="detail"] .rail {
+          display: none;
+        }
+
+        .app[data-selected="true"] .conversation,
+        .app[data-mode="detail"] .conversation {
+          display: grid;
+        }
+
+        .app[data-mode="master"] .mobile-back {
+          display: inline-flex;
+        }
+
+        .transcript {
+          padding: 14px 10px;
+        }
+
+        .toolbar {
+          padding-inline: 9px;
+        }
+
+        .brand-title {
+          max-width: 110px;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .status-dot[data-state="working"] {
+          animation: none;
+          border-color: var(--accent);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app" id="app" data-mode="master" data-selected="false">
+      <header class="toolbar">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 120 120" fill="none" aria-hidden="true">
+            <g
+              stroke="currentColor"
+              stroke-width="6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z"
+              />
+              <path d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z" />
+              <path d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z" />
+              <path d="M45 15 Q35 5 30 8" stroke-width="5" />
+              <path d="M75 15 Q85 5 90 8" stroke-width="5" />
+            </g>
+            <circle cx="45" cy="35" r="5.5" fill="currentColor" />
+            <circle cx="75" cy="35" r="5.5" fill="currentColor" />
+          </svg>
+          <div class="brand-copy">
+            <div class="brand-title">OpenClaw</div>
+          </div>
+        </div>
+        <button
+          class="connection-button"
+          id="connection-button"
+          type="button"
+          aria-haspopup="dialog"
+        >
+          <span class="connection-dot" id="connection-dot" data-state="connecting"></span>
+          <span class="connection-label" id="connection-label">Connecting</span>
+        </button>
+        <div class="agent-picker" id="agent-picker" hidden>
+          <span class="avatar" id="agent-picker-avatar" aria-hidden="true">O</span>
+          <select class="agent-select" id="agent-select" aria-label="Agent for new sessions">
+            <option value="">Default agent</option>
+          </select>
+        </div>
+        <button class="primary-button" id="new-session" type="button">New</button>
+        <button
+          class="icon-button"
+          id="refresh"
+          type="button"
+          aria-label="Refresh sessions"
+          title="Refresh sessions"
+        >
+          ↻
+        </button>
+      </header>
+
+      <div class="stale-banner" id="stale-banner" hidden>
+        <span id="stale-copy">Showing the last available sessions</span>
+        <button class="text-button" id="retry" type="button">Retry</button>
+      </div>
+
+      <div class="workspace">
+        <aside class="rail" aria-label="OpenClaw sessions">
+          <div class="rail-controls">
+            <input
+              class="search-input"
+              id="search"
+              type="search"
+              aria-label="Search sessions"
+              placeholder="Search sessions"
+              autocomplete="off"
+            />
+          </div>
+          <div id="session-list"></div>
+        </aside>
+
+        <main class="conversation">
+          <header class="conversation-header">
+            <button
+              class="icon-button mobile-back"
+              id="mobile-back"
+              type="button"
+              aria-label="Back to sessions"
+            >
+              ←
+            </button>
+            <div class="avatar" id="conversation-avatar" aria-hidden="true">O</div>
+            <div class="conversation-heading">
+              <div class="conversation-title" id="conversation-title">Select a session</div>
+              <div class="conversation-subtitle" id="conversation-subtitle">OpenClaw</div>
+            </div>
+            <button class="secondary-button" id="archive" type="button" hidden>Archive</button>
+          </header>
+
+          <div class="restore-bar" id="restore-bar" hidden>
+            <span>This session is archived</span>
+            <button class="text-button" id="restore" type="button">Restore</button>
+          </div>
+
+          <div
+            class="transcript"
+            id="transcript"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions"
+          ></div>
+
+          <form class="composer" id="composer">
+            <div class="composer-box">
+              <textarea
+                id="message"
+                rows="1"
+                placeholder="Message OpenClaw"
+                aria-label="Message OpenClaw"
+              ></textarea>
+              <button class="secondary-button" id="stop" type="button" hidden>Stop</button>
+              <button class="primary-button" id="send" type="submit">Send</button>
+            </div>
+            <div class="composer-hint" id="composer-hint">
+              Enter to send · Shift+Enter for a new line
+            </div>
+          </form>
+        </main>
+      </div>
+    </div>
+
+    <dialog class="gateway-dialog" id="gateway-dialog" aria-labelledby="gateway-dialog-title">
+      <div class="drawer-header">
+        <span id="gateway-dialog-title">OpenClaw Gateway</span>
+        <button
+          class="icon-button"
+          id="close-gateway"
+          type="button"
+          aria-label="Close Gateway details"
+        >
+          ×
+        </button>
+      </div>
+      <div class="drawer-row">
+        <span>Connection</span><strong id="drawer-connection">Connecting</strong>
+      </div>
+      <div class="drawer-row"><span>Sessions</span><strong id="drawer-count">0</strong></div>
+      <div class="capability-list" id="capability-list"></div>
+    </dialog>
+
+    <script>
+      const UI_PROTOCOL_VERSION = "2026-01-26";
+      const FIXTURE_NOW = 1767995121286;
+      const READ_RPC_TIMEOUT_MS = 20_000;
+      const MUTATION_RPC_TIMEOUT_MS = 190_000;
+      const fixtureName = new URL(window.location.href).searchParams.get("fixture");
+      const displayLocale = fixtureName ? "en-US" : undefined;
+      const displayTimeZone = fixtureName ? "UTC" : undefined;
+      const CACHE_KEY = "openclaw.codex.session-app.v1";
+      const TOOL = {
+        list: "openclaw_sessions_list",
+        detail: "openclaw_session_detail",
+        create: "openclaw_session_create",
+        send: "openclaw_session_send",
+        abort: "openclaw_session_abort",
+        update: "openclaw_session_update",
+      };
+      const DEFAULT_CAPABILITIES = {
+        list: true,
+        read: true,
+        create: false,
+        send: false,
+        abort: false,
+        update: false,
+      };
+      const elements = {
+        app: document.getElementById("app"),
+        connectionButton: document.getElementById("connection-button"),
+        connectionDot: document.getElementById("connection-dot"),
+        connectionLabel: document.getElementById("connection-label"),
+        agentPicker: document.getElementById("agent-picker"),
+        agentPickerAvatar: document.getElementById("agent-picker-avatar"),
+        agentSelect: document.getElementById("agent-select"),
+        newSession: document.getElementById("new-session"),
+        refresh: document.getElementById("refresh"),
+        staleBanner: document.getElementById("stale-banner"),
+        staleCopy: document.getElementById("stale-copy"),
+        retry: document.getElementById("retry"),
+        search: document.getElementById("search"),
+        sessionList: document.getElementById("session-list"),
+        mobileBack: document.getElementById("mobile-back"),
+        conversationAvatar: document.getElementById("conversation-avatar"),
+        conversationTitle: document.getElementById("conversation-title"),
+        conversationSubtitle: document.getElementById("conversation-subtitle"),
+        archive: document.getElementById("archive"),
+        restoreBar: document.getElementById("restore-bar"),
+        restore: document.getElementById("restore"),
+        transcript: document.getElementById("transcript"),
+        composer: document.getElementById("composer"),
+        message: document.getElementById("message"),
+        stop: document.getElementById("stop"),
+        send: document.getElementById("send"),
+        gatewayDialog: document.getElementById("gateway-dialog"),
+        closeGateway: document.getElementById("close-gateway"),
+        drawerConnection: document.getElementById("drawer-connection"),
+        drawerCount: document.getElementById("drawer-count"),
+        capabilityList: document.getElementById("capability-list"),
+      };
+      const state = {
+        mode: "master",
+        items: [],
+        agents: [],
+        selectedId: null,
+        messages: [],
+        capabilities: { ...DEFAULT_CAPABILITIES },
+        connection: "connecting",
+        stale: false,
+        busy: false,
+        detailBusy: false,
+        controlBusy: new Set(),
+        createMode: false,
+        toolInput: null,
+      };
+      let rpcId = 0;
+      let pollTimer = null;
+      let searchTimer = null;
+      let startupTimer = null;
+      let listRequest = 0;
+      let detailRequest = 0;
+      let selectionEpoch = 0;
+      let hostToolInputEpoch = null;
+      let hostToolInputSessionId = null;
+      let hostToolInputMode = null;
+      let operationSequence = 0;
+      let activeDraftOperation = null;
+      let retryDraftOperation = null;
+      let renderedTranscriptContext = null;
+      let renderedMessageKeys = [];
+      let tornDown = false;
+      const pendingRequests = new Map();
+
+      function now() {
+        return fixtureName ? FIXTURE_NOW : Date.now();
+      }
+
+      function isRecord(value) {
+        return value != null && typeof value === "object" && !Array.isArray(value);
+      }
+
+      function rpcNotify(method, params) {
+        if (tornDown) {
+          return;
+        }
+        window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
+      }
+
+      function rpcRequest(method, params, { timeoutMs = READ_RPC_TIMEOUT_MS } = {}) {
+        if (tornDown) {
+          return Promise.reject(new Error("resource_teardown"));
+        }
+        return new Promise((resolve, reject) => {
+          const id = ++rpcId;
+          const timeout = window.setTimeout(() => {
+            pendingRequests.delete(id);
+            reject(new Error("bridge_timeout"));
+          }, timeoutMs);
+          pendingRequests.set(id, { resolve, reject, timeout });
+          window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        });
+      }
+
+      window.addEventListener(
+        "message",
+        (event) => {
+          if (event.source !== window.parent || !isRecord(event.data)) {
+            return;
+          }
+          const message = event.data;
+          if (message.jsonrpc !== "2.0") {
+            return;
+          }
+          if (
+            message.method === "ui/resource-teardown" &&
+            (typeof message.id === "number" || typeof message.id === "string")
+          ) {
+            const id = message.id;
+            teardown();
+            window.parent.postMessage({ jsonrpc: "2.0", id, result: {} }, "*");
+            return;
+          }
+          if (typeof message.id === "number") {
+            const pending = pendingRequests.get(message.id);
+            if (!pending) {
+              return;
+            }
+            pendingRequests.delete(message.id);
+            window.clearTimeout(pending.timeout);
+            if (message.error) {
+              pending.reject(new Error("bridge_request_failed"));
+            } else {
+              pending.resolve(message.result);
+            }
+            return;
+          }
+          if (message.method === "ui/notifications/tool-input") {
+            acceptToolInput(message.params?.arguments);
+          } else if (message.method === "ui/notifications/tool-result") {
+            acceptHostToolResult(message.params);
+          } else if (message.method === "ui/notifications/host-context-changed") {
+            applyHostContext(message.params);
+          }
+        },
+        { passive: true },
+      );
+
+      function teardown() {
+        if (tornDown) {
+          return;
+        }
+        tornDown = true;
+        listRequest += 1;
+        detailRequest += 1;
+        window.clearTimeout(pollTimer);
+        window.clearTimeout(searchTimer);
+        window.clearTimeout(startupTimer);
+        for (const pending of pendingRequests.values()) {
+          window.clearTimeout(pending.timeout);
+          pending.resolve({});
+        }
+        pendingRequests.clear();
+      }
+
+      function applyHostContext(context) {
+        const theme = context?.theme;
+        if (theme === "light" || theme === "dark") {
+          document.documentElement.dataset.theme = theme;
+        }
+        const top = context?.safeAreaInsets?.top;
+        if (typeof top === "number" && Number.isFinite(top)) {
+          document.documentElement.style.setProperty("--safe-top", `${Math.max(0, top)}px`);
+        }
+      }
+
+      function acceptToolInput(input) {
+        if (!isRecord(input)) {
+          return;
+        }
+        state.toolInput = input;
+        if (input.chrome === "detail") {
+          state.mode = "detail";
+        }
+        if (input.mode === "new") {
+          enterCreateMode();
+          hostToolInputEpoch = selectionEpoch;
+          hostToolInputSessionId = null;
+          hostToolInputMode = "new";
+          return;
+        }
+        if (typeof input.session_id === "string") {
+          selectSession(input.session_id);
+          hostToolInputEpoch = selectionEpoch;
+          hostToolInputSessionId = input.session_id;
+          hostToolInputMode = null;
+          render();
+          return;
+        }
+        hostToolInputEpoch = selectionEpoch;
+        hostToolInputSessionId = null;
+        hostToolInputMode = null;
+      }
+
+      function acceptHostToolResult(result) {
+        const payload = resultPayload(result);
+        const payloadSessionId =
+          isRecord(payload?.session) && typeof payload.session.id === "string"
+            ? payload.session.id
+            : null;
+        const inputIsCurrent =
+          hostToolInputEpoch == null
+            ? state.selectedId == null && !state.createMode
+            : hostToolInputEpoch === selectionEpoch;
+        const canAdoptSession =
+          inputIsCurrent &&
+          payloadSessionId != null &&
+          !state.createMode &&
+          (hostToolInputSessionId == null
+            ? state.selectedId == null
+            : payloadSessionId === hostToolInputSessionId &&
+              state.selectedId === hostToolInputSessionId);
+        return acceptEnvelope(result, {
+          adoptSession: canAdoptSession,
+          acceptMessages: payloadSessionId == null ? inputIsCurrent : canAdoptSession,
+          acceptMode: inputIsCurrent && hostToolInputMode === "new" && state.createMode,
+          acceptError: inputIsCurrent,
+        });
+      }
+
+      function resultPayload(result) {
+        return isRecord(result?.structuredContent)
+          ? result.structuredContent
+          : isRecord(result)
+            ? result
+            : null;
+      }
+
+      function acceptEnvelope(
+        result,
+        { adoptSession = true, acceptMessages = true, acceptMode = true, acceptError = true } = {},
+      ) {
+        const payload = resultPayload(result);
+        if (!payload) {
+          return null;
+        }
+        if (acceptMode && payload.mode === "new" && !state.createMode) {
+          enterCreateMode();
+        }
+        if (isRecord(payload.capabilities)) {
+          for (const name of Object.keys(DEFAULT_CAPABILITIES)) {
+            if (typeof payload.capabilities[name] === "boolean") {
+              state.capabilities[name] = payload.capabilities[name];
+            }
+          }
+        }
+        if (Array.isArray(payload.items)) {
+          state.items = sanitizedItems(payload.items);
+          state.stale = false;
+          saveCache();
+        }
+        if (Array.isArray(payload.agents)) {
+          state.agents = sanitizedAgents(payload.agents);
+        }
+        if (isRecord(payload.session)) {
+          const session = upsertSession(payload.session);
+          if (adoptSession && session) {
+            selectSession(session.id);
+          }
+        }
+        if (acceptMessages && Array.isArray(payload.messages)) {
+          state.messages = sanitizedMessages(payload.messages);
+        }
+        const hasError = isRecord(payload.error);
+        if (hasError && acceptError) {
+          showSafeError(payload.error.code);
+        }
+        if (!hasError) {
+          state.connection = "online";
+        }
+        render();
+        return payload;
+      }
+
+      function sanitizedItems(items) {
+        const seen = new Set();
+        return items.flatMap((item) => {
+          if (!isRecord(item) || typeof item.id !== "string" || seen.has(item.id)) {
+            return [];
+          }
+          seen.add(item.id);
+          return [
+            {
+              id: item.id,
+              agentId: typeof item.agentId === "string" ? item.agentId : null,
+              title:
+                typeof item.title === "string" && item.title.trim() ? item.title : "New session",
+              preview: typeof item.preview === "string" ? item.preview : null,
+              updatedAt:
+                typeof item.updatedAt === "string" || typeof item.updatedAt === "number"
+                  ? item.updatedAt
+                  : null,
+              status: ["idle", "working", "waiting", "error"].includes(item.status)
+                ? item.status
+                : "idle",
+              unread: item.unread === true,
+              pinned: item.pinned === true,
+              archived: item.archived === true,
+              icon: sanitizedIcon(
+                item.icon ??
+                  (Array.isArray(item.icons)
+                    ? item.icons.find((icon) => isRecord(icon) && typeof icon.src === "string")
+                    : null),
+              ),
+            },
+          ];
+        });
+      }
+
+      function sanitizedAgents(agents) {
+        const seen = new Set();
+        return agents.flatMap((agent) => {
+          if (
+            !isRecord(agent) ||
+            typeof agent.id !== "string" ||
+            agent.id.length > 100 ||
+            seen.has(agent.id)
+          ) {
+            return [];
+          }
+          seen.add(agent.id);
+          return [
+            {
+              id: agent.id,
+              title:
+                typeof agent.title === "string" && agent.title.trim()
+                  ? agent.title.slice(0, 160)
+                  : agent.id,
+              icon: sanitizedIcon(agent.icon),
+            },
+          ];
+        });
+      }
+
+      function sanitizedIcon(icon) {
+        if (!isRecord(icon)) {
+          return null;
+        }
+        return {
+          src: safeImageSource(icon.src),
+          fallback: typeof icon.fallback === "string" ? icon.fallback.slice(0, 4) : null,
+        };
+      }
+
+      function safeImageSource(value) {
+        if (typeof value !== "string" || value.length > 256 * 1024) {
+          return null;
+        }
+        if (value.startsWith("data:image/") && !value.startsWith("data:image/svg+xml,<")) {
+          return value;
+        }
+        return null;
+      }
+
+      function sanitizedMessages(messages) {
+        return messages.flatMap((message) => {
+          if (
+            !isRecord(message) ||
+            (message.role !== "user" && message.role !== "assistant") ||
+            typeof message.text !== "string"
+          ) {
+            return [];
+          }
+          return [
+            {
+              id: typeof message.id === "string" ? message.id : null,
+              role: message.role,
+              text: message.text.slice(0, 20000),
+            },
+          ];
+        });
+      }
+
+      function upsertSession(session) {
+        const [next] = sanitizedItems([session]);
+        if (!next) {
+          return null;
+        }
+        state.items = [next, ...state.items.filter((item) => item.id !== next.id)];
+        saveCache();
+        return next;
+      }
+
+      function selectedSession() {
+        return state.items.find((item) => item.id === state.selectedId) ?? null;
+      }
+
+      function selectSession(id) {
+        if (state.createMode || state.selectedId !== id) {
+          selectionEpoch += 1;
+          detailRequest += 1;
+          state.detailBusy = false;
+          state.messages = [];
+          retryDraftOperation = null;
+        }
+        state.selectedId = id;
+        state.createMode = false;
+      }
+
+      function sessionTargetIsCurrent(sessionId, originEpoch) {
+        return (
+          selectionEpoch === originEpoch && !state.createMode && state.selectedId === sessionId
+        );
+      }
+
+      function draftTargetKey() {
+        if (state.createMode) {
+          return `create:${elements.agentSelect.value}`;
+        }
+        return state.selectedId == null ? null : `session:${state.selectedId}`;
+      }
+
+      function createOperationId() {
+        if (typeof globalThis.crypto?.randomUUID === "function") {
+          return globalThis.crypto.randomUUID();
+        }
+        if (typeof globalThis.crypto?.getRandomValues === "function") {
+          const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+          bytes[6] = (bytes[6] & 0x0f) | 0x40;
+          bytes[8] = (bytes[8] & 0x3f) | 0x80;
+          const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+          return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+        }
+        operationSequence += 1;
+        return `openclaw-${Date.now().toString(36)}-${operationSequence.toString(36)}`;
+      }
+
+      async function callTool(name, args) {
+        const result = await rpcRequest(
+          "tools/call",
+          { name, arguments: args },
+          { timeoutMs: MUTATION_RPC_TIMEOUT_MS },
+        );
+        return acceptEnvelope(result, {
+          adoptSession: false,
+          acceptMessages: false,
+          acceptError: false,
+        });
+      }
+
+      async function loadSessions({ background = false } = {}) {
+        if (tornDown || !state.capabilities.list || fixtureName) {
+          return;
+        }
+        const request = ++listRequest;
+        if (!background) {
+          elements.refresh.disabled = true;
+        }
+        const search = elements.search.value.trim();
+        try {
+          const result = await rpcRequest("tools/call", {
+            name: TOOL.list,
+            arguments: { limit: 100, ...(search ? { search } : {}) },
+          });
+          if (request !== listRequest) {
+            return;
+          }
+          const payload = acceptEnvelope(result, {
+            adoptSession: false,
+            acceptMessages: false,
+          });
+          if (payload?.error && state.items.length === 0) {
+            loadCache();
+          }
+        } catch {
+          if (request !== listRequest) {
+            return;
+          }
+          state.connection = "offline";
+          state.stale = state.items.length > 0;
+          if (!state.stale) {
+            loadCache();
+          }
+        } finally {
+          if (request === listRequest) {
+            elements.refresh.disabled = false;
+            render();
+            scheduleRefresh();
+          }
+        }
+      }
+
+      async function loadDetail(id, { background = false } = {}) {
+        if (tornDown || !id || !state.capabilities.read || fixtureName) {
+          return;
+        }
+        if (background && state.detailBusy) {
+          return;
+        }
+        const request = ++detailRequest;
+        const ownsBusyState = !background;
+        if (ownsBusyState) {
+          state.detailBusy = true;
+          render();
+        }
+        try {
+          const result = await rpcRequest("tools/call", {
+            name: TOOL.detail,
+            arguments: { session_id: id, limit: 100, chrome: "detail" },
+          });
+          if (
+            request !== detailRequest ||
+            state.selectedId !== id ||
+            state.createMode ||
+            tornDown
+          ) {
+            return;
+          }
+          const payload = resultPayload(result);
+          if (isRecord(payload?.error)) {
+            acceptEnvelope(payload, { adoptSession: false, acceptMessages: false });
+            return;
+          }
+          if (!isRecord(payload?.session) || payload.session.id !== id) {
+            showSafeError("invalid_response");
+            return;
+          }
+          acceptEnvelope(payload, { adoptSession: false });
+        } catch {
+          if (request !== detailRequest || state.selectedId !== id || tornDown) {
+            return;
+          }
+          state.connection = "offline";
+          state.stale = true;
+        } finally {
+          if (request === detailRequest) {
+            if (ownsBusyState) {
+              state.detailBusy = false;
+            }
+            render();
+          }
+        }
+      }
+
+      function enterCreateMode() {
+        selectionEpoch += 1;
+        detailRequest += 1;
+        state.detailBusy = false;
+        state.createMode = true;
+        state.selectedId = null;
+        state.messages = [];
+        retryDraftOperation = null;
+        elements.app.dataset.selected = "true";
+        render();
+        elements.message.focus();
+      }
+
+      async function createSession(message, operationId) {
+        const originEpoch = selectionEpoch;
+        const originAgentId = elements.agentSelect.value;
+        const createTargetIsCurrent = () =>
+          selectionEpoch === originEpoch &&
+          state.createMode &&
+          state.selectedId == null &&
+          elements.agentSelect.value === originAgentId;
+        const args = { operation_id: operationId };
+        if (elements.agentSelect.value) {
+          args.agent_id = elements.agentSelect.value;
+        }
+        if (message) {
+          args.message = message;
+        }
+        const payload = await callTool(TOOL.create, args);
+        if (isRecord(payload?.error)) {
+          if (createTargetIsCurrent()) {
+            showSafeError(payload.error.code);
+            render();
+          }
+          return false;
+        }
+        const createdId = typeof payload?.session?.id === "string" ? payload.session.id : null;
+        if (!createdId || !state.items.some((item) => item.id === createdId)) {
+          if (createTargetIsCurrent()) {
+            showSafeError("invalid_response");
+            render();
+          }
+          return false;
+        }
+        const canAdoptCreatedSession = createTargetIsCurrent();
+        let createdSelectionEpoch = null;
+        if (canAdoptCreatedSession) {
+          selectSession(createdId);
+          createdSelectionEpoch = selectionEpoch;
+          render();
+          await loadDetail(createdId);
+          await loadSessions({ background: true });
+        }
+        if (payload.initial_message_status === "failed") {
+          const createdSessionStillSelected =
+            createdSelectionEpoch === selectionEpoch &&
+            !state.createMode &&
+            state.selectedId === createdId;
+          if (createdSessionStillSelected) {
+            showSafeError("initial_message_failed");
+            const draftWasEdited =
+              activeDraftOperation?.id === operationId && activeDraftOperation.edited;
+            if (!draftWasEdited && elements.message.value === "") {
+              elements.message.value = message;
+              // The initial send may have reached Gateway before its response was lost.
+              // Preserve its idempotency key across the create-to-session handoff.
+              retryDraftOperation = {
+                id: operationId,
+                text: message,
+                targetKey: `session:${createdId}`,
+              };
+              resizeComposer();
+            }
+            render();
+          }
+        }
+        return true;
+      }
+
+      async function sendMessage(text, operationId) {
+        if (state.createMode) {
+          return createSession(text, operationId);
+        }
+        const session = selectedSession();
+        if (!session) {
+          return false;
+        }
+        const originEpoch = selectionEpoch;
+        const optimisticMessage = { id: null, role: "user", text };
+        const previousStatus = session.status;
+        state.messages.push(optimisticMessage);
+        session.status = "working";
+        render();
+        let payload;
+        try {
+          payload = await callTool(TOOL.send, {
+            session_id: session.id,
+            text,
+            operation_id: operationId,
+          });
+        } catch (error) {
+          rollbackOptimisticMessage(optimisticMessage, session, previousStatus);
+          throw error;
+        }
+        if (!payload) {
+          rollbackOptimisticMessage(optimisticMessage, session, previousStatus);
+          if (sessionTargetIsCurrent(session.id, originEpoch)) {
+            showSafeError("invalid_response");
+            render();
+          }
+          return false;
+        }
+        if (isRecord(payload?.error)) {
+          rollbackOptimisticMessage(optimisticMessage, session, previousStatus);
+          if (sessionTargetIsCurrent(session.id, originEpoch)) {
+            showSafeError(payload.error.code);
+            render();
+          }
+          return false;
+        }
+        if (sessionTargetIsCurrent(session.id, originEpoch)) {
+          await loadDetail(session.id, { background: true });
+          await loadSessions({ background: true });
+        }
+        return true;
+      }
+
+      function rollbackOptimisticMessage(optimisticMessage, session, previousStatus) {
+        state.messages = state.messages.filter((message) => message !== optimisticMessage);
+        if (state.items.includes(session) && session.status === "working") {
+          session.status = previousStatus;
+        }
+        render();
+      }
+
+      async function updateArchive(archived) {
+        const session = selectedSession();
+        if (!session) {
+          return false;
+        }
+        const originEpoch = selectionEpoch;
+        let payload;
+        try {
+          payload = await callTool(TOOL.update, { session_id: session.id, archived });
+        } catch {
+          if (sessionTargetIsCurrent(session.id, originEpoch)) {
+            state.connection = "offline";
+            showSafeError("offline");
+          }
+          return false;
+        }
+        if (!payload || isRecord(payload.error)) {
+          if (sessionTargetIsCurrent(session.id, originEpoch)) {
+            showSafeError(payload ? payload.error.code : "invalid_response");
+          }
+          return false;
+        }
+        if (sessionTargetIsCurrent(session.id, originEpoch)) {
+          await loadSessions({ background: true });
+        }
+        return true;
+      }
+
+      async function abortSession() {
+        const session = selectedSession();
+        if (!session) {
+          return false;
+        }
+        const originEpoch = selectionEpoch;
+        let payload;
+        try {
+          payload = await callTool(TOOL.abort, { session_id: session.id });
+        } catch {
+          if (sessionTargetIsCurrent(session.id, originEpoch)) {
+            state.connection = "offline";
+            showSafeError("offline");
+          }
+          return false;
+        }
+        if (!payload || isRecord(payload.error)) {
+          if (sessionTargetIsCurrent(session.id, originEpoch)) {
+            showSafeError(payload ? payload.error.code : "invalid_response");
+          }
+          return false;
+        }
+        if (sessionTargetIsCurrent(session.id, originEpoch)) {
+          await loadDetail(session.id, { background: true });
+        }
+        return true;
+      }
+
+      async function runControlAction(name, action) {
+        if (state.controlBusy.has(name)) {
+          return;
+        }
+        state.controlBusy.add(name);
+        render();
+        try {
+          await action();
+        } catch {
+          // Action helpers own target-scoped feedback; late errors must not leak to a new target.
+        } finally {
+          state.controlBusy.delete(name);
+          render();
+        }
+      }
+
+      function saveCache() {
+        try {
+          const items = state.items.slice(0, 200).map((item) => ({
+            ...item,
+            icon:
+              item.icon == null
+                ? null
+                : {
+                    ...item.icon,
+                    src: item.icon.src?.length <= 32768 ? item.icon.src : null,
+                  },
+          }));
+          sessionStorage.setItem(CACHE_KEY, JSON.stringify({ savedAt: now(), items }));
+        } catch {}
+      }
+
+      function loadCache() {
+        try {
+          const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) ?? "null");
+          if (isRecord(cached) && Array.isArray(cached.items)) {
+            state.items = sanitizedItems(cached.items);
+            state.stale = state.items.length > 0;
+          }
+        } catch {}
+      }
+
+      function showSafeError(code) {
+        const copy = {
+          offline: "The Gateway is offline. Showing the last available sessions.",
+          gateway_unavailable: "The Gateway is offline. Showing the last available sessions.",
+          invalid_response: "OpenClaw returned an unexpected response. Refresh and try again.",
+          unsupported: "This OpenClaw version does not support that action.",
+          read_only: "The Gateway granted read-only access.",
+          not_found: "That session is no longer available.",
+          conflict: "The session changed. Refresh and try again.",
+          rejected: "OpenClaw rejected that action.",
+          initial_message_failed:
+            "The session was created, but OpenClaw could not start the first message. Edit and retry it below.",
+          refresh_required: "Refresh sessions before trying that action again.",
+        };
+        elements.staleCopy.textContent = copy[code] ?? "OpenClaw could not complete that action.";
+        if (code === "offline" || code === "gateway_unavailable") {
+          state.connection = "offline";
+        }
+        state.stale = true;
+      }
+
+      function render() {
+        elements.app.dataset.mode = state.mode;
+        elements.app.dataset.selected = String(state.createMode || state.selectedId != null);
+        renderConnection();
+        renderAgents();
+        renderSessions();
+        renderConversation();
+        renderCapabilities();
+      }
+
+      function renderConnection() {
+        const label =
+          state.connection === "online"
+            ? "Connected"
+            : state.connection === "offline"
+              ? "Offline"
+              : "Connecting";
+        elements.connectionDot.dataset.state = state.connection;
+        elements.connectionLabel.textContent =
+          state.stale && state.connection === "online" ? "Stale" : label;
+        elements.connectionButton.setAttribute("aria-label", `${label} OpenClaw Gateway`);
+        elements.drawerConnection.textContent = state.stale ? `${label} · stale` : label;
+        elements.drawerCount.textContent = new Intl.NumberFormat(displayLocale).format(
+          state.items.length,
+        );
+        elements.staleBanner.hidden = !state.stale;
+      }
+
+      function renderAgents() {
+        const selected = elements.agentSelect.value;
+        elements.agentSelect.replaceChildren(new Option("Default agent", ""));
+        for (const agent of state.agents) {
+          elements.agentSelect.append(new Option(agent.title, agent.id));
+        }
+        elements.agentSelect.value = state.agents.some((agent) => agent.id === selected)
+          ? selected
+          : "";
+        const selectedAgent = state.agents.find((agent) => agent.id === elements.agentSelect.value);
+        const avatar = createAvatar(selectedAgent, "O");
+        avatar.id = "agent-picker-avatar";
+        elements.agentPickerAvatar.replaceWith(avatar);
+        elements.agentPickerAvatar = avatar;
+        elements.agentPicker.hidden = !state.capabilities.create;
+        elements.newSession.hidden = !state.capabilities.create;
+      }
+
+      function renderSessions() {
+        const groups = [
+          ["Working", state.items.filter((item) => !item.archived && item.status !== "idle")],
+          ["Recent", state.items.filter((item) => !item.archived && item.status === "idle")],
+          ["Archived", state.items.filter((item) => item.archived)],
+        ];
+        elements.sessionList.replaceChildren();
+        for (const [label, items] of groups) {
+          if (items.length === 0) {
+            continue;
+          }
+          const section = document.createElement("section");
+          section.className = "session-section";
+          const heading = document.createElement("h2");
+          heading.className = "section-label";
+          heading.textContent = label;
+          section.append(heading);
+          for (const item of items) {
+            section.append(sessionRow(item));
+          }
+          elements.sessionList.append(section);
+        }
+        if (state.items.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "empty-state";
+          const title = document.createElement("div");
+          title.className = "empty-title";
+          title.textContent =
+            state.connection === "offline" ? "Gateway unavailable" : "No sessions yet";
+          const copy = document.createElement("div");
+          copy.className = "empty-copy";
+          copy.textContent = state.capabilities.create
+            ? "Start a session and it will appear here."
+            : "This Gateway is available in read-only mode.";
+          empty.append(title, copy);
+          elements.sessionList.append(empty);
+        }
+      }
+
+      function sessionRow(item) {
+        const row = document.createElement("button");
+        row.className = "session-row";
+        row.type = "button";
+        row.setAttribute("aria-current", String(item.id === state.selectedId));
+        row.append(createAvatar(item));
+        const copy = document.createElement("span");
+        copy.className = "session-copy";
+        const title = document.createElement("span");
+        title.className = "session-title";
+        title.textContent = item.title;
+        const preview = document.createElement("span");
+        preview.className = "session-preview";
+        preview.textContent = item.preview || item.agentId || "OpenClaw session";
+        copy.append(title, preview);
+        const meta = document.createElement("span");
+        meta.className = "session-meta";
+        const time = document.createElement("span");
+        time.textContent = relativeTime(item.updatedAt);
+        const rowState = document.createElement("span");
+        rowState.className = "row-state";
+        const status = document.createElement("span");
+        status.className = "status-dot";
+        status.dataset.state = item.status;
+        status.title = item.status;
+        rowState.append(status);
+        if (item.unread) {
+          const unread = document.createElement("span");
+          unread.className = "unread-dot";
+          unread.title = "Unread";
+          rowState.append(unread);
+        }
+        meta.append(time, rowState);
+        row.append(copy, meta);
+        row.addEventListener("click", () => {
+          selectSession(item.id);
+          render();
+          if (window.innerWidth <= 720) {
+            elements.mobileBack.focus();
+          }
+          void loadDetail(item.id);
+        });
+        return row;
+      }
+
+      function createAvatar(session, fallback = "O") {
+        const avatar = document.createElement("span");
+        avatar.className = "avatar";
+        avatar.setAttribute("aria-hidden", "true");
+        const symbol =
+          session?.icon?.fallback ||
+          session?.agentEmoji ||
+          session?.agentId?.slice(0, 1) ||
+          session?.title?.slice(0, 1) ||
+          fallback;
+        avatar.textContent = symbol.toUpperCase();
+        const src = safeImageSource(session?.icon?.src || session?.agentImage);
+        if (src) {
+          const image = document.createElement("img");
+          image.alt = "";
+          image.decoding = "async";
+          image.loading = "lazy";
+          image.referrerPolicy = "no-referrer";
+          image.src = src;
+          image.addEventListener("error", () => image.remove(), { once: true });
+          avatar.append(image);
+        }
+        return avatar;
+      }
+
+      function renderConversation() {
+        const distanceFromBottom =
+          elements.transcript.scrollHeight -
+          elements.transcript.scrollTop -
+          elements.transcript.clientHeight;
+        const shouldFollowLatest = distanceFromBottom < 80;
+        const session = selectedSession();
+        const hasConversation = state.createMode || session != null;
+        const canMessage = state.createMode ? state.capabilities.create : state.capabilities.send;
+        elements.message.disabled = !hasConversation || !canMessage;
+        elements.send.disabled = state.busy || state.detailBusy || elements.message.disabled;
+        elements.archive.hidden = !session || !state.capabilities.update || session.archived;
+        elements.archive.disabled = state.controlBusy.has("archive");
+        elements.restoreBar.hidden = !session?.archived;
+        elements.restore.disabled = !state.capabilities.update || state.controlBusy.has("restore");
+        elements.stop.hidden =
+          !session || !state.capabilities.abort || !["working", "waiting"].includes(session.status);
+        elements.stop.disabled = state.controlBusy.has("stop");
+        if (state.createMode) {
+          const selectedAgent = state.agents.find(
+            (agent) => agent.id === elements.agentSelect.value,
+          );
+          setConversationHeader(
+            selectedAgent,
+            "New OpenClaw session",
+            selectedAgent?.title || "Default agent",
+          );
+          renderEmpty(
+            "create",
+            "What should OpenClaw work on?",
+            "Your first message creates the session and starts the run.",
+          );
+          return;
+        }
+        if (!session) {
+          setConversationHeader(null, "Select a session", "OpenClaw");
+          renderEmpty("none", "Choose a session", "Open a recent session, or start a new one.");
+          return;
+        }
+        setConversationHeader(
+          session,
+          session.title,
+          session.agentId || statusLabel(session.status),
+        );
+        if (state.messages.length === 0) {
+          renderEmpty(
+            `session:${session.id}:${state.detailBusy ? "loading" : "empty"}`,
+            state.detailBusy ? "Loading conversation" : "No visible messages",
+            state.detailBusy
+              ? "Fetching the latest transcript…"
+              : "Send a message to continue this session.",
+          );
+          return;
+        }
+        renderMessages(session, shouldFollowLatest);
+      }
+
+      function setConversationHeader(session, title, subtitle) {
+        elements.conversationTitle.textContent = title;
+        elements.conversationSubtitle.textContent = subtitle;
+        elements.conversationAvatar.replaceWith(createAvatar(session));
+        const nextAvatar = document.querySelector(".conversation-header .avatar");
+        nextAvatar.id = "conversation-avatar";
+        elements.conversationAvatar = nextAvatar;
+      }
+
+      function renderMessages(session, shouldFollowLatest) {
+        const agentTitle =
+          state.agents.find((agent) => agent.id === session.agentId)?.title ||
+          session.agentId ||
+          "OpenClaw";
+        const context = `session:${session.id}:${agentTitle}`;
+        const nextKeys = state.messages.map((message) =>
+          JSON.stringify([message.id, message.role, message.text]),
+        );
+        const existingList = elements.transcript.querySelector(":scope > .messages");
+        const canAppend =
+          renderedTranscriptContext === context &&
+          existingList != null &&
+          renderedMessageKeys.length <= nextKeys.length &&
+          renderedMessageKeys.every((key, index) => key === nextKeys[index]);
+        let list = existingList;
+        let changed = false;
+        if (!canAppend) {
+          list = document.createElement("div");
+          list.className = "messages";
+          for (const message of state.messages) {
+            list.append(messageNode(message, session, agentTitle));
+          }
+          elements.transcript.replaceChildren(list);
+          changed = true;
+        } else if (renderedMessageKeys.length < nextKeys.length) {
+          for (const message of state.messages.slice(renderedMessageKeys.length)) {
+            list.append(messageNode(message, session, agentTitle));
+          }
+          changed = true;
+        }
+        renderedTranscriptContext = context;
+        renderedMessageKeys = nextKeys;
+        if (changed && shouldFollowLatest) {
+          elements.transcript.scrollTop = elements.transcript.scrollHeight;
+        }
+      }
+
+      function messageNode(message, session, agentTitle) {
+        const article = document.createElement("article");
+        article.className = "message";
+        article.dataset.role = message.role;
+        article.setAttribute(
+          "aria-label",
+          `Message from ${message.role === "user" ? "You" : agentTitle}`,
+        );
+        const avatar = createAvatar(
+          message.role === "assistant" ? session : null,
+          message.role === "user" ? "Y" : "O",
+        );
+        const content = document.createElement("div");
+        content.className = "message-content";
+        content.textContent = message.text;
+        article.append(avatar, content);
+        return article;
+      }
+
+      function renderEmpty(context, titleText, copyText) {
+        if (renderedTranscriptContext === context) {
+          return;
+        }
+        const empty = document.createElement("div");
+        empty.className = "empty-state";
+        const mark = document.createElement("div");
+        mark.className = "empty-mark";
+        mark.textContent = "⌁";
+        mark.setAttribute("aria-hidden", "true");
+        const title = document.createElement("div");
+        title.className = "empty-title";
+        title.textContent = titleText;
+        const copy = document.createElement("div");
+        copy.className = "empty-copy";
+        copy.textContent = copyText;
+        empty.append(mark, title, copy);
+        elements.transcript.replaceChildren(empty);
+        renderedTranscriptContext = context;
+        renderedMessageKeys = [];
+      }
+
+      function renderCapabilities() {
+        elements.capabilityList.replaceChildren();
+        for (const [name, enabled] of Object.entries(state.capabilities)) {
+          const pill = document.createElement("span");
+          pill.className = "capability";
+          pill.dataset.enabled = String(enabled);
+          pill.textContent = name;
+          elements.capabilityList.append(pill);
+        }
+      }
+
+      function statusLabel(status) {
+        return status === "working"
+          ? "Working"
+          : status === "waiting"
+            ? "Waiting"
+            : status === "error"
+              ? "Needs attention"
+              : "Idle";
+      }
+
+      function relativeTime(value) {
+        const timestamp = typeof value === "number" ? value : Date.parse(value ?? "");
+        if (!Number.isFinite(timestamp)) {
+          return "";
+        }
+        const seconds = Math.round((timestamp - now()) / 1000);
+        if (Math.abs(seconds) < 60) {
+          return "now";
+        }
+        const minutes = Math.round(seconds / 60);
+        if (Math.abs(minutes) < 60) {
+          return new Intl.RelativeTimeFormat(displayLocale, { numeric: "auto" }).format(
+            minutes,
+            "minute",
+          );
+        }
+        const hours = Math.round(minutes / 60);
+        if (Math.abs(hours) < 24) {
+          return new Intl.RelativeTimeFormat(displayLocale, { numeric: "auto" }).format(
+            hours,
+            "hour",
+          );
+        }
+        return new Intl.DateTimeFormat(displayLocale, {
+          month: "short",
+          day: "numeric",
+          ...(displayTimeZone ? { timeZone: displayTimeZone } : {}),
+        }).format(timestamp);
+      }
+
+      function scheduleRefresh() {
+        window.clearTimeout(pollTimer);
+        if (tornDown || fixtureName || document.hidden) {
+          return;
+        }
+        const hasActive = state.items.some((item) => ["working", "waiting"].includes(item.status));
+        const hasError = state.items.some((item) => item.status === "error");
+        const delay = hasActive ? 5000 : state.connection === "offline" || hasError ? 60000 : 30000;
+        pollTimer = window.setTimeout(async () => {
+          await loadSessions({ background: true });
+          if (state.selectedId) {
+            await loadDetail(state.selectedId, { background: true });
+          }
+          scheduleRefresh();
+        }, delay);
+      }
+
+      elements.connectionButton.addEventListener("click", () => elements.gatewayDialog.showModal());
+      elements.closeGateway.addEventListener("click", () => elements.gatewayDialog.close());
+      elements.gatewayDialog.addEventListener("click", (event) => {
+        if (event.target === elements.gatewayDialog) {
+          elements.gatewayDialog.close();
+        }
+      });
+      elements.newSession.addEventListener("click", enterCreateMode);
+      elements.agentSelect.addEventListener("change", () => {
+        if (state.createMode) {
+          selectionEpoch += 1;
+          retryDraftOperation = null;
+        }
+        render();
+      });
+      elements.refresh.addEventListener("click", () => void loadSessions());
+      elements.retry.addEventListener("click", () => void loadSessions());
+      elements.mobileBack.addEventListener("click", () => {
+        selectionEpoch += 1;
+        detailRequest += 1;
+        state.detailBusy = false;
+        state.selectedId = null;
+        state.createMode = false;
+        state.messages = [];
+        retryDraftOperation = null;
+        render();
+        elements.search.focus();
+      });
+      elements.search.addEventListener("input", () => {
+        window.clearTimeout(searchTimer);
+        searchTimer = window.setTimeout(() => void loadSessions(), 250);
+      });
+      elements.archive.addEventListener(
+        "click",
+        () => void runControlAction("archive", () => updateArchive(true)),
+      );
+      elements.restore.addEventListener(
+        "click",
+        () => void runControlAction("restore", () => updateArchive(false)),
+      );
+      elements.stop.addEventListener("click", () => void runControlAction("stop", abortSession));
+      elements.message.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+          event.preventDefault();
+          elements.composer.requestSubmit();
+        }
+      });
+      elements.message.addEventListener("input", () => {
+        if (activeDraftOperation) {
+          activeDraftOperation.edited = true;
+        }
+        retryDraftOperation = null;
+        resizeComposer();
+      });
+      function resizeComposer() {
+        elements.message.style.height = "auto";
+        elements.message.style.height = `${Math.min(elements.message.scrollHeight, 132)}px`;
+      }
+      elements.composer.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const text = elements.message.value.trim();
+        if (!text || state.busy || state.detailBusy) {
+          return;
+        }
+        const submittedTargetKey = draftTargetKey();
+        const submittedSelectionEpoch = selectionEpoch;
+        const submittedTargetIsCurrent = () =>
+          selectionEpoch === submittedSelectionEpoch && draftTargetKey() === submittedTargetKey;
+        const operation =
+          retryDraftOperation?.text === text && retryDraftOperation.targetKey === submittedTargetKey
+            ? { ...retryDraftOperation, edited: false }
+            : {
+                id: createOperationId(),
+                text,
+                targetKey: submittedTargetKey,
+                edited: false,
+              };
+        retryDraftOperation = null;
+        activeDraftOperation = operation;
+        state.busy = true;
+        elements.message.value = "";
+        render();
+        let sent = false;
+        try {
+          sent = await sendMessage(text, operation.id);
+        } catch {
+          if (submittedTargetIsCurrent()) {
+            state.connection = "offline";
+            showSafeError("offline");
+          }
+        } finally {
+          const draftWasEdited = operation.edited;
+          if (activeDraftOperation === operation) {
+            activeDraftOperation = null;
+          }
+          state.busy = false;
+          const targetUnchanged = submittedTargetIsCurrent();
+          if (!sent && targetUnchanged && !draftWasEdited && elements.message.value === "") {
+            elements.message.value = text;
+            retryDraftOperation = {
+              id: operation.id,
+              text,
+              targetKey: submittedTargetKey,
+            };
+            resizeComposer();
+          }
+          render();
+          scheduleRefresh();
+        }
+      });
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          window.clearTimeout(pollTimer);
+        } else {
+          void loadSessions({ background: true });
+        }
+      });
+      window.addEventListener("focus", () => void loadSessions({ background: true }));
+      window.addEventListener("online", () => void loadSessions());
+
+      function fixtureData(name) {
+        const image = `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="16" fill="#5b6ea6"/><path d="M9 21c3-8 11-8 14 0" fill="none" stroke="white" stroke-width="2"/><circle cx="12" cy="13" r="2" fill="white"/><circle cx="20" cy="13" r="2" fill="white"/></svg>')}`;
+        const items = [
+          {
+            id: "eG9wZW5jbGF3LXNlc3Npb24tMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA",
+            agentId: "research",
+            title: "Investigate flaky CI",
+            preview: "Comparing the last three failed runs",
+            updatedAt: new Date(FIXTURE_NOW - 92000).toISOString(),
+            status: "working",
+            unread: true,
+            pinned: true,
+            archived: false,
+            icons: [{ src: image }],
+            icon: { src: image, fallback: "🔎" },
+          },
+          {
+            id: "c2Vjb25kLW9wZW5jbGF3LXNlc3Npb24tMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+            agentId: "main",
+            title: "Plan launch week",
+            preview: "The schedule is ready for review",
+            updatedAt: new Date(FIXTURE_NOW - 3600000).toISOString(),
+            status: "idle",
+            unread: false,
+            pinned: false,
+            archived: false,
+            icon: { src: null, fallback: "🦞" },
+          },
+          {
+            id: "dGhpcmQtb3BlbmNsYXctc2Vzc2lvbi0wMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMA",
+            agentId: "ops",
+            title: "Recover the preview deploy",
+            preview: "Waiting for a production approval",
+            updatedAt: new Date(FIXTURE_NOW - 7400000).toISOString(),
+            status: "waiting",
+            unread: false,
+            pinned: false,
+            archived: false,
+            icon: null,
+          },
+          {
+            id: "YXJjaGl2ZWQtb3BlbmNsYXctc2Vzc2lvbi0wMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMA",
+            agentId: "main",
+            title: "Quarterly notes",
+            preview: "Archived yesterday",
+            updatedAt: new Date(FIXTURE_NOW - 86400000).toISOString(),
+            status: "idle",
+            unread: false,
+            pinned: false,
+            archived: true,
+            icon: null,
+          },
+        ];
+        const agents = [
+          { id: "main", title: "OpenClaw", icon: { src: null, fallback: "🦞" } },
+          { id: "ops", title: "Operations", icon: null },
+          { id: "research", title: "Research", icon: { src: image, fallback: "🔎" } },
+        ];
+        if (name === "empty") {
+          return {
+            items: [],
+            agents,
+            selectedId: null,
+            messages: [],
+            connection: "online",
+            stale: false,
+          };
+        }
+        if (name === "error") {
+          items[2].status = "error";
+          items[2].preview = "The last run needs attention";
+        }
+        const selectedId = name === "archived" ? items[3].id : items[0].id;
+        return {
+          items,
+          agents,
+          selectedId,
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              text: "Find the cause of the flaky integration tests and open a focused fix.",
+            },
+            {
+              id: "m2",
+              role: "assistant",
+              text: "I’m comparing the failed jobs now. Two runs point to a shared cache race; I’ll verify the owner boundary before changing it.",
+            },
+          ],
+          connection: name === "offline" ? "offline" : "online",
+          stale: name === "offline",
+        };
+      }
+
+      async function start() {
+        loadCache();
+        if (fixtureName) {
+          const fixture = fixtureData(fixtureName);
+          Object.assign(state, fixture);
+          state.capabilities = {
+            list: true,
+            read: true,
+            create: true,
+            send: true,
+            abort: true,
+            update: true,
+          };
+          state.mode = fixtureName === "detail" || fixtureName === "archived" ? "detail" : "master";
+          render();
+          return;
+        }
+        render();
+        try {
+          const initialized = await rpcRequest("ui/initialize", {
+            appCapabilities: {},
+            appInfo: { name: "openclaw-codex", version: "1.0.0" },
+            protocolVersion: UI_PROTOCOL_VERSION,
+          });
+          applyHostContext(initialized?.hostContext);
+          rpcNotify("ui/notifications/initialized", {});
+          state.connection = "online";
+          render();
+          startupTimer = window.setTimeout(async () => {
+            startupTimer = null;
+            if (state.toolInput?.session_id && state.messages.length === 0) {
+              await loadDetail(state.toolInput.session_id);
+            }
+            await loadSessions({ background: true });
+          }, 300);
+        } catch {
+          state.connection = "offline";
+          state.stale = state.items.length > 0;
+          render();
+        }
+        scheduleRefresh();
+      }
+
+      void start();
+    </script>
+  </body>
+</html>

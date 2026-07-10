@@ -411,11 +411,18 @@ function isRetryableGatewayConnectError(error: Error): boolean {
 export async function connectMcpClient(params: {
   gatewayUrl: string;
   gatewayToken: string;
+  profile?: "codex";
   tempState?: McpClientTempState;
 }): Promise<McpClientHandle> {
   const ownsTempState = !params.tempState;
   const tempState =
     params.tempState ?? createMcpClientTempState({ gatewayToken: params.gatewayToken });
+  // Match each host contract: Codex opts into the bundled app, while the
+  // original channel lane explicitly enables Claude notification frames.
+  const codexProfile = params.profile === "codex";
+  const profileArgs = codexProfile
+    ? ["--client", "codex", "--app-resource", "assets/openclaw-session-app.html"]
+    : ["--claude-channel-mode", "on"];
   const transport = new StdioClientTransport({
     command: "node",
     args: [
@@ -426,10 +433,9 @@ export async function connectMcpClient(params: {
       params.gatewayUrl,
       "--token-file",
       tempState.tokenFile,
-      "--claude-channel-mode",
-      "on",
+      ...profileArgs,
     ],
-    cwd: "/app",
+    cwd: codexProfile ? "/app/extensions/codex" : "/app",
     env: {
       ...process.env,
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",

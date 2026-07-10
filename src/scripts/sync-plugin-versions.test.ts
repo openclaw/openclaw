@@ -131,6 +131,31 @@ describe("syncPluginVersions", () => {
     expect(unchangedPackage.openclaw?.compat?.pluginApi).toBe(">=2026.4.1");
   });
 
+  it("keeps a bundled Codex plugin manifest aligned with its package version", () => {
+    const rootDir = makeTempDir(tempDirs, "openclaw-sync-codex-plugin-version-");
+
+    writeJson(path.join(rootDir, "package.json"), {
+      name: "openclaw",
+      version: "2026.4.2",
+    });
+    writeJson(path.join(rootDir, "extensions/codex/package.json"), {
+      name: "@openclaw/codex",
+      version: "2026.4.1",
+    });
+    writeJson(path.join(rootDir, "extensions/codex/.codex-plugin/plugin.json"), {
+      name: "codex",
+      version: "2026.4.1",
+    });
+
+    const summary = syncPluginVersions(rootDir);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(rootDir, "extensions/codex/.codex-plugin/plugin.json"), "utf8"),
+    ) as { version?: string };
+
+    expect(summary.updated).toEqual(["@openclaw/codex"]);
+    expect(manifest.version).toBe("2026.4.2");
+  });
+
   it("uses the base release version for beta changelog entries", () => {
     const rootDir = makeTempDir(tempDirs, "openclaw-sync-plugin-versions-beta-changelog-");
 

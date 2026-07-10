@@ -1,0 +1,28 @@
+{
+  "name": "openclaw",
+  "interface": {
+    "displayName": "OpenClaw"
+  },
+  "plugins": [
+    {
+      "name": "codex",
+      "description": "Browse and chat with OpenClaw sessions from Codex.",
+      "source": {
+        "source": "git-subdir",
+        "url": "openclaw/openclaw",
+        "path": "extensions/codex",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity",
+      "interface": {
+        "displayName": "OpenClaw",
+        "shortDescription": "OpenClaw sessions and chat inside Codex",
+        "developerName": "OpenClaw"
+      }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "openclaw": {
+      "type": "stdio",
+      "command": "openclaw",
+      "args": [
+        "mcp",
+        "serve",
+        "--client",
+        "codex",
+        "--app-resource",
+        "assets/openclaw-session-app.html"
+      ],
+      "cwd": "."
+    }
+  }
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs a Docker Gateway plus MCP stdio bridge smoke with seeded conversations and
-# raw Claude notification-frame assertions.
+# Runs a Docker Gateway plus MCP stdio bridge smoke with seeded conversations,
+# raw Claude notification frames, and the Codex session lifecycle profile.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -22,9 +22,11 @@ OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-channels e
 
 echo "Running in-container gateway + MCP smoke..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.
+# The Codex profile reads the real plugin app asset from its installed-root path.
 set +e
 docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
+  -v "$ROOT_DIR/extensions/codex/assets:/app/extensions/codex/assets:ro" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
   -e "OPENCLAW_SKIP_CHANNELS=1" \
   -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
@@ -43,7 +45,9 @@ docker_e2e_run_with_harness \
     entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
     mock_port=44081
     export OPENCLAW_DOCKER_OPENAI_BASE_URL=\"http://127.0.0.1:\$mock_port/v1\"
+    export MOCK_ABORT_HOLD_MS=30000
     mock_pid=\"\$(openclaw_e2e_start_mock_openai \"\$mock_port\" /tmp/mcp-channels-mock-openai.log)\"
+    unset MOCK_ABORT_HOLD_MS
     gateway_pid=
     cleanup_inner() {
       openclaw_e2e_stop_process \"\${gateway_pid:-}\"

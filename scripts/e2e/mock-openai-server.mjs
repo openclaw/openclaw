@@ -1,8 +1,9 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
 import http from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
-import { readTcpPortEnv } from "./lib/env-limits.mjs";
+import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -18,6 +19,8 @@ const port =
     : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
+const abortHoldMs =
+  process.env.MOCK_ABORT_HOLD_MS == null ? 0 : readPositiveIntEnv("MOCK_ABORT_HOLD_MS");
 
 function responseEvents(text) {
   const itemId = "msg_e2e_1";
@@ -334,6 +337,12 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
+      if (abortHoldMs > 0 && bodyText.includes("OPENCLAW_E2E_ABORT_HOLD")) {
+        await delay(abortHoldMs);
+        if (res.destroyed || res.writableEnded) {
+          return;
+        }
+      }
       const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
       if (codeModeEvents) {
         writeResponsesEvents(res, body.stream, codeModeEvents);
