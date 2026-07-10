@@ -30,6 +30,8 @@ describe("Feishu read policy", () => {
   it("does not derive conversation kind from public/private visibility", () => {
     expect(resolveFeishuChatType({ chat_type: "private" })).toBeUndefined();
     expect(resolveFeishuChatType({ chat_type: "public" })).toBeUndefined();
+    expect(resolveFeishuChatType({ chat_type: "p2p" })).toBe("p2p");
+    expect(resolveFeishuChatType({ chat_type: "group" })).toBe("group");
     expect(resolveFeishuChatType({ chat_mode: "group", chat_type: "private" })).toBe("group");
     expect(resolveFeishuChatType({ chat_mode: "p2p", chat_type: "private" })).toBe("p2p");
   });

@@ -363,6 +363,59 @@ describe("handleSlackAction", () => {
     expect(listSlackReactions).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "reaction add",
+      params: { action: "react", emoji: "✅" },
+      providerCall: reactSlackMessage,
+    },
+    {
+      name: "reaction removal",
+      params: { action: "react", emoji: "✅", remove: true },
+      providerCall: removeSlackReaction,
+    },
+    {
+      name: "message edit",
+      params: { action: "editMessage", content: "updated" },
+      providerCall: editSlackMessage,
+    },
+    {
+      name: "message deletion",
+      params: { action: "deleteMessage" },
+      providerCall: deleteSlackMessage,
+    },
+    {
+      name: "pin",
+      params: { action: "pinMessage" },
+      providerCall: pinSlackMessage,
+    },
+    {
+      name: "unpin",
+      params: { action: "unpinMessage" },
+      providerCall: unpinSlackMessage,
+    },
+  ])("rejects blocked Slack $name before mutation", async ({ params, providerCall }) => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction(
+        {
+          channelId: "C_BLOCKED",
+          messageId: "123.456",
+          ...params,
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+
+    expect(providerCall).not.toHaveBeenCalled();
+  });
+
   it("allows a delegated read of the exact current Slack channel and account", async () => {
     const cfg = slackConfig({
       groupPolicy: "allowlist",
@@ -412,6 +465,77 @@ describe("handleSlackAction", () => {
       ),
     ).rejects.toThrow("Slack read target channel is not allowed.");
     expect(listSlackReactions).not.toHaveBeenCalled();
+  });
+
+  it("allows delegated member info for the current Slack requester and account", async () => {
+    const cfg = slackConfig();
+
+    await handleSlackAction({ action: "memberInfo", userId: "U123" }, cfg, {
+      conversationReadOrigin: "delegated",
+      requesterAccountId: "DEFAULT",
+      requesterSenderId: "u123",
+      currentChannelProvider: "Slack",
+    });
+
+    expect(getSlackMemberInfo).toHaveBeenCalledWith("U123", { cfg });
+  });
+
+  it.each([
+    {
+      name: "another user",
+      context: {
+        conversationReadOrigin: "delegated" as const,
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+        currentChannelProvider: "slack",
+      },
+      userId: "U999",
+    },
+    {
+      name: "another account",
+      context: {
+        conversationReadOrigin: "delegated" as const,
+        requesterAccountId: "other",
+        requesterSenderId: "U123",
+        currentChannelProvider: "slack",
+      },
+      userId: "U123",
+    },
+    {
+      name: "another provider",
+      context: {
+        conversationReadOrigin: "delegated" as const,
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+        currentChannelProvider: "telegram",
+      },
+      userId: "U123",
+    },
+    {
+      name: "missing trusted context",
+      context: undefined,
+      userId: "U123",
+    },
+  ])("rejects delegated member info for $name before provider access", async (testCase) => {
+    await expect(
+      handleSlackAction(
+        { action: "memberInfo", userId: testCase.userId },
+        slackConfig(),
+        testCase.context,
+      ),
+    ).rejects.toThrow("Delegated Slack member info is limited to the current requester.");
+
+    expect(getSlackMemberInfo).not.toHaveBeenCalled();
+  });
+
+  it("allows a direct operator to inspect another Slack member", async () => {
+    const cfg = slackConfig();
+
+    await handleSlackAction({ action: "memberInfo", userId: "U999" }, cfg, {
+      conversationReadOrigin: "direct-operator",
+    });
+
+    expect(getSlackMemberInfo).toHaveBeenCalledWith("U999", { cfg });
   });
 
   it("keeps explicitly disabled current Slack channels blocked", async () => {

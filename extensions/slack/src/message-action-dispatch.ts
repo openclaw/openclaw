@@ -239,7 +239,7 @@ export async function handleSlackMessageAction(params: {
     if (!userId) {
       throw new Error("member-info requires a userId outside a current Slack conversation.");
     }
-    return await invoke({ action: "memberInfo", userId, accountId }, cfg);
+    return await invoke({ action: "memberInfo", userId, accountId }, cfg, ctx.toolContext);
   }
 
   if (action === "emoji-list") {

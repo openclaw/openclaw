@@ -191,7 +191,12 @@ export async function handleMatrixAction(
         });
         return jsonResult({ ok: true, removed: result.removed });
       }
-      await reactMatrixMessage(roomId, messageId, emoji, clientOpts);
+      await withReadTarget(roomId, async (target) => {
+        await reactMatrixMessage(target.roomId, messageId, emoji, {
+          ...clientOpts,
+          client: target.client,
+        });
+      });
       return jsonResult({ ok: true, added: emoji });
     }
     const limit = readPositiveIntegerParam(params, "limit", {
@@ -275,16 +280,24 @@ export async function handleMatrixAction(
         const roomId = readRoomId(params);
         const messageId = readStringParam(params, "messageId", { required: true });
         const content = readStringParam(params, "content", { required: true });
-        const result = await editMatrixMessage(roomId, messageId, content, clientOpts);
+        const result = await withReadTarget(roomId, async (target) => {
+          return await editMatrixMessage(target.roomId, messageId, content, {
+            ...clientOpts,
+            client: target.client,
+          });
+        });
         return jsonResult({ ok: true, result });
       }
       case "deleteMessage": {
         const roomId = readRoomId(params);
         const messageId = readStringParam(params, "messageId", { required: true });
         const reason = readStringParam(params, "reason");
-        await deleteMatrixMessage(roomId, messageId, {
-          reason: reason ?? undefined,
-          ...clientOpts,
+        await withReadTarget(roomId, async (target) => {
+          await deleteMatrixMessage(target.roomId, messageId, {
+            reason: reason ?? undefined,
+            ...clientOpts,
+            client: target.client,
+          });
         });
         return jsonResult({ ok: true, deleted: true });
       }

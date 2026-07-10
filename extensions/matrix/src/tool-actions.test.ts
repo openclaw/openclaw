@@ -6,6 +6,8 @@ import type { CoreConfig } from "./types.js";
 const mocks = vi.hoisted(() => ({
   voteMatrixPoll: vi.fn(),
   reactMatrixMessage: vi.fn(),
+  editMatrixMessage: vi.fn(),
+  deleteMatrixMessage: vi.fn(),
   listMatrixReactions: vi.fn(),
   removeMatrixReactions: vi.fn(),
   sendMatrixMessage: vi.fn(),
@@ -25,6 +27,8 @@ vi.mock("./matrix/read-policy.js", () => ({
 
 vi.mock("./matrix/actions.js", () => {
   return {
+    deleteMatrixMessage: mocks.deleteMatrixMessage,
+    editMatrixMessage: mocks.editMatrixMessage,
     getMatrixMemberInfo: mocks.getMatrixMemberInfo,
     getMatrixRoomInfo: mocks.getMatrixRoomInfo,
     listMatrixReactions: mocks.listMatrixReactions,
@@ -77,6 +81,7 @@ describe("handleMatrixAction pollVote", () => {
       messageId: "$sent",
       roomId: "!room:example",
     });
+    mocks.editMatrixMessage.mockResolvedValue({ eventId: "$edited" });
     mocks.getMatrixMemberInfo.mockResolvedValue({ userId: "@u:example" });
     mocks.getMatrixRoomInfo.mockResolvedValue({ roomId: "!room:example" });
     mocks.applyMatrixProfileUpdate.mockResolvedValue({
@@ -225,7 +230,54 @@ describe("handleMatrixAction pollVote", () => {
     expect(mocks.reactMatrixMessage).toHaveBeenCalledWith("!room:example", "$msg", "👍", {
       cfg,
       accountId: "ops",
+      client: mocks.matrixClient,
     });
+  });
+
+  it.each([
+    {
+      action: "react",
+      params: { emoji: "👍" },
+      providerCall: mocks.reactMatrixMessage,
+    },
+    {
+      action: "editMessage",
+      params: { content: "updated" },
+      providerCall: mocks.editMatrixMessage,
+    },
+    {
+      action: "deleteMessage",
+      params: {},
+      providerCall: mocks.deleteMatrixMessage,
+    },
+  ])("rejects blocked $action before mutating Matrix", async ({ action, params, providerCall }) => {
+    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
+      new Error("Matrix read target is not allowed."),
+    );
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: {
+            messages: true,
+            reactions: true,
+          },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action,
+          roomId: "!blocked:example",
+          messageId: "$msg",
+          ...params,
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("Matrix read target is not allowed.");
+
+    expect(providerCall).not.toHaveBeenCalled();
   });
 
   it("passes account-scoped opts to remove reactions", async () => {

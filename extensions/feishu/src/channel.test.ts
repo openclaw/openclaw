@@ -1163,6 +1163,13 @@ describe("feishuPlugin actions", () => {
   });
 
   it("edits messages", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_2",
+      chatId: "oc_group_1",
+      chatType: "group",
+      content: "before",
+      contentType: "text",
+    });
     editMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_2", contentType: "post" });
 
     const result = await feishuPlugin.actions?.handleAction?.({
@@ -1170,6 +1177,7 @@ describe("feishuPlugin actions", () => {
       params: { messageId: "om_2", text: "updated" },
       cfg,
       accountId: undefined,
+      conversationReadOrigin: "direct-operator",
     } as never);
 
     expect(editMessageFeishuMock).toHaveBeenCalledWith({
@@ -1352,6 +1360,13 @@ describe("feishuPlugin actions", () => {
   });
 
   it("creates pins", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_pin",
+      chatId: "oc_group_1",
+      chatType: "group",
+      content: "pin me",
+      contentType: "text",
+    });
     createPinFeishuMock.mockResolvedValueOnce({ messageId: "om_pin", chatId: "oc_group_1" });
 
     const result = await feishuPlugin.actions?.handleAction?.({
@@ -1359,6 +1374,7 @@ describe("feishuPlugin actions", () => {
       params: { messageId: "om_pin" },
       cfg,
       accountId: undefined,
+      conversationReadOrigin: "direct-operator",
     } as never);
 
     expect(createPinFeishuMock).toHaveBeenCalledWith({
@@ -1403,11 +1419,19 @@ describe("feishuPlugin actions", () => {
   });
 
   it("removes pins", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_pin",
+      chatId: "oc_group_1",
+      chatType: "group",
+      content: "unpin me",
+      contentType: "text",
+    });
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "unpin",
       params: { messageId: "om_pin" },
       cfg,
       accountId: undefined,
+      conversationReadOrigin: "direct-operator",
     } as never);
 
     expect(removePinFeishuMock).toHaveBeenCalledWith({
@@ -1731,6 +1755,32 @@ describe("feishuPlugin actions", () => {
     );
   });
 
+  it("adds a reaction after authorizing the direct operator's ID-only target", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_msg1",
+      chatId: "oc_group_1",
+      chatType: "group",
+      content: "hello",
+      contentType: "text",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "react",
+      params: { messageId: "om_msg1", emoji: "THUMBSUP" },
+      cfg,
+      accountId: undefined,
+      conversationReadOrigin: "direct-operator",
+    } as never);
+
+    expect(addReactionFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      messageId: "om_msg1",
+      emojiType: "THUMBSUP",
+      accountId: undefined,
+    });
+    expect(resultDetails(result)).toMatchObject({ ok: true, added: "THUMBSUP" });
+  });
+
   it("allows explicit clearAll=true when removing all bot reactions", async () => {
     getMessageFeishuMock.mockResolvedValueOnce({
       messageId: "om_msg1",
@@ -1913,6 +1963,16 @@ describe("feishuPlugin actions", () => {
       params: { messageId: "om_blocked", chatId: "oc_blocked" },
     },
     {
+      name: "message edits",
+      action: "edit",
+      params: { messageId: "om_blocked", chatId: "oc_blocked", text: "blocked" },
+    },
+    {
+      name: "reaction addition",
+      action: "react",
+      params: { messageId: "om_blocked", chatId: "oc_blocked", emoji: "THUMBSUP" },
+    },
+    {
       name: "reaction removal",
       action: "react",
       params: {
@@ -1930,6 +1990,16 @@ describe("feishuPlugin actions", () => {
     {
       name: "reaction lookup",
       action: "reactions",
+      params: { messageId: "om_blocked", chatId: "oc_blocked" },
+    },
+    {
+      name: "pin creation",
+      action: "pin",
+      params: { messageId: "om_blocked", chatId: "oc_blocked" },
+    },
+    {
+      name: "pin removal",
+      action: "unpin",
       params: { messageId: "om_blocked", chatId: "oc_blocked" },
     },
     {
@@ -1968,7 +2038,11 @@ describe("feishuPlugin actions", () => {
     expect(getChatInfoMock).not.toHaveBeenCalled();
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
     expect(listReactionsFeishuMock).not.toHaveBeenCalled();
+    expect(addReactionFeishuMock).not.toHaveBeenCalled();
     expect(removeReactionFeishuMock).not.toHaveBeenCalled();
+    expect(editMessageFeishuMock).not.toHaveBeenCalled();
+    expect(createPinFeishuMock).not.toHaveBeenCalled();
+    expect(removePinFeishuMock).not.toHaveBeenCalled();
   });
 
   it.each([

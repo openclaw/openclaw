@@ -35,13 +35,15 @@ function resolveSlackActionContext(params: {
   mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAccountId?: string | null;
+  requesterSenderId?: string | null;
 }): SlackActionContext | undefined {
   if (
     !params.toolContext &&
     !params.mediaLocalRoots &&
     !params.mediaReadFile &&
     !params.conversationReadOrigin &&
-    !params.requesterAccountId
+    !params.requesterAccountId &&
+    !params.requesterSenderId
   ) {
     return undefined;
   }
@@ -49,10 +51,11 @@ function resolveSlackActionContext(params: {
     ...(params.toolContext as SlackActionContext | undefined),
     ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
-    ...(params.conversationReadOrigin
-      ? { conversationReadOrigin: params.conversationReadOrigin }
-      : {}),
-    ...(params.requesterAccountId ? { requesterAccountId: params.requesterAccountId } : {}),
+    // Authority comes only from the host-owned action context. Overwrite any
+    // structurally compatible fields carried by generic tool context.
+    conversationReadOrigin: params.conversationReadOrigin,
+    requesterAccountId: params.requesterAccountId ?? undefined,
+    requesterSenderId: params.requesterSenderId ?? undefined,
   };
 }
 
@@ -79,6 +82,7 @@ export function createSlackActions(
             mediaReadFile: ctx.mediaReadFile,
             conversationReadOrigin: ctx.conversationReadOrigin,
             requesterAccountId: ctx.requesterAccountId,
+            requesterSenderId: ctx.requesterSenderId,
           });
           return await (options?.invoke
             ? options.invoke(action, cfg, actionContext)

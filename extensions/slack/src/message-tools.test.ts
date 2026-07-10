@@ -42,6 +42,7 @@ describe("Slack message tools", () => {
       cfg: {} as OpenClawConfig,
       params: { channelId: "C_CURRENT" },
       requesterAccountId: "work",
+      requesterSenderId: "U123",
       toolContext,
     });
 
@@ -55,6 +56,7 @@ describe("Slack message tools", () => {
         currentChannelProvider: "slack",
         currentChannelId: "C_CURRENT",
         requesterAccountId: "work",
+        requesterSenderId: "U123",
       }),
     );
   });
@@ -67,6 +69,71 @@ describe("Slack message tools", () => {
     for (const action of ["readMessages", "listPins", "downloadFile"]) {
       expect(actions.isToolDeliveryAction?.({ args: { action } })).toBe(false);
     }
+  });
+
+  it("forwards complete trusted context for current-requester member info", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "member-info",
+      cfg: {} as OpenClawConfig,
+      params: {},
+      requesterAccountId: "default",
+      requesterSenderId: "U123",
+      conversationReadOrigin: "delegated",
+      toolContext: { currentChannelProvider: "slack", currentChannelId: "C_CURRENT" },
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U123" }),
+      expect.any(Object),
+      expect.objectContaining({
+        currentChannelProvider: "slack",
+        currentChannelId: "C_CURRENT",
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+      }),
+    );
+  });
+
+  it("does not accept Slack read authority from generic tool context", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: { channelId: "C_CURRENT" },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "C_CURRENT",
+        conversationReadOrigin: "direct-operator",
+        requesterAccountId: "default",
+        requesterSenderId: "U999",
+      } as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "readMessages", channelId: "C_CURRENT" }),
+      expect.any(Object),
+      expect.objectContaining({
+        currentChannelProvider: "slack",
+        currentChannelId: "C_CURRENT",
+        conversationReadOrigin: undefined,
+        requesterAccountId: undefined,
+        requesterSenderId: undefined,
+      }),
+    );
   });
 
   it("describes configured Slack message actions without loading channel runtime", () => {

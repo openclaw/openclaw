@@ -670,6 +670,7 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U123" }),
       expect.any(Object),
+      expect.objectContaining({ currentChannelProvider: " Slack " }),
     );
   });
 
@@ -692,6 +693,7 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U123" }),
       expect.any(Object),
+      expect.objectContaining({ currentChannelProvider: "slack" }),
     );
   });
 
@@ -741,6 +743,7 @@ describe("handleSlackMessageAction", () => {
         accountId: "other",
         requesterAccountId: "default",
         requesterSenderId: "U123",
+        conversationReadOrigin: "direct-operator",
         toolContext: { currentChannelProvider: "telegram" },
       } as never,
       invoke: invoke as never,
@@ -749,6 +752,7 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U999" }),
       expect.any(Object),
+      expect.objectContaining({ currentChannelProvider: "telegram" }),
     );
   });
 });

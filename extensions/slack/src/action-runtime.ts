@@ -87,6 +87,7 @@ export const slackActionRuntime = {
 export type SlackActionContext = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAccountId?: string;
+  requesterSenderId?: string;
   currentChannelProvider?: string;
   /** Current channel ID for auto-threading. */
   currentChannelId?: string;
@@ -240,6 +241,27 @@ function isCurrentSlackReadTarget(params: {
     params.context &&
     slackContextTargetsMatch(params.channelId, params.context),
   );
+}
+
+function assertSlackMemberInfoAllowed(params: {
+  account: ResolvedSlackAccount;
+  context?: SlackActionContext;
+  userId: string;
+}) {
+  if (params.context?.conversationReadOrigin === "direct-operator") {
+    return;
+  }
+  const requesterAccountId = params.context?.requesterAccountId?.trim();
+  const requesterSenderId = normalizeOptionalLowercaseString(params.context?.requesterSenderId);
+  if (
+    normalizeOptionalLowercaseString(params.context?.currentChannelProvider) !== "slack" ||
+    !requesterAccountId ||
+    normalizeAccountId(requesterAccountId) !== normalizeAccountId(params.account.accountId) ||
+    !requesterSenderId ||
+    requesterSenderId !== normalizeOptionalLowercaseString(params.userId)
+  ) {
+    throw new Error("Delegated Slack member info is limited to the current requester.");
+  }
 }
 
 function resolveSlackChannelReadPolicy(params: {
@@ -504,6 +526,7 @@ export async function handleSlackAction(
         removeErrorMessage: "Emoji is required to remove a Slack reaction.",
       });
       if (remove) {
+        await assertReadTargetAllowed(channelId);
         if (writeOpts) {
           await slackActionRuntime.removeSlackReaction(channelId, messageId, emoji, writeOpts);
         } else {
@@ -518,6 +541,7 @@ export async function handleSlackAction(
           : await slackActionRuntime.removeOwnSlackReactions(channelId, messageId);
         return jsonResult({ ok: true, removed });
       }
+      await assertReadTargetAllowed(channelId);
       if (writeOpts) {
         await slackActionRuntime.reactSlackMessage(channelId, messageId, emoji, writeOpts);
       } else {
@@ -648,6 +672,7 @@ export async function handleSlackAction(
         if (!content && !blocks) {
           throw new Error("Slack editMessage requires content or blocks.");
         }
+        await assertReadTargetAllowed(channelId);
         if (writeOpts) {
           await slackActionRuntime.editSlackMessage(channelId, messageId, content ?? "", {
             ...writeOpts,
@@ -665,6 +690,7 @@ export async function handleSlackAction(
         const messageId = readStringParam(params, "messageId", {
           required: true,
         });
+        await assertReadTargetAllowed(channelId);
         if (writeOpts) {
           await slackActionRuntime.deleteSlackMessage(channelId, messageId, writeOpts);
         } else {
@@ -769,6 +795,7 @@ export async function handleSlackAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
+      await assertReadTargetAllowed(channelId);
       if (writeOpts) {
         await slackActionRuntime.pinSlackMessage(channelId, messageId, writeOpts);
       } else {
@@ -780,6 +807,7 @@ export async function handleSlackAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
+      await assertReadTargetAllowed(channelId);
       if (writeOpts) {
         await slackActionRuntime.unpinSlackMessage(channelId, messageId, writeOpts);
       } else {
@@ -808,6 +836,7 @@ export async function handleSlackAction(
       throw new Error("Slack member info is disabled.");
     }
     const userId = readStringParam(params, "userId", { required: true });
+    assertSlackMemberInfoAllowed({ account, context, userId });
     const info = writeOpts
       ? await slackActionRuntime.getSlackMemberInfo(userId, readOpts)
       : await slackActionRuntime.getSlackMemberInfo(userId);

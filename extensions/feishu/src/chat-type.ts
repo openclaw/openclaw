@@ -22,6 +22,7 @@ export function resolveFeishuChatType(chat: {
   chat_type?: unknown;
 }): ResolvedFeishuChatType | undefined {
   // im.chat.get uses chat_mode for conversation kind; chat_type is the
-  // public/private visibility classification and must not select DM policy.
-  return normalizeFeishuChatMode(chat.chat_mode);
+  // public/private visibility classification. Older response shapes and test
+  // adapters may still expose p2p/group there; ignore privacy-only values.
+  return normalizeFeishuChatMode(chat.chat_mode) ?? normalizeFeishuChatType(chat.chat_type);
 }

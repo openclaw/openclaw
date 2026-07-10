@@ -706,7 +706,7 @@ function resolveFeishuMessageReadTarget(ctx: {
     currentChannelId?: string;
     currentChatType?: "direct" | "group" | "channel";
   } | null;
-}): { chatId: string; chatType?: "p2p" | "group" } {
+}): { chatId: string; chatType?: "p2p" | "group" } | undefined {
   const explicitChatId = resolveFeishuChatId({ params: ctx.params });
   const currentChatId = resolveFeishuChatId({
     params: {},
@@ -714,9 +714,7 @@ function resolveFeishuMessageReadTarget(ctx: {
   });
   const chatId = explicitChatId ?? currentChatId;
   if (!chatId) {
-    throw new ToolAuthorizationError(
-      "Feishu message reads require a chat target or current conversation.",
-    );
+    return undefined;
   }
   const normalizedChatId = normalizeFeishuTarget(chatId) ?? chatId.trim();
   const normalizedCurrentChatId = currentChatId
@@ -749,7 +747,7 @@ async function authorizeFeishuMessageReadTarget(params: {
   ctx: ChannelMessageActionContext;
   account: ResolvedFeishuAccount;
   runtime: Awaited<ReturnType<typeof loadFeishuChannelRuntime>>;
-  target: ReturnType<typeof resolveFeishuMessageReadTarget>;
+  target: NonNullable<ReturnType<typeof resolveFeishuMessageReadTarget>>;
 }) {
   const authorize = (chatType?: "p2p" | "group") =>
     assertFeishuChatReadAllowed({
@@ -833,13 +831,23 @@ async function getAuthorizedFeishuMessage(params: {
 }) {
   // An opaque message id cannot authorize its own provider read. Gate an
   // independent chat target first, then bind the provider response to it.
+  // Trusted direct operators may retain ID-only workflows because their
+  // provider read is not delegated; final account and disabled-scope policy
+  // still applies after the message resolves its chat.
   const target = resolveFeishuMessageReadTarget(params.ctx);
-  const authorizedChatId = await authorizeFeishuMessageReadTarget({
-    ctx: params.ctx,
-    account: params.account,
-    runtime: params.runtime,
-    target,
-  });
+  if (!target && params.ctx.conversationReadOrigin !== "direct-operator") {
+    throw new ToolAuthorizationError(
+      "Feishu message reads require a chat target or current conversation.",
+    );
+  }
+  const authorizedChatId = target
+    ? await authorizeFeishuMessageReadTarget({
+        ctx: params.ctx,
+        account: params.account,
+        runtime: params.runtime,
+        target,
+      })
+    : undefined;
   const message = await params.runtime.getMessageFeishu({
     cfg: params.ctx.cfg,
     messageId: params.messageId,
@@ -848,10 +856,12 @@ async function getAuthorizedFeishuMessage(params: {
   if (!message) {
     return null;
   }
-  assertFeishuMessageMatchesReadTarget({
-    authorizedChatId,
-    messageChatId: message.chatId,
-  });
+  if (authorizedChatId) {
+    assertFeishuMessageMatchesReadTarget({
+      authorizedChatId,
+      messageChatId: message.chatId,
+    });
+  }
   assertFeishuChatReadAllowed({
     cfg: params.ctx.cfg,
     account: params.account,
@@ -863,6 +873,16 @@ async function getAuthorizedFeishuMessage(params: {
     }),
     ctx: params.ctx,
   });
+  return message;
+}
+
+async function requireAuthorizedFeishuMessage(
+  params: Parameters<typeof getAuthorizedFeishuMessage>[0],
+) {
+  const message = await getAuthorizedFeishuMessage(params);
+  if (!message) {
+    throw new Error(`Feishu message not found: ${params.messageId}`);
+  }
   return message;
 }
 
@@ -1162,8 +1182,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               ctx.params.card && typeof ctx.params.card === "object"
                 ? (ctx.params.card as Record<string, unknown>)
                 : undefined;
-            const { editMessageFeishu } = await loadFeishuChannelRuntime();
-            const result = await editMessageFeishu({
+            const runtime = await loadFeishuChannelRuntime();
+            await requireAuthorizedFeishuMessage({
+              ctx,
+              account,
+              runtime,
+              messageId,
+            });
+            const result = await runtime.editMessageFeishu({
               cfg: ctx.cfg,
               messageId,
               text,
@@ -1183,8 +1209,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (!messageId) {
               throw new Error("Feishu pin requires messageId.");
             }
-            const { createPinFeishu } = await loadFeishuChannelRuntime();
-            const pin = await createPinFeishu({
+            const runtime = await loadFeishuChannelRuntime();
+            await requireAuthorizedFeishuMessage({
+              ctx,
+              account,
+              runtime,
+              messageId,
+            });
+            const pin = await runtime.createPinFeishu({
               cfg: ctx.cfg,
               messageId,
               accountId: ctx.accountId ?? undefined,
@@ -1197,8 +1229,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (!messageId) {
               throw new Error("Feishu unpin requires messageId.");
             }
-            const { removePinFeishu } = await loadFeishuChannelRuntime();
-            await removePinFeishu({
+            const runtime = await loadFeishuChannelRuntime();
+            await requireAuthorizedFeishuMessage({
+              ctx,
+              account,
+              runtime,
+              messageId,
+            });
+            await runtime.removePinFeishu({
               cfg: ctx.cfg,
               messageId,
               accountId: ctx.accountId ?? undefined,
@@ -1459,15 +1497,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 throw new Error("Emoji is required to remove a Feishu reaction.");
               }
               const runtime = await loadFeishuChannelRuntime();
-              const message = await getAuthorizedFeishuMessage({
+              await requireAuthorizedFeishuMessage({
                 ctx,
                 account,
                 runtime,
                 messageId,
               });
-              if (!message) {
-                throw new Error(`Feishu message not found: ${messageId}`);
-              }
               const matches = await runtime.listReactionsFeishu({
                 cfg: ctx.cfg,
                 messageId,
@@ -1498,15 +1533,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 );
               }
               const runtime = await loadFeishuChannelRuntime();
-              const message = await getAuthorizedFeishuMessage({
+              await requireAuthorizedFeishuMessage({
                 ctx,
                 account,
                 runtime,
                 messageId,
               });
-              if (!message) {
-                throw new Error(`Feishu message not found: ${messageId}`);
-              }
               const reactions = await runtime.listReactionsFeishu({
                 cfg: ctx.cfg,
                 messageId,
@@ -1530,8 +1562,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               }
               return jsonActionResult({ ok: true, removed });
             }
-            const { addReactionFeishu } = await loadFeishuChannelRuntime();
-            await addReactionFeishu({
+            const runtime = await loadFeishuChannelRuntime();
+            await requireAuthorizedFeishuMessage({
+              ctx,
+              account,
+              runtime,
+              messageId,
+            });
+            await runtime.addReactionFeishu({
               cfg: ctx.cfg,
               messageId,
               emojiType: emoji,
@@ -1546,15 +1584,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu reactions lookup requires messageId.");
             }
             const runtime = await loadFeishuChannelRuntime();
-            const message = await getAuthorizedFeishuMessage({
+            await requireAuthorizedFeishuMessage({
               ctx,
               account,
               runtime,
               messageId,
             });
-            if (!message) {
-              throw new Error(`Feishu message not found: ${messageId}`);
-            }
             const reactions = await runtime.listReactionsFeishu({
               cfg: ctx.cfg,
               messageId,

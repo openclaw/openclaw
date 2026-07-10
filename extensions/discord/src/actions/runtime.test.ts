@@ -670,6 +670,74 @@ describe("handleDiscordMessagingAction", () => {
     expect(fetchReactionsDiscord).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "reaction add",
+      action: "react",
+      params: { emoji: "✅" },
+      providerCall: discordSendMocks.reactMessageDiscord,
+    },
+    {
+      name: "reaction removal",
+      action: "react",
+      params: { emoji: "✅", remove: true },
+      providerCall: discordSendMocks.removeReactionDiscord,
+    },
+    {
+      name: "message edit",
+      action: "editMessage",
+      params: { content: "updated" },
+      providerCall: discordSendMocks.editMessageDiscord,
+    },
+    {
+      name: "message deletion",
+      action: "deleteMessage",
+      params: {},
+      providerCall: discordSendMocks.deleteMessageDiscord,
+    },
+    {
+      name: "pin",
+      action: "pinMessage",
+      params: {},
+      providerCall: discordSendMocks.pinMessageDiscord,
+    },
+    {
+      name: "unpin",
+      action: "unpinMessage",
+      params: {},
+      providerCall: discordSendMocks.unpinMessageDiscord,
+    },
+  ])("rejects blocked Discord $name before mutation", async ({ action, params, providerCall }) => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "444",
+      guild_id: "111",
+      name: "blocked",
+      type: ChannelType.GuildText,
+    });
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+        },
+      },
+    });
+
+    await expect(
+      handleMessagingAction(
+        action,
+        {
+          channelId: "444",
+          messageId: "M1",
+          ...params,
+        },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+
+    expect(providerCall).not.toHaveBeenCalled();
+  });
+
   it("allows a delegated read of the exact current Discord channel and account", async () => {
     fetchChannelInfoDiscord.mockResolvedValueOnce({
       id: "444",
