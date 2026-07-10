@@ -1,5 +1,5 @@
 // Covers live model extra-probe builders, matchers, and route skip lists.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,
@@ -14,6 +14,21 @@ import {
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
 } from "./live-model-turn-probes.js";
+
+function createImageProbeRunner(responses: string[]) {
+  const attempts: Array<1 | 2> = [];
+  return {
+    attempts,
+    run: async (attempt: 1 | 2) => {
+      attempts.push(attempt);
+      const response = responses[attempt - 1];
+      if (response === undefined) {
+        throw new Error(`Unexpected image probe attempt ${attempt}`);
+      }
+      return response;
+    },
+  };
+}
 
 describe("live model turn probes", () => {
   it("defaults probes on and accepts common opt-out values", () => {
@@ -179,63 +194,61 @@ describe("live model turn probes", () => {
   });
 
   it("retries one mismatched image reply and accepts only a matching retry", async () => {
-    const run = vi
-      .fn<(attempt: 1 | 2) => Promise<string>>()
-      .mockResolvedValueOnce("blue")
-      .mockResolvedValueOnce("OK");
-    const onRetry = vi.fn();
+    const { attempts, run } = createImageProbeRunner(["blue", "OK"]);
+    const retries: string[] = [];
 
-    await expect(runLiveModelImageProbeWithRetry({ run, onRetry })).resolves.toBe("OK");
-    expect(run.mock.calls).toEqual([[1], [2]]);
-    expect(onRetry).toHaveBeenCalledWith("blue");
+    await expect(
+      runLiveModelImageProbeWithRetry({
+        run,
+        onRetry: (firstText) => retries.push(firstText),
+      }),
+    ).resolves.toBe("OK");
+    expect(attempts).toEqual([1, 2]);
+    expect(retries).toEqual(["blue"]);
   });
 
   it("does not retry an image reply that already matches", async () => {
-    const run = vi.fn<(attempt: 1 | 2) => Promise<string>>().mockResolvedValue("OK");
-    const onRetry = vi.fn();
+    const { attempts, run } = createImageProbeRunner(["OK"]);
+    const retries: string[] = [];
 
-    await expect(runLiveModelImageProbeWithRetry({ run, onRetry })).resolves.toBe("OK");
-    expect(run.mock.calls).toEqual([[1]]);
-    expect(onRetry).not.toHaveBeenCalled();
+    await expect(
+      runLiveModelImageProbeWithRetry({
+        run,
+        onRetry: (firstText) => retries.push(firstText),
+      }),
+    ).resolves.toBe("OK");
+    expect(attempts).toEqual([1]);
+    expect(retries).toEqual([]);
   });
 
   it("fails when the image retry also does not match", async () => {
-    const run = vi
-      .fn<(attempt: 1 | 2) => Promise<string>>()
-      .mockResolvedValueOnce("blue")
-      .mockResolvedValueOnce('" or "Reply with exactly');
+    const { attempts, run } = createImageProbeRunner(["blue", '" or "Reply with exactly']);
 
-    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: vi.fn() })).rejects.toThrow(
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
       "image probe did not return ok after retry",
     );
-    expect(run).toHaveBeenCalledTimes(2);
+    expect(attempts).toEqual([1, 2]);
   });
 
   it("does not turn a mismatched image reply into an empty-response skip", async () => {
-    const run = vi
-      .fn<(attempt: 1 | 2) => Promise<string>>()
-      .mockResolvedValueOnce("blue")
-      .mockResolvedValueOnce("");
+    const { run } = createImageProbeRunner(["blue", ""]);
 
-    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: vi.fn() })).rejects.toThrow(
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
       "attempt 2: <empty>",
     );
   });
 
   it("retains the empty-response skip only after two empty attempts", async () => {
-    const run = vi.fn<(attempt: 1 | 2) => Promise<string>>().mockResolvedValue("");
+    const { attempts, run } = createImageProbeRunner(["", ""]);
 
-    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: vi.fn() })).resolves.toBe("");
-    expect(run).toHaveBeenCalledTimes(2);
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).resolves.toBe("");
+    expect(attempts).toEqual([1, 2]);
   });
 
   it("fails when an empty image reply is followed by a mismatch", async () => {
-    const run = vi
-      .fn<(attempt: 1 | 2) => Promise<string>>()
-      .mockResolvedValueOnce("")
-      .mockResolvedValueOnce("blue");
+    const { run } = createImageProbeRunner(["", "blue"]);
 
-    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: vi.fn() })).rejects.toThrow(
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
       "attempt 1: <empty>",
     );
   });
