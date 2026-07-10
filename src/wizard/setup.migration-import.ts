@@ -596,7 +596,7 @@ export async function runSetupMigrationImport(params: {
   assertApplySucceeded(withReport);
   // Commit the config to disk only after apply succeeds, so a failed apply
   // does not leave wizard metadata on disk that blocks retry.
-  targetConfig = await params.commitConfigFile(targetConfig);
+  await params.commitConfigFile(targetConfig);
   await params.prompter.note(
     formatMigrationResult(withReport).join("\n"),
     t("wizard.migration.appliedTitle"),
