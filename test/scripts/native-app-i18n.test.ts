@@ -190,6 +190,24 @@ describe("native app i18n inventory", () => {
           "Approve this device on the gateway.\n1) `\\(commandLine)`\n2) `/pair approve` in your OpenClaw chat\n\\(requestLine)\nOpenClaw will also retry automatically when you return to this app.",
       ),
     ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
+          entry.kind === "ui-localized-call-multiline" &&
+          entry.source ===
+            "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
+          entry.kind === "ui-localized-call-multiline" &&
+          entry.source ===
+            "Can't reach gateway at \\(host):\\(port). Verify Tailscale Serve is enabled and publishes this Gateway.",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "Approve this device on the gateway.\n")).toBe(
       false,
     );

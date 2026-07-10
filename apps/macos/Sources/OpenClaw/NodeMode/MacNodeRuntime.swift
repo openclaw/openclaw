@@ -492,12 +492,7 @@ extension MacNodeRuntime {
         }
         let services = await mainActorServices()
         let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let res: (
-            data: Data,
-            format: OpenClawScreenSnapshotFormat,
-            width: Int,
-            height: Int,
-            displayFrameId: String)
+        let res: ScreenSnapshotResult
         do {
             res = try await services.snapshotScreen(
                 screenIndex: params.screenIndex,

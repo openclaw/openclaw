@@ -48,8 +48,10 @@ final class GatewayConnectionController {
             case .available:
                 nil
             case .secureTransportRequired:
-                String(
-                    localized: "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.")
+                String(localized: """
+                Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. \
+                Use Unencrypted only with a trusted private-LAN address.
+                """)
             }
         }
     }
@@ -1261,8 +1263,10 @@ extension GatewayConnectionController {
         switch failure {
         case .endpointUnreachable:
             if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".ts.net") {
-                String(
-                    localized: "Can't reach gateway at \(host):\(port). Verify Tailscale Serve is enabled and publishes this Gateway.")
+                String(localized: """
+                Can't reach gateway at \(host):\(port). \
+                Verify Tailscale Serve is enabled and publishes this Gateway.
+                """)
             } else {
                 String(localized: "Can't reach gateway at \(host):\(port). Check Tailscale or LAN.")
             }

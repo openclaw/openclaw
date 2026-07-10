@@ -79,6 +79,8 @@ const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
   /\b(?:String\s*\(\s*localized:|LocalizedStringResource\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
+const APPLE_LOCALIZED_STRING_MULTILINE_CALLS =
+  /\b(?:String\s*\(\s*localized:|LocalizedStringResource\s*\()\s*"""([\s\S]*?)"""/gu;
 const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
@@ -662,6 +664,7 @@ function extractCandidates(
       ? [
           [APPLE_UI_MULTILINE_CALLS, "ui-call-multiline"],
           [APPLE_LOCALIZED_STRING_CALLS, "ui-localized-call"],
+          [APPLE_LOCALIZED_STRING_MULTILINE_CALLS, "ui-localized-call-multiline"],
           [APPLE_MODIFIER_CALLS, "ui-modifier"],
           [APPLE_MODIFIER_MULTILINE_CALLS, "ui-modifier-multiline"],
           ...CONDITIONAL_BRANCHES.map((pattern) => [pattern, "conditional-branch"] as const),

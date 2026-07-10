@@ -717,11 +717,13 @@ public actor GatewayChannelActor {
     }
 }
 
-private func requireCurrentConnection(_ connectionGeneration: UInt64) throws {
-    guard self.shouldReconnect,
-          self.connectionGeneration == connectionGeneration,
-          self.disconnectedConnectionGeneration != connectionGeneration
-    else { throw CancellationError() }
+extension GatewayChannelActor {
+    private func requireCurrentConnection(_ connectionGeneration: UInt64) throws {
+        guard self.shouldReconnect,
+              self.connectionGeneration == connectionGeneration,
+              self.disconnectedConnectionGeneration != connectionGeneration
+        else { throw CancellationError() }
+    }
 }
 
 // MARK: - Authentication

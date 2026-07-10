@@ -12066,24 +12066,24 @@
       "id": "native.apple.b6ea004a3ef09501"
     },
     {
-      "kind": "ui-localized-call",
+      "kind": "ui-localized-call-multiline",
       "line": 51,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.",
       "surface": "apple",
-      "id": "native.apple.16e06dae717734de"
+      "id": "native.apple.95fca03f60cf5f1c"
     },
     {
-      "kind": "ui-localized-call",
-      "line": 1264,
+      "kind": "ui-localized-call-multiline",
+      "line": 1266,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Can't reach gateway at \\(host):\\(port). Verify Tailscale Serve is enabled and publishes this Gateway.",
       "surface": "apple",
-      "id": "native.apple.ccfde3d74305d096"
+      "id": "native.apple.b94c43fad806cf31"
     },
     {
       "kind": "ui-localized-call",
-      "line": 1267,
+      "line": 1271,
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Can't reach gateway at \\(host):\\(port). Check Tailscale or LAN.",
       "surface": "apple",
