@@ -565,10 +565,6 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ],
   ],
   [
-    ".github/workflows/openclaw-shared-image-publish-reusable.yml",
-    ["test/scripts/release-no-push-workflow.test.ts"],
-  ],
-  [
     ".github/workflows/openclaw-npm-release.yml",
     [
       "test/openclaw-npm-postpublish-verify.test.ts",
