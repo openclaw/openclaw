@@ -123,25 +123,36 @@ the Control UI. For example, a base path of `/openclaw` uses
 `/openclaw/settings/plugins`. The page is always available, even when every
 optional plugin is disabled.
 
-The catalog combines a curated set of included and official plugins with
-inline [ClawHub](https://clawhub.ai/plugins) search. Included plugins are
-already present on the Gateway and show **Enable** or **Disable** instead of
-**Install**. For example, Workboard is included with OpenClaw but disabled by
-default, so its action is **Enable**.
+The **Installed** tab shows the full local inventory grouped by category, with
+overview counts, per-plugin enable/disable switches, and a **Remove** action
+for externally installed plugins. It also lists configured
+[MCP servers](/cli/mcp) and supports adding, disabling, and removing them
+inline. The **Discover** tab is the store: featured plugins included with
+OpenClaw, official external plugins, and one-click MCP connectors for popular
+services. The **ClawHub** tab searches
+[ClawHub](https://clawhub.ai/plugins) inline with download counts and
+source-verification badges.
+
+Included plugins are already present on the Gateway and show **Enable** or
+**Disable** instead of **Install**. For example, Workboard is included with
+OpenClaw but disabled by default, so its action is **Enable**. Bundled plugins
+cannot be removed, only disabled.
 
 Reading the catalog and searching ClawHub require `operator.read`. Installing,
-enabling, or disabling a plugin requires `operator.admin`; those actions stay
-disabled for read-only operators.
+enabling, disabling, or removing a plugin and changing MCP servers require
+`operator.admin`; those actions stay disabled for read-only operators.
 
 ClawHub installs run through the Gateway and keep the same trust, integrity,
 and plugin-install policy checks as other Gateway-mediated installs. Installing
-plugin code requires a Gateway restart. Enabling or disabling an installed
-plugin can apply without a restart when the plugin and current Gateway runtime
-support it; otherwise the UI reports that a restart is required.
+or removing plugin code requires a Gateway restart. Enabling or disabling an
+installed plugin can apply without a restart when the plugin and current
+Gateway runtime support it; otherwise the UI reports that a restart is
+required. OAuth-backed MCP connectors need a one-time
+`openclaw mcp login <name>` from the CLI after they are added.
 
-The page intentionally focuses on discovery, install, and enablement. Use
-[`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or local-path
-sources, updates, uninstalls, and advanced plugin configuration.
+The page intentionally focuses on inventory, discovery, install, enablement,
+and removal. Use [`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or
+local-path sources, updates, and advanced plugin configuration.
 
 ## Sidebar navigation
 
@@ -176,7 +187,7 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). T
   <Accordion title="Cron, tasks, plugins, skills, nodes, exec approvals">
     - Cron jobs: list/add/edit/run/enable/disable plus run history (`cron.*`).
     - Tasks: live active and recent background task ledger with linked sessions and cancellation (`tasks.*`).
-    - Plugins: browse curated included and official plugins, search ClawHub, install plugin code, and enable or disable installed plugins (`plugins.*`).
+    - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`); MCP server rows edit `mcp.servers` through the config methods.
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Nodes: one **Nodes & devices** inventory that joins paired device records with the node catalog (`node.list`, `device.pair.list`) — one entry per machine with roles, live link status, tokens, and capabilities. Duplicate pairings of the same client collapse into an expandable group, and **Clean up N stale** bulk-removes superseded pairings that are offline and were auto-approved (silent local or trusted-CIDR), so affected clients re-pair without user action. Entries can be removed (`node.pair.remove`, `device.pair.remove`), device pairing and node re-approvals handled inline (`device.pair.*`, `node.pair.approve`/`reject`), and mobile setup codes created from the same card.
     - Exec approvals: edit gateway or node allowlists and ask policy for `exec host=gateway/node` (`exec.approvals.*`).

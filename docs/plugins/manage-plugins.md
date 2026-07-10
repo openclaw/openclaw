@@ -23,25 +23,39 @@ verify the plugin's runtime registrations.
 
 Open **Plugins** in the Control UI, or use `/settings/plugins` relative to the
 configured Control UI base path. For example, a base path of `/openclaw` uses
-`/openclaw/settings/plugins`. The page is always available and shows a curated
-set of included and official plugins, installed plugins, and inline
-[ClawHub](https://clawhub.ai/plugins) search.
+`/openclaw/settings/plugins`. The page has three tabs:
+
+- **Installed** shows the full local inventory grouped by category (channels,
+  model providers, memory, tools), with per-plugin enable/disable switches and
+  a **Remove** action for externally installed plugins. The tab also lists the
+  configured [MCP servers](/cli/mcp) with add, enable/disable, and remove
+  actions that edit `mcp.servers` in the Gateway configuration.
+- **Discover** is the store: featured plugins included with OpenClaw, official
+  external plugins, and a curated connector shelf. Connector cards either add a
+  hosted MCP server in one click (GitHub, Notion, Linear, Sentry,
+  Home Assistant) or jump into a prefilled ClawHub search.
+- **ClawHub** searches [ClawHub](https://clawhub.ai/plugins) inline, showing
+  download counts and source-verification badges for each package.
 
 Included plugins do not need a package install. Their action is **Enable** or
 **Disable**. Workboard, for example, is included with OpenClaw and disabled by
-default, so choose **Enable** to turn it on.
+default, so choose **Enable** to turn it on. Bundled plugins cannot be removed,
+only disabled.
 
-Catalog and search access require `operator.read`. Install, enable, and disable
-actions require `operator.admin`. A ClawHub install is performed by the Gateway
-and preserves its trust, integrity, and plugin-install policy checks.
+Catalog and search access require `operator.read`. Install, enable, disable,
+remove, and MCP server changes require `operator.admin`. A ClawHub install is
+performed by the Gateway and preserves its trust, integrity, and plugin-install
+policy checks.
 
-Installing plugin code requires a Gateway restart. Enablement changes can be
-applied without a restart when the installed plugin and current Gateway runtime
-support it; otherwise the UI tells you a restart is required.
+Installing or removing plugin code requires a Gateway restart. Enablement
+changes can be applied without a restart when the installed plugin and current
+Gateway runtime support it; otherwise the UI tells you a restart is required.
+OAuth-backed MCP connectors still need a one-time `openclaw mcp login <name>`
+from the CLI after they are added.
 
 The Control UI does not install from arbitrary npm, git, or local-path sources,
-update or uninstall plugins, or expose rich plugin configuration. Use the CLI
-workflows below for those operations.
+update plugins, or expose rich plugin configuration. Use the CLI workflows
+below for those operations.
 
 ## List and search plugins
 
