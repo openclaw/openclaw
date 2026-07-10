@@ -1,5 +1,6 @@
 // Purpose-scoped local agent runtime identity token for Gateway clients.
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { HANDSHAKE_RUNTIME_TOKEN_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema.js";
 import { ensureExecApprovals, loadExecApprovals } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
@@ -90,7 +91,17 @@ export function mintAgentRuntimeIdentityToken(params: {
     sessionKey: params.sessionKey.trim(),
   });
   const signature = signPayload(requireSharedAgentRuntimeIdentitySecret(), payload);
-  return `${payload}.${signature}`;
+  const token = `${payload}.${signature}`;
+  // The connect protocol schema caps auth.agentRuntimeIdentityToken at
+  // HANDSHAKE_RUNTIME_TOKEN_MAX_LENGTH, so an over-long token would be
+  // silently rejected at the gateway handshake. Fail at the mint boundary
+  // instead, where the oversized agentId/sessionKey is actionable.
+  if (token.length > HANDSHAKE_RUNTIME_TOKEN_MAX_LENGTH) {
+    throw new Error(
+      `Unable to mint agent runtime identity token: serialized length ${token.length} exceeds the ${HANDSHAKE_RUNTIME_TOKEN_MAX_LENGTH}-char connect protocol cap (agentId/sessionKey too long).`,
+    );
+  }
+  return token;
 }
 
 /** Validate a presented agent runtime token and return the internal caller identity. */

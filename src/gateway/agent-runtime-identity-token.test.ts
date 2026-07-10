@@ -2,6 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { validateConnectParams } from "../../packages/gateway-protocol/src/index.js";
+import {
+  CHAT_SEND_SESSION_KEY_MAX_LENGTH,
+  HANDSHAKE_RUNTIME_TOKEN_MAX_LENGTH,
+} from "../../packages/gateway-protocol/src/schema.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 
 const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
@@ -72,6 +77,43 @@ describe("agent runtime identity token", () => {
 
     expect(runtimeToken.verifyAgentRuntimeIdentityToken("not-a-valid-token")).toBeUndefined();
     expect(fs.existsSync(execApprovalsPath(home))).toBe(false);
+  });
+
+  it("mints a token from the longest chat-send-supported session key that passes the connect schema cap", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+
+    const sessionKey = "k".repeat(CHAT_SEND_SESSION_KEY_MAX_LENGTH);
+    const token = runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "agent-with-a-fairly-long-identifier-for-headroom-proof",
+      sessionKey,
+    });
+
+    expect(token.length).toBeLessThanOrEqual(HANDSHAKE_RUNTIME_TOKEN_MAX_LENGTH);
+    expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)?.sessionKey).toBe(sessionKey);
+    const ok = validateConnectParams({
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "test", version: "1.0.0", platform: "test", mode: "test" },
+      caps: [],
+      commands: [],
+      role: "operator",
+      scopes: ["operator.read"],
+      auth: { agentRuntimeIdentityToken: token },
+    });
+    expect(ok).toBe(true);
+  });
+
+  it("fails at mint time instead of silently exceeding the connect schema cap", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+
+    expect(() =>
+      runtimeToken.mintAgentRuntimeIdentityToken({
+        agentId: "main",
+        sessionKey: "k".repeat(HANDSHAKE_RUNTIME_TOKEN_MAX_LENGTH),
+      }),
+    ).toThrow(/exceeds the \d+-char connect protocol cap/);
   });
 
   it("rejects tokens minted from a different local state directory", async () => {
