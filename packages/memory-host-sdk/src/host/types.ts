@@ -162,6 +162,8 @@ export interface MemorySearchManager {
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorStoreAvailability?(): Promise<boolean>;
   probeVectorAvailability(): Promise<boolean>;
+  /** Optional whole-operation budget used by callers instead of a fixed outer search timeout. */
   getSearchTimeoutMs?(opts?: { qmdSearchModeOverride?: "query" | "search" | "vsearch" }): number;
+  /** Optional bounded cleanup wait for managers with pending background work. */
   close?(timeoutMs?: number): Promise<void>;
 }
