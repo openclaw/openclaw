@@ -192,7 +192,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..306b800ace5398dcfc5eae6e15dcae533db42c95 history: 1461 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..b9dd72b2f2fd97b215aff481ec1f7a9cdcbb1cf3 history: 1469 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020, #92657, #93466, #93650, #93767, #93810, #97118).
 
@@ -1659,6 +1659,14 @@ Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020,
 - **PR #102873** feat(providers): add Meta Model API - muse-spark-1.1. Thanks @HamidShojanazeri and @davemorin and @Solvely-Colin and @jalehman.
 - **PR #103070** fix(providers): publish Meta under canonical package name. Thanks @vincentkoc.
 - **PR #103163** fix(meta): live validation targets deployed Muse Spark 1.1.
+- **PR #102858** ci: make release child dispatch idempotent.
+- **PR #102896** ci: retry transient release workflow reads.
+- **PR #103564** fix(release): restore bundled AI runtime in update smoke.
+- **PR #103467** fix(ci): read Codex bindings from SQLite in live harness. Related #103451. Thanks @vincentkoc.
+- **PR #103556** fix(release): bundle AI runtime in installer smoke. Related #103552. Thanks @vincentkoc.
+- **PR #103635** fix(qa): keep retry passes terminally successful. Related #103631.
+- **PR #103650** fix(qa): keep non-assistant fixtures out of token usage gate. Related #103641.
+- **PR #103654** fix(ci): run live suites from manual dispatches. Related #103652.
 
 ## 2026.6.11
 
