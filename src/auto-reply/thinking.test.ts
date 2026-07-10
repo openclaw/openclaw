@@ -684,6 +684,80 @@ describe("listThinkingLevels", () => {
     ).toBe("medium");
   });
 
+  it("uses the canonical request resolver for subset-effort fallback on openai-completions", () => {
+    const catalog = [
+      {
+        provider: "free",
+        id: "gpt-5.5",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["medium", "high"] },
+      },
+    ];
+
+    // Request resolver falls low -> medium when medium is supported.
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "low",
+        catalog,
+      }),
+    ).toBe("medium");
+
+    // Request resolver falls minimal -> medium when medium is supported.
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "minimal",
+        catalog,
+      }),
+    ).toBe("medium");
+
+    // xhigh falls back to high.
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe("high");
+  });
+
+  it("preserves reasoningEffortMap parity for subset-effort fallback", () => {
+    const catalog = [
+      {
+        provider: "groq",
+        id: "qwen/qwen3-32b",
+        api: "openai-completions",
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["none", "default"],
+          reasoningEffortMap: {
+            off: "none",
+            low: "default",
+            medium: "default",
+            high: "default",
+            xhigh: "default",
+          },
+        },
+      },
+    ];
+
+    // Request resolver maps minimal -> default (supported); inverse map returns
+    // the closest canonical key, which is low.
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "groq",
+        model: "qwen/qwen3-32b",
+        level: "minimal",
+        catalog,
+      }),
+    ).toBe("low");
+  });
+
   it("does not let catalog xhigh compat override binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
     const catalog = [
