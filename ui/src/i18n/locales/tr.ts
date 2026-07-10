@@ -552,6 +552,7 @@ export const tr: TranslationMap = {
     automation: "Otomasyon",
     mcp: "MCP",
     infrastructure: "Altyapı",
+    about: "Hakkında",
     aiAgents: "AI ve Aracılar",
     debug: "Hata Ayıklama",
     logs: "Günlükler",
@@ -583,6 +584,7 @@ export const tr: TranslationMap = {
     automation: "Komutlar, kancalar, cron ve eklentiler.",
     mcp: "MCP sunucuları, kimlik doğrulama, araçlar ve tanılama.",
     infrastructure: "Gateway, web, tarayıcı ve medya ayarları.",
+    about: "Control UI ve bağlı Gateway derleme kimliği.",
     aiAgents: "Aracılar, modeller, Skills, araçlar, bellek, oturum.",
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
@@ -708,6 +710,22 @@ export const tr: TranslationMap = {
     disabledSuccess: "{name} devre dışı bırakıldı.",
     disabledRestart:
       "{name} devre dışı bırakıldı. Değişikliği uygulamak için Gateway yeniden başlatılmalıdır.",
+  },
+  aboutPage: {
+    artifactTitle: "Control UI",
+    artifactSubtitle: "Bu tarayıcı yapıtı derlendiğinde gömülen kimlik.",
+    artifactDetails: "Control UI derleme ayrıntıları",
+    version: "Sürüm",
+    commit: "Commit",
+    built: "Derlendi",
+    unavailable: "Kullanılamıyor",
+    copyCommit: "Tam commit hash’ini kopyala",
+    copyingCommit: "Commit hash’i kopyalanıyor",
+    copiedCommit: "Commit hash’i kopyalandı",
+    copyCommitFailed: "Commit hash’i kopyalanamadı",
+    gatewayVersion: "Bağlı Gateway sürümü",
+    gatewayVersionHint:
+      "Etkin Gateway bağlantısı tarafından bildirildi; bu Control UI derlemesinden ayrıdır.",
   },
   profilePage: {
     offline: "Ajanınızla tanışmak için gateway'e bağlanın.",

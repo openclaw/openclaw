@@ -552,6 +552,7 @@ export const nl: TranslationMap = {
     automation: "Automatisering",
     mcp: "MCP",
     infrastructure: "Infrastructuur",
+    about: "Over",
     aiAgents: "AI en agents",
     debug: "Debuggen",
     logs: "Logs",
@@ -582,6 +583,7 @@ export const nl: TranslationMap = {
     automation: "Commando's, hooks, cron en plugins.",
     mcp: "MCP-servers, auth, tools en diagnostiek.",
     infrastructure: "Gateway-, web-, browser- en media-instellingen.",
+    about: "Control UI en verbonden Gateway build-identiteit.",
     aiAgents: "Agents, modellen, skills, tools, geheugen, sessie.",
     debug: "Momentopnamen, gebeurtenissen, RPC.",
     logs: "Live Gateway-logs.",
@@ -705,6 +707,22 @@ export const nl: TranslationMap = {
     disabledSuccess: "{name} uitgeschakeld.",
     disabledRestart:
       "{name} uitgeschakeld. De Gateway moet opnieuw worden gestart om de wijziging toe te passen.",
+  },
+  aboutPage: {
+    artifactTitle: "Control UI",
+    artifactSubtitle: "Identiteit die is ingesloten toen dit browserartefact werd gebouwd.",
+    artifactDetails: "Buildgegevens van Control UI",
+    version: "Versie",
+    commit: "Commit",
+    built: "Gebouwd",
+    unavailable: "Niet beschikbaar",
+    copyCommit: "Volledige commit-hash kopiëren",
+    copyingCommit: "Commit-hash kopiëren",
+    copiedCommit: "Commit-hash gekopieerd",
+    copyCommitFailed: "Kon commit-hash niet kopiëren",
+    gatewayVersion: "Versie van verbonden Gateway",
+    gatewayVersionHint:
+      "Gerapporteerd door de actieve Gateway-verbinding; los van deze Control UI-build.",
   },
   profilePage: {
     offline: "Maak verbinding met de Gateway om je agent te ontmoeten.",

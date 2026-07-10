@@ -554,6 +554,7 @@ export const fr: TranslationMap = {
     automation: "Automatisation",
     mcp: "MCP",
     infrastructure: "Infrastructure",
+    about: "À propos",
     aiAgents: "IA et agents",
     debug: "Débogage",
     logs: "Journaux",
@@ -585,6 +586,7 @@ export const fr: TranslationMap = {
     automation: "Commandes, hooks, cron et plugins.",
     mcp: "Serveurs MCP, authentification, outils et diagnostics.",
     infrastructure: "Paramètres Gateway, web, navigateur et médias.",
+    about: "Le Control UI et le Gateway connecté définissent l’identité de build.",
     aiAgents: "Agents, modèles, Skills, outils, mémoire, session.",
     debug: "Captures, événements, RPC.",
     logs: "Journaux Gateway en direct.",
@@ -713,6 +715,22 @@ export const fr: TranslationMap = {
     disabledSuccess: "{name} désactivé.",
     disabledRestart:
       "{name} désactivé. Un redémarrage de Gateway est nécessaire pour appliquer la modification.",
+  },
+  aboutPage: {
+    artifactTitle: "Control UI",
+    artifactSubtitle: "Identité intégrée lors de la création de cet artefact de navigateur.",
+    artifactDetails: "Détails de build du Control UI",
+    version: "Version",
+    commit: "Commit",
+    built: "Build",
+    unavailable: "Indisponible",
+    copyCommit: "Copier le hash complet du commit",
+    copyingCommit: "Copie du hash du commit",
+    copiedCommit: "Hash du commit copié",
+    copyCommitFailed: "Impossible de copier le hash du commit",
+    gatewayVersion: "Version du Gateway connecté",
+    gatewayVersionHint:
+      "Signalée par la connexion Gateway active ; distincte de ce build du Control UI.",
   },
   profilePage: {
     offline: "Connectez-vous au Gateway pour rencontrer votre agent.",

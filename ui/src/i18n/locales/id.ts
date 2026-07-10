@@ -549,6 +549,7 @@ export const id: TranslationMap = {
     automation: "Otomatisasi",
     mcp: "MCP",
     infrastructure: "Infrastruktur",
+    about: "Tentang",
     aiAgents: "AI & Agen",
     debug: "Debug",
     logs: "Log",
@@ -579,6 +580,7 @@ export const id: TranslationMap = {
     automation: "Perintah, hook, cron, dan plugin.",
     mcp: "Server MCP, autentikasi, alat, dan diagnostik.",
     infrastructure: "Pengaturan Gateway, web, browser, dan media.",
+    about: "Control UI dan Gateway yang terhubung membangun identitas.",
     aiAgents: "Agen, model, Skills, alat, memori, sesi.",
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
@@ -700,6 +702,22 @@ export const id: TranslationMap = {
     disabledSuccess: "{name} telah dinonaktifkan.",
     disabledRestart:
       "{name} telah dinonaktifkan. Restart Gateway diperlukan untuk menerapkan perubahan.",
+  },
+  aboutPage: {
+    artifactTitle: "Control UI",
+    artifactSubtitle: "Identitas yang disematkan saat artefak browser ini dibuat.",
+    artifactDetails: "Detail build Control UI",
+    version: "Versi",
+    commit: "Commit",
+    built: "Dibuat",
+    unavailable: "Tidak tersedia",
+    copyCommit: "Salin hash commit lengkap",
+    copyingCommit: "Menyalin hash commit",
+    copiedCommit: "Hash commit disalin",
+    copyCommitFailed: "Tidak dapat menyalin hash commit",
+    gatewayVersion: "Versi Gateway yang terhubung",
+    gatewayVersionHint:
+      "Dilaporkan oleh koneksi Gateway aktif; terpisah dari build Control UI ini.",
   },
   profilePage: {
     offline: "Hubungkan ke gateway untuk bertemu agen Anda.",
