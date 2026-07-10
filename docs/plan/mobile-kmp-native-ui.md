@@ -135,10 +135,10 @@ facade. This is the stable choice today:
   This app-internal integration does not require a hosted binary package or a
   new publishing system.
 
-This mirrors the useful part of the walt.id wallet work: a KMP core remains
-shared, while a deliberately small Swift package hides generated/Kotlin symbols
-behind a native Swift API. Its later API gate also provides the right model for
-requiring an explicit Swift parity decision whenever an exposed KMP ABI changes.
+The public Swift symbol graph stays small and intentional: a KMP core remains
+shared, while a deliberately small Swift package hides generated Kotlin symbols
+behind a native Swift API. An ABI gate requires an explicit Swift parity
+decision whenever an exposed KMP ABI changes.
 
 ## Contract-first rollout
 
@@ -238,15 +238,6 @@ business-rule implementation, not maximum Kotlin coverage.
   production façade.
 - [SKIE](https://skie.touchlab.co/) provides the required coroutine and Flow
   ergonomics, including typed `AsyncSequence` bridging.
-- The local [webauthn-kotlin-multiplatform](https://github.com/szijpeter/webauthn-kotlin-multiplatform)
-  project demonstrates focused common modules with iOS device and simulator
-  targets. Its model/validation separation is the relevant design precedent,
-  not its UI approach.
-- walt.id [PR #1849](https://github.com/walt-id/waltid-identity/pull/1849)
-  implements a KMP core plus SwiftPM facade over SKIE; [PR
-  #1866](https://github.com/walt-id/waltid-identity/pull/1866) adds explicit
-  Kotlin API and Swift-parity decision gates. Reuse the boundary discipline,
-  not its wallet-specific models or build surface.
 
 ## Related
 
