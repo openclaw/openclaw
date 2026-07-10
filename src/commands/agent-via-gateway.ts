@@ -9,6 +9,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -164,6 +165,7 @@ export const agentViaGatewayTesting = {
     agentSessionModuleCache.clear();
     agentSessionModuleLoader = loader;
   },
+  parseTimeoutSeconds,
   resolveGatewayAgentTimeoutMs,
   setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
     gatewayAbortRetryDelaysMsForTests = delays;
@@ -234,10 +236,13 @@ async function resolveAgentMessageOpts(opts: AgentCliOpts): Promise<AgentDispatc
 }
 
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
+  const configuredTimeoutSeconds = opts.cfg.agents?.defaults?.timeoutSeconds;
   const raw =
     opts.timeout !== undefined
       ? parseStrictNonNegativeInteger(opts.timeout)
-      : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
+      : configuredTimeoutSeconds === 0
+        ? 0
+        : resolveAgentTimeoutMs({ cfg: opts.cfg }) / 1000;
   if (raw === undefined) {
     throw new Error(
       `Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.`,

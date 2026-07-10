@@ -281,6 +281,29 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("inherits the shared agent timeout when config and --timeout are unset", () => {
+    expect(agentViaGatewayTesting.parseTimeoutSeconds({ cfg: {} })).toBe(48 * 60 * 60);
+  });
+
+  it.each([
+    {
+      label: "config",
+      cfg: { agents: { defaults: { timeoutSeconds: 90 } } },
+      timeout: undefined,
+      expected: 90,
+    },
+    {
+      label: "config zero",
+      cfg: { agents: { defaults: { timeoutSeconds: 0 } } },
+      timeout: undefined,
+      expected: 0,
+    },
+    { label: "CLI", cfg: {}, timeout: "45", expected: 45 },
+    { label: "CLI zero", cfg: {}, timeout: "0", expected: 0 },
+  ] as const)("preserves explicit $label timeout", ({ cfg, timeout, expected }) => {
+    expect(agentViaGatewayTesting.parseTimeoutSeconds({ cfg, timeout })).toBe(expected);
+  });
+
   it("rejects partial gateway timeout values", async () => {
     await withTempStore(async () => {
       await expect(

@@ -389,7 +389,6 @@ Time format in system prompt. Default: `auto` (OS preference).
       toolProgressDetail: "explain",
       reasoningDefault: "off",
       elevatedDefault: "on",
-      timeoutSeconds: 600,
       mediaMaxMb: 5,
       contextTokens: 200000,
       maxConcurrent: 4,
