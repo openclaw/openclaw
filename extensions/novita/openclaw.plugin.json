@@ -59,6 +59,10 @@
     "properties": {}
   },
   "modelCatalog": {
+    "runtimeAugment": true,
+    "discovery": {
+      "novita": "refreshable"
+    },
     "aliases": {
       "novita-ai": {
         "provider": "novita"

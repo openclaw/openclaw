@@ -163,12 +163,17 @@ export async function buildNovitaProvider(
         ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
       }),
     });
+    // Preserve curated static metadata (reasoning, vision, context, pricing)
+    // for models the manifest already knows; the live list endpoint only carries
+    // an id/title/context, so conservative synthesis is used for new routes only.
+    const staticById = new Map(fallback.models.map((model) => [model.id, model]));
     const models = new Map<string, ModelDefinitionConfig>();
     for (const row of rows) {
-      const model = buildNovitaModelDefinitionFromLiveRow(row);
-      if (model && !models.has(model.id)) {
-        models.set(model.id, model);
+      const discovered = buildNovitaModelDefinitionFromLiveRow(row);
+      if (!discovered || models.has(discovered.id)) {
+        continue;
       }
+      models.set(discovered.id, staticById.get(discovered.id) ?? discovered);
     }
     if (models.size > 0) {
       return {
