@@ -13053,7 +13053,13 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
   it("silences operational runtime notices when configured", async () => {
     setNoAbort();
     const cases: Array<{ name: string; payload: ReplyPayload }> = [
-      { name: "error", payload: { text: "usage limit reached", isError: true } },
+      {
+        name: "runtime-error",
+        payload: setReplyPayloadMetadata(
+          { text: "usage limit reached", isError: true },
+          { deliverDespiteSourceReplySuppression: true },
+        ),
+      },
       {
         name: "fallback",
         payload: { text: "falling back to another model", isFallbackNotice: true },
@@ -13110,6 +13116,31 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         item.name,
       ).not.toHaveBeenCalled();
     }
+  });
+
+  it("does not silence normal error replies when operational notices are silent", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s-normal-error",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const errorReply = { text: "Tool call blocked by plugin policy", isError: true };
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:normal-error" }),
+      cfg: {
+        messages: {
+          operationalReplies: { policy: "silent" },
+        },
+      },
+      dispatcher,
+      replyResolver: vi.fn(async () => errorReply satisfies ReplyPayload),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(expect.objectContaining(errorReply));
   });
 
   it("clears pending final delivery when an operational final is silenced", async () => {
@@ -13206,7 +13237,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       sendPolicy: "allow",
     };
     const dispatcher = createDispatcher();
-    const notice: ReplyPayload = { text: "usage limit reached", isError: true };
+    const notice = setReplyPayloadMetadata(
+      { text: "usage limit reached", isError: true },
+      { deliverDespiteSourceReplySuppression: true },
+    );
 
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({ SessionKey: "test:silent-live-pending-final" }),

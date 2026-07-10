@@ -291,11 +291,10 @@ export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): bool
 export function isReplyPayloadOperationalNotice(
   payload: Pick<
     ReplyPayload,
-    "channelData" | "isCompactionNotice" | "isError" | "isFallbackNotice" | "isStatusNotice"
+    "channelData" | "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice"
   >,
 ): boolean {
   return (
-    payload.isError === true ||
     payload.isCompactionNotice === true ||
     payload.isFallbackNotice === true ||
     payload.isStatusNotice === true ||

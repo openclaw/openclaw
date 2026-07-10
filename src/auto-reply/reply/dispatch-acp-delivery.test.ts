@@ -1,6 +1,7 @@
 // Tests ACP dispatch delivery routing and visible reply handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher, type ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -34,6 +35,12 @@ const transcriptMocks = vi.hoisted(() => ({
     messageId: "message-1",
   })),
 }));
+
+const createAcpErrorNotice = (text: string) =>
+  markReplyPayloadForSourceSuppressionDelivery({
+    text,
+    isError: true,
+  });
 
 const channelPluginMocks = vi.hoisted(() => ({
   accountIds: ["default"] as string[],
@@ -301,10 +308,10 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       originatingTo: "channel:thread-1",
     });
 
-    const delivered = await coordinator.deliver("final", {
-      text: "ACP turn failed before completion.",
-      isError: true,
-    });
+    const delivered = await coordinator.deliver(
+      "final",
+      createAcpErrorNotice("ACP turn failed before completion."),
+    );
 
     expect(delivered).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -345,10 +352,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       shouldRouteToOriginating: false,
     });
-    const notice = {
-      text: "ACP backend failed before completion.",
-      isError: true,
-    };
+    const notice = createAcpErrorNotice("ACP backend failed before completion.");
 
     const delivered = await coordinator.deliver("final", notice);
 
@@ -378,10 +382,10 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       shouldRouteToOriginating: false,
     });
 
-    const delivered = await coordinator.deliver("final", {
-      text: "ACP backend failed before completion.",
-      isError: true,
-    });
+    const delivered = await coordinator.deliver(
+      "final",
+      createAcpErrorNotice("ACP backend failed before completion."),
+    );
 
     expect(delivered).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -408,10 +412,10 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       shouldRouteToOriginating: false,
     });
 
-    const delivered = await coordinator.deliver("final", {
-      text: "Background ACP child failed before completion.",
-      isError: true,
-    });
+    const delivered = await coordinator.deliver(
+      "final",
+      createAcpErrorNotice("Background ACP child failed before completion."),
+    );
 
     expect(delivered).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -440,10 +444,10 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       shouldRouteToOriginating: false,
     });
 
-    const delivered = await coordinator.deliver("final", {
-      text: "ACP turn failed before completion.",
-      isError: true,
-    });
+    const delivered = await coordinator.deliver(
+      "final",
+      createAcpErrorNotice("ACP turn failed before completion."),
+    );
 
     expect(delivered).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -470,10 +474,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       inboundAudio: false,
       shouldRouteToOriginating: false,
     });
-    const notice = {
-      text: "ACP once policy delayed delivery proof",
-      isError: true,
-    };
+    const notice = createAcpErrorNotice("ACP once policy delayed delivery proof");
 
     const failed = await failedCoordinator.deliver("final", notice);
 

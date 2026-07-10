@@ -6574,7 +6574,14 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
   it("applies operational policy to message-tool-only queued followup finals", async () => {
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({
-      agentResult: { payloads: [{ text: "backend failed for queued followup", isError: true }] },
+      agentResult: {
+        payloads: [
+          setReplyPayloadMetadataForTest(
+            { text: "backend failed for queued followup", isError: true },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+        ],
+      },
       queued: {
         ...queued,
         originatingChannel: "discord",
@@ -6607,7 +6614,14 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
   it("keeps room-event message-tool-only operational finals out of source rooms by default", async () => {
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({
-      agentResult: { payloads: [{ text: "room backend failed", isError: true }] },
+      agentResult: {
+        payloads: [
+          setReplyPayloadMetadataForTest(
+            { text: "room backend failed", isError: true },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+        ],
+      },
       queued: {
         ...queued,
         currentInboundEventKind: "room_event",
@@ -6631,8 +6645,14 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
         payloads: [
-          { text: "room once backend failed", isError: true },
-          { text: "room once backend failed", isError: true },
+          setReplyPayloadMetadataForTest(
+            { text: "room once backend failed", isError: true },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+          setReplyPayloadMetadataForTest(
+            { text: "room once backend failed", isError: true },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
         ],
       },
       queued: {
@@ -6953,8 +6973,14 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
   it("delivers only the first matching queued operational notice when policy is once", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [
-        { text: "queued once usage limit", isError: true },
-        { text: "queued once usage limit", isError: true },
+        setReplyPayloadMetadataForTest(
+          { text: "queued once usage limit", isError: true },
+          { deliverDespiteSourceReplySuppression: true },
+        ),
+        setReplyPayloadMetadataForTest(
+          { text: "queued once usage limit", isError: true },
+          { deliverDespiteSourceReplySuppression: true },
+        ),
       ],
       meta: {},
     });

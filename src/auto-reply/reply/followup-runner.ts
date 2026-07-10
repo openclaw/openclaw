@@ -631,13 +631,13 @@ export function createFollowupRunner(params: {
       !routedAnyCrossChannelPayloadToOrigin &&
       opts?.onBlockReply
     ) {
-      const routeFailureNotice: ReplyPayload = {
+      const routeFailureNotice: ReplyPayload = markReplyPayloadForSourceSuppressionDelivery({
         text:
           "Follow-up completed, but OpenClaw could not deliver it to the originating " +
           "channel. The reply content was not forwarded to this channel to avoid " +
           "cross-channel misdelivery.",
         isError: true,
-      };
+      });
       const policyResult = await applyFollowupPayloadPolicy(
         routeFailureNotice,
         policyCandidatePayloads.length,
@@ -2079,22 +2079,6 @@ export function createFollowupRunner(params: {
       }
 
       if (run.sourceReplyDeliveryMode === "message_tool_only") {
-        const suppressionDeliverablePayloads = deliveryPayloads.filter(
-          (payload) =>
-            getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
-        );
-        if (suppressionDeliverablePayloads.length > 0) {
-          await sendFollowupPayloads(
-            suppressionDeliverablePayloads,
-            effectiveQueued,
-            {
-              provider: providerUsed,
-              modelId: modelUsed,
-            },
-            { runId },
-          );
-          return;
-        }
         const operationalDeliveryPayloads = deliveryPayloads.filter((payload) =>
           isOperationalReplyPayload({ payload, explicitCommandTurn: false }),
         );
@@ -2108,6 +2092,27 @@ export function createFollowupRunner(params: {
             operationalPolicy === "redirect" ||
             operationalPolicy === "silent" ||
             operationalPolicy === "once");
+        const suppressionDeliverablePayloads = deliveryPayloads.filter((payload) => {
+          if (getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression !== true) {
+            return false;
+          }
+          return (
+            !isOperationalReplyPayload({ payload, explicitCommandTurn: false }) ||
+            shouldEvaluateOperationalPayloads
+          );
+        });
+        if (suppressionDeliverablePayloads.length > 0) {
+          await sendFollowupPayloads(
+            suppressionDeliverablePayloads,
+            effectiveQueued,
+            {
+              provider: providerUsed,
+              modelId: modelUsed,
+            },
+            { runId },
+          );
+          return;
+        }
         if (shouldEvaluateOperationalPayloads) {
           await sendRunPayloads(
             operationalDeliveryPayloads,
