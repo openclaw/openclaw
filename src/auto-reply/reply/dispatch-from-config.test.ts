@@ -66,9 +66,17 @@ type AbortResult = {
 type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
+type RouteReplyMockResult = {
+  ok: boolean;
+  messageId?: string;
+  suppressed?: boolean;
+};
 
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn<(_params: unknown) => Promise<RouteReplyMockResult>>(async () => ({
+    ok: true,
+    messageId: "mock",
+  })),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
