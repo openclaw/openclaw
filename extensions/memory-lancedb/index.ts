@@ -25,6 +25,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import {
   asOptionalRecord as asRecord,
@@ -1436,8 +1437,13 @@ export default definePluginEntry({
       if (!runtimeCfg) {
         return true;
       }
-      const agentEntry = agentId
-        ? runtimeCfg.agents?.list?.find((entry) => entry.id === agentId)
+      // Normalize both sides: configured ids like "XiaoHuo" or ids with stray
+      // whitespace must still hit their per-agent override, not the default.
+      const normalizedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+      const agentEntry = normalizedAgentId
+        ? runtimeCfg.agents?.list?.find(
+            (entry) => normalizeAgentId(entry.id ?? "") === normalizedAgentId,
+          )
         : undefined;
       return (
         agentEntry?.memorySearch?.enabled ??

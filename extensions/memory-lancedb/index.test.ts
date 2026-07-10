@@ -1691,6 +1691,13 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).not.toHaveBeenCalled();
       expect(add).not.toHaveBeenCalled();
 
+      // Case/whitespace variants of the configured id still hit the override.
+      const recallDisabledCased = await beforePromptBuild?.(recallEvent, {
+        agentId: " XiaoHuo ",
+      });
+      expect(recallDisabledCased).toBeUndefined();
+      expect(embeddingsCreate).not.toHaveBeenCalled();
+
       // Enabled agent: recall and capture proceed as before.
       await beforePromptBuild?.(recallEvent, { agentId: "main" });
       await agentEnd?.(captureEvent, { agentId: "main", sessionKey: "agent:main:main" });
