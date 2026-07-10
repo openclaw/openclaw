@@ -9,6 +9,8 @@ IMAGE_NAME="${OPENCLAW_DOCKER_SELECTED_PLUGINS_E2E_IMAGE:-openclaw-docker-select
 DEPENDENCY_ONLY_IMAGE="${IMAGE_NAME}-dependency-only"
 CONTAINER_NAME="openclaw-docker-selected-plugins-e2e-$$"
 SELECTED_PLUGINS="${OPENCLAW_DOCKER_SELECTED_PLUGINS:-slack,msteams clickclack,slack}"
+BUILD_GIT_COMMIT="${OPENCLAW_DOCKER_SELECTED_PLUGINS_E2E_GIT_COMMIT:-0123456789abcdef0123456789abcdef01234567}"
+BUILD_TIMESTAMP="${OPENCLAW_DOCKER_SELECTED_PLUGINS_E2E_BUILD_TIMESTAMP:-2026-07-10T12:34:56.000Z}"
 UNKNOWN_LOG="$(mktemp -t openclaw-docker-selected-plugins-unknown.XXXXXX)"
 RUN_LOG="$(mktemp -t openclaw-docker-selected-plugins-run.XXXXXX)"
 DOCKER_COMMAND_TIMEOUT="${OPENCLAW_DOCKER_SELECTED_PLUGINS_RUN_TIMEOUT:-900s}"
@@ -59,6 +61,8 @@ else
 
   echo "Building selected-plugin runtime image: $IMAGE_NAME"
   docker_build_run docker-selected-plugins-build \
+    --build-arg "GIT_COMMIT=$BUILD_GIT_COMMIT" \
+    --build-arg "OPENCLAW_BUILD_TIMESTAMP=$BUILD_TIMESTAMP" \
     --build-arg "OPENCLAW_EXTENSIONS=$SELECTED_PLUGINS" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \
@@ -69,6 +73,8 @@ echo "Inspecting selected plugins from the final runtime image..."
 if ! docker_e2e_docker_run_cmd run --rm \
   --name "$CONTAINER_NAME" \
   --entrypoint bash \
+  -e "OPENCLAW_E2E_EXPECTED_GIT_COMMIT=$BUILD_GIT_COMMIT" \
+  -e "OPENCLAW_E2E_EXPECTED_BUILD_TIMESTAMP=$BUILD_TIMESTAMP" \
   -v "$ROOT_DIR/scripts/e2e/lib/docker-selected-plugins:/openclaw-e2e:ro" \
   "$IMAGE_NAME" \
   /openclaw-e2e/scenario.sh >"$RUN_LOG" 2>&1; then

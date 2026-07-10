@@ -203,6 +203,7 @@ of Chromium:
 
 ```bash
 SOURCE_SHA="$(git rev-parse HEAD)"
+BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 REGISTRY="registry.example.com/fakeco"
 
 build_gateway_image() {
@@ -210,6 +211,8 @@ build_gateway_image() {
   selected_plugin="$2"
   docker buildx build \
     --platform linux/amd64,linux/arm64 \
+    --build-arg "GIT_COMMIT=${SOURCE_SHA}" \
+    --build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}" \
     --build-arg "OPENCLAW_EXTENSIONS=${selected_plugin}" \
     --build-arg OPENCLAW_INSTALL_BROWSER= \
     --provenance=mode=max \

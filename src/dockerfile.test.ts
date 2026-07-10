@@ -255,12 +255,23 @@ describe("Dockerfile", () => {
 
   it("documents provenance arguments for manual source builds", async () => {
     const docs = await readFile(dockerInstallDocsPath, "utf8");
+    const selectedPluginStart = docs.indexOf("### Source-built images with selected plugins");
+    const selectedPluginEnd = docs.indexOf("### Observability", selectedPluginStart);
+    const selectedPluginDocs = docs.slice(selectedPluginStart, selectedPluginEnd);
 
     expect(docs).toContain('BUILD_GIT_COMMIT="$(git rev-parse HEAD)"');
     expect(docs).toContain('BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"');
     expect(docs).toContain('--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}"');
     expect(docs).toContain('--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}"');
     expect(docs).toContain("The Docker context excludes `.git`.");
+    expect(selectedPluginStart).toBeGreaterThan(-1);
+    expect(selectedPluginEnd).toBeGreaterThan(selectedPluginStart);
+    expect(selectedPluginDocs).toContain('SOURCE_SHA="$(git rev-parse HEAD)"');
+    expect(selectedPluginDocs).toContain('BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"');
+    expect(selectedPluginDocs).toContain('--build-arg "GIT_COMMIT=${SOURCE_SHA}"');
+    expect(selectedPluginDocs).toContain(
+      '--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}"',
+    );
   });
 
   it("prunes runtime dependencies and omitted plugin packages after the build stage", async () => {
