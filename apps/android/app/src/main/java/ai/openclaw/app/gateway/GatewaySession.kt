@@ -721,6 +721,7 @@ class GatewaySession(
       socket?.cancel() ?: closedDeferred.complete(Unit)
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     private fun finishTransport(
       message: String,
       connectError: Throwable,
@@ -728,24 +729,21 @@ class GatewaySession(
       if (!terminalCallbackClaimed.compareAndSet(false, true)) return
       val shouldNotify = state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED
       incomingMessages.close()
-      messagePumpJob.invokeOnCompletion {
-        val completeTerminalCallback = {
+      // Completion handlers run synchronously and cannot own app-level disconnect cleanup.
+      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
+        // Preserve accepted-frame ordering even if the parent scope is cancelled during failure.
+        withContext(NonCancellable) {
           try {
+            messagePumpJob.join()
+            if (connectResponseAccepted.get()) {
+              connectHandshakeJob?.join()
+            } else {
+              connectNonceDeferred.completeExceptionally(connectError)
+            }
             if (shouldNotify) onDisconnected(message)
           } finally {
             finalizeTransport(connectError)
           }
-        }
-        // OkHttp can deliver onClosed immediately after onMessage. Let an accepted connect
-        // response finish so auth retry state and issued device tokens survive the close. The
-        // terminal callback must observe that same drained boundary; consumers clear run state.
-        if (connectResponseAccepted.get()) {
-          connectHandshakeJob?.invokeOnCompletion {
-            completeTerminalCallback()
-          } ?: completeTerminalCallback()
-        } else {
-          connectNonceDeferred.completeExceptionally(connectError)
-          completeTerminalCallback()
         }
       }
     }

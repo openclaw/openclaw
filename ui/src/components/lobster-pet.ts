@@ -46,6 +46,10 @@ export type LobsterPetAccessory = "none" | "crown" | "sprout" | "patch";
 
 export type LobsterPetAntennae = "perky" | "droopy";
 
+export type LobsterPetBuild = "round" | "squat" | "slender";
+
+export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
+
 export type LobsterPetLook = {
   palette: LobsterPetPalette;
   scale: number;
@@ -56,6 +60,9 @@ export type LobsterPetLook = {
   facing: 1 | -1;
   personality: LobsterPetPersonalityId;
   blinkDelayS: number;
+  build: LobsterPetBuild;
+  clawSize: LobsterPetClawSize;
+  tailFan: boolean;
 };
 
 type ActProfile = {
@@ -187,10 +194,55 @@ const SCALES: Array<[number, number]> = [
   [2.5, 20],
 ];
 
+const BUILDS: Array<[LobsterPetBuild, number]> = [
+  ["round", 40],
+  ["squat", 30],
+  ["slender", 30],
+];
+
+const CLAW_SIZES: Array<[LobsterPetClawSize, number]> = [
+  ["regular", 55],
+  ["dainty", 25],
+  ["mighty", 20],
+];
+
+// Builds reshape the whole sprite by stretching its aspect ratio (the svg
+// renders with preserveAspectRatio="none"), so eyes, claws, accessories, and
+// rare-variant geometry stay aligned for every silhouette.
+export const LOBSTER_PET_BUILD_MULS: Record<LobsterPetBuild, { w: number; h: number }> = {
+  round: { w: 1, h: 1 },
+  squat: { w: 1.14, h: 0.9 },
+  slender: { w: 0.88, h: 1.1 },
+};
+
+export const LOBSTER_PET_CLAW_MULS: Record<LobsterPetClawSize, number> = {
+  dainty: 0.85,
+  regular: 1,
+  mighty: 1.18,
+};
+
 // Keep the perch off the footer center so tooltips and the theme toggle
 // never sit under the sprite.
 const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 const ENTER_MS = 450;
+const LEAVE_MS = 350;
+
+export type LobsterPetAnchor = "ledge" | "bar";
+
+// The bar anchor stands the pet inside the footer bar's free stretch between
+// the status dot (left) and the settings icons (right).
+const BAR_ZONE = [18, 50] as const;
+// Inside the ~30px bar the sprite must stay small regardless of rolled size.
+const BAR_MAX_SCALE = 1.7;
+
+// Visit cadence: seeded per load, the pet is a guest, not a fixture. A share
+// of loads gets no visit at all; the rest get a first arrival within minutes,
+// stays of a few minutes, and long gaps between returns. Disconnects summon
+// the pet regardless of schedule (unless dismissed or disabled).
+const VISIT_SHY_CHANCE = 0.25;
+const VISIT_FIRST_DELAY_MS = [15_000, 180_000] as const;
+const VISIT_STAY_MS = [90_000, 300_000] as const;
+const VISIT_GAP_MS = [360_000, 1_080_000] as const;
 
 function fnv1a(value: string): number {
   let hash = 0x811c9dc5;
@@ -247,7 +299,25 @@ export function createLobsterPetLook(seed: number): LobsterPetLook {
   const facing = rng() < 0.5 ? 1 : -1;
   const personality = pickWeighted(rng, PERSONALITY_IDS);
   const blinkDelayS = Math.round(randomBetween(rng, 0, 4) * 10) / 10;
-  return { palette, scale, accessory, antennae, side, spotPct, facing, personality, blinkDelayS };
+  // Shape traits roll after the original ones so pre-existing seeds keep
+  // their palette/personality and only gain a silhouette.
+  const build = pickWeighted(rng, BUILDS);
+  const clawSize = pickWeighted(rng, CLAW_SIZES);
+  const tailFan = rng() < 0.3;
+  return {
+    palette,
+    scale,
+    accessory,
+    antennae,
+    side,
+    spotPct,
+    facing,
+    personality,
+    blinkDelayS,
+    build,
+    clawSize,
+    tailFan,
+  };
 }
 
 export function resolveLobsterPetMode(
@@ -344,6 +414,15 @@ const RETRO_FACE = svg`
   </g>
 `;
 
+// Tail-fan lobes peek out diagonally behind the lower body (drawn before the
+// body path so they read as "behind"). Fill color lives in lobster-pet.css.
+const TAIL_FAN = svg`
+  <g class="lob-tail">
+    <ellipse cx="16" cy="84" rx="11" ry="7" transform="rotate(-32 16 84)" />
+    <ellipse cx="104" cy="84" rx="11" ry="7" transform="rotate(32 104 84)" />
+  </g>
+`;
+
 const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   perky: svg`
     <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
@@ -366,10 +445,11 @@ function renderLobsterSvg(look: LobsterPetLook) {
     <svg
       class="lobster-pet__svg"
       viewBox="0 0 120 105"
-      preserveAspectRatio="xMidYMax meet"
+      preserveAspectRatio="none"
       aria-hidden="true"
     >
       ${look.palette.id === "retro" ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
+      ${look.tailFan ? TAIL_FAN : nothing}
       <g class="lob-claw lob-claw--l">
         <path
           d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z"
@@ -432,16 +512,25 @@ export class LobsterPet extends LitElement {
   @property({ attribute: false }) seed = 0;
   @property({ attribute: false }) mode: LobsterPetMode = "idle";
 
+  @property({ attribute: false }) visitsEnabled = true;
+
   @state() private act: LobsterPetAct | null = null;
   @state() private spotPct = 80;
   @state() private facing: 1 | -1 = 1;
   @state() private entering = false;
+  @state() private presence: "out" | "in" | "leaving" = "out";
+  @state() private anchor: LobsterPetAnchor = "ledge";
+  @state() private scheduledVisiting = false;
+  @state() private dismissed = false;
 
   private look: LobsterPetLook | null = null;
   private rng: () => number = mulberry32(0);
+  private visitRng: () => number = mulberry32(0);
   private idleTimer: number | null = null;
   private actEndTimer: number | null = null;
   private enterTimer: number | null = null;
+  private visitTimer: number | null = null;
+  private leaveTimer: number | null = null;
   private restartPending = false;
 
   override connectedCallback() {
@@ -451,8 +540,15 @@ export class LobsterPet extends LitElement {
 
   override disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    this.clearTimers();
+    this.clearActTimers();
+    this.clearVisitTimers();
     super.disconnectedCallback();
+  }
+
+  private wantsVisible(): boolean {
+    return (
+      this.visitsEnabled && !this.dismissed && (this.mode === "offline" || this.scheduledVisiting)
+    );
   }
 
   override willUpdate(changed: Map<PropertyKey, unknown>) {
@@ -460,19 +556,52 @@ export class LobsterPet extends LitElement {
     if (seedChanged) {
       this.look = createLobsterPetLook(this.seed);
       this.rng = mulberry32(this.seed ^ 0x9e3779b9);
+      this.visitRng = mulberry32(this.seed ^ 0x5eaf00d);
       this.spotPct = this.look.spotPct;
       this.facing = this.look.facing;
       // Reset the act loop inside the update pass; deferring state flips to
       // updated() would chain a second update and trip lit's change-in-update
       // warning.
-      this.clearTimers();
+      this.clearActTimers();
       this.act = null;
-      this.entering = !prefersReducedMotion();
-      this.restartPending = this.entering;
-    } else if (changed.has("mode") && !prefersReducedMotion()) {
+      this.dismissed = false;
+      this.presence = "out";
+      this.scheduleVisits();
+    } else if (changed.has("mode") && this.presence === "in" && !prefersReducedMotion()) {
       // Status flips get an immediate reaction; the act-end timer then
       // reschedules from the new mode's pool.
       this.performAct("startle");
+    }
+    this.reconcilePresence();
+  }
+
+  // Presence follows the visit schedule, offline summons, the setting, and
+  // dismissals. Runs inside the update pass so arrivals/departures never
+  // chain a post-update state change.
+  private reconcilePresence() {
+    const visible = this.wantsVisible();
+    if (visible && this.presence !== "in") {
+      if (this.leaveTimer !== null) {
+        window.clearTimeout(this.leaveTimer);
+        this.leaveTimer = null;
+      }
+      if (this.presence === "out") {
+        this.rollPerch();
+      }
+      this.presence = "in";
+      this.entering = !prefersReducedMotion();
+      this.restartPending = true;
+      return;
+    }
+    if (!visible && this.presence === "in") {
+      this.clearActTimers();
+      this.act = null;
+      this.entering = false;
+      this.presence = "leaving";
+      this.leaveTimer = window.setTimeout(() => {
+        this.leaveTimer = null;
+        this.presence = "out";
+      }, LEAVE_MS);
     }
   }
 
@@ -490,7 +619,7 @@ export class LobsterPet extends LitElement {
 
   private readonly handleVisibilityChange = () => {
     if (document.hidden) {
-      this.clearTimers();
+      this.clearActTimers();
       this.act = null;
     } else {
       this.scheduleNextAct();
@@ -504,7 +633,13 @@ export class LobsterPet extends LitElement {
     this.performAct("startle");
   };
 
-  private clearTimers() {
+  // Right-click shoos the pet away for the rest of this page load.
+  private readonly handleShoo = (event: Event) => {
+    event.preventDefault();
+    this.dismissed = true;
+  };
+
+  private clearActTimers() {
     for (const timer of [this.idleTimer, this.actEndTimer, this.enterTimer]) {
       if (timer !== null) {
         window.clearTimeout(timer);
@@ -513,6 +648,63 @@ export class LobsterPet extends LitElement {
     this.idleTimer = null;
     this.actEndTimer = null;
     this.enterTimer = null;
+  }
+
+  private clearVisitTimers() {
+    for (const timer of [this.visitTimer, this.leaveTimer]) {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    }
+    this.visitTimer = null;
+    this.leaveTimer = null;
+  }
+
+  // ---- Visit schedule ----
+
+  private scheduleVisits() {
+    this.clearVisitTimers();
+    this.scheduledVisiting = false;
+    // A shy share of loads never visits on their own; offline still summons.
+    if (this.visitRng() < VISIT_SHY_CHANCE) {
+      return;
+    }
+    this.armArrival(randomBetween(this.visitRng, VISIT_FIRST_DELAY_MS[0], VISIT_FIRST_DELAY_MS[1]));
+  }
+
+  private armArrival(delayMs: number) {
+    this.visitTimer = window.setTimeout(() => {
+      this.visitTimer = null;
+      this.rollPerch();
+      this.scheduledVisiting = true;
+      this.armDeparture(randomBetween(this.visitRng, VISIT_STAY_MS[0], VISIT_STAY_MS[1]));
+    }, delayMs);
+  }
+
+  private armDeparture(stayMs: number) {
+    this.visitTimer = window.setTimeout(() => {
+      this.visitTimer = null;
+      this.scheduledVisiting = false;
+      this.armArrival(randomBetween(this.visitRng, VISIT_GAP_MS[0], VISIT_GAP_MS[1]));
+    }, stayMs);
+  }
+
+  // Each arrival re-rolls where the pet shows up: the ledge above the footer
+  // divider or the free stretch inside the footer bar.
+  private rollPerch() {
+    this.anchor = this.visitRng() < 0.6 ? "ledge" : "bar";
+    this.setAttribute("data-spot", this.anchor);
+    const zone = this.currentZone();
+    this.spotPct = Math.round(randomBetween(this.visitRng, zone[0], zone[1]));
+    this.facing = this.visitRng() < 0.5 ? 1 : -1;
+  }
+
+  private currentZone(): readonly [number, number] {
+    if (this.anchor === "bar") {
+      return BAR_ZONE;
+    }
+    const side = this.look?.side ?? "right";
+    return SPOT_ZONES[side];
   }
 
   private actProfile(): ActProfile | null {
@@ -524,9 +716,10 @@ export class LobsterPet extends LitElement {
 
   private scheduleNextAct() {
     // Guard here, not just at activation: the visibilitychange resume path
-    // must also stay inert for reduced-motion users.
+    // must also stay inert for reduced-motion users and departed pets.
     if (
       !this.look ||
+      this.presence !== "in" ||
       this.idleTimer !== null ||
       this.actEndTimer !== null ||
       prefersReducedMotion()
@@ -541,7 +734,7 @@ export class LobsterPet extends LitElement {
     this.idleTimer = window.setTimeout(() => {
       this.idleTimer = null;
       const nextProfile = this.actProfile();
-      if (!nextProfile || document.hidden) {
+      if (!nextProfile || document.hidden || this.presence !== "in") {
         return;
       }
       this.performAct(pickWeighted(this.rng, nextProfile.acts));
@@ -549,7 +742,7 @@ export class LobsterPet extends LitElement {
   }
 
   private performAct(act: LobsterPetAct) {
-    this.clearTimers();
+    this.clearActTimers();
     this.entering = false;
     if (act === "scuttle") {
       this.startScuttle();
@@ -566,7 +759,7 @@ export class LobsterPet extends LitElement {
     if (!this.look) {
       return;
     }
-    const zone = SPOT_ZONES[this.look.side];
+    const zone = this.currentZone();
     let target = Math.round(randomBetween(this.rng, zone[0], zone[1]));
     // A same-spot walk reads as a glitch; nudge to the other zone edge.
     if (Math.abs(target - this.spotPct) < 4) {
@@ -579,30 +772,42 @@ export class LobsterPet extends LitElement {
 
   override render() {
     const look = this.look;
-    if (!look) {
+    if (!look || this.presence === "out") {
       return nothing;
     }
     const classes = [
       "lobster-pet",
       `lobster-pet--${this.mode}`,
       `lobster-pet--palette-${look.palette.id}`,
+      this.presence === "leaving" ? "lobster-pet--away" : "",
       this.entering ? "lobster-pet--entering" : "",
       this.act ? `lobster-pet--act-${this.act}` : "",
     ]
       .filter(Boolean)
       .join(" ");
+    // The bar anchor stands inside the ~30px footer bar, so cap the sprite.
+    const scale = this.anchor === "bar" ? Math.min(look.scale, BAR_MAX_SCALE) : look.scale;
     // Glint color stays class-driven (see lobster-pet.css): an inline
     // --lob-glint would out-cascade the offline grey override.
     const style = [
       `--lob-shell:${look.palette.shell}`,
       `--lob-claw:${look.palette.claw}`,
-      `--lob-scale:${look.scale}`,
+      `--lob-scale:${scale}`,
       `--lob-x:${this.spotPct}%`,
       `--lob-face:${this.facing}`,
       `--lob-blink-delay:${look.blinkDelayS}s`,
+      `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
+      `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
+      `--lob-claw-scale:${LOBSTER_PET_CLAW_MULS[look.clawSize]}`,
     ].join(";");
     return html`
-      <div class=${classes} style=${style} aria-hidden="true" @pointerdown=${this.handlePoke}>
+      <div
+        class=${classes}
+        style=${style}
+        aria-hidden="true"
+        @pointerdown=${this.handlePoke}
+        @contextmenu=${this.handleShoo}
+      >
         <div class="lobster-pet__body">
           ${renderLobsterSvg(look)}
           <span class="lobster-pet__z" style="--i:0">z</span>
