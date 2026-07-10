@@ -53,6 +53,14 @@ describe("QA Lab Matrix CLI runtime", () => {
     );
   });
 
+  it("keeps the dedicated Matrix command default on all profile scenarios", async () => {
+    await runQaMatrixCommand({});
+
+    const call = runQaSuiteCommand.mock.calls.at(-1)?.[0];
+    expect(call?.scenarioIds).toHaveLength(92);
+    expect(call?.scenarioIds).toContain("matrix-e2ee-cli-encryption-setup");
+  });
+
   it("delegates restored E2EE profiles through the same live Matrix adapter host", async () => {
     await runQaMatrixCommand({ profile: "e2ee-deep" });
 

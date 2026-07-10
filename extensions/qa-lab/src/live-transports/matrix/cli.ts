@@ -6,9 +6,23 @@ import {
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
-import { MATRIX_QA_ALL_SCENARIO_IDS } from "./profiles.js";
 
 const DISABLE_MATRIX_QA_FORCE_EXIT_ENV = "OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT";
+const MATRIX_QA_REPO_FLOW_SCENARIO_IDS = [
+  "channel-chat-baseline",
+  "channel-canary",
+  "channel-dm-group-routing",
+  "channel-mention-gating",
+  "channel-sender-allowlist",
+  "channel-top-level-reply-shape",
+  "channel-secondary-conversation-isolation",
+  "channel-multi-actor-ordering",
+  "thread-follow-up",
+  "thread-isolation",
+  "thread-reply-override",
+  "dm-shared-session",
+  "dm-per-room-session",
+] as const;
 
 const loadMatrixQaCliRuntime = createLazyCliRuntimeLoader<typeof import("./cli.runtime.js")>(
   () => import("./cli.runtime.js"),
@@ -57,7 +71,7 @@ async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
 
 const matrixQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
   id: "matrix",
-  scenarioIds: MATRIX_QA_ALL_SCENARIO_IDS,
+  scenarioIds: MATRIX_QA_REPO_FLOW_SCENARIO_IDS,
   matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
   async create(context) {
     return await (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);

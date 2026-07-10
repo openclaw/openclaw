@@ -7,7 +7,6 @@ const runQaMatrixCommand = vi.hoisted(() => vi.fn());
 vi.mock("./cli.runtime.js", () => ({ runQaMatrixCommand }));
 
 import { matrixQaCliRegistration } from "./cli.js";
-import { MATRIX_QA_ALL_SCENARIO_IDS } from "./profiles.js";
 
 function requireMatrixQaAdapterFactory(): NonNullable<
   (typeof matrixQaCliRegistration)["adapterFactory"]
@@ -63,9 +62,22 @@ describe("QA Lab Matrix CLI registration", () => {
     stdoutSpy.mockRestore();
   });
 
-  it("keeps every Matrix profile scenario on the live adapter", () => {
-    expect(matrixQaAdapterFactory.scenarioIds).toEqual(MATRIX_QA_ALL_SCENARIO_IDS);
-    expect(matrixQaAdapterFactory.scenarioIds).toHaveLength(92);
+  it("keeps generic Matrix suite defaults in the repo-backed flow catalog", () => {
+    expect(matrixQaAdapterFactory.scenarioIds).toEqual([
+      "channel-chat-baseline",
+      "channel-canary",
+      "channel-dm-group-routing",
+      "channel-mention-gating",
+      "channel-sender-allowlist",
+      "channel-top-level-reply-shape",
+      "channel-secondary-conversation-isolation",
+      "channel-multi-actor-ordering",
+      "thread-follow-up",
+      "thread-isolation",
+      "thread-reply-override",
+      "dm-shared-session",
+      "dm-per-room-session",
+    ]);
   });
 
   it("exposes only QA Lab selector flags", () => {
