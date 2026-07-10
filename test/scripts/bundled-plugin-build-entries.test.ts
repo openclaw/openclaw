@@ -1,8 +1,7 @@
 // Bundled Plugin Build Entries tests cover bundled plugin build entries script behavior.
 import fs from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
@@ -10,6 +9,9 @@ import {
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectNoPrefixMatches(values: string[], prefix: string) {
   expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
@@ -237,55 +239,51 @@ describe("bundled plugin build entries", () => {
   });
 
   it("sorts Docker-selected build entries without git metadata", () => {
-    const repoDir = fs.mkdtempSync(path.join(tmpdir(), "openclaw-docker-build-entries-"));
+    const repoDir = tempDirs.make("openclaw-docker-build-entries-");
     const extensionsDir = path.join(repoDir, "extensions");
 
-    try {
-      for (const pluginId of ["clickclack", "msteams", "slack"]) {
-        const pluginDir = path.join(extensionsDir, pluginId);
-        fs.mkdirSync(pluginDir, { recursive: true });
-        fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {};\n");
-        fs.writeFileSync(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          `${JSON.stringify({ id: pluginId })}\n`,
-        );
-        fs.writeFileSync(
-          path.join(pluginDir, "package.json"),
-          `${JSON.stringify({
-            name: `@openclaw/${pluginId}`,
-            openclaw: {
-              extensions: ["./index.ts"],
-              build: { bundledDist: false },
-            },
-          })}\n`,
-        );
-      }
+    for (const pluginId of ["clickclack", "msteams", "slack"]) {
+      const pluginDir = path.join(extensionsDir, pluginId);
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {};\n");
+      fs.writeFileSync(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        `${JSON.stringify({ id: pluginId })}\n`,
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        `${JSON.stringify({
+          name: `@openclaw/${pluginId}`,
+          openclaw: {
+            extensions: ["./index.ts"],
+            build: { bundledDist: false },
+          },
+        })}\n`,
+      );
+    }
 
-      const unsortedDirents = fs.readdirSync(extensionsDir, { withFileTypes: true }).toReversed();
-      const readdirSpy = vi
-        .spyOn(fs, "readdirSync")
-        .mockImplementationOnce(() => unsortedDirents as never);
-      try {
-        expect(
-          Object.keys(
-            listBundledPluginBuildEntries({
-              cwd: repoDir,
-              env: {
-                ...process.env,
-                [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack,msteams,clickclack",
-              },
-            }),
-          ),
-        ).toEqual([
-          "extensions/clickclack/index",
-          "extensions/msteams/index",
-          "extensions/slack/index",
-        ]);
-      } finally {
-        readdirSpy.mockRestore();
-      }
+    const unsortedDirents = fs.readdirSync(extensionsDir, { withFileTypes: true }).toReversed();
+    const readdirSpy = vi
+      .spyOn(fs, "readdirSync")
+      .mockImplementationOnce(() => unsortedDirents as never);
+    try {
+      expect(
+        Object.keys(
+          listBundledPluginBuildEntries({
+            cwd: repoDir,
+            env: {
+              ...process.env,
+              [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack,msteams,clickclack",
+            },
+          }),
+        ),
+      ).toEqual([
+        "extensions/clickclack/index",
+        "extensions/msteams/index",
+        "extensions/slack/index",
+      ]);
     } finally {
-      fs.rmSync(repoDir, { recursive: true, force: true });
+      readdirSpy.mockRestore();
     }
   });
 
