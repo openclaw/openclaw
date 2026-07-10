@@ -18,6 +18,7 @@ export { XAI_BASE_URL };
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 const XAI_TTS_VOICE_LIST_TIMEOUT_MS = 30_000;
 const XAI_TTS_VOICE_LIST_MAX_BYTES = 1024 * 1024;
+const XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS = 15_000;
 export const XAI_TTS_FALLBACK_VOICES = ["ara", "eve", "leo", "rex", "sal"] as const;
 
 export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
@@ -404,7 +405,14 @@ export async function xaiTTSStream(params: {
       });
 
       try {
-        ws?.send(JSON.stringify({ type: "text.delta", delta: text }));
+        for (let offset = 0; offset < text.length; offset += XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS) {
+          ws?.send(
+            JSON.stringify({
+              type: "text.delta",
+              delta: text.slice(offset, offset + XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS),
+            }),
+          );
+        }
         ws?.send(JSON.stringify({ type: "text.done" }));
       } catch (error) {
         failStream(error instanceof Error ? error : new Error(String(error)));

@@ -320,6 +320,52 @@ describe("xai tts", () => {
       await result.release();
     });
 
+    it("splits text above xAI's 15,000-character limit into ordered delta frames", async () => {
+      const text = `${"a".repeat(15_000)}${"b".repeat(15_000)}c`;
+      const resultPromise = xaiTTSStream({
+        text,
+        apiKey: "ok-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        timeoutMs: 5_000,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      ws?.emit("open");
+
+      expect(ws?.sent.map((payload) => JSON.parse(payload))).toEqual([
+        { type: "text.delta", delta: "a".repeat(15_000) },
+        { type: "text.delta", delta: "b".repeat(15_000) },
+        { type: "text.delta", delta: "c" },
+        { type: "text.done" },
+      ]);
+
+      ws?.emit("message", JSON.stringify({ type: "audio.done" }));
+      const result = await resultPromise;
+      await result.release();
+    });
+
+    it("keeps exactly 15,000 characters in one delta frame", async () => {
+      const text = "a".repeat(15_000);
+      const resultPromise = xaiTTSStream({
+        text,
+        apiKey: "ok-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        timeoutMs: 5_000,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      ws?.emit("open");
+
+      expect(ws?.sent.map((payload) => JSON.parse(payload))).toEqual([
+        { type: "text.delta", delta: text },
+        { type: "text.done" },
+      ]);
+
+      ws?.emit("message", JSON.stringify({ type: "audio.done" }));
+      const result = await resultPromise;
+      await result.release();
+    });
+
     it("rejects upgrade failures before streaming starts", async () => {
       const resultPromise = xaiTTSStream({
         text: "hello",
