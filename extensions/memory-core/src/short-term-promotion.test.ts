@@ -3628,13 +3628,12 @@ describe("short-term promotion", () => {
         ],
       });
 
-      const storePath = resolveShortTermRecallStorePath(workspaceDir);
-      const storeJson = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      const entryKey = Object.keys(storeJson.entries)[0];
-      storeJson.entries[entryKey].dailyCount = 6;
-      storeJson.entries[entryKey].recallCount = 0;
-      storeJson.entries[entryKey].groundedCount = 1;
-      await fs.writeFile(storePath, JSON.stringify(storeJson, null, 2), "utf-8");
+      const store = await testing.readRecallStore(workspaceDir, new Date(nowMs).toISOString());
+      const entryKey = Object.keys(store.entries)[0];
+      store.entries[entryKey].dailyCount = 6;
+      store.entries[entryKey].recallCount = 0;
+      store.entries[entryKey].groundedCount = 1;
+      await testing.writeRawRecallStore(workspaceDir, store);
 
       const ranked = await rankShortTermPromotionCandidates({
         workspaceDir,
