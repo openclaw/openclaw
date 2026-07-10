@@ -412,13 +412,25 @@ export async function xaiTTSStream(params: {
       });
 
       try {
-        for (let offset = 0; offset < text.length; offset += XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS) {
+        for (let offset = 0; offset < text.length; ) {
+          let end = Math.min(offset + XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS, text.length);
+          // Keep a surrogate pair in the same frame, even if that frame is one unit shorter.
+          if (
+            end < text.length &&
+            text.charCodeAt(end - 1) >= 0xd800 &&
+            text.charCodeAt(end - 1) <= 0xdbff &&
+            text.charCodeAt(end) >= 0xdc00 &&
+            text.charCodeAt(end) <= 0xdfff
+          ) {
+            end -= 1;
+          }
           ws?.send(
             JSON.stringify({
               type: "text.delta",
-              delta: text.slice(offset, offset + XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS),
+              delta: text.slice(offset, end),
             }),
           );
+          offset = end;
         }
         ws?.send(JSON.stringify({ type: "text.done" }));
       } catch (error) {

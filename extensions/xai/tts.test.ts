@@ -350,6 +350,33 @@ describe("xai tts", () => {
       await result.release();
     });
 
+    it("does not split a surrogate pair at the delta frame boundary", async () => {
+      const text = `${"a".repeat(14_999)}😀${"b".repeat(15_000)}`;
+      const resultPromise = xaiTTSStream({
+        text,
+        apiKey: "ok-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        timeoutMs: 5_000,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      ws?.emit("open");
+
+      const deltas = (ws?.sent ?? []).flatMap((payload) => {
+        const frame = JSON.parse(payload) as { type: string; delta?: string };
+        return frame.type === "text.delta" && typeof frame.delta === "string" ? [frame.delta] : [];
+      });
+      expect(deltas.join("")).toBe(text);
+      for (const delta of deltas) {
+        expect(delta.length).toBeLessThanOrEqual(15_000);
+        expect(delta).not.toMatch(/(?:[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF])/u);
+      }
+
+      ws?.emit("message", JSON.stringify({ type: "audio.done" }));
+      const result = await resultPromise;
+      await result.release();
+    });
+
     it("keeps exactly 15,000 characters in one delta frame", async () => {
       const text = "a".repeat(15_000);
       const resultPromise = xaiTTSStream({
