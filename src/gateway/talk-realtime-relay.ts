@@ -391,10 +391,26 @@ function submitFinalProviderToolResult(params: {
   const working = params.session.pendingWorkingToolResults.get(params.callId);
   const epoch = params.session.toolResultEpoch;
   const submitAfterWorking = async () => {
-    if (
-      relaySessions.get(params.session.id) !== params.session ||
-      params.session.toolResultEpoch !== epoch
-    ) {
+    if (relaySessions.get(params.session.id) !== params.session) {
+      return false;
+    }
+    if (params.session.toolResultEpoch !== epoch) {
+      if (!params.session.cancelledAgentToolCalls.has(params.callId)) {
+        return false;
+      }
+      // The browser already considers this final submitted while it waits behind
+      // the provider's working-result acknowledgement. Finish the cancelled call
+      // here so the provider is not left waiting for a terminal result.
+      await params.session.bridge.submitToolResult(
+        params.callId,
+        buildRealtimeVoiceAgentCancelProviderResult(
+          "OpenClaw cancelled this consult before completion. Do not restart it.",
+        ),
+        suppressedToolResultOptions(params.session),
+      );
+      params.session.completedProviderToolResults.add(params.callId);
+      params.session.cancelledAgentToolCalls.delete(params.callId);
+      params.session.completedAgentToolCalls.add(params.callId);
       return false;
     }
     await submit();
@@ -1437,6 +1453,9 @@ export function cancelTalkRealtimeRelayTurn(params: {
   for (const forcedConsult of session.forcedConsults.handles()) {
     if (session.forcedConsults.isCancelled(forcedConsult)) {
       session.cancelledAgentToolCalls.set(forcedConsult.id, turnId);
+      for (const nativeCallId of session.forcedConsults.nativeCallIds(forcedConsult)) {
+        session.cancelledAgentToolCalls.set(nativeCallId, turnId);
+      }
     }
   }
   session.bridge.handleBargeIn({ audioPlaybackActive: true });

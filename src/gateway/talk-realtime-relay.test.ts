@@ -55,13 +55,22 @@ describe("talk realtime gateway relay", () => {
     return { promise, resolve };
   }
 
-  async function createSuppressionUnsupportedForcedConsultFixture(nativeCallIds: string[]) {
+  async function createSuppressionUnsupportedForcedConsultFixture(
+    nativeCallIds: string[],
+    options: {
+      firstSubmission?: Promise<void>;
+      supportsToolResultContinuation?: boolean;
+    } = {},
+  ) {
     vi.useFakeTimers();
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
-    const submitToolResult = vi.fn<RealtimeVoiceBridge["submitToolResult"]>(() => undefined);
+    const submitToolResult = vi.fn<RealtimeVoiceBridge["submitToolResult"]>();
+    if (options.firstSubmission) {
+      submitToolResult.mockReturnValueOnce(options.firstSubmission);
+    }
     const sendUserMessage = vi.fn();
     const bridge = {
-      supportsToolResultContinuation: false,
+      supportsToolResultContinuation: options.supportsToolResultContinuation ?? false,
       supportsToolResultSuppression: false,
       connect: vi.fn(async () => undefined),
       sendAudio: vi.fn(),
@@ -1884,6 +1893,72 @@ describe("talk realtime gateway relay", () => {
     ).toBe(false);
   });
 
+  it("terminally cancels a final queued behind working acceptance without a second client result", async () => {
+    const workingAccepted = createDeferredVoid();
+    const submitToolResult = vi
+      .fn<RealtimeVoiceBridge["submitToolResult"]>()
+      .mockReturnValueOnce(workingAccepted.promise)
+      .mockReturnValueOnce(undefined);
+    const provider = createIdleRelayProvider();
+    provider.createBridge = () => ({
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult,
+      supportsToolResultSuppression: false,
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    });
+    const { broadcastToConnIds, session } = createAbortableRelayRunFixture(provider);
+    const working = submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { status: "working" },
+      options: { willContinue: true },
+    });
+    const final = submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { answer: "stale" },
+    });
+
+    cancelTalkRealtimeRelayTurn({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      reason: "barge-in",
+    });
+    workingAccepted.resolve();
+    await Promise.all([working, final]);
+
+    expect(submitToolResult.mock.calls.map((call) => call[1])).toEqual([
+      { status: "working" },
+      {
+        status: "cancelled",
+        message: "OpenClaw cancelled this consult before completion. Do not restart it.",
+      },
+    ]);
+    expect(submitToolResult.mock.calls[1]?.[2]).toBeUndefined();
+    expect(
+      broadcastToConnIds.mock.calls.some(
+        (call) =>
+          (call[1] as { type?: string; callId?: string }).type === "toolResult" &&
+          (call[1] as { callId?: string }).callId === "call-1",
+      ),
+    ).toBe(false);
+
+    await submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { error: "late abort" },
+    });
+    expect(submitToolResult).toHaveBeenCalledTimes(2);
+  });
+
   it("supersedes a rejected in-flight final with canonical cancellation", async () => {
     let rejectFinal: ((error: Error) => void) | undefined;
     const rejectedFinal = new Promise<void>((_resolve, reject) => {
@@ -2529,6 +2604,44 @@ describe("talk realtime gateway relay", () => {
       },
       forced: true,
     });
+  });
+
+  it("terminally cancels a forced final queued behind native working acceptance", async () => {
+    const workingAccepted = createDeferredVoid();
+    const fixture = await createSuppressionUnsupportedForcedConsultFixture(["native-call"], {
+      firstSubmission: workingAccepted.promise,
+      supportsToolResultContinuation: true,
+    });
+    const final = submitTalkRealtimeRelayToolResult({
+      relaySessionId: fixture.session.relaySessionId,
+      connId: "conn-1",
+      callId: fixture.callId,
+      result: { answer: "stale" },
+    });
+
+    cancelTalkRealtimeRelayTurn({
+      relaySessionId: fixture.session.relaySessionId,
+      connId: "conn-1",
+      reason: "barge-in",
+    });
+    workingAccepted.resolve();
+    await final;
+
+    expect(fixture.submitToolResult.mock.calls.map((call) => call[1])).toEqual([
+      expect.objectContaining({ status: "working" }),
+      {
+        status: "cancelled",
+        message: "OpenClaw cancelled this consult before completion. Do not restart it.",
+      },
+    ]);
+    expect(fixture.submitToolResult.mock.calls[1]?.[2]).toBeUndefined();
+    expect(
+      fixture.events.some(
+        (entry) =>
+          (entry.payload as { type?: string; callId?: string }).type === "toolResult" &&
+          (entry.payload as { callId?: string }).callId === fixture.callId,
+      ),
+    ).toBe(false);
   });
 
   it("supersedes a rejected forced final with canonical cancellation", async () => {
