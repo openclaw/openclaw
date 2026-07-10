@@ -33,11 +33,8 @@ describe("thread binding persona", () => {
     expect(resolveThreadBindingPersonaFromRecord(record)).toBe("⚙️ codex-thread");
   });
 
-  it("does not leave a dangling surrogate when the persona hits the length limit", () => {
-    const persona = resolveThreadBindingPersona({ label: "😀".repeat(50) });
-    expect(persona.length).toBeLessThanOrEqual(80);
-    const lastUnit = persona.charCodeAt(persona.length - 1);
-    // A raw slice would keep a dangling high surrogate at the length boundary.
-    expect(lastUnit >= 0xd800 && lastUnit <= 0xdbff).toBe(false);
+  it("does not split a surrogate pair at the length limit", () => {
+    const prefix = "a".repeat(76);
+    expect(resolveThreadBindingPersona({ label: `${prefix}😀tail` })).toBe(`⚙️ ${prefix}`);
   });
 });
