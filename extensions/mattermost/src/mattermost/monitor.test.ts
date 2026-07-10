@@ -228,9 +228,7 @@ describe("resolveMattermostReplyRootId", () => {
     expect(resolveMattermostReplyRootId({ kind: "channel" })).toBeUndefined();
   });
 
-  it("threads direct-message replies once a DM thread root exists (dmReplyToMode on, #93203)", () => {
-    // A direct chat only carries a threadRootId when dmReplyToMode enabled DM
-    // threading; in that case the reply threads under the DM thread root.
+  it("threads direct-message replies once a DM thread root exists", () => {
     expect(
       resolveMattermostReplyRootId({
         kind: "direct",
@@ -241,8 +239,7 @@ describe("resolveMattermostReplyRootId", () => {
   });
 
   it("keeps flat direct-message replies top-level when there is no DM thread root", () => {
-    // dmReplyToMode "off" never produces a threadRootId for a DM, so a bare
-    // replyToId must NOT thread the reply (preserves the flat-DM contract).
+    // A flat DM has no effective thread root, so a payload reply target stays flat.
     expect(
       resolveMattermostReplyRootId({
         kind: "direct",
@@ -790,7 +787,7 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("post-123");
   });
 
-  it("starts a direct-message thread under the post when dmReplyToMode is all (#93203)", () => {
+  it("starts a direct-message thread under the post when its effective mode is all", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "direct",
@@ -800,8 +797,7 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("post-123");
   });
 
-  it("keeps direct messages flat when dmReplyToMode is off", () => {
-    // replyToMode here reflects dmReplyToMode for direct chats (#93203).
+  it("keeps direct messages flat when their effective mode is off", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "direct",
@@ -812,7 +808,7 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBeUndefined();
   });
 
-  it("uses an existing direct-message thread root when dmReplyToMode is on (#93203)", () => {
+  it("uses an existing direct-message thread root when threading is enabled", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "direct",
@@ -823,7 +819,7 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("dm-root-456");
   });
 
-  it("starts a new direct-message thread under the post when dmReplyToMode is on (#93203)", () => {
+  it("starts a new direct-message thread under the post when threading is enabled", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "direct",
@@ -850,7 +846,7 @@ describe("resolveMattermostThreadSessionContext", () => {
     });
   });
 
-  it("keeps DM threads as fresh independent sessions when dmReplyToMode is on (#93203)", () => {
+  it("keeps DM threads as fresh independent sessions", () => {
     const ctx = resolveMattermostThreadSessionContext({
       baseSessionKey: "agent:main:mattermost:direct:user-1",
       kind: "direct",
@@ -910,7 +906,7 @@ describe("resolveMattermostThreadSessionContext", () => {
     });
   });
 
-  it("keeps direct-message sessions linear when dmReplyToMode is off", () => {
+  it("keeps direct-message sessions linear when their effective mode is off", () => {
     expect(
       resolveMattermostThreadSessionContext({
         baseSessionKey: "agent:main:mattermost:default:user-1",

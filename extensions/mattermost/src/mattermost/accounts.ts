@@ -144,16 +144,18 @@ export function resolveMattermostAccount(params: {
 
 /**
  * Resolve the effective replyToMode for a given chat type.
- * Mattermost auto-threading only applies to channel and group messages.
+ * Direct messages stay flat unless explicitly opted into a per-chat-type mode.
  */
 export function resolveMattermostReplyToMode(
   account: ResolvedMattermostAccount,
   kind: MattermostChatTypeKey,
 ): MattermostReplyToMode {
+  const scopedMode = account.config.replyToModeByChatType?.[kind];
+  if (scopedMode !== undefined) {
+    return scopedMode;
+  }
   if (kind === "direct") {
-    // Opt-in DM threading: governed by dmReplyToMode (default "off" = historical
-    // flat-DM behavior). #93203.
-    return account.config.dmReplyToMode ?? "off";
+    return "off";
   }
   return account.config.replyToMode ?? "off";
 }

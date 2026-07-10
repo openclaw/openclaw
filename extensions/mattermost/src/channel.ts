@@ -924,10 +924,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       matchesMattermostToolContextTarget({ target, toolContext }),
     resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
       const ambientThreadId = threadId != null ? String(threadId) : undefined;
-      // Direct chats stay flat only when DM threading is off (dmReplyToMode
-      // "off", the historical contract). When opted in ("first"/"all") they
-      // preserve the thread root like channel/group replies, so routed replies
-      // and message-tool follow-ups thread instead of posting flat (#93203).
+      // Direct chats stay flat when their effective mode is off. Opted-in DMs
+      // preserve the thread root for routed replies and message-tool follow-ups.
       const isFlatDirect =
         replyDelivery?.chatType === "direct" && replyDelivery.replyToMode === "off";
       const resolvedThreadId = isFlatDirect
@@ -942,7 +940,6 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         threadId: resolvedThreadId ?? null,
       };
     },
-
   },
   security: mattermostSecurityAdapter,
   outbound: mattermostOutbound,

@@ -281,8 +281,7 @@ export function resolveMattermostReplyRootId(params: {
 }): string | undefined {
   const threadRootId = normalizeOptionalString(params.threadRootId);
   // Flat DMs (no thread context) get no reply root. A DM carries a threadRootId
-  // only when dmReplyToMode enables DM threading (#93203), where it threads like
-  // a group/channel.
+  // only when its effective per-chat-type mode enables threading.
   if (params.kind === "direct" && !threadRootId) {
     return undefined;
   }
@@ -447,9 +446,8 @@ export function resolveMattermostEffectiveReplyToId(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): string | undefined {
-  // Flat DMs (dmReplyToMode "off") never thread. Opt-in DM threading (#93203)
-  // falls through to the same thread-root logic as groups/channels — replyToMode
-  // here already reflects dmReplyToMode for direct chats.
+  // Flat DMs never thread. Opted-in DMs use the same thread-root logic as rooms;
+  // replyToMode already reflects the effective per-chat-type mode.
   if (params.kind === "direct" && params.replyToMode === "off") {
     return undefined;
   }
@@ -484,9 +482,7 @@ export function resolveMattermostThreadSessionContext(params: {
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: params.baseSessionKey,
     threadId: effectiveReplyToId,
-    // DM threads start as fresh, independent sessions (no parent-session
-    // inheritance) so each DM topic is isolated; group/channel threads still
-    // inherit their base session. #93203.
+    // DM threads start fresh; room threads inherit their base session.
     parentSessionKey:
       effectiveReplyToId && params.kind !== "direct" ? params.baseSessionKey : undefined,
   });
@@ -1469,9 +1465,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           threadRootId,
         });
         const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
-        // A flat DM root keeps no history key (one rolling session); a DM that is
-        // threaded (dmReplyToMode on -> effectiveReplyToId set) keeps its own
-        // thread-session history like a group/channel. #93203.
+        // Flat DMs use one rolling session; threaded DMs keep thread-local history.
         const historyKey = kind === "direct" && !effectiveReplyToId ? null : sessionKey;
 
         const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
