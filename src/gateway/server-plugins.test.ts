@@ -321,9 +321,11 @@ async function createSubagentRuntime(
   return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).subagent;
 }
 
-async function reloadServerPluginsModule(): Promise<ServerPluginsModule> {
+async function reloadFallbackGatewayContextModule() {
+  // Existing runtimes retain the old module graph; only the process-global state owner
+  // must reload to prove a restarted Gateway can replace their fallback context.
   vi.resetModules();
-  return await import("./server-plugins.js");
+  return await import("./server-plugin-fallback-context.js");
 }
 
 function loadGatewayPluginsForTest(
@@ -808,6 +810,23 @@ describe("loadGatewayPlugins", () => {
         { timeoutMs: 5 },
       ),
     ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
+  });
+
+  test("marks synthetic cron continuation calls as server-owned", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("cron-run-continuation"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.client?.connect.client.mode).toBe("backend");
+      expect(opts.client?.internal?.cronRunContinuation).toBe(true);
+      opts.respond(true, { status: "ok" });
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "agent:main:cron:job:run:run-1" },
+        { allowSyntheticCronRunContinuation: true, forceSyntheticClient: true },
+      ),
+    ).resolves.toEqual({ status: "ok" });
   });
 
   test("uses one timeout budget across accepted and final in-process responses", async () => {
@@ -1611,7 +1630,7 @@ describe("loadGatewayPlugins", () => {
     await runtime.run({ sessionKey: "s-1", message: "hello" });
     expect(getLastDispatchedContext()).toBe(staleContext);
 
-    const reloaded = await reloadServerPluginsModule();
+    const reloaded = await reloadFallbackGatewayContextModule();
     const freshContext = createTestContext("fresh");
     reloaded.setFallbackGatewayContext(freshContext);
 

@@ -1041,7 +1041,13 @@ describe("memory-core dreaming phases", () => {
     setDreamingTestEnv(path.join(workspaceDir, ".state"));
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    const transcriptName = `dreaming-${"x".repeat(48)}.jsonl`;
+    const transcriptPath = path.join(sessionsDir, transcriptName);
+    const snippetTranscriptName = "snippet-boundary.jsonl";
+    const snippetTranscriptPath = path.join(sessionsDir, snippetTranscriptName);
+    const renderedSource = `[main/sessions/main/${transcriptName}#L4] `;
+    const renderedPadding = "r".repeat(343 - renderedSource.length - "User: ".length);
+    const snippetPadding = "s".repeat(273);
     await fs.writeFile(
       transcriptPath,
       [
@@ -1066,7 +1072,27 @@ describe("memory-core dreaming phases", () => {
             content: [{ type: "text", text: "Set retention to 365 days." }],
           },
         }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:03:00.000Z",
+            content: [{ type: "text", text: `${renderedPadding}🎉 omitted tail` }],
+          },
+        }),
       ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      snippetTranscriptPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          timestamp: "2026-04-05T18:04:00.000Z",
+          content: [{ type: "text", text: `${snippetPadding}🌍 omitted tail` }],
+        },
+      }) + "\n",
       "utf-8",
     );
 
@@ -1118,7 +1144,7 @@ describe("memory-core dreaming phases", () => {
     expect(transcriptReadCount).toBeLessThanOrEqual(1);
 
     const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
-    expect(Object.keys(sessionIngestion.files)).toContain("main:sessions/main/dreaming-main.jsonl");
+    expect(Object.keys(sessionIngestion.files)).toContain(`main:sessions/main/${transcriptName}`);
     const corpusPath = path.join(
       workspaceDir,
       "memory",
@@ -1129,6 +1155,12 @@ describe("memory-core dreaming phases", () => {
     const corpus = await fs.readFile(corpusPath, "utf-8");
     expect(corpus).toContain("Move backups to S3 Glacier.");
     expect(corpus).toContain("Set retention to 365 days.");
+    expect(corpus).toContain(`${renderedSource}User: ${renderedPadding}\n`);
+    expect(corpus).toContain(
+      `[main/sessions/main/${snippetTranscriptName}#L1] User: ${snippetPadding}\n`,
+    );
+    expect(corpus).not.toContain("🎉");
+    expect(corpus).not.toContain("🌍");
 
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
@@ -2513,6 +2545,41 @@ describe("memory-core dreaming phases", () => {
     expect(after[0]?.snippet).toContain("Emma Rees:");
     expect(after[0]?.snippet).toContain("She asked for more space");
     expect(after[0]?.snippet).toContain("messages short and low-pressure");
+  });
+
+  it("keeps daily ingestion snippets valid at surrogate-pair boundaries", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const memoryDir = path.join(workspaceDir, "memory");
+    const headingPrefix = "h".repeat(279);
+    const itemPrefix = "i".repeat(279);
+    const chunkPrefix = "c".repeat(272);
+    await Promise.all([
+      fs.writeFile(
+        path.join(memoryDir, "2026-04-05-heading.md"),
+        [`# ${headingPrefix}🎉`, "", "- Durable heading context item."].join("\n"),
+        "utf-8",
+      ),
+      fs.writeFile(
+        path.join(memoryDir, "2026-04-05-item.md"),
+        ["# 2026-04-05", "", `- ${itemPrefix}🎉`].join("\n"),
+        "utf-8",
+      ),
+      fs.writeFile(
+        path.join(memoryDir, "2026-04-05-chunk.md"),
+        ["# 2026-04-05", "", "## Topic", `- ${chunkPrefix}🎉`].join("\n"),
+        "utf-8",
+      ),
+    ]);
+
+    const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:05:00.000Z");
+    expect(snippets).toEqual(
+      expect.arrayContaining([`${headingPrefix}:`, itemPrefix, `Topic: ${chunkPrefix}`]),
+    );
   });
 
   it("drops generic day headings but keeps meaningful section labels", async () => {

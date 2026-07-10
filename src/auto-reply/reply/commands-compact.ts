@@ -206,7 +206,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const sessionId = targetSessionEntry.sessionId;
   if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
     runtime.abortEmbeddedAgentRun(sessionId);
-    await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+    const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+    if (!drained) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚙️ Compaction unavailable: the previous run is still stopping.",
+          isStatusNotice: true,
+        },
+      };
+    }
   }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -238,6 +247,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
+    clientCaps: params.ctx.GatewayClientCaps,
     groupId: targetSessionEntry.groupId,
     groupChannel: targetSessionEntry.groupChannel,
     groupSpace: targetSessionEntry.space,

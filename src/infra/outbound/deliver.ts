@@ -43,7 +43,7 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { isPreConnectNetworkError } from "../delivery-recovery.shared.js";
+import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -52,6 +52,7 @@ import {
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
+import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import {
   OutboundDeliveryError,
   type OutboundDeliveryFailureStage,
@@ -744,7 +745,7 @@ type DeliverOutboundPayloadsCoreParams = {
   requiredUnknownSendReconciliation?: boolean;
   /** @internal Caller preflight explicitly required provider unknown-send reconciliation. */
   requireUnknownSendReconciliation?: boolean;
-  /** @internal Refresh durable timing after provider serialization and before I/O. */
+  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
@@ -763,6 +764,8 @@ type DeliverOutboundPayloadsCoreParams = {
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
+  /** @internal Recovery already ran provider admission after its pending-row re-read. */
+  deferredDeliveryAdmissionPassed?: true;
   /** @internal State directory that owns the existing recovery queue entry. */
   deliveryQueueStateDir?: string;
   /** @internal Let recovery run commit hooks after it has acked the recovered queue entry. */
@@ -1341,6 +1344,18 @@ export async function deliverOutboundPayloadsInternal(
       `Required durable message send is unsupported for ${channel}: unknown-send reconciliation requires exactly one payload`,
     );
   }
+  if (params.deferredDeliveryAdmissionPassed !== true) {
+    const admission = resolveDeferredDeliveryAdmission({
+      cfg: params.cfg,
+      channel,
+      to,
+      accountId: params.accountId,
+      phase: "live",
+    });
+    if (admission.status === "permanent_rejection") {
+      throw new Error(admission.reason);
+    }
+  }
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
   const queuePayloadsChanged = queuePayloads.some((payload, index) => payload !== payloads[index]);
@@ -1416,7 +1431,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   // payload failed so we can call failDelivery instead of ackDelivery.
   let hadPartialFailure = false;
   let lastPayloadError: unknown;
-  let partialFailuresArePreConnect = true;
+  let partialFailuresAreProvenNotSent = true;
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const platformQueueId = queueId ?? params.deliveryQueueId;
   const platformQueuePolicy = queueId ? queuePolicy : (params.queuePolicy ?? "required");
@@ -1486,7 +1501,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
       hadPartialFailure = true;
       lastPayloadError = err;
-      partialFailuresArePreConnect &&= isPreConnectNetworkError(err);
+      partialFailuresAreProvenNotSent &&= isProvenDeliveryNotSentError(err);
       params.onError?.(err, payload);
     },
     onDeliveryResult: async (result) => {
@@ -1523,7 +1538,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
           const recordFailure =
-            !partialSendEvidence && partialFailuresArePreConnect
+            !partialSendEvidence && partialFailuresAreProvenNotSent
               ? failDeliveryBeforePlatformSend
               : failDelivery;
           await recordFailure(queueId, error).catch((err: unknown) => {
@@ -1619,7 +1634,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           }
           await runCommitHooksAfterAck();
         } else {
-          const recordFailure = isPreConnectNetworkError(err)
+          const recordFailure = isProvenDeliveryNotSentError(err)
             ? failDeliveryBeforePlatformSend
             : failDelivery;
           await recordFailure(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {

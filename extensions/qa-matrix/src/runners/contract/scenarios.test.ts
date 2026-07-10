@@ -139,6 +139,10 @@ function requireMatrixQaScenario(id: string): (typeof MATRIX_QA_SCENARIOS)[numbe
   return scenario;
 }
 
+function buildMatrixQaSplitSurrogateError(prefix: string): string {
+  return `${prefix.padEnd(239, "x")}😀tail`;
+}
+
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await stat(targetPath);
@@ -2288,6 +2292,8 @@ describe("matrix live qa scenarios", () => {
           eventId: "$quiet-preview",
           sender: "@sut:matrix-qa.test",
           type: "m.room.message",
+          body: "",
+          formattedBody: "",
         },
         since: "driver-sync-preview",
       }))
@@ -2337,11 +2343,15 @@ describe("matrix live qa scenarios", () => {
     });
     const artifacts = result.artifacts as {
       driverEventId?: unknown;
+      previewBodyPreview?: unknown;
       previewEventId?: unknown;
+      previewFormattedBodyPreview?: unknown;
       reply?: { eventId?: unknown };
     };
     expect(artifacts.driverEventId).toBe("$quiet-stream-trigger");
+    expect(artifacts.previewBodyPreview).toBe("");
     expect(artifacts.previewEventId).toBe("$quiet-preview");
+    expect(artifacts.previewFormattedBodyPreview).toBe("");
     expect(artifacts.reply?.eventId).toBe("$quiet-final");
 
     expectSentTextMessage(sendTextMessage, {
@@ -2357,6 +2367,8 @@ describe("matrix live qa scenarios", () => {
 
   it("captures partial preview text messages before the finalized Matrix reply", async () => {
     const previewEventId = "$partial-preview";
+    const previewBody = `${"b".repeat(199)}😀tail`;
+    const previewFormattedBody = `${"f".repeat(199)}😀tail`;
     const fallbackFinalText = "MATRIX_QA_PARTIAL_STREAM_PREVIEW_COMPLETE";
     const { sendTextMessage } = mockMatrixQaRoomClient({
       driverEventId: "$partial-stream-trigger",
@@ -2365,7 +2377,8 @@ describe("matrix live qa scenarios", () => {
           event: matrixQaMessageEvent({
             kind: "message",
             eventId: previewEventId,
-            body: "partial preview",
+            body: previewBody,
+            formattedBody: previewFormattedBody,
           }),
           since: "driver-sync-preview",
         },
@@ -2393,11 +2406,15 @@ describe("matrix live qa scenarios", () => {
     const result = await runMatrixQaScenario(scenario, matrixQaScenarioContext());
     const artifacts = result.artifacts as {
       driverEventId?: unknown;
+      previewBodyPreview?: unknown;
       previewEventId?: unknown;
+      previewFormattedBodyPreview?: unknown;
       reply?: { eventId?: unknown };
     };
     expect(artifacts.driverEventId).toBe("$partial-stream-trigger");
+    expect(artifacts.previewBodyPreview).toBe("b".repeat(199));
     expect(artifacts.previewEventId).toBe("$partial-preview");
+    expect(artifacts.previewFormattedBodyPreview).toBe("f".repeat(199));
     expect(artifacts.reply?.eventId).toBe("$partial-final");
 
     expectSentTextMessage(sendTextMessage, {
@@ -2767,7 +2784,7 @@ describe("matrix live qa scenarios", () => {
     const updateEvent = matrixQaMessageEvent({
       kind: "notice",
       eventId: "$tool-progress-timeout-update",
-      body: "Working...\nstill deciding",
+      body: `${"x".repeat(236)}😀tail`,
       relatesTo: {
         relType: "m.replace",
         eventId: previewEvent.eventId,
@@ -2794,8 +2811,16 @@ describe("matrix live qa scenarios", () => {
 
     const scenario = requireMatrixQaScenario("matrix-room-tool-progress-preview");
 
-    await expect(runMatrixQaScenario(scenario, context)).rejects.toThrow(
-      /observed preview candidates:[\s\S]*\$tool-progress-timeout-update/,
+    const error = await runMatrixQaScenario(scenario, context).then(
+      () => undefined,
+      (candidate: unknown) => candidate,
+    );
+    expect(error).toBeInstanceOf(Error);
+    const candidateLine = (error as Error).message
+      .split("\n")
+      .find((line) => line.startsWith("$tool-progress-timeout-update"));
+    expect(candidateLine).toBe(
+      `$tool-progress-timeout-update kind=notice relation=m.replace:$tool-progress-timeout-preview body=${JSON.stringify(`${"x".repeat(236)}...`)}`,
     );
   });
 
@@ -5453,6 +5478,9 @@ describe("matrix live qa scenarios", () => {
       path.join(os.tmpdir(), "matrix-cli-encryption-setup-bootstrap-failure-"),
     );
     try {
+      const bootstrapError = buildMatrixQaSplitSurrogateError(
+        "Matrix room key backup is still missing after bootstrap: ",
+      );
       const proxyStop = vi.fn().mockResolvedValue(undefined);
       const hits = vi.fn().mockReturnValue([
         {
@@ -5478,7 +5506,7 @@ describe("matrix live qa scenarios", () => {
         stdout: JSON.stringify({
           accountId: "cli-encryption-failure",
           bootstrap: {
-            error: "Matrix room key backup is still missing after bootstrap",
+            error: bootstrapError,
             success: false,
           },
           encryptionChanged: true,
@@ -5515,6 +5543,7 @@ describe("matrix live qa scenarios", () => {
       });
       const artifacts = result.artifacts as {
         accountId?: unknown;
+        bootstrapErrorPreview?: unknown;
         bootstrapSuccess?: unknown;
         cliDeviceId?: unknown;
         faultedEndpoint?: unknown;
@@ -5522,6 +5551,7 @@ describe("matrix live qa scenarios", () => {
         faultRuleId?: unknown;
       };
       expect(artifacts.accountId).toBe("cli-encryption-failure");
+      expect(artifacts.bootstrapErrorPreview).toBe(bootstrapError.slice(0, 239));
       expect(artifacts.bootstrapSuccess).toBe(false);
       expect(artifacts.cliDeviceId).toBe("CLIFAILUREDEVICE");
       expect(artifacts.faultedEndpoint).toBe("/_matrix/client/v3/room_keys/version");
@@ -5775,6 +5805,9 @@ describe("matrix live qa scenarios", () => {
   it("runs Matrix invalid recovery-key setup through the CLI QA scenario", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-cli-recovery-key-invalid-"));
     try {
+      const bootstrapError = buildMatrixQaSplitSurrogateError(
+        "Matrix recovery key could not unlock secret storage: ",
+      );
       const deleteOwnDevices = vi.fn().mockResolvedValue(undefined);
       const stop = vi.fn().mockResolvedValue(undefined);
       const { loginWithPassword, registerWithToken } = mockMatrixQaCliAccount({
@@ -5809,7 +5842,7 @@ describe("matrix live qa scenarios", () => {
         stdout: JSON.stringify({
           accountId: "cli-invalid-recovery-key",
           bootstrap: {
-            error: "Matrix recovery key could not unlock secret storage",
+            error: bootstrapError,
             success: false,
           },
           encryptionChanged: true,
@@ -5853,6 +5886,7 @@ describe("matrix live qa scenarios", () => {
       });
       const artifacts = result.artifacts as {
         accountId?: unknown;
+        bootstrapErrorPreview?: unknown;
         bootstrapSuccess?: unknown;
         cliDeviceId?: unknown;
         encryptionChanged?: unknown;
@@ -5861,6 +5895,7 @@ describe("matrix live qa scenarios", () => {
         setupSuccess?: unknown;
       };
       expect(artifacts.accountId).toBe("cli-invalid-recovery-key");
+      expect(artifacts.bootstrapErrorPreview).toBe(bootstrapError.slice(0, 239));
       expect(artifacts.bootstrapSuccess).toBe(false);
       expect(artifacts.cliDeviceId).toBe("CLIINVALIDDEVICE");
       expect(artifacts.encryptionChanged).toBe(true);
@@ -6301,6 +6336,9 @@ describe("matrix live qa scenarios", () => {
   });
 
   it("runs Matrix E2EE bootstrap failure through a real faulted homeserver endpoint", async () => {
+    const bootstrapError = buildMatrixQaSplitSurrogateError(
+      "Matrix room key backup is still missing after bootstrap: ",
+    );
     const stop = vi.fn().mockResolvedValue(undefined);
     const hits = vi.fn().mockReturnValue([
       {
@@ -6323,7 +6361,7 @@ describe("matrix live qa scenarios", () => {
         userSigningKeyPublished: true,
       },
       cryptoBootstrap: null,
-      error: "Matrix room key backup is still missing after bootstrap",
+      error: bootstrapError,
       pendingVerifications: 0,
       success: false,
       verification: {
@@ -6379,12 +6417,14 @@ describe("matrix live qa scenarios", () => {
     });
     const artifacts = result.artifacts as {
       bootstrapActor?: unknown;
+      bootstrapErrorPreview?: unknown;
       bootstrapSuccess?: unknown;
       faultedEndpoint?: unknown;
       faultHitCount?: unknown;
       faultRuleId?: unknown;
     };
     expect(artifacts.bootstrapActor).toBe("driver");
+    expect(artifacts.bootstrapErrorPreview).toBe(bootstrapError.slice(0, 239));
     expect(artifacts.bootstrapSuccess).toBe(false);
     expect(artifacts.faultedEndpoint).toBe("/_matrix/client/v3/room_keys/version");
     expect(artifacts.faultHitCount).toBe(1);

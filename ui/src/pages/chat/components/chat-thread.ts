@@ -79,6 +79,8 @@ type ChatThreadProps = {
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
+  /** True while the session has an abortable live run (marks running tool rows). */
+  runActive?: boolean;
   sessions: SessionsListResult | null;
   assistantName: string;
   assistantAvatar: string | null;
@@ -459,6 +461,7 @@ export function renderChatPinnedMessages(
 let activeReplyContextMenu: HTMLElement | null = null;
 let activeReplyContextMenuPaneId: string | null = null;
 let contextMenuDocumentClickHandler: ((event: MouseEvent) => void) | null = null;
+let contextMenuDocumentContextMenuHandler: ((event: MouseEvent) => void) | null = null;
 let contextMenuKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
 
 function removeReplyContextMenu(paneId?: string) {
@@ -472,6 +475,10 @@ function removeReplyContextMenu(paneId?: string) {
   if (contextMenuDocumentClickHandler) {
     document.removeEventListener("click", contextMenuDocumentClickHandler);
     contextMenuDocumentClickHandler = null;
+  }
+  if (contextMenuDocumentContextMenuHandler) {
+    document.removeEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
+    contextMenuDocumentContextMenuHandler = null;
   }
   if (contextMenuKeydownHandler) {
     document.removeEventListener("keydown", contextMenuKeydownHandler);
@@ -578,6 +585,11 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
         removeReplyContextMenu();
       }
     };
+    contextMenuDocumentContextMenuHandler = (nextEvent: MouseEvent) => {
+      if (!menu.contains(nextEvent.target as Node | null)) {
+        removeReplyContextMenu();
+      }
+    };
     const handleKeydown = (nextEvent: KeyboardEvent) => {
       if (nextEvent.key === "Escape") {
         nextEvent.preventDefault();
@@ -588,6 +600,8 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
     };
     contextMenuKeydownHandler = handleKeydown;
     document.addEventListener("click", contextMenuDocumentClickHandler);
+    // Capture closes this owner even when the next menu stops event propagation.
+    document.addEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
     document.addEventListener("keydown", handleKeydown);
   });
 }
@@ -714,6 +728,7 @@ export function renderChatThread(props: ChatThreadProps) {
             props.fullMessageAgentId,
             showReasoning,
             props.showToolCalls,
+            Boolean(props.runActive),
             Boolean(props.autoExpandToolCalls),
             props.assistantName,
             assistantIdentity.avatar,
@@ -784,6 +799,7 @@ export function renderChatThread(props: ChatThreadProps) {
                     agentId: props.fullMessageAgentId,
                     showReasoning,
                     showToolCalls: props.showToolCalls,
+                    runActive: props.runActive,
                     autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
                     isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
                     onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {

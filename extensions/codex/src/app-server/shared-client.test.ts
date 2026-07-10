@@ -202,7 +202,7 @@ describe("shared Codex app-server client", () => {
 
     const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
     await sendInitializeResult(desktop, "openclaw/0.124.9 (macOS; test)");
-    await sendInitializeResult(pluginLocal, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(pluginLocal, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(pluginLocal);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
@@ -235,7 +235,7 @@ describe("shared Codex app-server client", () => {
     expect(first.process.stdin.destroyed).toBe(true);
 
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(second, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(second);
 
     await expect(secondList).resolves.toEqual({ models: [] });
@@ -257,7 +257,7 @@ describe("shared Codex app-server client", () => {
     abandonController.abort();
     expect(harness.process.stdin.destroyed).toBe(false);
 
-    await sendInitializeResult(harness, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
 
     await expect(abandonedAcquire).resolves.toBe(harness.client);
     await expect(activeAcquire).resolves.toBe(harness.client);
@@ -282,7 +282,7 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       authProfileId: "openai:work",
     });
-    await sendInitializeResult(harness, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
@@ -309,7 +309,7 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       authProfileStore,
     });
-    await sendInitializeResult(harness, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
 
     await expect(clientPromise).resolves.toBe(harness.client);
     expect(mocks.resolveCodexAppServerAuthProfileStore).toHaveBeenCalledWith({
@@ -355,7 +355,7 @@ describe("shared Codex app-server client", () => {
       authProfileId: "openai:persisted",
       agentDir: "/tmp/openclaw-persisted-agent",
     });
-    await sendInitializeResult(harness, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
 
     await expect(clientPromise).resolves.toBe(harness.client);
     const priorWriteCount = harness.writes.length;
@@ -392,7 +392,7 @@ describe("shared Codex app-server client", () => {
       agentDir: "/tmp/openclaw-target-agent",
       config,
     });
-    await sendInitializeResult(harness, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
 
     await expect(clientPromise).resolves.toBe(harness.client);
     expect(mocks.resolveCodexAppServerAuthProfileIdForAgent).not.toHaveBeenCalled();
@@ -421,7 +421,7 @@ describe("shared Codex app-server client", () => {
         headers: {},
       },
     });
-    await sendInitializeResult(harness, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
 
     await expect(clientPromise).resolves.toBe(harness.client);
     expect(mocks.resolveCodexAppServerAuthProfileIdForAgent).not.toHaveBeenCalled();
@@ -439,7 +439,7 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       config,
     });
-    await sendInitializeResult(harness, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
@@ -466,7 +466,7 @@ describe("shared Codex app-server client", () => {
       authProfileId: "openai:work",
       agentDir: "/tmp/openclaw-agent-nova",
     });
-    await sendInitializeResult(harness, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
@@ -490,7 +490,7 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       agentDir: "/tmp/openclaw-agent-one",
     });
-    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(first);
     await expect(firstList).resolves.toEqual({ models: [] });
 
@@ -498,7 +498,7 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       agentDir: "/tmp/openclaw-agent-two",
     });
-    await sendInitializeResult(second, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
@@ -517,7 +517,7 @@ describe("shared Codex app-server client", () => {
     }));
 
     const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(harness, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
@@ -551,7 +551,7 @@ describe("shared Codex app-server client", () => {
         headers: {},
       },
     });
-    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(first);
     await expect(firstList).resolves.toEqual({ models: [] });
 
@@ -566,7 +566,7 @@ describe("shared Codex app-server client", () => {
         headers: {},
       },
     });
-    await sendInitializeResult(second, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
@@ -586,12 +586,12 @@ describe("shared Codex app-server client", () => {
       .mockReturnValueOnce("api-key:second");
 
     const firstList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(first);
     await expect(firstList).resolves.toEqual({ models: [] });
 
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(second, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
@@ -634,7 +634,7 @@ describe("shared Codex app-server client", () => {
     });
     await vi.waitFor(() => expect(second.writes.length).toBeGreaterThanOrEqual(1));
 
-    await sendInitializeResult(second, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
@@ -652,7 +652,7 @@ describe("shared Codex app-server client", () => {
       .mockReturnValueOnce(second.client);
 
     const firstList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(first);
     await expect(firstList).resolves.toEqual({ models: [] });
 
@@ -660,7 +660,7 @@ describe("shared Codex app-server client", () => {
     expect(first.process.stdin.destroyed).toBe(true);
 
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(second, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
@@ -678,7 +678,7 @@ describe("shared Codex app-server client", () => {
       .mockReturnValueOnce(second.client);
 
     const firstList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(first);
     await expect(firstList).resolves.toEqual({ models: [] });
 
@@ -686,7 +686,7 @@ describe("shared Codex app-server client", () => {
     expect(first.process.stdin.destroyed).toBe(false);
 
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(second, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
@@ -699,7 +699,7 @@ describe("shared Codex app-server client", () => {
     expect(second.process.stdin.destroyed).toBe(true);
   });
 
-  it("closes a retired shared app-server after all active leases release", async () => {
+  it("closes a retired shared app-server and forces active leases onto the retryable close path", async () => {
     const first = createClientHarness();
     const second = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start")
@@ -707,7 +707,7 @@ describe("shared Codex app-server client", () => {
       .mockReturnValueOnce(second.client);
 
     const firstList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(first);
     await expect(firstList).resolves.toEqual({ models: [] });
 
@@ -715,19 +715,22 @@ describe("shared Codex app-server client", () => {
     const releaseSecond = retainSharedCodexAppServerClientIfCurrent(first.client);
     expect(releaseFirst).toBeTypeOf("function");
     expect(releaseSecond).toBeTypeOf("function");
-    expect(retireSharedCodexAppServerClientIfCurrent(first.client)).toEqual({
+    const activeRequest = first.client.request("test/pending", {});
+    expect(
+      retireSharedCodexAppServerClientIfCurrent(first.client, { failActiveLeases: true }),
+    ).toEqual({
       activeLeases: 2,
-      closed: false,
+      closed: true,
     });
-    expect(first.process.stdin.destroyed).toBe(false);
+    expect(first.process.stdin.destroyed).toBe(true);
+    await expect(activeRequest).rejects.toThrow("codex app-server client is closed");
 
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(second, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
     releaseFirst?.();
-    expect(first.process.stdin.destroyed).toBe(false);
     releaseSecond?.();
     expect(first.process.stdin.destroyed).toBe(true);
     expect(second.process.kill).not.toHaveBeenCalled();
@@ -744,25 +747,100 @@ describe("shared Codex app-server client", () => {
 
     const firstLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
     const secondLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
-    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await expect(firstLease).resolves.toBe(first.client);
     await expect(secondLease).resolves.toBe(first.client);
 
-    expect(retireSharedCodexAppServerClientIfCurrent(first.client)).toEqual({
+    expect(
+      retireSharedCodexAppServerClientIfCurrent(first.client, { failActiveLeases: true }),
+    ).toEqual({
+      activeLeases: 2,
+      closed: true,
+    });
+    expect(
+      retireSharedCodexAppServerClientIfCurrent(first.client, { failActiveLeases: true }),
+    ).toEqual({
       activeLeases: 2,
       closed: false,
     });
+    expect(first.process.stdin.destroyed).toBe(true);
+
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+    expect(first.process.stdin.destroyed).toBe(true);
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(false);
+  });
+
+  it("rejects pending acquires during shared-client retirement", async () => {
+    const first = createClientHarness();
+    const second = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+
+    const firstLease = getLeasedSharedCodexAppServerClient();
+    const pendingLease = getLeasedSharedCodexAppServerClient();
+    await vi.waitFor(() => expect(first.writes.length).toBeGreaterThanOrEqual(1));
+
+    expect(
+      retireSharedCodexAppServerClientIfCurrent(first.client, { failActiveLeases: true }),
+    ).toEqual({
+      activeLeases: 0,
+      closed: true,
+    });
+    await expect(firstLease).rejects.toThrow("codex app-server client is closed");
+    await expect(pendingLease).rejects.toThrow("codex app-server client is closed");
+
+    const freshLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
+    await expect(freshLease).resolves.toBe(second.client);
+    expect(second.process.stdin.destroyed).toBe(false);
+  });
+
+  it("suspect retirement closes a client that was already gracefully detached", async () => {
+    const first = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(first.client);
+
+    const lease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
+    await expect(lease).resolves.toBe(first.client);
+
+    // Routine cleanup detaches gracefully; a later terminal-idle kill must
+    // still be able to fail the leaseholders off the poisoned process.
     expect(retireSharedCodexAppServerClientIfCurrent(first.client)).toEqual({
-      activeLeases: 2,
+      activeLeases: 1,
+      closed: false,
+    });
+    expect(first.process.stdin.destroyed).toBe(false);
+
+    expect(
+      retireSharedCodexAppServerClientIfCurrent(first.client, { failActiveLeases: true }),
+    ).toEqual({
+      activeLeases: 1,
+      closed: true,
+    });
+    expect(first.process.stdin.destroyed).toBe(true);
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+  });
+
+  it("retires gracefully by default: leased clients close on release, not immediately", async () => {
+    const first = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(first.client);
+
+    const lease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
+    await expect(lease).resolves.toBe(first.client);
+
+    // Routine cleanup (e.g. one-shot bundle-MCP) must not yank a healthy
+    // client from co-leased sessions; only suspect retirement does.
+    expect(retireSharedCodexAppServerClientIfCurrent(first.client)).toEqual({
+      activeLeases: 1,
       closed: false,
     });
     expect(first.process.stdin.destroyed).toBe(false);
 
     expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
-    expect(first.process.stdin.destroyed).toBe(false);
-    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
     expect(first.process.stdin.destroyed).toBe(true);
-    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(false);
   });
 
   it("waits only for the shared client that is still current", async () => {
@@ -778,7 +856,7 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       agentDir: "/tmp/openclaw-agent-one",
     });
-    await sendInitializeResult(first, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(first);
     await expect(firstList).resolves.toEqual({ models: [] });
 
@@ -786,7 +864,7 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       agentDir: "/tmp/openclaw-agent-two",
     });
-    await sendInitializeResult(second, "openclaw/0.142.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.143.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
@@ -812,7 +890,7 @@ describe("shared Codex app-server client", () => {
         const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
         if (message.method === "initialize") {
           socket.send(
-            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.142.0" } }),
+            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.143.0" } }),
           );
           return;
         }

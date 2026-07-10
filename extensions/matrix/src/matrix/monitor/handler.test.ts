@@ -265,6 +265,23 @@ function expectDeliveredMediaReply() {
 }
 
 describe("matrix monitor handler pairing account scope", () => {
+  it("keeps inbound log previews UTF-16 well-formed at the limit", async () => {
+    const logVerboseMessage = vi.fn();
+    const { handler } = createMatrixHandlerTestHarness({ logVerboseMessage });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-preview",
+        body: `${"x".repeat(199)}🚀tail`,
+      }),
+    );
+
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      `matrix inbound: room=!room:example.org from=@user:example.org preview="${"x".repeat(199)}"`,
+    );
+  });
+
   it("caches account-scoped allowFrom store reads on hot path", async () => {
     const readAllowFromStore = vi.fn(async () => [] as string[]);
     sendMessageMatrixMock.mockClear();
@@ -3182,6 +3199,31 @@ describe("matrix monitor handler draft streaming", () => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
     expect(singleTextMessageBody()).toBe("- `second`");
+    await finish();
+  });
+
+  it("keeps truncated Matrix tool progress UTF-16 safe", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      accountConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, maxLineChars: 500 },
+        },
+      } as never,
+    });
+    const { opts, finish } = await dispatch();
+    const progressPrefix = "x".repeat(298);
+
+    const progressText = `${progressPrefix}🎉tail`;
+    await opts.onItemEvent?.({ progressText });
+    await opts.onItemEvent?.({ progressText });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(singleTextMessageBody()).toBe(`- \`${progressPrefix}...\``);
     await finish();
   });
 

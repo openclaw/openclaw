@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -36,6 +36,16 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
+
+const providerArtifactMocks = vi.hoisted(() => ({
+  resolveBundledProviderPolicySurface: vi.fn<
+    typeof import("../plugins/provider-public-artifacts.js").resolveBundledProviderPolicySurface
+  >(() => null),
+}));
+
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
+}));
 
 function resolveSyncRealpath(filePath: string): string {
   return fs.realpathSync.native(filePath);
@@ -101,23 +111,10 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("gateway session utils", () => {
-  beforeAll(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    listSessionsFromStore({
-      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4.6" }),
-      storePath: "",
-      store: {
-        "agent:main:main": {
-          sessionId: "sess-main",
-          updatedAt: 1,
-          modelProvider: "anthropic",
-          model: "claude-sonnet-4.6",
-        },
-      },
-      opts: {},
-    });
-    resetConfigRuntimeState();
-    resetPluginRuntimeStateForTest();
+  beforeEach(() => {
+    // Real artifact loading belongs to its owner tests; session projections only need the contract.
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReset();
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -620,7 +617,19 @@ describe("gateway session utils", () => {
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
   });
 
-  test("session defaults and rows expose bundled startup-lazy provider thinking without catalog", () => {
+  test("session defaults and rows consume provider-policy thinking without catalog", () => {
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+        ],
+      }),
+    });
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.5" });
 
     const defaults = getSessionDefaults(cfg);
@@ -633,7 +642,82 @@ describe("gateway session utils", () => {
 
     expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+    expect(providerArtifactMocks.resolveBundledProviderPolicySurface).toHaveBeenCalledWith(
+      "openai",
+    );
   });
+
+  test("preserves persisted Ultra while projecting picker levels without a catalog", () => {
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
+      resolveThinkingProfile: ({ modelId, agentRuntime }) => ({
+        levels: [
+          { id: "off" },
+          { id: "high" },
+          { id: "xhigh" },
+          { id: "max" },
+          ...(modelId.startsWith("gpt-5.6") &&
+          (agentRuntime === "openclaw" || !modelId.startsWith("gpt-5.6-luna"))
+            ? [{ id: "ultra" as const }]
+            : []),
+        ],
+      }),
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const defaults = getSessionDefaults(cfg);
+    const row = (entry: SessionEntry) =>
+      buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry,
+      });
+
+    const codex = row({ sessionId: "codex", thinkingLevel: "ultra" } as SessionEntry);
+    const openClawOverride = row({
+      sessionId: "openclaw",
+      thinkingLevel: "ultra",
+      agentRuntimeOverride: "openclaw",
+    } as SessionEntry);
+    const legacyObservedOpenClaw = row({
+      sessionId: "legacy-observed-openclaw",
+      thinkingLevel: "ultra",
+      agentHarnessId: "openclaw",
+    } as SessionEntry);
+
+    expect(defaults.agentRuntime?.id).toBe("codex");
+    expect(codex.thinkingLevel).toBe("ultra");
+    expect(codex.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
+    expect(openClawOverride.thinkingLevel).toBe("ultra");
+    expect(openClawOverride.agentRuntime?.id).toBe("openclaw");
+    expect(legacyObservedOpenClaw.thinkingLevel).toBe("ultra");
+    expect(legacyObservedOpenClaw.agentRuntime?.id).toBe("codex");
+    expect(legacyObservedOpenClaw.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
+  });
+
+  test.each(["xhigh", "max"] as const)(
+    "preserves catalog-less persisted %s in session change projections",
+    (thinkingLevel) => {
+      const row = buildGatewaySessionRow({
+        cfg: createModelDefaultsConfig({ primary: "custom/reasoner" }),
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: { sessionId: thinkingLevel, thinkingLevel } as SessionEntry,
+      });
+
+      expect(row.thinkingLevel).toBe(thinkingLevel);
+    },
+  );
 
   test("session defaults use configured thinking default", () => {
     const defaults = getSessionDefaults({
@@ -843,7 +927,7 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("openclaw-tui");
   });
 
-  test("buildGatewaySessionRow displayName uses group display name for group sessions", () => {
+  test("buildGatewaySessionRow displayName prefers the human chat title for group sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry = {
       chatType: "group",
@@ -858,8 +942,65 @@ describe("gateway session utils", () => {
       key: "agent:main:telegram:group:99",
       entry,
     });
-    expect(row.displayName).toMatch(/^telegram:/);
-    expect(row.displayName).not.toBe("openclaw-tui");
+    expect(row.displayName).toBe("Engineering");
+  });
+
+  test("buildGatewaySessionRow group displayName prefers #channel and falls back to the token", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const channelEntry = {
+      chatType: "channel",
+      channel: "slack",
+      groupChannel: "general",
+      space: "Acme",
+    } as SessionEntry;
+    const channelRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:slack:channel:C1": channelEntry },
+      key: "agent:main:slack:channel:C1",
+      entry: channelEntry,
+    });
+    expect(channelRow.displayName).toBe("Acme #general");
+
+    const labeled = { ...channelEntry, label: "Team room" } as SessionEntry;
+    const labeledRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:slack:channel:C1": labeled },
+      key: "agent:main:slack:channel:C1",
+      entry: labeled,
+    });
+    expect(labeledRow.displayName).toBe("Team room");
+
+    const opaque = { chatType: "group", channel: "telegram" } as SessionEntry;
+    const opaqueRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:group:99": opaque },
+      key: "agent:main:telegram:group:99",
+      entry: opaque,
+    });
+    expect(opaqueRow.displayName).toMatch(/^telegram:/);
+  });
+
+  test("buildGatewaySessionRow projects worktree and execNode bindings", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      sessionId: "s1",
+      updatedAt: 1,
+      spawnedCwd: "/state/worktrees/abc/wt-1234",
+      worktree: { id: "wt-id", branch: "openclaw/wt-1234", repoRoot: "/repo" },
+      execNode: "macbook",
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:dashboard:x": entry },
+      key: "agent:main:dashboard:x",
+      entry,
+    });
+    expect(row.worktree).toEqual({ id: "wt-id", branch: "openclaw/wt-1234", repoRoot: "/repo" });
+    expect(row.execNode).toBe("macbook");
   });
 
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {

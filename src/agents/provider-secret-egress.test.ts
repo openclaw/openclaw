@@ -79,7 +79,7 @@ describe("unwrapModelHeaderSentinelsForProviderEgress", () => {
       {
         auth: {
           mode: "authorization-bearer",
-          token: "oc-sent-v1-00000000000000000000dead",
+          token: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
         },
       },
     );

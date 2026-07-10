@@ -30,7 +30,11 @@ import {
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import {
+  attachGatewayUpgradeHandler,
+  createGatewayHttpServer,
+  runWithGatewayHttpWorkAdmission,
+} from "./server-http.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
@@ -101,6 +105,7 @@ export async function createGatewayRuntimeState(params: {
   logPlugins: ReturnType<typeof createSubsystemLogger>;
   getReadiness?: ReadinessChecker;
   isTerminalEnabled: () => boolean;
+  handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 }): Promise<{
   releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
@@ -152,20 +157,22 @@ export async function createGatewayRuntimeState(params: {
       if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
         return false;
       }
-      if (!loadedHooksRequestHandler) {
-        // Hooks are cold for most gateway starts; create the handler only after a request
-        // matches the configured base path so startup avoids importing hook runtime code.
-        const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
-        loadedHooksRequestHandler = createGatewayHooksRequestHandler({
-          deps: params.deps,
-          getHooksConfig: params.hooksConfig,
-          getClientIpConfig: params.getHookClientIpConfig,
-          bindHost: params.bindHost,
-          port: params.port,
-          logHooks: params.logHooks,
-        });
-      }
-      return await loadedHooksRequestHandler(req, res);
+      return await runWithGatewayHttpWorkAdmission(res, async () => {
+        if (!loadedHooksRequestHandler) {
+          // Hooks are cold for most gateway starts; create the handler only after a request
+          // matches the configured base path so startup avoids importing hook runtime code.
+          const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
+          loadedHooksRequestHandler = createGatewayHooksRequestHandler({
+            deps: params.deps,
+            getHooksConfig: params.hooksConfig,
+            getClientIpConfig: params.getHookClientIpConfig,
+            bindHost: params.bindHost,
+            port: params.port,
+            logHooks: params.logHooks,
+          });
+        }
+        return await loadedHooksRequestHandler(req, res);
+      });
     };
 
     let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
@@ -261,6 +268,7 @@ export async function createGatewayRuntimeState(params: {
         openResponsesEnabled: params.openResponsesEnabled,
         openResponsesConfig: params.openResponsesConfig,
         strictTransportSecurityHeader: params.strictTransportSecurityHeader,
+        handleWatchNodeRequest: params.handleWatchNodeRequest,
         handleHooksRequest,
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,

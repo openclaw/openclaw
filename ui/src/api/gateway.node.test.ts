@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
@@ -125,6 +126,7 @@ vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
 }));
 
 const {
+  CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OPERATOR_SCOPES,
   GatewayBrowserClient,
   GatewayRequestError,
@@ -137,9 +139,10 @@ type ConnectFrame = {
   id?: string;
   method?: string;
   params?: {
-    auth?: { token?: string; password?: string; deviceToken?: string };
+    auth?: { token?: string; bootstrapToken?: string; password?: string; deviceToken?: string };
     maxProtocol?: number;
     minProtocol?: number;
+    caps?: string[];
     scopes?: string[];
   };
 };
@@ -412,7 +415,31 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
+    expect(connectFrame.params?.caps).toEqual([
+      GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+    ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("requests handoff scopes with bootstrap token auth", async () => {
+    const client = new GatewayBrowserClient({
+      url: "wss://gateway.example",
+      bootstrapToken: "boot-1",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.token).toBeUndefined();
+    expect(connectFrame.params?.auth?.bootstrapToken).toBe("boot-1");
+    expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]);
+    const [, signedPayload] = requireFirstSignCall();
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES],
+      token: "boot-1",
+      nonce: "nonce-1",
+    });
   });
 
   it("adds the current Control UI protocol to bare protocol mismatch errors", () => {

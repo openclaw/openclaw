@@ -13,6 +13,7 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   createCodexAppServerBindingStore,
   createStoredCodexAppServerBinding,
+  readCodexAppServerThreadBinding,
   type StoredCodexAppServerBinding,
 } from "./session-binding.js";
 
@@ -56,6 +57,22 @@ afterEach(() => {
 });
 
 describe("Codex app-server binding store", () => {
+  it("normalizes the retired approval policy in persisted bindings", () => {
+    expect(
+      readCodexAppServerThreadBinding({
+        threadId: "thread-legacy-policy",
+        cwd: "/repo",
+        approvalPolicy: "on-failure",
+        sandbox: "workspace-write",
+      }),
+    ).toMatchObject({
+      threadId: "thread-legacy-policy",
+      cwd: "/repo",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+  });
+
   it("stores domain data under the canonical session identity", async () => {
     const { state, values } = createStateStore();
     const store = createCodexAppServerBindingStore(state);
