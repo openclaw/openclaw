@@ -838,6 +838,23 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   }
 
+  private findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
+    const navigationState = this.getSessionNavigationState();
+    const active = navigationState.visibleSessions.find(
+      (candidate) => candidate.key === sessionKey,
+    );
+    if (active) {
+      return active;
+    }
+    for (const rows of Object.values(this.sessionRowsByAgent)) {
+      const row = rows.find((candidate) => candidate.key === sessionKey);
+      if (row) {
+        return navigationState.toSidebarSession(row);
+      }
+    }
+    return undefined;
+  }
+
   private handleSessionSectionDrop(event: DragEvent, category?: string) {
     event.preventDefault();
     const sourceGroup = readSessionGroupDragData(event.dataTransfer);
@@ -849,9 +866,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       this.reorderSessionGroup(sourceGroup, category, position);
     } else {
       const sessionKey = readSessionDragData(event.dataTransfer);
-      const session = this.getSessionNavigationState().visibleSessions.find(
-        (candidate) => candidate.key === sessionKey,
-      );
+      // Rows can be dragged out of a browsed (non-active) agent section, so the
+      // lookup must cover every agent's cached rows, not just the active scope.
+      const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
       const nextCategory = category ?? null;
       if (session && (session.category !== nextCategory || session.pinned)) {
         if (category) {
