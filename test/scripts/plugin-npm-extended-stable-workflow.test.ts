@@ -140,6 +140,12 @@ describe("plugin npm extended-stable workflow", () => {
     expect(prepare.run).toContain('path.join(process.env.ARTIFACT_DIR, "preflight-manifest.json")');
     expect(prepare.run).toContain('kind: "openclaw-plugin-npm-preflight"');
     expect(prepare.run).toContain('mode: "preflight-only"');
+    expect(prepare.run).toContain("source_package_json_sha256=");
+    expect(prepare.run).toContain("packed_package_json_sha256=");
+    expect(prepare.run).toContain(
+      "sourcePackageJsonSha256: process.env.SOURCE_PACKAGE_JSON_SHA256",
+    );
+    expect(prepare.run).toContain("packageJsonSha256: process.env.PACKED_PACKAGE_JSON_SHA256");
     expect(prepare.run).toContain("npmIntegrity: actualIntegrity");
     expect(prepare.run).toContain("npmShasum: actualShasum");
     expect(prepare.run).toContain("npmPublish: false");
@@ -157,15 +163,48 @@ describe("plugin npm extended-stable workflow", () => {
     const verify = parsed.jobs?.verify_plugin_npm_preflight;
     expect(verify?.needs).toEqual(["preview_plugins_npm", "preview_plugin_pack"]);
     expect(verify?.strategy?.matrix?.plugin).toContain("all_matrix");
+    expect(verify?.name).toBe("Preflight plugin npm package (${{ matrix.plugin.packageName }})");
+    const trustedCheckout = step(verify, "Checkout trusted npm preflight tooling");
+    expect(trustedCheckout.with?.ref).toBe("${{ github.workflow_sha }}");
     const download = step(verify, "Download immutable npm preflight artifact");
     expect(download.uses).toBe(
       "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     );
+    expect(download.with?.name).toBe(
+      "plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}",
+    );
     const readback = step(verify, "Validate npm preflight artifact readback");
+    expect(readback.run).toContain('git show "${SOURCE_SHA}:${PACKAGE_DIR}/package.json"');
+    expect(readback.run).toContain("Expected exactly one live package artifact named");
     expect(readback.run).toContain('crypto.createHash("sha256")');
     expect(readback.run).toContain('crypto.createHash("sha512")');
     expect(readback.run).toContain('crypto.createHash("sha1")');
-    expect(readback.run).toContain("Packed plugin identity or install route changed");
+    expect(readback.run).toContain(
+      "Packed plugin identity, package hashes, or install route changed",
+    );
+
+    const route = step(verify, "Verify npm publication route readiness");
+    expect(route.run).toContain("encodeURIComponent(packageName)");
+    expect(route.run).toContain('observations.push("npm-token-bootstrap")');
+    expect(route.run).toContain('observations.push("npm-oidc")');
+    expect(route.run).toContain('"npm-readback" : "npm-mirror"');
+
+    const evidence = step(verify, "Record validation-only result");
+    expect(evidence.run).toContain('schema: "openclaw.plugin-npm-package-evidence/v2"');
+    expect(evidence.run).toContain("schemaVersion: 2");
+    expect(evidence.run).toContain("packageJsonSha256: process.env.PACKED_PACKAGE_JSON_SHA256");
+    expect(evidence.run).toContain(
+      "sourcePackageJsonSha256: process.env.SOURCE_PACKAGE_JSON_SHA256",
+    );
+    expect(evidence.run).toContain("id: Number(process.env.PUBLICATION_ARTIFACT_ID)");
+    expect(evidence.run).toContain("tarballSha256: process.env.TARBALL_SHA256");
+    const evidenceUpload = step(verify, "Upload immutable plugin npm preflight evidence");
+    expect(evidenceUpload.with?.name).toBe(
+      "plugin-npm-package-${{ matrix.plugin.extensionId }}-${{ matrix.plugin.version }}",
+    );
+    expect(evidenceUpload.with?.path).toBe(
+      "${{ steps.preflight_evidence.outputs.artifact_path }}/*",
+    );
   });
 
   it("makes every publication capability unreachable in preflight mode", () => {
