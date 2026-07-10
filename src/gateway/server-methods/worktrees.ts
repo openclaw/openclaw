@@ -1,6 +1,7 @@
 import {
   ErrorCodes,
   errorShape,
+  validateWorktreesBranchesParams,
   validateWorktreesCreateParams,
   validateWorktreesGcParams,
   validateWorktreesListParams,
@@ -13,7 +14,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 type WorktreeService = Pick<
   ManagedWorktreeService,
-  "create" | "gc" | "list" | "remove" | "restore"
+  "create" | "gc" | "list" | "listRepositoryBranches" | "remove" | "restore"
 >;
 
 function invalidParams(respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"]): void {
@@ -69,6 +70,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
           {
             removed: result.removed,
             ...(result.snapshotRef ? { snapshotRef: result.snapshotRef } : {}),
+            ...(result.snapshotError ? { snapshotError: result.snapshotError } : {}),
           },
           undefined,
         );
@@ -83,6 +85,17 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       }
       try {
         respond(true, await service.restore({ id: params.id }), undefined);
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+      }
+    },
+    "worktrees.branches": async ({ params, respond }) => {
+      if (!validateWorktreesBranchesParams(params)) {
+        invalidParams(respond);
+        return;
+      }
+      try {
+        respond(true, await service.listRepositoryBranches(params.repoRoot), undefined);
       } catch (error) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }

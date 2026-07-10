@@ -415,6 +415,20 @@ import {
   SessionsDeleteParamsSchema,
   type SessionsDescribeParams,
   SessionsDescribeParamsSchema,
+  type SessionGroup,
+  SessionGroupSchema,
+  type SessionsGroupsDeleteParams,
+  SessionsGroupsDeleteParamsSchema,
+  type SessionsGroupsListParams,
+  SessionsGroupsListParamsSchema,
+  type SessionsGroupsListResult,
+  SessionsGroupsListResultSchema,
+  type SessionsGroupsMutationResult,
+  SessionsGroupsMutationResultSchema,
+  type SessionsGroupsPutParams,
+  SessionsGroupsPutParamsSchema,
+  type SessionsGroupsRenameParams,
+  SessionsGroupsRenameParamsSchema,
   type SessionsFilesGetParams,
   SessionsFilesGetParamsSchema,
   type SessionsFilesGetResult,
@@ -615,6 +629,12 @@ import {
   WorktreesGcParamsSchema,
   type WorktreesGcResult,
   WorktreesGcResultSchema,
+  type WorktreesBranchesParams,
+  WorktreesBranchesParamsSchema,
+  type WorktreeBranch,
+  WorktreeBranchSchema,
+  type WorktreesBranchesResult,
+  WorktreesBranchesResultSchema,
 } from "./schema.js";
 
 /** Normalized validation error shape exposed by every protocol validator. */
@@ -707,6 +727,9 @@ export const validateWorktreesRestoreParams = lazyCompile<WorktreesRestoreParams
   WorktreesRestoreParamsSchema,
 );
 export const validateWorktreesGcParams = lazyCompile<WorktreesGcParams>(WorktreesGcParamsSchema);
+export const validateWorktreesBranchesParams = lazyCompile<WorktreesBranchesParams>(
+  WorktreesBranchesParamsSchema,
+);
 export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
 export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
@@ -826,6 +849,18 @@ export const validateSessionsResetParams =
   lazyCompile<SessionsResetParams>(SessionsResetParamsSchema);
 export const validateSessionsDeleteParams = lazyCompile<SessionsDeleteParams>(
   SessionsDeleteParamsSchema,
+);
+export const validateSessionsGroupsListParams = lazyCompile<SessionsGroupsListParams>(
+  SessionsGroupsListParamsSchema,
+);
+export const validateSessionsGroupsPutParams = lazyCompile<SessionsGroupsPutParams>(
+  SessionsGroupsPutParamsSchema,
+);
+export const validateSessionsGroupsRenameParams = lazyCompile<SessionsGroupsRenameParams>(
+  SessionsGroupsRenameParamsSchema,
+);
+export const validateSessionsGroupsDeleteParams = lazyCompile<SessionsGroupsDeleteParams>(
+  SessionsGroupsDeleteParamsSchema,
 );
 export const validateSessionsCompactParams = lazyCompile<SessionsCompactParams>(
   SessionsCompactParamsSchema,
@@ -1255,6 +1290,13 @@ export {
   SessionsPluginPatchParamsSchema,
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
+  SessionGroupSchema,
+  SessionsGroupsListParamsSchema,
+  SessionsGroupsListResultSchema,
+  SessionsGroupsPutParamsSchema,
+  SessionsGroupsRenameParamsSchema,
+  SessionsGroupsDeleteParamsSchema,
+  SessionsGroupsMutationResultSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
   ArtifactSummarySchema,
@@ -1451,6 +1493,9 @@ export {
   WorktreesRestoreParamsSchema,
   WorktreesGcParamsSchema,
   WorktreesGcResultSchema,
+  WorktreesBranchesParamsSchema,
+  WorktreeBranchSchema,
+  WorktreesBranchesResultSchema,
   ProtocolSchemas,
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,
@@ -1733,6 +1778,16 @@ export type {
   WorktreesRestoreParams,
   WorktreesGcParams,
   WorktreesGcResult,
+  WorktreesBranchesParams,
+  WorktreeBranch,
+  WorktreesBranchesResult,
+  SessionGroup,
+  SessionsGroupsListParams,
+  SessionsGroupsListResult,
+  SessionsGroupsPutParams,
+  SessionsGroupsRenameParams,
+  SessionsGroupsDeleteParams,
+  SessionsGroupsMutationResult,
 };
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];

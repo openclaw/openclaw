@@ -84,6 +84,53 @@ describe("ManagedWorktreeService", () => {
     expect(repeated).toEqual(created);
   });
 
+  it("lists repository branches default-first with deterministic ordering", async () => {
+    await addRemote(root, repo);
+    await git(repo, "branch", "feature-a");
+    await git(repo, "push", "origin", "feature-a");
+    await git(repo, "branch", "-D", "feature-a");
+    await git(repo, "branch", "zeta-local");
+    await git(repo, "checkout", "-b", "current-work");
+
+    const result = await service.listRepositoryBranches(repo);
+    expect(result.defaultBranch).toBe("main");
+    expect(result.headBranch).toBe("current-work");
+    expect(result.branches.map((branch) => branch.name)).toEqual([
+      "main",
+      "current-work",
+      "feature-a",
+      "zeta-local",
+    ]);
+    expect(result.branches.find((branch) => branch.name === "feature-a")?.kind).toBe("remote");
+    expect(result.branches.find((branch) => branch.name === "main")?.kind).toBe("local");
+  });
+
+  it("lists local branches without a remote", async () => {
+    await git(repo, "branch", "side");
+    const result = await service.listRepositoryBranches(repo);
+    expect(result.defaultBranch).toBeUndefined();
+    expect(result.headBranch).toBe("main");
+    expect(result.branches.map((branch) => branch.name)).toEqual(["main", "side"]);
+    expect(result.branches.every((branch) => branch.kind === "local")).toBe(true);
+  });
+
+  it("creates a worktree from an explicit base ref", async () => {
+    await git(repo, "checkout", "-b", "base-branch");
+    await fs.writeFile(path.join(repo, "base.txt"), "base branch file\n");
+    await git(repo, "add", "base.txt");
+    await git(repo, "commit", "-m", "base branch commit");
+    const baseCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "checkout", "main");
+
+    const created = await service.create({
+      repoRoot: repo,
+      name: "based-task",
+      baseRef: "base-branch",
+    });
+    expect(created.baseRef).toBe("base-branch");
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(baseCommit);
+  });
+
   it("does not remove a concurrent successful create during remote fallback", async () => {
     await addRemote(root, repo);
 

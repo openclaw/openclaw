@@ -64,6 +64,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
   buildGroupDisplayName,
+  buildGroupDisplayTitle,
   getSessionStoreCacheVersion,
   isTerminalSessionStatus,
   resolveAllAgentSessionStoreTargetsSync,
@@ -1799,8 +1800,11 @@ export function buildGatewaySessionRow(params: {
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
   // A user-assigned label is an explicit rename; it must win over stored
   // channel-derived display names or renames silently vanish on refresh.
+  // Group sessions prefer the human chat title (subject/#channel) over the
+  // stored compact token displayName (e.g. "slack:g-general").
   const displayName =
     entry?.label ??
+    (isGroupSession ? buildGroupDisplayTitle({ subject, groupChannel, space }) : undefined) ??
     entry?.displayName ??
     (isGroupSession && channel
       ? buildGroupDisplayName({
@@ -2071,6 +2075,8 @@ export function buildGatewaySessionRow(params: {
     spawnedBy: subagentOwner || entry?.spawnedBy,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
+    worktree: entry?.worktree,
+    execNode: entry?.execNode,
     forkedFromParent: entry?.forkedFromParent,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
