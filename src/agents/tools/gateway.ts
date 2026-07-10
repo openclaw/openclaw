@@ -273,6 +273,8 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
     return identity;
   } catch (error) {
     if (isNodeApprovalReplay) {
+      // Never downgrade node exec replay to the device-less backend bridge.
+      // Repair stable identity first so replay stays bound to the approving device.
       throw new Error(
         [
           "approved node gateway calls require a stable device identity.",
