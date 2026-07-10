@@ -23,6 +23,7 @@ actor TalkModeRuntime {
     private static let mlxTalkProvider = "mlx"
     private static let systemTalkProvider = "system"
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
+    private static let idleSpeechRecognitionGrace: TimeInterval = 1.0
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -88,6 +89,27 @@ actor TalkModeRuntime {
     static func configureRecognitionRequest(_ request: SFSpeechAudioBufferRecognitionRequest) {
         request.shouldReportPartialResults = true
         request.taskHint = .dictation
+    }
+
+    static func shouldExpireIdleTimeout(
+        now: Date,
+        lastInteractionAt: Date,
+        idleTimeout: TimeInterval,
+        lastSpeechEnergyAt: Date?,
+        speechRecognitionGrace: TimeInterval) -> Bool
+    {
+        guard idleTimeout > 0 else { return false }
+        let deadline = lastInteractionAt.addingTimeInterval(idleTimeout)
+        guard now >= deadline else { return false }
+        // Raw energy may precede transcription near the deadline, but it never moves the deadline.
+        guard speechRecognitionGrace > 0, now < deadline.addingTimeInterval(speechRecognitionGrace),
+              let lastSpeechEnergyAt,
+              lastSpeechEnergyAt <= now,
+              now.timeIntervalSince(lastSpeechEnergyAt) <= speechRecognitionGrace
+        else {
+            return true
+        }
+        return false
     }
 
     // MARK: - Lifecycle
@@ -351,8 +373,15 @@ actor TalkModeRuntime {
         if self.lastInteractionAt == nil {
             self.lastInteractionAt = anchor
         }
-        let elapsed = Date().timeIntervalSince(anchor)
-        guard elapsed >= idleTimeout else { return }
+        let now = Date()
+        guard Self.shouldExpireIdleTimeout(
+            now: now,
+            lastInteractionAt: anchor,
+            idleTimeout: idleTimeout,
+            lastSpeechEnergyAt: self.lastSpeechEnergyAt,
+            speechRecognitionGrace: Self.idleSpeechRecognitionGrace)
+        else { return }
+        let elapsed = now.timeIntervalSince(anchor)
         self.logger.info("talk idle timeout expired after \(elapsed, privacy: .public)s")
         self.idleTimeout = nil
         await AppStateStore.shared.setTalkEnabled(false)
@@ -1276,7 +1305,6 @@ extension TalkModeRuntime {
         if rms >= threshold {
             let now = Date()
             self.lastHeard = now
-            self.lastInteractionAt = now
             self.lastSpeechEnergyAt = now
         }
 
