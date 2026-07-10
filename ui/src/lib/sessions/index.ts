@@ -1279,6 +1279,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         showArchived: lastListOptions.showArchived,
       });
       const eventInfo = readSessionChangedEvent(event.payload);
+      // Catalog mutations from other clients invalidate the per-connection
+      // groups snapshot. Groups events carry no session key, so read the
+      // reason straight off the payload instead of the parsed row info.
+      const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
+      if (eventReason === "groups") {
+        groupsLoadedEpoch = -1;
+        void groupsLoad();
+      }
       const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
       const status = reconciled.status ?? eventInfo?.status;
       const runEnded =
