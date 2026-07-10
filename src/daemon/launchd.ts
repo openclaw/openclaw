@@ -912,32 +912,150 @@ async function bootoutLaunchAgentOrThrow(params: {
   params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
 }
 
-async function quiesceLaunchAgentOrThrow(params: { serviceTarget: string }): Promise<void> {
+type LaunchAgentDisabledOverrideProbe =
+  | { state: "disabled" | "not-disabled" }
+  | { state: "unknown"; detail?: string };
+
+function parseLaunchAgentDisabledOverride(output: string, label: string): boolean | null {
+  const quotedLabel = `"${label}"`;
+  for (const line of output.split(/\r?\n/)) {
+    const [rawLabel, rawValue] = line.trim().split(/\s*=>\s*/, 2);
+    if (rawLabel !== quotedLabel) {
+      continue;
+    }
+    const value = normalizeLowercaseStringOrEmpty(rawValue);
+    if (value === "disabled" || value === "true") {
+      return true;
+    }
+    if (value === "enabled" || value === "false") {
+      return false;
+    }
+    return null;
+  }
+  return false;
+}
+
+async function probeLaunchAgentDisabledOverride(
+  domain: string,
+  label: string,
+): Promise<LaunchAgentDisabledOverrideProbe> {
+  const probe = await execLaunchctl(["print-disabled", domain]);
+  if (probe.code !== 0) {
+    return { state: "unknown", detail: formatLaunchctlResultDetail(probe) || undefined };
+  }
+  const disabled = parseLaunchAgentDisabledOverride(probe.stdout || probe.stderr || "", label);
+  return disabled === null
+    ? { state: "unknown", detail: "unrecognized launchctl print-disabled output" }
+    : { state: disabled ? "disabled" : "not-disabled" };
+}
+
+async function quiesceLaunchAgentOrThrow(params: {
+  domain: string;
+  label: string;
+  serviceTarget: string;
+  serviceEnv: GatewayServiceEnv;
+  plistPath: string;
+}): Promise<void> {
+  // Rollback must preserve the prior loaded state. Enabling an already-unloaded
+  // job must not bootstrap it and unexpectedly start the gateway.
+  const initialState = await probeLaunchAgentState(params.serviceTarget);
+  if (initialState.state === "unknown") {
+    throw new Error(
+      `LaunchAgent state could not be confirmed before quiescence: ${initialState.detail ?? "unknown error"}`,
+    );
+  }
+  const wasLoaded = initialState.state !== "not-loaded";
+  const initialDisabledOverride = await probeLaunchAgentDisabledOverride(
+    params.domain,
+    params.label,
+  );
+  if (initialDisabledOverride.state === "unknown") {
+    throw new Error(
+      `LaunchAgent disabled state could not be confirmed before quiescence: ${initialDisabledOverride.detail ?? "unknown error"}`,
+    );
+  }
+  const wasDisabled = initialDisabledOverride.state === "disabled";
   const disable = await execLaunchctl(["disable", params.serviceTarget]);
   if (disable.code !== 0) {
     throw new Error(`launchctl disable failed: ${formatLaunchctlResultDetail(disable)}`);
   }
 
-  let lastState: LaunchAgentProbeResult | null = null;
-  for (let attempt = 0; attempt < LAUNCH_AGENT_QUIESCE_BOOTOUT_ATTEMPTS; attempt += 1) {
-    const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
-    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+  try {
+    let lastState: LaunchAgentProbeResult | null = null;
+    for (let attempt = 0; attempt < LAUNCH_AGENT_QUIESCE_BOOTOUT_ATTEMPTS; attempt += 1) {
+      const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
+      if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+        throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+      }
+      const state = await probeLaunchAgentState(params.serviceTarget);
+      if (state.state === "not-loaded") {
+        await assertGatewayPortReleasedAfterStop(params.serviceEnv);
+        return;
+      }
+      lastState = state;
     }
-    const state = await probeLaunchAgentState(params.serviceTarget);
-    if (state.state === "not-loaded") {
-      return;
-    }
-    lastState = state;
-  }
 
-  const detail =
-    lastState?.state === "unknown" && lastState.detail
-      ? `: ${lastState.detail}`
-      : lastState
-        ? `: state=${lastState.state}`
-        : "";
-  throw new Error(`LaunchAgent remained loaded after bootout${detail}`);
+    const detail =
+      lastState?.state === "unknown" && lastState.detail
+        ? `: ${lastState.detail}`
+        : lastState
+          ? `: state=${lastState.state}`
+          : "";
+    throw new Error(`LaunchAgent remained loaded after bootout${detail}`);
+  } catch (err) {
+    const restoreErrors: Error[] = [];
+    let canRestoreLoadedState = wasDisabled;
+    if (!wasDisabled) {
+      const enable = await execLaunchctl(["enable", params.serviceTarget]);
+      if (enable.code !== 0) {
+        restoreErrors.push(
+          new Error(`launchctl enable rollback failed: ${formatLaunchctlResultDetail(enable)}`),
+        );
+      } else {
+        canRestoreLoadedState = true;
+      }
+    }
+    if (canRestoreLoadedState) {
+      const restoredState = await probeLaunchAgentState(params.serviceTarget);
+      if (wasLoaded && restoredState.state === "not-loaded") {
+        try {
+          await bootstrapLaunchAgentOrThrow({
+            domain: params.domain,
+            serviceTarget: params.serviceTarget,
+            plistPath: params.plistPath,
+            actionHint: "openclaw gateway restart",
+          });
+        } catch (restoreErr) {
+          restoreErrors.push(
+            restoreErr instanceof Error ? restoreErr : new Error(String(restoreErr)),
+          );
+        }
+        if (wasDisabled) {
+          const disable = await execLaunchctl(["disable", params.serviceTarget]);
+          if (disable.code !== 0) {
+            restoreErrors.push(
+              new Error(
+                `launchctl disable rollback failed: ${formatLaunchctlResultDetail(disable)}`,
+              ),
+            );
+          }
+        }
+      } else if (restoredState.state === "unknown") {
+        restoreErrors.push(
+          new Error(
+            `launchctl rollback state could not be confirmed: ${restoredState.detail ?? "unknown error"}`,
+          ),
+        );
+      }
+    }
+    if (restoreErrors.length > 0) {
+      throw new AggregateError(
+        [err, ...restoreErrors],
+        "LaunchAgent quiescence failed and its prior state could not be restored",
+      );
+    }
+    throw err;
+  }
 }
 
 type LaunchAgentProbeResult =
@@ -1028,6 +1146,7 @@ export async function stopLaunchAgent({
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
 
   if (
@@ -1039,8 +1158,7 @@ export async function stopLaunchAgent({
   }
 
   if (quiesce) {
-    await quiesceLaunchAgentOrThrow({ serviceTarget });
-    await assertGatewayPortReleasedAfterStop(serviceEnv);
+    await quiesceLaunchAgentOrThrow({ domain, label, serviceTarget, serviceEnv, plistPath });
     stdout.write(`${formatLine("Quiesced LaunchAgent", serviceTarget)}\n`);
     return;
   }
