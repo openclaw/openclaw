@@ -1229,9 +1229,13 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
 
     #if DEBUG
     fileprivate func failForTesting() {
-        let (task, fd, identity, lifecycleLease) = self.stateLock.withLock {
+        let shutdown: (
+            task: Task<Void, Never>?,
+            fd: Int32,
+            identity: ExecApprovalsSocketPathIdentity?,
+            lifecycleLease: ExecApprovalsSocketLifecycleLease?) = self.stateLock.withLock {
             guard self.isRunning, self.socketFD >= 0 else {
-                return (nil, Int32(-1), nil, nil)
+                return (task: nil, fd: -1, identity: nil, lifecycleLease: nil)
             }
             self.isRunning = false
             let task = self.acceptTask
@@ -1242,14 +1246,14 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             self.socketIdentity = nil
             let lifecycleLease = self.socketLifecycleLease
             self.socketLifecycleLease = nil
-            return (task, fd, identity, lifecycleLease)
+            return (task: task, fd: fd, identity: identity, lifecycleLease: lifecycleLease)
         }
-        guard fd >= 0 else { return }
-        task?.cancel()
+        guard shutdown.fd >= 0 else { return }
+        shutdown.task?.cancel()
         self.closeOwnedSocket(
-            fd: fd,
-            identity: identity,
-            lifecycleLease: lifecycleLease)
+            fd: shutdown.fd,
+            identity: shutdown.identity,
+            lifecycleLease: shutdown.lifecycleLease)
         self.onUnexpectedStop(self)
     }
     #endif
