@@ -20,6 +20,7 @@ type ExecApprovalsModule = typeof import("./exec-approvals.js");
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
 let ensureExecApprovalsSnapshot: ExecApprovalsModule["ensureExecApprovalsSnapshot"];
 let commitExecAuthorization: ExecApprovalsModule["commitExecAuthorizationLocked"];
+let createExecApprovalPolicySnapshot: ExecApprovalsModule["createExecApprovalPolicySnapshot"];
 let loadExecApprovals: ExecApprovalsModule["loadExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
@@ -48,6 +49,7 @@ beforeAll(async () => {
   ensureExecApprovals = module.ensureExecApprovals;
   ensureExecApprovalsSnapshot = module.ensureExecApprovalsSnapshot;
   commitExecAuthorization = module.commitExecAuthorizationLocked;
+  createExecApprovalPolicySnapshot = module.createExecApprovalPolicySnapshot;
   loadExecApprovals = module.loadExecApprovals;
   mergeExecApprovalsSocketDefaults = module.mergeExecApprovalsSocketDefaults;
   normalizeExecApprovals = module.normalizeExecApprovals;
@@ -1314,6 +1316,27 @@ describe("exec approvals store helpers", () => {
     });
   });
 
+  it("preserves whitespace-only argPattern bytes for allow-always entries", async () => {
+    const dir = createHomeDir();
+
+    ensureExecApprovals();
+    await persistAllowAlwaysDecision({
+      agentId: "worker",
+      decision: {
+        kind: "patterns",
+        patterns: [{ pattern: "*", argPattern: "  " }],
+      },
+    });
+
+    expect(allowlistEntries(dir, "worker")).toEqual([
+      expect.objectContaining({
+        pattern: "*",
+        argPattern: "  ",
+        source: "allow-always",
+      }),
+    ]);
+  });
+
   it("records allowlist usage on the matching entry and backfills missing ids", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(999_000);
@@ -1473,6 +1496,61 @@ describe("exec approvals store helpers", () => {
       }),
     ).rejects.toThrow("Exec approval changed before execution");
     expect(readApprovalsFile(dir).agents?.main?.allowlist).toEqual([]);
+  });
+
+  it("rejects reusable execution when its matched argPattern bytes change", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off" },
+      agents: {
+        main: {
+          allowlist: [{ pattern: "/usr/bin/rg", argPattern: " ^safe$ ", id: "rg-id" }],
+        },
+      },
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [{ pattern: "/usr/bin/rg", argPattern: "^safe$", id: "rg-id" }],
+        command: "rg safe",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "off",
+          allowlistSatisfied: true,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+    expect(readApprovalsFile(dir).agents?.main?.allowlist).toEqual([
+      { pattern: "/usr/bin/rg", argPattern: " ^safe$ ", id: "rg-id" },
+    ]);
+  });
+
+  it("rejects reusable execution when matched entry fields collide under separator encoding", async () => {
+    const dir = createHomeDir();
+    const currentEntry = { pattern: "/usr/bin/rg\x00a", argPattern: "b", id: "current-id" };
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off" },
+      agents: { main: { allowlist: [currentEntry] } },
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [{ pattern: "/usr/bin/rg", argPattern: "a\x00b", id: "stale-id" }],
+        command: "rg needle",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "off",
+          allowlistSatisfied: true,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+    expect(readApprovalsFile(dir).agents?.main?.allowlist).toEqual([currentEntry]);
   });
 
   it("rejects reusable execution when current policy changes to deny", async () => {
@@ -1711,12 +1789,57 @@ describe("exec approvals store helpers", () => {
     expect(allowlistEntries(dir, "main")).toEqual([]);
   });
 
+  it("rejects an explicit allow-always grant after its matched policy entry is revoked", async () => {
+    const dir = createHomeDir();
+    const matchedEntry = { pattern: "/usr/bin/rg", id: "rg-id" };
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "always" },
+      agents: { main: { allowlist: [matchedEntry] } },
+    });
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        agents: { ...current.agents, main: { allowlist: [] } },
+      }),
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [matchedEntry],
+        command: "rg needle",
+        authorization: {
+          source: "explicit-approval",
+          security: "allowlist",
+          ask: "always",
+          allowlistSatisfied: true,
+          policySnapshot,
+        },
+        allowAlwaysDecision: {
+          kind: "patterns",
+          patterns: [{ pattern: "/usr/bin/rg" }],
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+    expect(allowlistEntries(dir, "main")).toEqual([]);
+  });
+
   it("commits an explicit allow-always grant after current-policy authorization", async () => {
     const dir = createHomeDir();
     saveExecApprovals({
       version: 1,
       defaults: { security: "allowlist", ask: "always" },
       agents: { main: { allowlist: [] } },
+    });
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
     });
 
     await commitExecAuthorization({
@@ -1728,6 +1851,7 @@ describe("exec approvals store helpers", () => {
         security: "allowlist",
         ask: "always",
         allowlistSatisfied: false,
+        policySnapshot,
       },
       allowAlwaysDecision: {
         kind: "exact-command",
@@ -1741,6 +1865,34 @@ describe("exec approvals store helpers", () => {
         source: "allow-always",
       }),
     ]);
+  });
+
+  it("rejects a persistent explicit allow-always grant without a policy snapshot", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "always" },
+      agents: { main: { allowlist: [] } },
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf approved",
+        authorization: {
+          source: "explicit-approval",
+          security: "allowlist",
+          ask: "always",
+          allowlistSatisfied: false,
+        },
+        allowAlwaysDecision: {
+          kind: "exact-command",
+          commandText: "printf approved",
+        },
+      }),
+    ).rejects.toThrow("Allow-always persistence requires a policy snapshot");
+    expect(allowlistEntries(dir, "main")).toEqual([]);
   });
 
   it("does not let current policy create an allow-always grant", async () => {

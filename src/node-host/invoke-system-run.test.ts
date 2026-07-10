@@ -1842,6 +1842,78 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it("does not restore a revoked allowlist rule during explicit allow-always persistence", async () => {
+    const tempDir = createFixtureDir("openclaw-allow-always-revoked-rule-");
+    const executablePath = createTempExecutable({ dir: tempDir, name: "approved-tool" });
+    const matchedEntry = { pattern: fs.realpathSync(executablePath) };
+    const expectedPolicySnapshot = {
+      security: "allowlist" as const,
+      ask: "always" as const,
+      askFallback: "deny" as const,
+      autoAllowSkills: false,
+      allowlistRuleKeys: [JSON.stringify([matchedEntry.pattern, null, null])],
+    };
+
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: { security: "allowlist", ask: "always", askFallback: "deny" },
+        agents: { main: { allowlist: [matchedEntry] } },
+      },
+      run: async () => {
+        let capturedAuthorization:
+          | Parameters<typeof commitExecAuthorizationLocked>[0]["authorization"]
+          | undefined;
+        const commitAuthorization = vi.fn(
+          async (params: Parameters<typeof commitExecAuthorizationLocked>[0]) => {
+            capturedAuthorization = params.authorization;
+            const current = loadExecApprovals();
+            const main = current.agents?.main;
+            saveExecApprovals({
+              ...current,
+              agents: {
+                ...current.agents,
+                main: { ...main, allowlist: [] },
+              },
+            });
+            await commitExecAuthorizationLocked(params);
+          },
+        );
+
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: [executablePath],
+          security: "allowlist",
+          ask: "always",
+          approvalDecision: "allow-always",
+          approved: true,
+          commitExecAuthorization: commitAuthorization,
+        });
+
+        expect(commitAuthorization).toHaveBeenCalledTimes(1);
+        expect(commitAuthorization).toHaveBeenCalledWith(
+          expect.objectContaining({
+            allowAlwaysDecision: expect.objectContaining({ kind: "patterns" }),
+          }),
+        );
+        expect(capturedAuthorization).toEqual({
+          source: "explicit-approval",
+          security: "allowlist",
+          ask: "always",
+          allowlistSatisfied: true,
+          policySnapshot: expectedPolicySnapshot,
+          requireAutoAllowSkills: false,
+          requireExactCommandApproval: false,
+          requireDurableAllowlistApproval: false,
+        });
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expect(invoke.sendExecFinishedEvent).not.toHaveBeenCalled();
+        expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
+        expectApprovalStateWriteDenied(invoke);
+      },
+    });
+  });
+
   it("fails closed when allowlist usage persistence fails", async () => {
     const tempDir = createFixtureDir("openclaw-allowlist-usage-write-failure-");
     const executablePath = createTempExecutable({ dir: tempDir, name: "allowlisted-tool" });
@@ -2906,6 +2978,86 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           },
         });
       }
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("fails closed when cmd.exe wrapper trust is downgraded before execution", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const tempDir = createFixtureDir("openclaw-cmd-wrapper-downgraded-");
+      const scriptPath = path.join(tempDir, "check_mail.cmd");
+      fs.writeFileSync(scriptPath, "@echo off\r\necho ok\r\n");
+      const command = ["env", "FOO=bar", "cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`];
+      const prepared = buildSystemRunApprovalPlan({ command, cwd: tempDir });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      const commandPattern = `=command:${crypto
+        .createHash("sha256")
+        .update(prepared.plan.commandText)
+        .digest("hex")
+        .slice(0, 16)}`;
+
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals({
+          agents: {
+            main: {
+              allowlist: [
+                { pattern: scriptPath },
+                { pattern: commandPattern, source: "allow-always" },
+              ],
+            },
+          },
+        }),
+        run: async () => {
+          const commitAuthorization = vi.fn(
+            async (params: Parameters<typeof commitExecAuthorizationLocked>[0]) => {
+              const current = loadExecApprovals();
+              current.agents = {
+                ...current.agents,
+                main: {
+                  allowlist: [{ pattern: scriptPath }, { pattern: commandPattern }],
+                },
+              };
+              saveExecApprovals(current);
+              await commitExecAuthorizationLocked(params);
+            },
+          );
+          const invoke = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: prepared.plan.argv,
+            rawCommand: prepared.plan.commandText,
+            systemRunPlan: prepared.plan,
+            cwd: prepared.plan.cwd ?? tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+            isCmdExeInvocation: (argv) => {
+              const token = argv[0]?.trim();
+              if (!token) {
+                return false;
+              }
+              const base = path.win32.basename(token).toLowerCase();
+              return base === "cmd.exe" || base === "cmd";
+            },
+            commitExecAuthorization: commitAuthorization,
+          });
+
+          expect(commitAuthorization).toHaveBeenCalledWith(
+            expect.objectContaining({
+              authorization: expect.objectContaining({
+                source: "current-policy",
+                requireExactCommandApproval: true,
+              }),
+            }),
+          );
+          expect(invoke.runCommand).not.toHaveBeenCalled();
+          expect(invoke.sendExecFinishedEvent).not.toHaveBeenCalled();
+          expectApprovalStateWriteDenied(invoke);
+        },
+      });
     } finally {
       platformSpy.mockRestore();
     }

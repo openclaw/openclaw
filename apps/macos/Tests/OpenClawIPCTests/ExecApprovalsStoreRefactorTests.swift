@@ -217,7 +217,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `string source and empty arg pattern remain cross-runtime compatible`() async throws {
+    func `string source and arg pattern bytes remain cross-runtime compatible`() async throws {
         try await self.withTempStateDir { _ in
             let raw = Data(
                 """
@@ -246,11 +246,25 @@ struct ExecApprovalsStoreRefactorTests {
             #expect(entry.id == "external-entry")
             #expect(entry.pattern == "/usr/bin/printf")
             #expect(entry.source == "external-policy")
-            #expect(entry.argPattern == nil)
+            #expect(entry.argPattern == "  ")
 
             let persisted = try #require(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.first)
             #expect(persisted.source == "external-policy")
-            #expect(persisted.argPattern == nil)
+            #expect(persisted.argPattern == "  ")
+        }
+    }
+
+    @Test
+    func `native add preserves arg pattern bytes`() async throws {
+        try await self.withTempStateDir { _ in
+            _ = try ExecApprovalsStore.addAllowlistEntry(
+                agentId: "main",
+                pattern: "/usr/bin/rg",
+                argPattern: " ^safe$ ").get()
+
+            let entry = try #require(
+                ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.first)
+            #expect(entry.argPattern == " ^safe$ ")
         }
     }
 
@@ -1183,6 +1197,103 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `usage checkpoint rejects changed arg pattern bytes`() async throws {
+        try await self.withTempStateDir { _ in
+            let stale = ExecAllowlistEntry(
+                id: "stale",
+                pattern: "/usr/bin/rg",
+                argPattern: "^safe$")
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .allowlist
+                entry.ask = .off
+                entry.allowlist = [stale]
+            }.get()
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.allowlist = [ExecAllowlistEntry(
+                    id: "stale",
+                    pattern: "/usr/bin/rg",
+                    argPattern: " ^safe$ ")]
+            }.get()
+
+            let result = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
+                agentId: "main",
+                command: "rg safe",
+                authorization: .currentPolicy(
+                    evaluatedSecurity: .allowlist,
+                    evaluatedAsk: .off,
+                    basis: .allowlistEntries),
+                uses: [ExecAllowlistUse(match: stale, resolvedPath: "/usr/bin/rg")]))
+
+            guard case .failure(.unavailable) = result else {
+                Issue.record("expected changed arg pattern approval checkpoint to fail")
+                return
+            }
+            let current = try #require(
+                ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.first)
+            #expect(current.argPattern == " ^safe$ ")
+            #expect(current.lastUsedCommand == nil)
+        }
+    }
+
+    @Test
+    func `usage checkpoint rejects canonically equivalent changed arg pattern bytes`() async throws {
+        try await self.withTempStateDir { _ in
+            let evaluatedArgPattern = "^caf\u{00E9}$"
+            let currentArgPattern = "^cafe\u{0301}$"
+            #expect(evaluatedArgPattern == currentArgPattern)
+            #expect(Data(evaluatedArgPattern.utf8) != Data(currentArgPattern.utf8))
+
+            let stale = ExecAllowlistEntry(
+                id: "stale",
+                pattern: "/usr/bin/rg",
+                argPattern: evaluatedArgPattern)
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .allowlist
+                entry.ask = .off
+                entry.allowlist = [stale]
+            }.get()
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.allowlist = [ExecAllowlistEntry(
+                    id: "stale",
+                    pattern: "/usr/bin/rg",
+                    argPattern: currentArgPattern)]
+            }.get()
+
+            let result = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
+                agentId: "main",
+                command: "rg caf\u{00E9}",
+                authorization: .currentPolicy(
+                    evaluatedSecurity: .allowlist,
+                    evaluatedAsk: .off,
+                    basis: .allowlistEntries),
+                uses: [ExecAllowlistUse(match: stale, resolvedPath: "/usr/bin/rg")]))
+
+            guard case .failure(.unavailable) = result else {
+                Issue.record("expected Unicode-normalized approval checkpoint to fail")
+                return
+            }
+            let current = try #require(
+                ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.first)
+            #expect(try Data(#require(current.argPattern).utf8) == Data(currentArgPattern.utf8))
+            #expect(current.lastUsedCommand == nil)
+        }
+    }
+
+    @Test
+    func `allowlist match key separates embedded nul boundaries`() {
+        let nulInPattern = ExecAllowlistEntry(
+            pattern: "/usr/bin/rg\0safe",
+            argPattern: "value")
+        let nulInArgPattern = ExecAllowlistEntry(
+            pattern: "/usr/bin/rg",
+            argPattern: "safe\0value")
+
+        #expect(
+            ExecApprovalsStore.allowlistEntryMatchKey(nulInPattern) !=
+                ExecApprovalsStore.allowlistEntryMatchKey(nulInArgPattern))
+    }
+
+    @Test
     func `execution commit rejects unprompted full policy after concurrent deny`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
@@ -1341,7 +1452,10 @@ struct ExecApprovalsStoreRefactorTests {
                 autoAllowSkills: evaluated.agent.autoAllowSkills,
                 allowlist: evaluated.allowlist)
             let grant = ExecAllowlistUse(
-                match: ExecAllowlistEntry(pattern: "/usr/bin/printf", source: "allow-always"),
+                match: ExecAllowlistEntry(
+                    pattern: "/usr/bin/printf",
+                    source: "allow-always",
+                    argPattern: " ^ok$ "),
                 resolvedPath: "/usr/bin/printf")
 
             _ = try ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
@@ -1356,6 +1470,7 @@ struct ExecApprovalsStoreRefactorTests {
             let entry = try #require(ExecApprovalsStore.resolve(agentId: "main").allowlist.first)
             #expect(entry.pattern == "/usr/bin/printf")
             #expect(entry.source == "allow-always")
+            #expect(entry.argPattern == " ^ok$ ")
             #expect(entry.lastUsedAt != nil)
             #expect(entry.lastUsedCommand == "printf ok")
             #expect(entry.lastResolvedPath == "/usr/bin/printf")

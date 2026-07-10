@@ -1978,16 +1978,13 @@ export function hasExactCommandDurableExecApproval(params: {
 
 export type DurableExecApprovalRequirement = "exact-command" | "segment-allowlist";
 
-/** Names the durable grant that must still exist when execution commits. */
+/** Callers pass whether their final, post-gate authorization depends on a durable grant. */
 export function resolveDurableExecApprovalRequirement(params: {
-  durableApprovalSatisfied: boolean;
-  allowlistAuthorizationSatisfied: boolean;
+  durableApprovalRequired: boolean;
   allowlist?: readonly ExecAllowlistEntry[];
   commandText?: string | null;
 }): DurableExecApprovalRequirement | null {
-  // Do not bind execution to an incidental durable grant when current policy
-  // already authorizes every segment through allowlist, safe-bin, builtin, or skill trust.
-  if (!params.durableApprovalSatisfied || params.allowlistAuthorizationSatisfied) {
+  if (!params.durableApprovalRequired) {
     return null;
   }
   return hasExactCommandDurableExecApproval({
@@ -2012,7 +2009,56 @@ function hasSegmentDurableExecApproval(params: {
 function buildAllowlistEntryMatchKey(
   entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern">,
 ): string {
-  return `${entry.pattern}\x00${entry.argPattern?.trim() ?? ""}`;
+  return JSON.stringify([entry.pattern, entry.argPattern ?? null]);
+}
+
+export type ExecApprovalPolicySnapshot = {
+  security: ExecSecurity;
+  ask: ExecAsk;
+  askFallback: ExecSecurity;
+  autoAllowSkills: boolean;
+  allowlistRuleKeys: readonly string[];
+};
+
+function buildExecApprovalPolicyRuleKey(entry: ExecAllowlistEntry): string {
+  // A JSON tuple preserves exact regex bytes without delimiter collisions.
+  return JSON.stringify([entry.pattern, entry.argPattern ?? null, entry.source ?? null]);
+}
+
+/** Captures effective file policy while excluding ids and mutable usage metadata. */
+export function createExecApprovalPolicySnapshot(params: {
+  file: ExecApprovalsFile;
+  agentId: string | undefined;
+}): ExecApprovalPolicySnapshot {
+  // Runtime overrides are deliberately absent: the snapshot protects the
+  // persisted policy that may change while a human approval is pending.
+  const resolved = resolveExecApprovalsFromFile({
+    file: params.file,
+    agentId: params.agentId,
+  });
+  return {
+    security: resolved.agent.security,
+    ask: resolved.agent.ask,
+    askFallback: resolved.agent.askFallback,
+    autoAllowSkills: resolved.agent.autoAllowSkills,
+    allowlistRuleKeys: [
+      ...new Set(resolved.allowlist.map(buildExecApprovalPolicyRuleKey)),
+    ].toSorted(),
+  };
+}
+
+function execApprovalPolicySnapshotsEqual(
+  left: ExecApprovalPolicySnapshot,
+  right: ExecApprovalPolicySnapshot,
+): boolean {
+  return (
+    left.security === right.security &&
+    left.ask === right.ask &&
+    left.askFallback === right.askFallback &&
+    left.autoAllowSkills === right.autoAllowSkills &&
+    left.allowlistRuleKeys.length === right.allowlistRuleKeys.length &&
+    left.allowlistRuleKeys.every((key, index) => key === right.allowlistRuleKeys[index])
+  );
 }
 
 export type ExecApprovalUsageAuthorization = {
@@ -2020,6 +2066,7 @@ export type ExecApprovalUsageAuthorization = {
   security: ExecSecurity;
   ask: ExecAsk;
   allowlistSatisfied: boolean;
+  policySnapshot?: ExecApprovalPolicySnapshot;
   requireAutoAllowSkills?: boolean;
   requireExactCommandApproval?: boolean;
   requireDurableAllowlistApproval?: boolean;
@@ -2046,6 +2093,16 @@ function assertCurrentUsageAuthorization(params: {
     throw new Error("Exec approval changed before execution");
   }
   if (params.authorization.source === "explicit-approval") {
+    const expectedPolicy = params.authorization.policySnapshot;
+    if (
+      expectedPolicy &&
+      !execApprovalPolicySnapshotsEqual(
+        expectedPolicy,
+        createExecApprovalPolicySnapshot({ file: params.file, agentId: params.agentId }),
+      )
+    ) {
+      throw new Error("Exec approval changed before execution");
+    }
     return;
   }
   if (params.authorization.source === "auto-review") {
@@ -2258,12 +2315,13 @@ export async function commitExecAuthorizationLocked(params: {
   authorization: ExecApprovalUsageAuthorization;
   allowAlwaysDecision?: AllowAlwaysPersistenceDecision;
 }): Promise<void> {
-  if (
-    params.allowAlwaysDecision &&
-    params.allowAlwaysDecision.kind !== "one-shot" &&
-    params.authorization.source !== "explicit-approval"
-  ) {
-    throw new Error("Allow-always persistence requires explicit approval");
+  if (params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot") {
+    if (params.authorization.source !== "explicit-approval") {
+      throw new Error("Allow-always persistence requires explicit approval");
+    }
+    if (!params.authorization.policySnapshot) {
+      throw new Error("Allow-always persistence requires a policy snapshot");
+    }
   }
   await updateExecApprovals({
     update: (file) => {
@@ -2314,9 +2372,9 @@ function applyAllowlistEntryUpdate(params: {
   if (!trimmed) {
     return null;
   }
-  const trimmedArgPattern = normalizeOptionalString(params.options?.argPattern);
+  const argPattern = params.options?.argPattern === "" ? undefined : params.options?.argPattern;
   const existingEntry = allowlist.find(
-    (entry) => entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern,
+    (entry) => entry.pattern === trimmed && (entry.argPattern ?? undefined) === argPattern,
   );
   if (
     existingEntry &&
@@ -2327,10 +2385,10 @@ function applyAllowlistEntryUpdate(params: {
   const now = Date.now();
   const nextAllowlist = existingEntry
     ? allowlist.map((entry) =>
-        entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern
+        entry.pattern === trimmed && (entry.argPattern ?? undefined) === argPattern
           ? {
               ...entry,
-              argPattern: trimmedArgPattern,
+              argPattern,
               source: params.options?.source ?? entry.source,
               lastUsedAt: now,
             }
@@ -2341,7 +2399,7 @@ function applyAllowlistEntryUpdate(params: {
         {
           id: crypto.randomUUID(),
           pattern: trimmed,
-          argPattern: trimmedArgPattern,
+          argPattern,
           source: params.options?.source,
           lastUsedAt: now,
         },
