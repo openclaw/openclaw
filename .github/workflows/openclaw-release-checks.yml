@@ -652,10 +652,9 @@ jobs:
       actions: read
       contents: read
       packages: read
-    uses: ./.github/workflows/install-smoke.yml
+    uses: ./.github/workflows/install-smoke-reusable.yml
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
-      root_image_transport: no-push-artifact
       run_bun_global_install_smoke: true
 
   cross_os_release_checks:

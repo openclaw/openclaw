@@ -224,6 +224,9 @@ function ghWorkflowCommand(lanes, ref, workflow, reuseInputs = {}) {
   if (reuseInputs.functionalImage) {
     fields.push("-f", `docker_e2e_functional_image=${shellQuote(reuseInputs.functionalImage)}`);
   }
+  if (reuseInputs.bareImage || reuseInputs.functionalImage) {
+    fields.push("-f", "shared_image_policy=existing-only");
+  }
   if (reuseInputs.publishedUpgradeSurvivorBaseline) {
     fields.push(
       "-f",
@@ -392,7 +395,9 @@ function safePathSegment(value) {
 }
 
 function defaultOutputDir(input) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-docker-e2e-rerun-${safePathSegment(input)}-`));
+  return fs.mkdtempSync(
+    path.join(os.tmpdir(), `openclaw-docker-e2e-rerun-${safePathSegment(input)}-`),
+  );
 }
 
 function printEntries(entries, ref, workflow, runValue) {
@@ -432,13 +437,13 @@ function printEntries(entries, ref, workflow, runValue) {
         );
       }
     }
-      console.log("");
-      console.log("Per-lane GitHub reruns:");
-      for (const entry of workflowEntries) {
-        console.log(
-          `- ${entry.lane}: ${ghWorkflowCommand([entry.lane], ref, workflow, entry.reuseInputs)}`,
-        );
-      }
+    console.log("");
+    console.log("Per-lane GitHub reruns:");
+    for (const entry of workflowEntries) {
+      console.log(
+        `- ${entry.lane}: ${ghWorkflowCommand([entry.lane], ref, workflow, entry.reuseInputs)}`,
+      );
+    }
   } else {
     console.log("");
     console.log("No targetable failed Docker E2E lanes found.");

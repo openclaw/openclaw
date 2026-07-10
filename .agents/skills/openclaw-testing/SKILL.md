@@ -575,11 +575,12 @@ docker_lanes: install-e2e bundled-channel-update-acpx
 
 That skips the release chunk matrix and runs one targeted Docker job against the
 prepared GHCR images and the selected package artifact. Rerun commands
-generated inside GitHub artifacts include `package_artifact_run_id`,
-`package_artifact_name`, `docker_e2e_bare_image`, and
-`docker_e2e_functional_image` when available, so failed lanes can reuse the
-exact tarball and prepared images from the failed run. When the fix changes
-package contents, omit those reuse inputs so the workflow packs a new tarball.
+generated inside GitHub artifacts include `package_artifact_run_id` and
+`package_artifact_name`. They add `docker_e2e_bare_image`,
+`docker_e2e_functional_image`, and `shared_image_policy=existing-only` only for
+GHCR-backed images; runner-local artifact images are rebuilt on a fresh rerun.
+When the fix changes package contents, omit the reuse inputs so the workflow
+packs a new tarball.
 Live-only targeted reruns skip the E2E images and build only the live-test
 image. Release-path normal mode fans out into smaller Docker chunk jobs:
 

@@ -441,9 +441,9 @@ When debugging a failed package acceptance run, start at the `resolve_package` s
 
 ## Install smoke
 
-The separate `Install Smoke` workflow no longer runs on pull requests or `main` pushes. It runs on a nightly schedule, on manual dispatch, and as a workflow call from release validation, and every run takes the full install-smoke path on GitHub-hosted runners:
+The `Install Smoke` workflow no longer runs on pull requests or `main` pushes. Its nightly/manual wrapper and release validation both call the read-only `install-smoke-reusable.yml` core, and every run takes the full install-smoke path on GitHub-hosted runners:
 
-- The root Dockerfile smoke image is built once per target SHA (or reused from GHCR as `ghcr.io/openclaw/openclaw-dockerfile-smoke:<sha>`), then the CLI smoke, the agents delete shared-workspace CLI smoke, the container gateway-network E2E, and the bundled `matrix` plugin build-arg smoke run against it. The plugin smoke verifies runtime dependency install mirroring and that the plugin loads without entry-escape diagnostics.
+- The root Dockerfile smoke image is built once per target SHA, bound to the workflow revision and producer attempt in an immutable artifact, then loaded by the CLI smoke, agents delete shared-workspace CLI smoke, container gateway-network E2E, and bundled `matrix` plugin build-arg smoke. The plugin smoke verifies runtime dependency install mirroring and that the plugin loads without entry-escape diagnostics.
 - QR package install and the installer/update Docker smokes (including Rocky Linux installer lanes and an update lane against a configurable `update_baseline_version` npm baseline) run as separate jobs so installer work does not wait behind the root image smokes.
 
 The slow Bun global install image-provider smoke is separately gated by `run_bun_global_install_smoke`. It runs on the nightly schedule, defaults on for workflow calls from release checks, and manual `Install Smoke` dispatches can opt into it. Normal PR CI still runs the fast Bun launcher regression lane for Node-relevant changes. QR and installer Docker tests keep their own install-focused Dockerfiles.

@@ -20,6 +20,7 @@ import {
   describeDockerSchedulerLimits,
   dockerPreflightContainerNames,
   dockerPreflightSmokeCommand,
+  githubWorkflowRerunCommand,
   LOG_TAIL_MAX_BYTES,
   parseDockerAllCliArgs,
   resolveDockerPreflightPlatform,
@@ -147,6 +148,28 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer");
     expect(result.stderr).not.toContain("at ");
+  });
+
+  it("reuses only registry-backed images in generated workflow reruns", () => {
+    const localCommand = githubWorkflowRerunCommand(["install-e2e"], "a".repeat(40), {
+      OPENCLAW_DOCKER_E2E_BARE_IMAGE: "openclaw-docker-e2e-bare:local",
+      OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: "openclaw-docker-e2e-functional:local",
+    });
+    expect(localCommand).not.toContain("docker_e2e_bare_image=");
+    expect(localCommand).not.toContain("docker_e2e_functional_image=");
+    expect(localCommand).not.toContain("shared_image_policy=existing-only");
+
+    const registryCommand = githubWorkflowRerunCommand(["install-e2e"], "b".repeat(40), {
+      OPENCLAW_DOCKER_E2E_BARE_IMAGE: "ghcr.io/openclaw/openclaw-docker-e2e-bare:test",
+      OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: "ghcr.io/openclaw/openclaw-docker-e2e-functional:test",
+    });
+    expect(registryCommand).toContain(
+      "docker_e2e_bare_image='ghcr.io/openclaw/openclaw-docker-e2e-bare:test'",
+    );
+    expect(registryCommand).toContain(
+      "docker_e2e_functional_image='ghcr.io/openclaw/openclaw-docker-e2e-functional:test'",
+    );
+    expect(registryCommand).toContain("shared_image_policy=existing-only");
   });
 
   it("rejects loose numeric resource limit env vars before scheduling lanes", () => {

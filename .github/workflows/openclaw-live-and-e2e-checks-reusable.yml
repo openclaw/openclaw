@@ -6,7 +6,6 @@ on:
       ref:
         description: Ref, tag, or SHA to validate
         required: true
-        default: main
         type: string
       include_repo_e2e:
         description: Whether to run pnpm test:e2e plus repo-specific extra E2E lanes
@@ -51,10 +50,9 @@ on:
       shared_image_policy:
         description: Shared Docker image transport
         required: true
-        default: allow-push
+        default: no-push-artifact
         type: choice
         options:
-          - allow-push
           - existing-only
           - no-push-artifact
       shared_image_artifact_namespace:
@@ -223,9 +221,9 @@ on:
         default: ""
         type: string
       shared_image_policy:
-        description: "Shared Docker image transport: allow-push, existing-only, or no-push-artifact"
+        description: "Shared Docker image transport: existing-only or no-push-artifact"
         required: false
-        default: allow-push
+        default: no-push-artifact
         type: string
       shared_image_artifact_namespace:
         description: Safe unique artifact namespace when shared_image_policy=no-push-artifact
@@ -277,6 +275,10 @@ on:
         required: false
         default: true
         type: boolean
+    outputs:
+      publication_manifest:
+        description: Immutable tested-image artifact manifest for an explicit publisher workflow
+        value: ${{ jobs.collect_shared_image_publication.outputs.manifest }}
     secrets:
       OPENAI_API_KEY:
         required: false
@@ -506,8 +508,6 @@ jobs:
           fi
 
           case "$SHARED_IMAGE_POLICY" in
-            allow-push)
-              ;;
             existing-only)
               if [[ -z "${PROVIDED_BARE_IMAGE// }" && -z "${PROVIDED_FUNCTIONAL_IMAGE// }" ]]; then
                 echo "shared_image_policy=existing-only requires explicit shared image refs." >&2
@@ -529,7 +529,7 @@ jobs:
               }
               ;;
             *)
-              echo "shared_image_policy must be allow-push, existing-only, or no-push-artifact." >&2
+              echo "shared_image_policy must be existing-only or no-push-artifact." >&2
               exit 1
               ;;
           esac
@@ -2056,7 +2056,7 @@ jobs:
           echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
-        if: steps.plan.outputs.needs_e2e_image == '1' && (inputs.shared_image_policy == 'allow-push' || inputs.shared_image_policy == 'existing-only')
+        if: steps.plan.outputs.needs_e2e_image == '1' && inputs.shared_image_policy == 'existing-only'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -2064,7 +2064,7 @@ jobs:
 
       - name: Check existing shared Docker E2E images
         id: image_exists
-        if: steps.plan.outputs.needs_e2e_image == '1' && (inputs.shared_image_policy == 'allow-push' || inputs.shared_image_policy == 'existing-only')
+        if: steps.plan.outputs.needs_e2e_image == '1' && inputs.shared_image_policy == 'existing-only'
         shell: bash
         env:
           PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
@@ -2196,126 +2196,8 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-  push_docker_e2e_images:
-    needs: [validate_selected_ref, prepare_docker_e2e_image]
-    if: inputs.shared_image_policy == 'allow-push' && needs.prepare_docker_e2e_image.outputs.needs_registry_build == '1'
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
-    permissions:
-      actions: read
-      contents: read
-      packages: write
-    env:
-      DOCKER_BUILD_SUMMARY: "false"
-      DOCKER_BUILD_RECORD_UPLOAD: "false"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Download OpenClaw Docker E2E package
-        if: needs.prepare_docker_e2e_image.outputs.needs_functional_image == '1' && needs.prepare_docker_e2e_image.outputs.functional_exists != '1'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_id }}
-          path: .artifacts/docker-e2e-package
-          run-id: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_run_id }}
-          github-token: ${{ github.token }}
-
-      - name: Normalize OpenClaw Docker E2E package
-        if: needs.prepare_docker_e2e_image.outputs.needs_functional_image == '1' && needs.prepare_docker_e2e_image.outputs.functional_exists != '1'
-        shell: bash
-        run: |
-          set -euo pipefail
-          target=".artifacts/docker-e2e-package/openclaw-current.tgz"
-          if [[ ! -f "$target" ]]; then
-            mapfile -t tgzs < <(find .artifacts/docker-e2e-package -type f -name '*.tgz' | sort)
-            if [[ "${#tgzs[@]}" -ne 1 ]]; then
-              echo "Expected exactly one package tarball for the registry image build; found ${#tgzs[@]}." >&2
-              exit 1
-            fi
-            cp "${tgzs[0]}" "$target"
-          fi
-
-      - name: Log in to GHCR
-        run: bash scripts/ci-docker-login-ghcr.sh
-        env:
-          GHCR_USERNAME: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Setup Docker builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
-        with:
-          max-cache-size-mb: 800000
-
-      - name: Build and push bare Docker E2E image
-        if: needs.prepare_docker_e2e_image.outputs.needs_bare_image == '1' && needs.prepare_docker_e2e_image.outputs.bare_exists != '1'
-        shell: bash
-        env:
-          IMAGE_REF: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
-        run: |
-          set -euo pipefail
-          build_cmd=(
-            docker buildx build
-            --file ./scripts/e2e/Dockerfile
-            --target bare
-            --platform linux/amd64
-            --tag "$IMAGE_REF"
-            --sbom=true
-            --provenance=mode=max
-            --push
-            .
-          )
-          for attempt in 1 2 3 4; do
-            if "${build_cmd[@]}"; then
-              exit 0
-            fi
-            if [[ "$attempt" == "4" ]]; then
-              echo "::error::Failed to build Docker E2E bare image after ${attempt} attempts"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 20))
-            echo "Docker E2E bare image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
-            sleep "$sleep_seconds"
-          done
-
-      - name: Build and push functional Docker E2E image
-        if: needs.prepare_docker_e2e_image.outputs.needs_functional_image == '1' && needs.prepare_docker_e2e_image.outputs.functional_exists != '1'
-        shell: bash
-        env:
-          IMAGE_REF: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-        run: |
-          set -euo pipefail
-          build_cmd=(
-            docker buildx build
-            --file ./scripts/e2e/Dockerfile
-            --target functional
-            --build-context openclaw_package=.artifacts/docker-e2e-package
-            --platform linux/amd64
-            --tag "$IMAGE_REF"
-            --sbom=true
-            --provenance=mode=max
-            --push
-            .
-          )
-          for attempt in 1 2 3 4; do
-            if "${build_cmd[@]}"; then
-              exit 0
-            fi
-            if [[ "$attempt" == "4" ]]; then
-              echo "::error::Failed to build Docker E2E functional image after ${attempt} attempts"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 20))
-            echo "Docker E2E functional image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
-            sleep "$sleep_seconds"
-          done
-
   docker_e2e_image_ready:
-    needs: [prepare_docker_e2e_image, push_docker_e2e_images]
+    needs: prepare_docker_e2e_image
     if: always() && needs.prepare_docker_e2e_image.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -2325,23 +2207,11 @@ jobs:
       - name: Verify Docker E2E image preparation
         env:
           PREPARE_RESULT: ${{ needs.prepare_docker_e2e_image.result }}
-          PUSH_RESULT: ${{ needs.push_docker_e2e_images.result }}
-          NEEDS_REGISTRY_BUILD: ${{ needs.prepare_docker_e2e_image.outputs.needs_registry_build }}
-          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ "$PREPARE_RESULT" != "success" ]]; then
             echo "Docker E2E image preparation ended with ${PREPARE_RESULT}." >&2
-            exit 1
-          fi
-          if [[ "$SHARED_IMAGE_POLICY" == "allow-push" && "$NEEDS_REGISTRY_BUILD" == "1" ]]; then
-            if [[ "$PUSH_RESULT" != "success" ]]; then
-              echo "Docker E2E registry image publication ended with ${PUSH_RESULT}." >&2
-              exit 1
-            fi
-          elif [[ "$PUSH_RESULT" != "skipped" ]]; then
-            echo "Unexpected Docker E2E registry publication result: ${PUSH_RESULT}." >&2
             exit 1
           fi
 
@@ -2485,53 +2355,8 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-  push_live_test_image:
-    needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.shared_image_policy == 'allow-push' && needs.prepare_live_test_image.outputs.image_exists != '1'
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: write
-    env:
-      DOCKER_BUILD_SUMMARY: "false"
-      DOCKER_BUILD_RECORD_UPLOAD: "false"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Log in to GHCR
-        run: bash scripts/ci-docker-login-ghcr.sh
-        env:
-          GHCR_USERNAME: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Setup Docker builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
-        with:
-          max-cache-size-mb: 800000
-
-      - name: Build and push shared live-test image
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
-        with:
-          context: .
-          file: ./Dockerfile
-          target: build
-          build-args: |
-            OPENCLAW_EXTENSIONS=matrix,acpx
-          platforms: linux/amd64
-          tags: ${{ needs.prepare_live_test_image.outputs.live_image }}
-          sbom: true
-          provenance: mode=max
-          load: false
-          push: true
-
   live_test_image_ready:
-    needs: [prepare_live_test_image, push_live_test_image]
+    needs: prepare_live_test_image
     if: always() && needs.prepare_live_test_image.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -2540,10 +2365,7 @@ jobs:
     steps:
       - name: Verify live-test image preparation
         env:
-          IMAGE_EXISTS: ${{ needs.prepare_live_test_image.outputs.image_exists }}
           PREPARE_RESULT: ${{ needs.prepare_live_test_image.result }}
-          PUSH_RESULT: ${{ needs.push_live_test_image.result }}
-          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2551,15 +2373,143 @@ jobs:
             echo "Live-test image preparation ended with ${PREPARE_RESULT}." >&2
             exit 1
           fi
-          if [[ "$SHARED_IMAGE_POLICY" == "allow-push" && "$IMAGE_EXISTS" != "1" ]]; then
-            if [[ "$PUSH_RESULT" != "success" ]]; then
-              echo "Live-test registry image publication ended with ${PUSH_RESULT}." >&2
-              exit 1
-            fi
-          elif [[ "$PUSH_RESULT" != "skipped" ]]; then
-            echo "Unexpected live-test registry publication result: ${PUSH_RESULT}." >&2
-            exit 1
-          fi
+
+  collect_shared_image_publication:
+    needs: [validate_selected_ref, prepare_docker_e2e_image, prepare_live_test_image]
+    if: always() && inputs.shared_image_policy == 'no-push-artifact' && needs.validate_selected_ref.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      manifest: ${{ steps.manifest.outputs.publication_manifest }}
+    steps:
+      - name: Collect immutable tested-image artifacts
+        id: manifest
+        env:
+          DOCKER_OUTPUTS: ${{ toJSON(needs.prepare_docker_e2e_image.outputs) }}
+          DOCKER_RESULT: ${{ needs.prepare_docker_e2e_image.result }}
+          LIVE_OUTPUTS: ${{ toJSON(needs.prepare_live_test_image.outputs) }}
+          LIVE_RESULT: ${{ needs.prepare_live_test_image.result }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          WORKFLOW_REPOSITORY: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const parseOutputs = (label, value) => {
+            try {
+              return JSON.parse(value || "{}");
+            } catch (error) {
+              throw new Error(`${label} outputs are not valid JSON`, { cause: error });
+            }
+          };
+          const requireMatch = (label, value, pattern) => {
+            if (typeof value !== "string" || !pattern.test(value)) {
+              throw new Error(`${label} is missing or invalid`);
+            }
+            return value;
+          };
+          const optionalMatch = (label, value, pattern) => {
+            if (!value) {
+              return "";
+            }
+            return requireMatch(label, value, pattern);
+          };
+          const artifactFrom = (label, outputs) => {
+            if (!outputs.image_artifact_id) {
+              return null;
+            }
+            return {
+              archiveSha256: requireMatch(
+                `${label} archive SHA-256`,
+                outputs.image_archive_sha256,
+                /^[a-f0-9]{64}$/u,
+              ),
+              digest: requireMatch(
+                `${label} artifact digest`,
+                outputs.image_artifact_digest,
+                /^[a-f0-9]{64}$/u,
+              ),
+              id: requireMatch(`${label} artifact ID`, outputs.image_artifact_id, /^[1-9][0-9]*$/u),
+              name: requireMatch(
+                `${label} artifact name`,
+                outputs.image_artifact_name,
+                /^[A-Za-z0-9][A-Za-z0-9._-]*$/u,
+              ),
+              runAttempt: requireMatch(
+                `${label} run attempt`,
+                outputs.image_artifact_run_attempt,
+                /^[1-9][0-9]*$/u,
+              ),
+              runId: requireMatch(
+                `${label} run ID`,
+                outputs.image_artifact_run_id,
+                /^[1-9][0-9]*$/u,
+              ),
+            };
+          };
+
+          const docker = parseOutputs("Docker E2E", process.env.DOCKER_OUTPUTS);
+          const live = parseOutputs("live-test", process.env.LIVE_OUTPUTS);
+          const dockerArtifact = artifactFrom("Docker E2E", docker);
+          const liveArtifact = artifactFrom("live-test", live);
+          if (process.env.DOCKER_RESULT === "success" && docker.needs_e2e_image === "1" && !dockerArtifact) {
+            throw new Error("Docker E2E image preparation succeeded without an immutable artifact");
+          }
+          if (process.env.LIVE_RESULT === "success" && live.live_image && !liveArtifact) {
+            throw new Error("live-test image preparation succeeded without an immutable artifact");
+          }
+
+          const dockerImages = [];
+          if (docker.needs_bare_image === "1") {
+            dockerImages.push({ role: "bare", ref: docker.bare_image });
+          }
+          if (docker.needs_functional_image === "1") {
+            dockerImages.push({ role: "functional", ref: docker.functional_image });
+          }
+          if (dockerArtifact && dockerImages.length === 0) {
+            throw new Error("Docker E2E artifact has no declared images");
+          }
+
+          const manifest = {
+            schema: "openclaw.shared-image-publication/v1",
+            targetSha: requireMatch("target SHA", process.env.TARGET_SHA, /^[a-f0-9]{40}$/u),
+            workflowRepository: requireMatch(
+              "workflow repository",
+              process.env.WORKFLOW_REPOSITORY,
+              /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u,
+            ),
+            workflowSha: requireMatch(
+              "workflow SHA",
+              process.env.WORKFLOW_SHA,
+              /^[a-f0-9]{40}$/u,
+            ),
+            dockerE2e: dockerArtifact
+              ? {
+                  artifact: dockerArtifact,
+                  images: dockerImages,
+                  packageSha256: optionalMatch(
+                    "Docker E2E package SHA-256",
+                    docker.package_sha256,
+                    /^[a-f0-9]{64}$/u,
+                  ),
+                }
+              : null,
+            liveTest: liveArtifact
+              ? {
+                  artifact: liveArtifact,
+                  images: [{ role: "live", ref: live.live_image }],
+                }
+              : null,
+          };
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `publication_manifest=${JSON.stringify(manifest)}\n`,
+          );
+          NODE
 
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})

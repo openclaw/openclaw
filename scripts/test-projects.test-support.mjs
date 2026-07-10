@@ -482,7 +482,20 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
       "test/scripts/plugin-prerelease-test-plan.test.ts",
     ],
   ],
-  [".github/workflows/install-smoke.yml", ["test/scripts/test-install-sh-docker.test.ts"]],
+  [
+    ".github/workflows/install-smoke.yml",
+    [
+      "test/scripts/install-smoke-no-push-workflow.test.ts",
+      "test/scripts/test-install-sh-docker.test.ts",
+    ],
+  ],
+  [
+    ".github/workflows/install-smoke-reusable.yml",
+    [
+      "test/scripts/install-smoke-no-push-workflow.test.ts",
+      "test/scripts/test-install-sh-docker.test.ts",
+    ],
+  ],
   [
     ".github/workflows/ios-periphery-comment.yml",
     ["test/scripts/ios-periphery-comment-workflow.test.ts"],
@@ -552,6 +565,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ],
   ],
   [
+    ".github/workflows/openclaw-shared-image-publish-reusable.yml",
+    ["test/scripts/release-no-push-workflow.test.ts"],
+  ],
+  [
     ".github/workflows/openclaw-npm-release.yml",
     [
       "test/openclaw-npm-postpublish-verify.test.ts",
@@ -577,7 +594,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [
     ".github/workflows/openclaw-scheduled-live-checks.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/release-no-push-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/openclaw-stable-main-closeout.yml",
