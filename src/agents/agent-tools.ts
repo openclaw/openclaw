@@ -264,6 +264,7 @@ function applyModelProviderToolPolicy(
     config?: OpenClawConfig;
     modelProvider?: string;
     modelApi?: string;
+    modelBaseUrl?: string;
     modelId?: string;
     agentId?: string;
     sessionKey?: string;
@@ -280,6 +281,10 @@ function applyModelProviderToolPolicy(
     config: params?.config,
     agentId: params?.agentId,
     sessionKey: params?.sessionKey,
+    modelProvider: params?.modelProvider,
+    modelApi: params?.modelApi,
+    modelBaseUrl: params?.modelBaseUrl,
+    modelId: params?.modelId,
     preserveToolNames: params?.localModelLeanPreserveToolNames ?? params?.runtimeToolAllowlist,
   });
 
@@ -451,6 +456,8 @@ export function createOpenClawCodingTools(options?: {
   modelId?: string;
   /** Model API for the current provider (used for provider-native tool arbitration). */
   modelApi?: string;
+  /** Resolved endpoint used by the active model transport. */
+  modelBaseUrl?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
   modelContextWindowTokens?: number;
   /** Resolved runtime model compatibility hints. */
@@ -1107,6 +1114,7 @@ export function createOpenClawCodingTools(options?: {
     config: options?.config,
     modelProvider: options?.modelProvider,
     modelApi: options?.modelApi,
+    modelBaseUrl: options?.modelBaseUrl,
     modelId: options?.modelId,
     agentId: options?.agentId,
     sessionKey: options?.sessionKey,

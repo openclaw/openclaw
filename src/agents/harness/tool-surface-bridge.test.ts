@@ -14,11 +14,15 @@ function tools(names: string[]) {
   return names.map(createStubTool);
 }
 
-function createRuntime(config: OpenClawConfig) {
+function createRuntime(
+  config: OpenClawConfig,
+  modelScope: { modelProvider?: string; modelBaseUrl?: string; modelId?: string } = {},
+) {
   return createAgentHarnessToolSurfaceRuntime({
     config,
     executeTool: async () => ({ content: [], details: {} }),
     modelToolsEnabled: true,
+    ...modelScope,
   });
 }
 
@@ -40,6 +44,102 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         .compactTools(tools(["read", "browser"]), { localModelLeanApplied: true })
         .tools.map((tool) => tool.name),
     ).toEqual(["read", "browser"]);
+    runtime.cleanup();
+  });
+
+  it("keeps the full harness tool surface for hosted provider overrides", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "ollama/qwen3-coder",
+          experimental: { localModelLean: true },
+        },
+      },
+    };
+    const runtime = createRuntime(config, {
+      modelProvider: "meta",
+      modelId: "muse-spark-1.1",
+    });
+
+    expect(runtime.toolSearchControlsEnabled).toBe(false);
+    expect(
+      runtime
+        .compactTools(tools(["read", "browser", "cron", "message", "exec"]))
+        .tools.map((tool) => tool.name),
+    ).toEqual(["read", "browser", "cron", "message", "exec"]);
+    runtime.cleanup();
+  });
+
+  it("keeps the full harness surface for an unknown provider on a public endpoint", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            model: "ollama/qwen3-coder",
+            experimental: { localModelLean: true },
+          },
+        ],
+      },
+    };
+    const runtime = createRuntime(config, {
+      modelProvider: "custom-provider",
+      modelBaseUrl: "https://models.example.com/v1",
+      modelId: "hosted-model",
+    });
+
+    expect(runtime.toolSearchControlsEnabled).toBe(false);
+    expect(
+      runtime
+        .compactTools(tools(["read", "browser", "cron", "message", "exec"]))
+        .tools.map((tool) => tool.name),
+    ).toEqual(["read", "browser", "cron", "message", "exec"]);
+    runtime.cleanup();
+  });
+
+  it("applies lean filtering for an unknown provider on a private endpoint", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            model: "ollama/qwen3-coder",
+            experimental: { localModelLean: true },
+          },
+        ],
+      },
+      tools: { toolSearch: { enabled: false } },
+    };
+    const runtime = createRuntime(config, {
+      modelProvider: "custom-provider",
+      modelBaseUrl: "http://192.168.1.50:1234/v1",
+      modelId: "local-model",
+    });
+
+    expect(runtime.toolSearchControlsEnabled).toBe(false);
+    expect(
+      runtime
+        .compactTools(tools(["read", "browser", "cron", "message", "exec"]))
+        .tools.map((tool) => tool.name),
+    ).toEqual(["read", "exec"]);
+    runtime.cleanup();
+  });
+
+  it("still applies lean filtering for known local harness providers", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { experimental: { localModelLean: true } } },
+      tools: { toolSearch: { enabled: false } },
+    };
+    const runtime = createRuntime(config, {
+      modelProvider: "lmstudio",
+      modelId: "qwen3-coder",
+    });
+
+    expect(
+      runtime
+        .compactTools(tools(["read", "browser", "cron", "message", "exec"]))
+        .tools.map((tool) => tool.name),
+    ).toEqual(["read", "exec"]);
     runtime.cleanup();
   });
 

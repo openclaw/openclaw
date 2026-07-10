@@ -201,6 +201,7 @@ export async function createCopilotToolBridge(
     isRawModelRun: isCopilotRawModelRun(attemptParams),
     modelId: input.modelId,
     modelProvider: input.modelProvider,
+    modelBaseUrl: attemptParams.model?.baseUrl,
     modelToolsEnabled: true,
     prompt: attemptParams.prompt,
     runId: attemptParams.runId,
