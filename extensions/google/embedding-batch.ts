@@ -10,6 +10,7 @@ import {
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
+  assertOkOrThrowProviderError,
   createProviderHttpError,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
@@ -125,10 +126,7 @@ async function submitGeminiBatch(params: {
       body: uploadPayload.body,
     },
     onResponse: async (fileRes) => {
-      if (!fileRes.ok) {
-        const text = await fileRes.text();
-        throw new Error(`gemini batch file upload failed: ${fileRes.status} ${text}`);
-      }
+      await assertOkOrThrowProviderError(fileRes, "gemini.batch-file-upload");
       return readProviderJsonResponse<{ name?: string; file?: { name?: string } }>(
         fileRes,
         "gemini.batch-file-upload",
