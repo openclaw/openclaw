@@ -274,4 +274,51 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
       await closeServer(server);
     }
   });
+
+  it("bounds and redacts secrets in token exchange error responses (#103567)", async () => {
+    const leakedSecret = "oauth-client-secret-abc123xyz";
+    const errorBody = JSON.stringify({
+      error: "invalid_grant",
+      error_description: `Authorization failed for client_secret=${leakedSecret}`,
+    });
+    const oversizedSuffix = "x".repeat(32 * 1024);
+    const body = `${errorBody}${oversizedSuffix}`;
+
+    const server = createServer((_req, res) => {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(body);
+    });
+    const port = await listenLoopbackServer(server);
+    const release = vi.fn(async () => undefined);
+
+    try {
+      ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
+        const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
+          ...init,
+          signal,
+        });
+        return { response, release };
+      });
+
+      const result = await testing.exchangeAuthorizationCode(
+        "code-secret-test",
+        "verifier-secret-test",
+        "http://localhost:1455/auth/callback",
+        { timeoutMs: 5000 },
+      );
+
+      expect(result).toMatchObject({ type: "failed" });
+      const message = (result as { type: "failed"; message: string }).message;
+      expect(message).toContain("OpenAI Codex token exchange failed");
+      expect(message).toContain("invalid_grant");
+      // Secret must be redacted from the error message.
+      expect(message).not.toContain(leakedSecret);
+      // Error body is bounded at 16 KiB — the full 32 KiB suffix should not appear.
+      expect(message.length).toBeLessThan(body.length);
+      expect(message.length).toBeLessThan(18 * 1024);
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
