@@ -17,6 +17,7 @@ import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
   parseCommandArgs,
+  resolveEffectiveAgentRuntime,
   resolveCommandArgMenu,
   resolveFastModeState,
   resolveStoredModelOverride,
@@ -182,17 +183,20 @@ function buildTelegramCodexLoginFlowKey(params: {
   ].join(":");
 }
 
+type TelegramCommandMenuModelContext = {
+  provider?: string;
+  model?: string;
+  agentRuntime?: string;
+  thinkingLevel?: string;
+  fastMode?: SessionEntry["fastMode"];
+};
+
 function buildTelegramCommandMenuModelContext(params: {
   provider: string;
   model: string;
   thinkingLevel?: string;
   fastMode?: SessionEntry["fastMode"];
-}): {
-  provider: string;
-  model: string;
-  thinkingLevel?: string;
-  fastMode?: SessionEntry["fastMode"];
-} {
+}): TelegramCommandMenuModelContext {
   return {
     provider: params.provider,
     model: params.model,
@@ -265,12 +269,7 @@ function resolveTelegramCommandMenuModelContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-}): {
-  provider?: string;
-  model?: string;
-  thinkingLevel?: string;
-  fastMode?: SessionEntry["fastMode"];
-} {
+}): TelegramCommandMenuModelContext {
   if (!params.sessionKey.trim()) {
     return {};
   }
@@ -283,38 +282,52 @@ function resolveTelegramCommandMenuModelContext(params: {
     const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
     const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
     const fastMode = entry?.fastMode;
+    let context: TelegramCommandMenuModelContext;
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      return buildTelegramCommandMenuModelContext({
+      context = buildTelegramCommandMenuModelContext({
         provider: defaultModel.provider,
         model: defaultModel.model,
         ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(fastMode !== undefined ? { fastMode } : {}),
       });
-    }
-    const override = resolveStoredModelOverride({
-      sessionEntry: entry,
-      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
-      sessionKey: params.sessionKey,
-      defaultProvider: defaultModel.provider,
-    });
-    if (override?.model) {
-      return buildTelegramCommandMenuModelContext({
-        provider: override.provider || defaultModel.provider,
-        model: override.model,
-        ...(thinkingLevel ? { thinkingLevel } : {}),
-        ...(fastMode !== undefined ? { fastMode } : {}),
+    } else {
+      const override = resolveStoredModelOverride({
+        sessionEntry: entry,
+        loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
+        sessionKey: params.sessionKey,
+        defaultProvider: defaultModel.provider,
       });
+      if (override?.model) {
+        context = buildTelegramCommandMenuModelContext({
+          provider: override.provider || defaultModel.provider,
+          model: override.model,
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+          ...(fastMode !== undefined ? { fastMode } : {}),
+        });
+      } else {
+        const provider =
+          normalizeOptionalString(entry?.providerOverride) ??
+          normalizeOptionalString(entry?.modelProvider);
+        const model =
+          normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model);
+        context = {
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+          ...(fastMode !== undefined ? { fastMode } : {}),
+        };
+      }
     }
-    const provider =
-      normalizeOptionalString(entry?.providerOverride) ??
-      normalizeOptionalString(entry?.modelProvider);
-    const model =
-      normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model);
     return {
-      ...(provider ? { provider } : {}),
-      ...(model ? { model } : {}),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
-      ...(fastMode !== undefined ? { fastMode } : {}),
+      ...context,
+      agentRuntime: resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider: context.provider ?? defaultModel.provider,
+        modelId: context.model ?? defaultModel.model,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionEntry: entry,
+      }),
     };
   } catch {
     return {};
@@ -406,6 +419,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
   agentId: string;
   provider?: string;
   model?: string;
+  agentRuntime?: string;
   thinkingLevel?: string;
   catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
 }): Promise<string> {
@@ -427,6 +441,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
     cfg: params.cfg,
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
+    agentRuntime: params.agentRuntime,
     loadModelCatalog: async () => params.catalog,
   });
 }

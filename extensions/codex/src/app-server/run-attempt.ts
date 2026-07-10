@@ -2762,6 +2762,16 @@ export async function runCodexAppServerAttempt(
     latestStartupErrorNotification = undefined;
     rateLimitsRevisionBeforeLastTurnStart = readCodexRateLimitsRevision(client);
     activeTurnRoute.armTurn();
+    void emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: {
+        phase: "turn_starting",
+        threadId: thread.threadId,
+        model: turnStartParams.model,
+        effort: turnStartParams.effort,
+        collaborationEffort: turnStartParams.collaborationMode?.settings.reasoning_effort,
+      },
+    });
     let acceptedTurnId: string | undefined;
     try {
       const startedTurn = assertCodexTurnStartResponse(
@@ -2824,10 +2834,6 @@ export async function runCodexAppServerAttempt(
       event: buildLlmInputEvent(),
       ctx: hookContext,
       hookRunner,
-    });
-    void emitCodexAppServerEvent(params, {
-      stream: "codex_app_server.lifecycle",
-      data: { phase: "turn_starting", threadId: thread.threadId },
     });
     turn = await startCodexTurn();
   } catch (error) {

@@ -1,12 +1,20 @@
 // Session patch tests cover model/provider edits, subagent patching, provider
 // aliases, model catalog validation, and rejected invalid patch payloads.
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
+
+const acpSessionMetaMocks = vi.hoisted(() => ({
+  readAcpSessionMetaForEntry: vi.fn(),
+}));
+
+vi.mock("../acp/runtime/session-meta.js", () => ({
+  readAcpSessionMetaForEntry: acpSessionMetaMocks.readAcpSessionMetaForEntry,
+}));
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
 const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
@@ -212,6 +220,7 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
 
 describe("gateway sessions patch", () => {
   afterEach(() => {
+    acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReset();
     resetProviderAuthAliasMapCacheForTest();
     resetPluginRuntimeStateForTest();
   });
@@ -825,6 +834,135 @@ describe("gateway sessions patch", () => {
     );
 
     expect(entry.thinkingLevel).toBe("xhigh");
+  });
+
+  test("persists OpenClaw Luna Ultra through the runtime-aware provider profile", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-luna" },
+              models: {
+                "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+        loadGatewayModelCatalog: async () => [],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("ultra");
+  });
+
+  test("remaps stored Ultra to Max when a model patch selects Codex Luna", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-sol" },
+              models: {
+                "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        store: mainStoreEntry({ thinkingLevel: "ultra" }),
+        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.6-luna" },
+        loadGatewayModelCatalog: loadCatalog("openai/gpt-5.6-sol", "openai/gpt-5.6-luna"),
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("max");
+  });
+
+  test("honors an explicit OpenClaw session runtime override for Luna Ultra", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+        } as OpenClawConfig,
+        store: mainStoreEntry({
+          agentRuntimeOverride: "openclaw",
+          agentHarnessId: "codex",
+        }),
+        patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+        loadGatewayModelCatalog: async () => [],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("ultra");
+  });
+
+  test("uses ACP backend metadata on canonical agent keys for thinking validation", async () => {
+    acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReturnValue({
+      backend: "codex",
+      agent: "main",
+      runtimeSessionName: MAIN_SESSION_KEY,
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: 1,
+    });
+
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-luna" },
+            models: {
+              "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      store: mainStoreEntry({}),
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+      loadGatewayModelCatalog: async () => [],
+    });
+
+    expectPatchError(result, 'thinkingLevel "ultra" is not supported');
+    expect(acpSessionMetaMocks.readAcpSessionMetaForEntry).toHaveBeenCalledWith({
+      sessionKey: MAIN_SESSION_KEY,
+      entry: expect.objectContaining({ sessionId: "sess" }),
+    });
+  });
+
+  test("treats the persisted harness id as observational when validating Luna Ultra", async () => {
+    const result = await runPatch({
+      cfg: {
+        agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+      } as OpenClawConfig,
+      store: mainStoreEntry({ agentHarnessId: "openclaw" }),
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+      loadGatewayModelCatalog: async () => [],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain("not supported");
+    }
+  });
+
+  test("preserves an incompatible stored thinkingLevel without loading the catalog for unrelated patches", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      { provider: "synthetic", id: "plain", name: "plain", reasoning: false },
+    ]);
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: { defaults: { model: { primary: "synthetic/plain" } } },
+        } as OpenClawConfig,
+        store: mainStoreEntry({ thinkingLevel: "max" }),
+        patch: { key: MAIN_SESSION_KEY, label: "new label" },
+        loadGatewayModelCatalog,
+      }),
+    );
+
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+    expect(entry).toMatchObject({ label: "new label", thinkingLevel: "max" });
   });
 
   test("sets spawnedBy for ACP sessions", async () => {

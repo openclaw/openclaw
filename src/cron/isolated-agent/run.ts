@@ -3,8 +3,8 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
@@ -111,6 +111,8 @@ import {
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
   resolveSessionTranscriptPath,
+  resolveEffectiveAgentRuntime,
+  resolveSessionRuntimeOverrideForProvider,
   resolveThinkingDefault,
   setSessionRuntimeModel,
 } from "./run.runtime.js";
@@ -550,6 +552,7 @@ type PreparedCronRunContext = {
   inheritDefaultFallbacksForAgentStringModel: boolean;
   modelFallbacksOverride?: string[];
   thinkLevel: ThinkLevel | undefined;
+  thinkingCatalog: ModelCatalogEntry[];
   timeoutMs: number;
   preflightDiagnostics?: CronRunDiagnostics;
   /**
@@ -776,29 +779,47 @@ async function prepareCronRunContext(params: {
   const jobThink = normalizeThinkLevel(
     (input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined) ?? undefined,
   );
-  let thinkLevel: ThinkLevel | undefined = jobThink ?? hooksGmailThinking;
-  if (!thinkLevel) {
+  const sessionThink = normalizeThinkLevel(cronSession.sessionEntry.thinkingLevel);
+  const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
+    cfg: cfgWithAgentDefaults,
+    provider,
+    modelId: model,
+    agentId,
+    sessionKey: agentSessionKey,
+    sessionEntry: cronSession.sessionEntry,
+  });
+  let requestedThinkLevel: ThinkLevel | undefined = jobThink ?? hooksGmailThinking ?? sessionThink;
+  if (!requestedThinkLevel) {
     const thinkingCatalog = await loadCatalog();
-    thinkLevel = resolveThinkingDefault({
+    requestedThinkLevel = resolveThinkingDefault({
       cfg: cfgWithAgentDefaults,
       provider,
       model,
       catalog: thinkingCatalog,
+      agentRuntime: effectiveAgentRuntime,
     });
   }
   const thinkingCatalog = await loadCatalog();
-  if (!isThinkingLevelSupported({ provider, model, level: thinkLevel, catalog: thinkingCatalog })) {
+  if (
+    !isThinkingLevelSupported({
+      provider,
+      model,
+      level: requestedThinkLevel,
+      catalog: thinkingCatalog,
+      agentRuntime: effectiveAgentRuntime,
+    })
+  ) {
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
       provider,
       model,
-      level: thinkLevel,
+      level: requestedThinkLevel,
       catalog: thinkingCatalog,
+      agentRuntime: effectiveAgentRuntime,
     });
-    if (fallbackThinkLevel !== thinkLevel) {
+    if (fallbackThinkLevel !== requestedThinkLevel) {
       logWarn(
-        `[cron:${input.job.id}] Thinking level "${thinkLevel}" is not supported for ${provider}/${model}; downgrading to "${fallbackThinkLevel}".`,
+        `[cron:${input.job.id}] Thinking level "${requestedThinkLevel}" is not supported for ${provider}/${model}; using "${fallbackThinkLevel}" for this candidate.`,
       );
-      thinkLevel = fallbackThinkLevel;
     }
   }
 
@@ -964,13 +985,7 @@ async function prepareCronRunContext(params: {
             provider,
             acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
               provider,
-              harnessRuntime: resolveAgentHarnessPolicy({
-                provider,
-                modelId: model,
-                config: cfgWithAgentDefaults,
-                agentId,
-                sessionKey: agentSessionKey,
-              }).runtime,
+              harnessRuntime: effectiveAgentRuntime,
               config: cfgWithAgentDefaults,
             }),
             agentDir,
@@ -983,12 +998,16 @@ async function prepareCronRunContext(params: {
     const liveSelection: CronLiveSelection = {
       provider,
       model,
+      agentRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
+        provider,
+        entry: cronSession.sessionEntry,
+        cfg: cfgWithAgentDefaults,
+      }),
       authProfileId,
       authProfileIdSource: authProfileId
         ? cronSession.sessionEntry.authProfileOverrideSource
         : undefined,
     };
-
     return {
       ok: true,
       context: {
@@ -1019,7 +1038,8 @@ async function prepareCronRunContext(params: {
         useSubagentFallbacks,
         inheritDefaultFallbacksForAgentStringModel,
         modelFallbacksOverride,
-        thinkLevel,
+        thinkLevel: requestedThinkLevel,
+        thinkingCatalog,
         timeoutMs,
         preflightDiagnostics,
         runTimeoutOverrideMs,
@@ -1611,6 +1631,7 @@ export async function runCronIsolatedAgentTurn(params: {
       abortReason,
       isAborted,
       thinkLevel: prepared.context.thinkLevel,
+      thinkingCatalog: prepared.context.thinkingCatalog,
       timeoutMs: prepared.context.timeoutMs,
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
