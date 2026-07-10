@@ -76,7 +76,7 @@ const mocks = vi.hoisted(() => ({
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
-  resolveDefaultAgentId: vi.fn((_cfg?: unknown) => "default"),
+  resolveDefaultAgentId: vi.fn(() => "default"),
   resolveAgentContextLimits: vi.fn(
     (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
       cfg.agents?.defaults?.contextLimits ?? {},
@@ -320,33 +320,11 @@ vi.mock("../commands/doctor-browser.js", () => ({
   maybeArchiveLegacyClawdBrowserProfileResidue: mocks.maybeArchiveLegacyClawdBrowserProfileResidue,
 }));
 
-vi.mock("../agents/agent-scope.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/agent-scope.js")>();
-  return {
-    ...actual,
-    resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-    resolveDefaultAgentId: mocks.resolveDefaultAgentId,
-    resolveAgentContextLimits: mocks.resolveAgentContextLimits,
-    resolveSessionAgentIds: (
-      params: {
-        agentId?: string;
-        config?: unknown;
-        sessionKey?: string;
-      } = {},
-    ) => {
-      const defaultAgentId = mocks.resolveDefaultAgentId(params.config);
-      const explicitAgentId = params.agentId?.trim().toLowerCase();
-      const sessionAgentId =
-        explicitAgentId ||
-        params.sessionKey
-          ?.trim()
-          .toLowerCase()
-          .match(/^agent:([^:]+):/)?.[1] ||
-        defaultAgentId;
-      return { defaultAgentId, sessionAgentId };
-    },
-  };
-});
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  resolveAgentContextLimits: mocks.resolveAgentContextLimits,
+}));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
