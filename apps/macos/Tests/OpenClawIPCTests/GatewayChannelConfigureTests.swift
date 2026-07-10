@@ -125,6 +125,51 @@ struct GatewayConnectionTests {
         await conn.shutdown()
     }
 
+    @Test func `server lease preserves caller cancellation after dispatch`() async throws {
+        let requestSent = AsyncStream<Void>.makeStream()
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        if sendIndex == 2 {
+                            requestSent.continuation.yield()
+                            return
+                        }
+                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    },
+                    receiveHook: { task, receiveIndex in
+                        if receiveIndex == 0 {
+                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                        }
+                        let id = task.snapshotConnectRequestID() ?? "connect"
+                        return .data(Self.connectOkData(
+                            id: id,
+                            capabilities: ["crestodian-setup-model-ref"]))
+                    })
+            })
+        let (conn, _) = try makeConnection(session: session)
+        let lease = try await conn.acquireServerLease()
+        let request = Task {
+            try await conn.request(
+                method: "crestodian.setup.activate",
+                params: [:],
+                timeoutMs: 5000,
+                ifCurrentServerLease: lease)
+        }
+        var sentIterator = requestSent.stream.makeAsyncIterator()
+        _ = await sentIterator.next()
+
+        request.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            try await request.value
+        }
+        requestSent.continuation.finish()
+        await conn.shutdown()
+    }
+
     @Test func `request reconfigures and cancels on token change`() async throws {
         let session = self.makeSession()
         let (conn, cfg) = try makeConnection(session: session, token: "a")

@@ -351,6 +351,9 @@ actor GatewayConnection {
                 timeoutMs: timeoutMs,
                 ifCurrentConnectionGeneration: lease.socketGeneration)
         } catch is CancellationError {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
             throw OpenClawChatTransportSendError.notDispatched
         }
     }
