@@ -3,7 +3,7 @@ import type { ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { hashApprovedWidgetFiles } from "./manifest.js";
+import { snapshotApprovedWidget } from "./manifest.js";
 import {
   parseWidgetRequestPath,
   serveWidgetAsset,
@@ -50,12 +50,23 @@ async function withApprovedWidget<T>(
     const store = new DashboardStore({ stateDir });
     const widgetDir = path.join(stateDir, "dashboard", "widgets", "revenue-chart");
     await fs.mkdir(widgetDir, { recursive: true });
+    await fs.writeFile(
+      path.join(widgetDir, "widget.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        name: "revenue-chart",
+        title: "Revenue Chart",
+        entrypoint: "index.html",
+        bindings: [],
+        capabilities: [],
+      }),
+    );
     await fs.writeFile(path.join(widgetDir, "index.html"), "<!doctype html><h1>ok</h1>");
     await fs.writeFile(path.join(widgetDir, "app.js"), "console.log(1)");
     await fs.writeFile(path.join(widgetDir, "secret.mjs"), "export const x = 1");
     // Approval freezes a digest of every servable file, exactly as the gateway
     // method does; serving compares against it.
-    const approvedFiles = await hashApprovedWidgetFiles("revenue-chart", { stateDir });
+    const { files: approvedFiles } = await snapshotApprovedWidget("revenue-chart", { stateDir });
     store.mutate(
       (draft) => {
         draft.widgetsRegistry["revenue-chart"] = {

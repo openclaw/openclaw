@@ -43,23 +43,41 @@ function hashBytes(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+export type ApprovedWidgetSnapshot = {
+  /** sha256 of every servable file, keyed by the logical path the route serves. */
+  files: Record<string, string>;
+  /** Parsed from the exact `widget.json` bytes that were hashed. */
+  manifest: WidgetManifest;
+};
+
 /**
- * Hashes every servable file in a widget's directory, keyed by the logical path
- * the route serves it under.
+ * Reads a widget's directory once and returns both the digests of every servable
+ * file and the manifest parsed from the very bytes that were hashed.
  *
- * This is what an operator approves. Without it, "approved" names a directory
- * rather than the code inside it: an agent could scaffold a widget, get approval
- * on an empty or innocuous tree, and then write the real payload afterwards. The
- * serving route re-hashes each file it reads and refuses anything that does not
- * match, so approved bytes are the only bytes that ever reach a browser.
+ * This is what an operator approves. Hashing matters because "approved" must name
+ * the code, not the directory: otherwise an agent could win approval on an
+ * innocuous tree and write the real payload afterwards. Parsing the manifest from
+ * the hashed bytes matters for the same reason one level up — reading `widget.json`
+ * twice would let it change between the read that validates the entrypoint and the
+ * read that freezes the digest, so the operator would approve one manifest while a
+ * different one got served.
  */
-export async function hashApprovedWidgetFiles(
+export async function snapshotApprovedWidget(
   name: string,
   options: { stateDir?: string } = {},
-): Promise<Record<string, string>> {
+): Promise<ApprovedWidgetSnapshot> {
   const widgetDir = resolveWidgetDir(name, options.stateDir);
-  const entries = await fs.readdir(widgetDir, { recursive: true, withFileTypes: true });
+  let entries;
+  try {
+    entries = await fs.readdir(widgetDir, { recursive: true, withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`dashboard widget not found: ${name}`, { cause: error });
+    }
+    throw error;
+  }
   const files: Record<string, string> = {};
+  let manifestBytes: Buffer | undefined;
   for (const entry of entries) {
     if (!entry.isFile()) {
       continue;
@@ -72,9 +90,26 @@ export async function hashApprovedWidgetFiles(
     if (Object.keys(files).length >= MAX_WIDGET_FILES) {
       throw new Error(`widget has more than ${MAX_WIDGET_FILES} servable files`);
     }
-    files[logical] = hashBytes(await fs.readFile(absolute));
+    const bytes = await fs.readFile(absolute);
+    files[logical] = hashBytes(bytes);
+    if (logical === "widget.json") {
+      manifestBytes = bytes;
+    }
   }
-  return files;
+  if (!manifestBytes || manifestBytes.byteLength > MANIFEST_MAX_BYTES) {
+    throw new Error(`dashboard widget not found: ${name}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(manifestBytes.toString("utf8"));
+  } catch (error) {
+    throw new Error("widget.json is not valid JSON", { cause: error });
+  }
+  const manifest = validateWidgetManifest(parsed, name);
+  if (!files[manifest.entrypoint]) {
+    throw new Error(`dashboard widget entrypoint is missing: ${manifest.entrypoint}`);
+  }
+  return { files, manifest };
 }
 
 /** True when `bytes` are exactly what was approved for `logicalPath`. */

@@ -1,8 +1,14 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadWidgetManifest, resolveWidgetDir, validateWidgetManifest } from "./manifest.js";
+import {
+  loadWidgetManifest,
+  resolveWidgetDir,
+  snapshotApprovedWidget,
+  validateWidgetManifest,
+} from "./manifest.js";
 
 async function withTempStateDir<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dashboard-manifest-"));
@@ -164,4 +170,62 @@ describe("loadWidgetManifest", () => {
       await expect(loadWidgetManifest("broken", { stateDir })).rejects.toThrow(/not valid JSON/);
     });
   });
+
+  it("parses the manifest from the same bytes it hashes", async () => {
+    await withWidget(async ({ stateDir, widgetDir }) => {
+      const snapshot = await snapshotApprovedWidget("demo", { stateDir });
+      const digestOfHashedManifest = snapshot.files["widget.json"];
+
+      // The manifest the caller receives must be the one whose digest was frozen:
+      // reading widget.json twice would let it change in between, so an operator
+      // could validate one entrypoint while a different one got served.
+      const bytes = await fs.readFile(path.join(widgetDir, "widget.json"));
+      expect(createHash("sha256").update(bytes).digest("hex")).toBe(digestOfHashedManifest);
+      expect(snapshot.manifest.entrypoint).toBe("index.html");
+      expect(snapshot.files[snapshot.manifest.entrypoint]).toBeDefined();
+    });
+  });
+
+  it("refuses a widget whose declared entrypoint does not exist", async () => {
+    await withWidget(async ({ stateDir, widgetDir }) => {
+      await fs.rm(path.join(widgetDir, "index.html"));
+
+      await expect(snapshotApprovedWidget("demo", { stateDir })).rejects.toThrow(
+        "entrypoint is missing",
+      );
+    });
+  });
+
+  it("refuses a widget with no manifest at all", async () => {
+    await withWidget(async ({ stateDir, widgetDir }) => {
+      await fs.rm(path.join(widgetDir, "widget.json"));
+
+      await expect(snapshotApprovedWidget("demo", { stateDir })).rejects.toThrow("not found");
+    });
+  });
 });
+
+async function withWidget(
+  run: (ctx: { stateDir: string; widgetDir: string }) => Promise<void>,
+): Promise<void> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dashboard-manifest-"));
+  try {
+    const widgetDir = path.join(stateDir, "dashboard", "widgets", "demo");
+    await fs.mkdir(widgetDir, { recursive: true });
+    await fs.writeFile(
+      path.join(widgetDir, "widget.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        name: "demo",
+        title: "Demo",
+        entrypoint: "index.html",
+        bindings: [],
+        capabilities: [],
+      }),
+    );
+    await fs.writeFile(path.join(widgetDir, "index.html"), "<h1>demo</h1>");
+    await run({ stateDir, widgetDir });
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
