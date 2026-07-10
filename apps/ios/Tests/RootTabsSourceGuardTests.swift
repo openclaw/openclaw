@@ -1081,6 +1081,34 @@ struct RootTabsSourceGuardTests {
         #expect(!modelSource.contains("expectedGeneration: UInt64?"))
     }
 
+    @Test func `discovered gateway surfaces share secure connection availability`() throws {
+        let controllerSource = try String(
+            contentsOf: Self.gatewayConnectionControllerSourceURL(),
+            encoding: .utf8)
+        let settingsSource = try String(
+            contentsOf: Self.settingsProTabSectionsSourceURL(),
+            encoding: .utf8)
+        let quickSetupSource = try String(
+            contentsOf: Self.gatewayQuickSetupSourceURL(),
+            encoding: .utf8)
+        let onboardingSource = try String(
+            contentsOf: Self.onboardingWizardSourceURL(),
+            encoding: .utf8)
+        let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+
+        #expect(controllerSource.contains("enum DiscoveredGatewayConnectionAvailability"))
+        #expect(controllerSource.contains("gateway.tlsEnabled || GatewayTLSStore.loadFingerprint"))
+        #expect(controllerSource.contains("enter your Tailscale Serve HTTPS host in Manual Setup"))
+        #expect(settingsSource.contains("discoveredGatewayConnectionAvailability(gateway)"))
+        #expect(quickSetupSource.contains("discoveredGatewayConnectionAvailability(candidate)"))
+        #expect(quickSetupSource.contains("Text(\"Use Manual Setup\")"))
+        #expect(quickSetupSource.contains("self.gatewayController.preferredDiscoveredGateway()"))
+        #expect(onboardingSource.contains("discoveredGatewayConnectionAvailability(gateway)"))
+        #expect(!onboardingSource.contains("gatewayHasResolvableHost"))
+        #expect(rootSource.contains("GatewayQuickSetupSheet(onUseManualSetup:"))
+        #expect(rootSource.contains("self.selectSettingsRoute(.gateway)"))
+    }
+
     @Test func `gateway credential fields update before endpoint persistence is available`() throws {
         let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
         let settingsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
@@ -1110,7 +1138,7 @@ struct RootTabsSourceGuardTests {
         let modeDefaults = try Self.extract(
             source,
             from: "private func applyModeDefaults(_ mode: OnboardingConnectionMode)",
-            to: "private func gatewayHasResolvableHost")
+            to: "private func connectManual")
 
         #expect(modeDefaults.contains("let previousStableID = self.currentManualGatewayStableID"))
         #expect(modeDefaults.contains("previousStableID != self.currentManualGatewayStableID"))
@@ -1538,6 +1566,13 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Onboarding/OnboardingWizardView.swift")
+    }
+
+    private static func gatewayQuickSetupSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Gateway/GatewayQuickSetupSheet.swift")
     }
 
     private static func qrScannerSourceURL() -> URL {

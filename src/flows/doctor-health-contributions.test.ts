@@ -589,7 +589,7 @@ describe("doctor health contributions", () => {
     mocks.noteChromeMcpBrowserReadiness.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockResolvedValue(undefined);
     mocks.detectLegacyStateMigrations.mockReset();
-    mocks.detectLegacyStateMigrations.mockResolvedValue({ preview: [], warnings: [] });
+    mocks.detectLegacyStateMigrations.mockResolvedValue({ preview: [], warnings: [], notices: [] });
     mocks.runLegacyStateMigrations.mockReset();
     mocks.runLegacyStateMigrations.mockResolvedValue({ changes: [], warnings: [] });
     mocks.detectLegacyClawdBrowserProfileResidue.mockReset();
@@ -1434,7 +1434,7 @@ describe("doctor health contributions", () => {
     expect(legacyStateCheck).toMatchObject({ defaultEnabled: false });
 
     const cfg = { session: { store: "/tmp/shared-sessions.json" } };
-    const detected = { preview: ["legacy sessions"], warnings: [] };
+    const detected = { preview: ["legacy sessions"], warnings: [], notices: [] };
     mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
     const ctx = {
       cfg,
@@ -1455,7 +1455,7 @@ describe("doctor health contributions", () => {
 
   it("prints legacy state migration notices during manual doctor runs", async () => {
     const contribution = requireDoctorContribution("doctor:legacy-state");
-    const detected = { preview: ["legacy sessions"], warnings: [] };
+    const detected = { preview: ["legacy sessions"], warnings: [], notices: [] };
     mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
     mocks.runLegacyStateMigrations.mockResolvedValue({
       changes: [],
@@ -3211,6 +3211,26 @@ describe("doctor health contributions", () => {
         nextConfig: repairedCfg,
       }),
     );
+  });
+
+  it("does not suggest --fix after a clean doctor run", async () => {
+    const cfg = {};
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await requireDoctorContribution("doctor:write-config").run({
+      cfg,
+      cfgForPersistence: cfg,
+      configResult: { cfg, shouldWriteConfig: false },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime,
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext);
+
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   describe("config size drops during update", () => {
