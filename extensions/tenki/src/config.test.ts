@@ -5,7 +5,6 @@ describe("resolveTenkiPluginConfig", () => {
   it("applies defaults when config is absent", () => {
     const cfg = resolveTenkiPluginConfig(undefined);
     expect(cfg.workspaceRoot).toBe("/tmp/openclaw-sandboxes");
-    expect(cfg.cliCommand).toBe("tenki");
     expect(cfg.tags).toEqual([]);
     expect(cfg.authToken).toBeUndefined();
     expect(cfg.image).toBeUndefined();

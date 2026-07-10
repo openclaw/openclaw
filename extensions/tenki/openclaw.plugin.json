@@ -33,10 +33,6 @@
         "type": "string",
         "minLength": 1
       },
-      "cliCommand": {
-        "type": "string",
-        "minLength": 1
-      },
       "idleTimeoutMinutes": {
         "type": "number",
         "minimum": 1
@@ -89,11 +85,6 @@
     "workspaceRoot": {
       "label": "Workspace Root",
       "help": "Absolute path inside the session used for per-scope workspaces.",
-      "advanced": true
-    },
-    "cliCommand": {
-      "label": "Tenki CLI Command",
-      "help": "Local tenki CLI command used for interactive exec passthrough.",
       "advanced": true
     },
     "idleTimeoutMinutes": {

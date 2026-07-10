@@ -27,6 +27,14 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTenkiPluginConfig, type ResolvedTenkiPluginConfig } from "./config.js";
+import {
+  buildSshExecArgv,
+  ensureTenkiSshKeypair,
+  startTenkiSshForwarder,
+  waitForSshAuth,
+  type TenkiSshForwarder,
+  type TenkiSshKeypair,
+} from "./ssh-transport.js";
 
 const TENKI_SESSION_TAG = "openclaw";
 
@@ -217,6 +225,9 @@ async function createTenkiSandboxBackend(params: {
 class TenkiSandboxBackendImpl {
   private sessionPromise: Promise<Session> | null = null;
   private ensurePromise: Promise<void> | null = null;
+  private sshKeypairPromise: Promise<TenkiSshKeypair> | null = null;
+  private sshForwarderPromise: Promise<TenkiSshForwarder> | null = null;
+  private sshKeyPushedForSession: string | null = null;
 
   constructor(
     private readonly params: {
@@ -245,9 +256,7 @@ class TenkiSandboxBackendImpl {
         this.params.runtimePaths.remoteWorkspaceDir,
         this.params.runtimePaths.remoteAgentWorkspaceDir,
       ],
-      buildExecSpec: async ({ command, workdir, env }) => {
-        // Draft limitation: usePty degrades to non-PTY exec until this routes
-        // through `tenki sandbox ssh` for interactive sessions.
+      buildExecSpec: async ({ command, workdir, env, usePty }) => {
         const remoteCommand = buildValidatedExecRemoteCommand({
           command,
           workdir: workdir ?? this.params.runtimePaths.remoteWorkspaceDir,
@@ -255,21 +264,16 @@ class TenkiSandboxBackendImpl {
         });
         await this.ensureRuntime();
         const session = await this.getSession();
+        const { keypair, forwarder } = await this.ensureSshTransport(session);
         return {
-          argv: [
-            this.cfg.cliCommand,
-            "sandbox",
-            "exec",
-            "--session",
-            session.id,
-            "--stream",
-            "--",
-            "/bin/sh",
-            "-c",
+          argv: buildSshExecArgv({
+            privateKeyPath: keypair.privateKeyPath,
+            port: forwarder.port,
+            usePty,
             remoteCommand,
-          ],
-          env: this.buildCliEnv(),
-          stdinMode: "pipe-closed",
+          }),
+          env: sanitizeEnvVars(process.env).allowed,
+          stdinMode: "pipe-open",
         };
       },
       runShellCommand: async (command) => await this.runRemoteShellScript(command),
@@ -285,28 +289,6 @@ class TenkiSandboxBackendImpl {
     };
   }
 
-  /** Local environment for the spawned Tenki CLI, with auth re-added after sanitization. */
-  private buildCliEnv(): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...sanitizeEnvVars(process.env).allowed };
-    for (const key of [
-      "TENKI_AUTH_TOKEN",
-      "TENKI_API_KEY",
-      "TENKI_API_ENDPOINT",
-      "TENKI_API_URL",
-    ]) {
-      if (process.env[key]) {
-        env[key] = process.env[key];
-      }
-    }
-    if (this.cfg.authToken) {
-      env.TENKI_AUTH_TOKEN = this.cfg.authToken;
-    }
-    if (this.cfg.baseUrl) {
-      env.TENKI_API_ENDPOINT = this.cfg.baseUrl;
-    }
-    return env;
-  }
-
   private async getSession(): Promise<Session> {
     if (!this.sessionPromise) {
       this.sessionPromise = this.getSessionInner().catch((error: unknown) => {
@@ -315,6 +297,23 @@ class TenkiSandboxBackendImpl {
       });
     }
     return await this.sessionPromise;
+  }
+
+  /** Ensure keypair, per-session authorized key, and the loopback forwarder. */
+  private async ensureSshTransport(
+    session: Session,
+  ): Promise<{ keypair: TenkiSshKeypair; forwarder: TenkiSshForwarder }> {
+    this.sshKeypairPromise ??= ensureTenkiSshKeypair();
+    const keypair = await this.sshKeypairPromise;
+    this.sshForwarderPromise ??= startTenkiSshForwarder(async () => await this.getSession());
+    const forwarder = await this.sshForwarderPromise;
+    if (this.sshKeyPushedForSession !== session.id) {
+      await session.updateSshAuthorizedKeys([keypair.publicKey]);
+      // Wait out async key propagation so the first real exec does not race it.
+      await waitForSshAuth({ privateKeyPath: keypair.privateKeyPath, port: forwarder.port });
+      this.sshKeyPushedForSession = session.id;
+    }
+    return { keypair, forwarder };
   }
 
   private async getSessionInner(): Promise<Session> {

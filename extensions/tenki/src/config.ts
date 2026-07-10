@@ -14,7 +14,6 @@ type TenkiPluginConfig = {
   workspaceId?: string;
   image?: string;
   workspaceRoot?: string;
-  cliCommand?: string;
   idleTimeoutMinutes?: number;
   cpuCores?: number;
   memoryMb?: number;
@@ -29,7 +28,6 @@ export type ResolvedTenkiPluginConfig = {
   workspaceId?: string;
   image?: string;
   workspaceRoot: string;
-  cliCommand: string;
   idleTimeoutMinutes?: number;
   cpuCores?: number;
   memoryMb?: number;
@@ -37,7 +35,6 @@ export type ResolvedTenkiPluginConfig = {
   tags: string[];
 };
 
-const DEFAULT_CLI_COMMAND = "tenki";
 const DEFAULT_WORKSPACE_ROOT = "/tmp/openclaw-sandboxes";
 
 const nonEmptyTrimmedString = (message: string) =>
@@ -55,7 +52,6 @@ const TenkiPluginConfigSchema = z.strictObject({
   workspaceId: nonEmptyTrimmedString("workspaceId must be a non-empty string").optional(),
   image: nonEmptyTrimmedString("image must be a non-empty string").optional(),
   workspaceRoot: nonEmptyTrimmedString("workspaceRoot must be a non-empty string").optional(),
-  cliCommand: nonEmptyTrimmedString("cliCommand must be a non-empty string").optional(),
   idleTimeoutMinutes: positiveNumber("idleTimeoutMinutes").optional(),
   cpuCores: positiveNumber("cpuCores").optional(),
   memoryMb: positiveNumber("memoryMb").optional(),
@@ -103,7 +99,6 @@ export function resolveTenkiPluginConfig(value: unknown): ResolvedTenkiPluginCon
   if (value === undefined) {
     return {
       workspaceRoot: DEFAULT_WORKSPACE_ROOT,
-      cliCommand: DEFAULT_CLI_COMMAND,
       tags: [],
     };
   }
@@ -120,7 +115,6 @@ export function resolveTenkiPluginConfig(value: unknown): ResolvedTenkiPluginCon
     workspaceId: cfg.workspaceId,
     image: cfg.image,
     workspaceRoot: normalizeWorkspaceRoot(cfg.workspaceRoot),
-    cliCommand: cfg.cliCommand ?? DEFAULT_CLI_COMMAND,
     idleTimeoutMinutes: cfg.idleTimeoutMinutes,
     cpuCores: cfg.cpuCores,
     memoryMb: cfg.memoryMb,
