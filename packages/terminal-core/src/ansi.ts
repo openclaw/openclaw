@@ -1,7 +1,6 @@
 // Full CSI: ESC [ <params> <final byte> covers cursor movement, erase, and SGR.
 const ESC_ANSI_CSI_PATTERN = "\\x1b\\[[\\x20-\\x3f]*[\\x40-\\x7e]";
 const C1_ANSI_CSI_PATTERN = "\\x9b[\\x20-\\x3f]*[\\x40-\\x7e]";
-const PARAMETERIZED_C1_ANSI_CSI_PATTERN = "\\x9b[\\x20-\\x3f]+[\\x40-\\x7e]";
 const ANSI_CSI_PATTERN = `(?:${ESC_ANSI_CSI_PATTERN}|${C1_ANSI_CSI_PATTERN})`;
 // OSC: ESC ] or C1 OSC, then <payload> ST. Covers hyperlinks and clipboard/title escapes.
 // ST can be ESC \, BEL, or its C1 form.
@@ -13,7 +12,7 @@ const ANSI_CSI_REGEX = new RegExp(ANSI_CSI_PATTERN, "g");
 const ANSI_OSC_REGEX = new RegExp(ANSI_OSC_PATTERN, "g");
 const ANSI_SEQUENCE_REGEX = new RegExp(`${ANSI_OSC_PATTERN}|${ANSI_CSI_PATTERN}`, "g");
 const SANITIZATION_ANSI_SEQUENCE_REGEX = new RegExp(
-  `${ANSI_OSC_PATTERN}|${ESC_ANSI_CSI_PATTERN}|${PARAMETERIZED_C1_ANSI_CSI_PATTERN}`,
+  `${ANSI_OSC_PATTERN}|${ESC_ANSI_CSI_PATTERN}|${C1_ANSI_CSI_PATTERN}`,
   "g",
 );
 

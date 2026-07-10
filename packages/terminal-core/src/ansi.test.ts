@@ -50,9 +50,19 @@ describe("terminal ansi helpers", () => {
       "line" +
       String.fromCharCode(127) +
       String.fromCharCode(0x9b) +
+      String.fromCharCode(0) +
       "done";
     expect(sanitizeForLog(input)).toBe("warnnextlinedone");
     expect(sanitizeForLog("\u009B31mred\u009B0m")).toBe("red");
+  });
+
+  it("strips no-argument C1 CSI sequences in sanitization", () => {
+    // C1 CSI with no parameter/intermediate bytes (e.g. \x9b@ ICH) must be
+    // stripped as a complete sequence, not leave the final byte behind.
+    expect(sanitizeForLog("\u009B@")).toBe("");
+    expect(sanitizeForLog("\u009BA")).toBe("");
+    expect(sanitizeForLog("\u009BB")).toBe("");
+    expect(sanitizeForLog("clean\u009B@\u009BA\u009BBtext")).toBe("cleantext");
   });
 
   it("measures wide graphemes by terminal cell width", () => {
