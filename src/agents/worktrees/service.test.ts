@@ -5,7 +5,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { deleteRegistryWorktree, getRegistryWorktree } from "./registry.js";
+import {
+  deleteRegistryWorktree,
+  findRegistryWorktreeByPath,
+  getRegistryWorktree,
+} from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -724,6 +728,54 @@ describe("ManagedWorktreeService", () => {
     });
     expect(service.findLiveByOwner("workboard", "card-42")?.id).toBe(retried.id);
     expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
+  });
+
+  it("re-runs provisioning when a retried create() adopts a pre-setup crash orphan", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "included.env\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "included.env\n");
+    await fs.writeFile(path.join(repo, "included.env"), "provisioned\n");
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      "#!/bin/sh\necho ran > setup-marker.txt\n",
+      { mode: 0o755 },
+    );
+    const created = await service.create({ repoRoot: repo, name: "orphan-setup", baseRef: "main" });
+    // Simulates a crash after `git worktree add` but before copy/setup and the registry insert:
+    // undo the provisioning artifacts the initial create() produced and drop its registry row.
+    deleteRegistryWorktree(env, created.id);
+    await fs.rm(path.join(created.path, "included.env"));
+    await fs.rm(path.join(created.path, "setup-marker.txt"));
+
+    const retried = await service.create({ repoRoot: repo, name: "orphan-setup", baseRef: "main" });
+
+    expect(retried.path).toBe(created.path);
+    expect(retried.baseRef).toBe("main");
+    expect(await fs.readFile(path.join(retried.path, "included.env"), "utf8")).toBe(
+      "provisioned\n",
+    );
+    expect(await fs.readFile(path.join(retried.path, "setup-marker.txt"), "utf8")).toBe("ran\n");
+  });
+
+  it("cleans up instead of adopting when provisioning fails on the retried create()", async () => {
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      '#!/bin/sh\nif [ -f "$OPENCLAW_SOURCE_TREE_PATH/fail-setup" ]; then\n  echo setup-broke >&2\n  exit 9\nfi\nexit 0\n',
+      { mode: 0o755 },
+    );
+    const created = await service.create({ repoRoot: repo, name: "orphan-refail" });
+    deleteRegistryWorktree(env, created.id);
+    await fs.writeFile(path.join(repo, "fail-setup"), "");
+
+    await expect(service.create({ repoRoot: repo, name: "orphan-refail" })).rejects.toThrow(
+      "setup-broke",
+    );
+
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(created.path);
+    expect(await git(repo, "branch", "--list", "openclaw/orphan-refail")).toBe("");
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(findRegistryWorktreeByPath(env, created.path)).toBeUndefined();
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {

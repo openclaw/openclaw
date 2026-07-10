@@ -387,11 +387,29 @@ export class ManagedWorktreeService {
         existing === undefined &&
         (await findAdoptableOrphan(repository.repoRoot, worktreePath, branch))
       ) {
+        // The crash may have hit before provisioning finished, so re-run copy + setup with the
+        // normal create() failure semantics before the registry row exists. Safe because the
+        // crashed create() never returned this worktree to any caller.
+        const adoptedBase = await resolveBase(repository.repoRoot, params.baseRef);
+        try {
+          await copyIncludedFiles(repository.sourceRoot, worktreePath);
+          if (params.runSetupScript !== false) {
+            await runSetupScript(repository.sourceRoot, worktreePath);
+          }
+        } catch (error) {
+          try {
+            await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
+          } catch (cleanupError) {
+            throw new Error(`${String(error)}\n${String(cleanupError)}`, { cause: cleanupError });
+          }
+          throw error;
+        }
         return this.adoptOrphan({
           repoFingerprint: repository.fingerprint,
           repoRoot: repository.repoRoot,
           path: worktreePath,
           branch,
+          baseRef: adoptedBase.base,
           ...(params.ownerKind ? { ownerKind: params.ownerKind } : {}),
           ...(params.ownerId ? { ownerId: params.ownerId } : {}),
         });
@@ -818,6 +836,7 @@ export class ManagedWorktreeService {
     repoRoot: string;
     path: string;
     branch: string;
+    baseRef?: string;
     ownerKind?: ManagedWorktreeOwnerKind;
     ownerId?: string;
   }): ManagedWorktreeRecord {
@@ -829,7 +848,8 @@ export class ManagedWorktreeService {
       repoRoot: params.repoRoot,
       path: params.path,
       branch: params.branch,
-      baseRef: "HEAD",
+      // gc-side adoption cannot recover the crashed create()'s base; "HEAD" is its placeholder.
+      baseRef: params.baseRef ?? "HEAD",
       // Mirrors create()'s owner defaulting so a retried create() keeps findLiveByOwner()
       // lookups and idle-gc expiry working; gc-side adoption cannot recover an owner.
       ownerKind: params.ownerKind ?? "manual",
@@ -874,6 +894,8 @@ export class ManagedWorktreeService {
           if (await findAdoptableOrphan(repository.repoRoot, candidate, managedBranch)) {
             // Orphaned by a create() that crashed before insertRegistryWorktree(); reclaim it
             // instead of deleting a live worktree or leaving it invisible to list()/gc() forever.
+            // Registration-only: background gc must not execute repo setup scripts, so a possibly
+            // half-provisioned worktree becomes visible/removable rather than silently trusted.
             this.adoptOrphan({
               repoFingerprint: repository.fingerprint,
               repoRoot: repository.repoRoot,
