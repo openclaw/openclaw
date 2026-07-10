@@ -2,7 +2,12 @@
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isPathInside } from "../infra/path-guards.js";
-export { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "./avatar-limits.js";
+export {
+  AVATAR_INLINE_DATA_URL_CHARS,
+  AVATAR_INLINE_MAX_BYTES,
+  AVATAR_MAX_BYTES,
+  AVATAR_MAX_DATA_URL_CHARS,
+} from "./avatar-limits.js";
 
 /**
  * Shared avatar source policy for config validation, agent identity loading,

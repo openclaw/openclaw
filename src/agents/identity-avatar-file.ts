@@ -5,8 +5,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { readFileDescriptorBoundedSync } from "../infra/file-descriptor-read.js";
+import { logWarn } from "../logger.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
+  AVATAR_INLINE_DATA_URL_CHARS,
+  AVATAR_INLINE_MAX_BYTES,
   AVATAR_MAX_BYTES,
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -141,6 +144,21 @@ export function readOpenedLocalAgentAvatarDataUrl(
   }
 }
 
+/** Tracks file paths already warned about exceeding the inline cap. */
+const warnedInlineOversized = new Set<string>();
+
+/**
+ * Check whether a raw avatar source should be omitted from projection responses
+ * because it is a data URL exceeding the inline budget. File paths and HTTP URLs
+ * are always safe to include; only oversized data URLs bloat the payload.
+ */
+export function isAvatarSourceOverInlineBudget(source: string | null | undefined): boolean {
+  if (!source) {
+    return false;
+  }
+  return isAvatarDataUrl(source) && source.length > AVATAR_INLINE_DATA_URL_CHARS;
+}
+
 /** Resolve one configured avatar source for agent-list projections. */
 export function resolveAgentAvatarUrlFromSource(
   cfg: OpenClawConfig,
@@ -151,8 +169,13 @@ export function resolveAgentAvatarUrlFromSource(
   if (!normalized) {
     return undefined;
   }
-  if (isAvatarHttpUrl(normalized) || isRenderableAvatarImageDataUrl(normalized)) {
+  if (isAvatarHttpUrl(normalized)) {
     return normalized;
+  }
+  // Accept renderable data URLs up to the shared limit, then cap at inline
+  // projection budget so configured data URLs cannot produce oversized responses.
+  if (isRenderableAvatarImageDataUrl(normalized)) {
+    return normalized.length <= AVATAR_INLINE_DATA_URL_CHARS ? normalized : undefined;
   }
   if (
     isAvatarDataUrl(normalized) ||
@@ -161,5 +184,24 @@ export function resolveAgentAvatarUrlFromSource(
     return undefined;
   }
   const opened = openLocalAgentAvatarFile({ cfg, agentId, source: normalized });
-  return opened.ok ? readOpenedLocalAgentAvatarDataUrl(opened.file) : undefined;
+  if (!opened.ok) {
+    return undefined;
+  }
+  // Inline cap applies only to agent-list projections (listAgentsForGateway).
+  // Shared opener and reader stay at AVATAR_MAX_BYTES for dedicated delivery.
+  try {
+    const stat = fs.fstatSync(opened.file.fd);
+    if (stat.size > AVATAR_INLINE_MAX_BYTES) {
+      if (!warnedInlineOversized.has(opened.file.path)) {
+        warnedInlineOversized.add(opened.file.path);
+        logWarn(`gateway: local avatar file exceeds inline byte cap (${AVATAR_INLINE_MAX_BYTES})`);
+      }
+      fs.closeSync(opened.file.fd);
+      return undefined;
+    }
+  } catch {
+    fs.closeSync(opened.file.fd);
+    return undefined;
+  }
+  return readOpenedLocalAgentAvatarDataUrl(opened.file);
 }

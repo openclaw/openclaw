@@ -3,12 +3,22 @@
 /** Maximum avatar payload size accepted by local file and Gateway upload paths. */
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Maximum size for inline base64 data URLs in gateway projections (agents.list etc.).
+ * Separate from AVATAR_MAX_BYTES so upload/acceptance policy stays independent.
+ */
+export const AVATAR_INLINE_MAX_BYTES = 256 * 1024;
+
 // SVG has the longest MIME prefix among supported local avatar formats.
 const MAX_AVATAR_DATA_URL_PREFIX_LENGTH = "data:image/svg+xml;base64,".length;
 
 /** Maximum encoded length of a supported local avatar at AVATAR_MAX_BYTES. */
 export const AVATAR_MAX_DATA_URL_CHARS =
   Math.ceil(AVATAR_MAX_BYTES / 3) * 4 + MAX_AVATAR_DATA_URL_PREFIX_LENGTH;
+
+/** Maximum encoded length of a local avatar data URL at the inline projection cap. */
+export const AVATAR_INLINE_DATA_URL_CHARS =
+  Math.ceil(AVATAR_INLINE_MAX_BYTES / 3) * 4 + MAX_AVATAR_DATA_URL_PREFIX_LENGTH;
 
 const AVATAR_IMAGE_DATA_URL_RE = /^data:image\//i;
 
