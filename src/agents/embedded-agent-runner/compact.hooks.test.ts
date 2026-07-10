@@ -104,14 +104,14 @@ function findMockCall(mock: ReturnType<typeof vi.fn>, predicate: (arg: unknown[]
   return call;
 }
 
-function mockResolvedModel(params?: { supportsTools?: boolean }) {
+function mockResolvedModel(params?: { supportsTools?: boolean; input?: string[] }) {
   resolveModelMock.mockReset();
   resolveModelMock.mockReturnValue({
     model: {
       provider: "openai",
       api: "responses",
       id: "fake",
-      input: [],
+      input: params?.input ?? [],
       ...(params?.supportsTools === undefined
         ? {}
         : { compat: { supportsTools: params.supportsTools } }),
@@ -463,6 +463,24 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       senderE164: "+15551234567",
     });
   });
+
+  it.each([
+    { input: ["text"], modelHasVision: false },
+    { input: ["text", "image"], modelHasVision: true },
+  ])(
+    "propagates modelHasVision=$modelHasVision when rebuilding compaction tools",
+    async ({ input, modelHasVision }) => {
+      mockResolvedModel({ input });
+
+      await compactEmbeddedAgentSessionDirect({
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+      });
+
+      expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), { modelHasVision });
+    },
+  );
 
   it("uses cwd for compaction runtime tools while preserving workspace bootstrap root", async () => {
     await compactEmbeddedAgentSessionDirect({

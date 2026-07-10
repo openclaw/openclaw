@@ -17029,9 +17029,9 @@
       "kind": "ui-named-argument",
       "line": 105,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Let the agent move the pointer, click, and type on this Mac. Requires Accessibility permission and stays disarmed until an operator arms it. High risk.",
+      "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
       "surface": "apple",
-      "id": "native.apple.b59b6b6769b0ad2f"
+      "id": "native.apple.124d07cfaa03f5e5"
     },
     {
       "kind": "ui-named-argument",
@@ -17891,7 +17891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 302,
+      "line": 317,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -17899,7 +17899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 302,
+      "line": 317,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Open Canvas",
       "surface": "apple",
