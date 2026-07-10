@@ -503,7 +503,7 @@ class ChatPane extends OpenClawLightDomElement {
     const previousStoredDraft = previousStoredSnapshot ? previousStoredSnapshot.draft : null;
     const storedDraftMatches = previousStoredDraft === state.chatMessage;
     const hasStagedAttachments = state.chatAttachments.length > 0;
-    const retainExistingFallback = Boolean(existingFallback && !storedDraftMatches);
+    const retainExistingFallback = existingFallback !== undefined && !storedDraftMatches;
     const previousDraftRetry =
       draftPersistResult.status === "storage-failed"
         ? {

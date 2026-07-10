@@ -30,6 +30,7 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentParamsForSession,
   unsubscribeSessionMessages,
+  visibleSessionMatches,
   type SessionCapability,
 } from "../../lib/sessions/index.ts";
 import {
@@ -750,6 +751,8 @@ type ClearChatHistoryState = ChatState &
     sessions: Pick<SessionCapability, "reset">;
   };
 
+export type ClearChatHistoryResult = "completed" | "failed" | "uncertain";
+
 function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   if (state.chatRunId) {
     return true;
@@ -772,9 +775,11 @@ function clearCachedChatMessagesForSession(
   clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey, agentId });
 }
 
-export async function clearChatHistory(state: ClearChatHistoryState): Promise<boolean> {
+export async function clearChatHistory(
+  state: ClearChatHistoryState,
+): Promise<ClearChatHistoryResult> {
   if (!state.client || !state.connected) {
-    return false;
+    return "failed";
   }
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
@@ -783,26 +788,52 @@ export async function clearChatHistory(state: ClearChatHistoryState): Promise<bo
   const runId = state.chatRunId;
   const hadActiveRun = hasAbortableChatSessionRun(state);
   try {
-    const resetCurrentConnection = await state.sessions.reset(sessionKey, agentParams);
+    const resetResult = await state.sessions.reset(sessionKey, agentParams);
+    if (resetResult === "not-started") {
+      setChatError(state, "Gateway was unavailable before chat history could be cleared.");
+      scheduleChatScroll(state);
+      return "failed";
+    }
+    // Reset is destructive once issued. Drop the captured session's cached
+    // transcript before classifying the result so an ambiguous response cannot
+    // expose stale pre-reset history after a route switch.
+    clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId);
     if (
-      !resetCurrentConnection ||
+      resetResult === "uncertain" ||
       state.client !== client ||
       state.connectionEpoch !== connectionEpoch ||
       !state.connected
     ) {
-      setChatError(state, "Gateway connection changed while clearing chat history.");
+      let historyRefreshed = false;
+      if (
+        state.client &&
+        state.connected &&
+        visibleSessionMatches(state, sessionKey, agentParams.agentId)
+      ) {
+        // Do not let a failed refresh keep rendering the transcript that the
+        // ambiguous reset may already have destroyed. Clearing first also
+        // prevents history loading from preserving a pre-reset optimistic tail.
+        state.chatMessages = [];
+        historyRefreshed = Boolean(await loadChatHistory(state));
+      }
+      setChatError(
+        state,
+        historyRefreshed
+          ? "The clear request may have completed. Current history was refreshed; review it before resuming queued messages."
+          : "The clear request may have completed. Cached history was cleared, but current history could not be refreshed; reconnect and review it before resuming queued messages.",
+      );
       scheduleChatScroll(state);
-      return false;
+      // sessions.reset is not idempotent. Treat an uncertain completion as
+      // consumed so a durable /clear row cannot erase newer history on retry.
+      return "uncertain";
     }
   } catch (err) {
     setChatError(state, String(err));
     scheduleChatScroll(state);
-    return false;
+    return "failed";
   }
-  clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId);
-  const visibleAgentId = scopedAgentParamsForSession(state, state.sessionKey).agentId;
-  if (state.sessionKey !== sessionKey || visibleAgentId !== agentParams.agentId) {
-    return true;
+  if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+    return "completed";
   }
   state.chatMessages = [];
   state.chatSideResult = null;
@@ -820,7 +851,7 @@ export async function clearChatHistory(state: ClearChatHistoryState): Promise<bo
   });
   await loadChatHistory(state);
   scheduleChatScroll(state);
-  return true;
+  return "completed";
 }
 
 export async function loadChatHistory(

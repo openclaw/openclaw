@@ -330,6 +330,13 @@ function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessio
   };
 }
 
+function idleChatHistory(sessionKey = "agent:main") {
+  return {
+    messages: [],
+    sessionInfo: row(sessionKey, { hasActiveRun: false, status: "done" }),
+  };
+}
+
 function createDeferred<T>() {
   let resolve: ((value: T) => void) | undefined;
   let reject: ((reason?: unknown) => void) | undefined;
@@ -1614,7 +1621,10 @@ describe("handleSendChat", () => {
         return { runId: payload.idempotencyKey, status: "ok" };
       }
       if (method === "chat.history") {
-        return { messages: [] };
+        return {
+          messages: [],
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+        };
       }
       if (method === "sessions.list") {
         return createSessionsResult([row("agent:main", { hasActiveRun: false, status: "done" })]);
@@ -2761,6 +2771,9 @@ describe("handleSendChat", () => {
   it("waits for pending settings before retrying a failed queued send", async () => {
     const settingsPatch = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory();
+      }
       if (method === "chat.send") {
         return { runId: "retry-run", status: "started" };
       }
@@ -2785,7 +2798,11 @@ describe("handleSendChat", () => {
     const retry = retryQueuedChatMessage(host, "retry-send");
 
     expect(await raceWithMacrotask(retry)).toBe("pending");
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ sessionKey: "agent:main" }),
+    );
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
     expect(host.chatQueue[0]).toMatchObject({
       sendState: "waiting-model",
       text: "retry with new settings",
@@ -2806,6 +2823,9 @@ describe("handleSendChat", () => {
   it("keeps a queued retry failed when its pending settings patch fails", async () => {
     const settingsPatch = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory();
+      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const host = makeHost({
@@ -2830,7 +2850,7 @@ describe("handleSendChat", () => {
     settingsPatch.resolve(false);
     await retry;
 
-    expect(request).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
     expect(host.chatQueue[0]).toMatchObject({
       sendError: "Chat settings update was interrupted. Review and retry when ready.",
       sendState: "failed",
@@ -2876,9 +2896,71 @@ describe("handleSendChat", () => {
     );
   });
 
+  it("does not volatile-retry a durable unconfirmed row when storage reads fail", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("sessionStorage", storage);
+    const request = vi.fn();
+    const original = {
+      id: "durable-unconfirmed-read-failure",
+      text: "keep the durable claim",
+      createdAt: 1,
+      sendRunId: "durable-unconfirmed-run",
+      sendState: "unconfirmed" as const,
+      sessionKey: "agent:main",
+    };
+    const host = makeHost({
+      chatQueue: [original],
+      client: { request } as unknown as ChatHost["client"],
+    });
+    expect(admitQueuedMessageForSession(host, original.sessionKey, original)).toBe(true);
+    const getItem = vi.spyOn(storage, "getItem").mockImplementation(() => {
+      throw new DOMException("storage unavailable", "SecurityError");
+    });
+
+    await retryQueuedChatMessage(host, original.id);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatQueue).toStrictEqual([original]);
+    getItem.mockRestore();
+    expect(listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue)).toEqual([original]);
+  });
+
+  it("does not acquire volatile provenance after repeated durable retry read failures", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("sessionStorage", storage);
+    const request = vi.fn();
+    const original = {
+      id: "durable-failed-repeat-read-failure",
+      text: "never bypass the durable row",
+      createdAt: 1,
+      sendRunId: "durable-failed-run",
+      sendState: "failed" as const,
+      sessionKey: "agent:main",
+    };
+    const host = makeHost({
+      chatQueue: [original],
+      client: { request } as unknown as ChatHost["client"],
+    });
+    expect(admitQueuedMessageForSession(host, original.sessionKey, original)).toBe(true);
+    const getItem = vi.spyOn(storage, "getItem").mockImplementation(() => {
+      throw new DOMException("storage unavailable", "SecurityError");
+    });
+
+    await retryQueuedChatMessage(host, original.id);
+    await retryQueuedChatMessage(host, original.id);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatQueue).toStrictEqual([original]);
+    getItem.mockRestore();
+    expect(listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue)).toEqual([original]);
+  });
+
   it("drains a foreground retry after the in-flight send fails", async () => {
     const foregroundAck = createDeferred<{ runId: string; status: "error" }>();
     const request = vi.fn((method: string, params?: unknown) => {
+      if (method === "chat.history") {
+        return Promise.resolve(idleChatHistory());
+      }
       if (method !== "chat.send") {
         throw new Error(`Unexpected request: ${method}`);
       }
@@ -2908,7 +2990,7 @@ describe("handleSendChat", () => {
     await retryQueuedChatMessage(host, "retry-send");
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(host.chatQueue.find((item) => item.id === "retry-send")?.sendState).toBeUndefined();
+    expect(host.chatQueue.find((item) => item.id === "retry-send")?.sendState).toBe("waiting-idle");
 
     foregroundAck.resolve({ runId: "foreground-run", status: "error" });
     await foreground;
@@ -2916,7 +2998,8 @@ describe("handleSendChat", () => {
       expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(2),
     );
 
-    expect(requireRecord(request.mock.calls[1]?.[1], "rescheduled retry").message).toBe(
+    const retriedSend = request.mock.calls.filter(([method]) => method === "chat.send")[1];
+    expect(requireRecord(retriedSend?.[1], "rescheduled retry").message).toBe(
       "retry after failure",
     );
     expect(host.chatQueue.find((item) => item.id === "retry-send")).toMatchObject({
@@ -3533,9 +3616,82 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
+  it("reconciles a restored undefined-state command before destructive execution", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return {
+          messages: [],
+          sessionInfo: row("agent:main", { hasActiveRun: true, status: "running" }),
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const item = {
+      id: "restored-undefined-clear",
+      text: "/clear",
+      createdAt: 1,
+      localCommandArgs: "",
+      localCommandName: "clear",
+      sessionKey: "agent:main",
+    };
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [item],
+    });
+    // Seed the persisted pre-fix shape without creating fresh-admission provenance.
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ sessionKey: item.sessionKey }),
+    );
+    expect(request.mock.calls.filter(([method]) => method === "sessions.reset")).toHaveLength(0);
+    expect(host.chatQueue).toEqual([expect.objectContaining({ id: item.id })]);
+  });
+
+  it("reconciles a waiting-idle row after restart before its durable claim", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return {
+          messages: [],
+          sessionInfo: row("agent:main", { hasActiveRun: true, status: "running" }),
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const item = {
+      id: "restart-before-send-claim",
+      text: "wait behind the server run",
+      createdAt: 1,
+      sendAttempts: 0,
+      sendRunId: "restart-before-send-claim-run",
+      sendState: "waiting-idle" as const,
+      sessionKey: "agent:main",
+    };
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [item],
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ sessionKey: item.sessionKey }),
+    );
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+    expect(host.chatQueue).toEqual([expect.objectContaining({ id: item.id })]);
+  });
+
   it("claims one stored local command once across split panes", async () => {
     executeSlashCommandMock.mockResolvedValue({ content: "Thinking level set." });
     const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory();
+      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as ChatHost["client"];
@@ -3566,6 +3722,9 @@ describe("handleSendChat", () => {
       .mockImplementationOnce(() => firstCommand.promise)
       .mockResolvedValueOnce({ content: "Thinking level set." });
     const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory("agent:main:visible");
+      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as ChatHost["client"];
@@ -3606,6 +3765,9 @@ describe("handleSendChat", () => {
     const command = createDeferred<{ content: string }>();
     executeSlashCommandMock.mockImplementationOnce(() => command.promise);
     const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory();
+      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const item = {
@@ -3667,6 +3829,9 @@ describe("handleSendChat", () => {
     const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
     executeSlashCommandMock.mockImplementationOnce(() => command.promise);
     const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory("agent:main:first");
+      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const item = {
@@ -3723,6 +3888,9 @@ describe("handleSendChat", () => {
     executeSlashCommandMock.mockImplementationOnce(() => command.promise);
     const firstClient = {
       request: vi.fn(async (method: string) => {
+        if (method === "chat.history") {
+          return idleChatHistory("agent:main:first");
+        }
         throw new Error(`Unexpected request: ${method}`);
       }),
     } as unknown as ChatHost["client"];
@@ -3874,7 +4042,7 @@ describe("handleSendChat", () => {
     ).toEqual(["user", "assistant"]);
     expect(
       inactiveCached.filter((message) => {
-        const marker = requireRecord(message, "cached terminal transcript").__openclaw;
+        const marker = requireRecord(message, "cached terminal transcript")["__openclaw"];
         return (
           marker &&
           typeof marker === "object" &&
@@ -3978,6 +4146,9 @@ describe("handleSendChat", () => {
     executeSlashCommandMock.mockResolvedValue({ content: "Thinking level set." });
     const sendPayloads: Array<Record<string, unknown>> = [];
     const request = vi.fn((method: string, params?: unknown) => {
+      if (method === "chat.history") {
+        return Promise.resolve(idleChatHistory());
+      }
       if (method === "chat.send") {
         const payload = requireRecord(params, "queued reset send payload");
         sendPayloads.push(payload);
@@ -4076,6 +4247,9 @@ describe("handleSendChat", () => {
     const write = storage.setItem.bind(storage);
     executeSlashCommandMock.mockResolvedValue({ content: "Thinking level set." });
     const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory();
+      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const item = {
@@ -4122,6 +4296,9 @@ describe("handleSendChat", () => {
         return { content: "Thinking level set." };
       });
     const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory();
+      }
       if (method === "chat.send") {
         events.push("following-prompt");
         return { status: "ok" };
@@ -4173,50 +4350,158 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
-  it("keeps a queued clear command retryable when its reset request fails", async () => {
-    let resetAttempts = 0;
-    const request = vi.fn(async (method: string) => {
+  it("retires a rejected clear, drops its optimistic history, and parks its successor", async () => {
+    const sentMessages: string[] = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.reset") {
-        resetAttempts += 1;
-        if (resetAttempts === 1) {
-          throw new Error("gateway closed during clear");
-        }
-        return { ok: true };
+        throw new Error("post-commit lifecycle failed");
       }
       if (method === "chat.history") {
-        return { messages: [] };
+        return idleChatHistory();
+      }
+      if (method === "chat.send") {
+        const payload = requireRecord(params, "successor send payload");
+        sentMessages.push(String(payload.message));
+        return { runId: payload.idempotencyKey, status: "ok" };
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const item = {
-      id: "retry-clear-after-disconnect",
+    const clear = {
+      id: "uncertain-clear",
       text: "/clear",
       createdAt: 1,
       localCommandArgs: "",
       localCommandName: "clear",
       sessionKey: "agent:main",
     };
+    const successor = {
+      id: "prompt-after-uncertain-clear",
+      text: "send only after review",
+      createdAt: 2,
+      sessionKey: "agent:main",
+    };
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
-      chatMessages: [{ role: "user", content: "keep until clear succeeds" }],
-      chatQueue: [item],
+      chatMessages: [{ role: "user", content: "possibly cleared" }],
+      chatQueue: [clear, successor],
     });
-    expect(admitQueuedMessageForSession(host, host.sessionKey, item)).toBe(true);
+    expect(admitQueuedMessageForSession(host, host.sessionKey, clear)).toBe(true);
+    expect(admitQueuedMessageForSession(host, host.sessionKey, successor)).toBe(true);
 
     await retryReconnectableQueuedChatSends(host);
 
-    expect(resetAttempts).toBe(1);
-    expect(host.chatMessages).toEqual([{ role: "user", content: "keep until clear succeeds" }]);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.reset")).toHaveLength(1);
+    expect(sentMessages).toEqual([]);
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatQueue.map((item) => item.id)).toEqual([successor.id]);
     expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
-      id: item.id,
-      sendState: "failed",
+      id: successor.id,
+      sendState: "unconfirmed",
+    });
+    expect(host.chatQueue[0]?.sendError).toContain("preceding /clear may have completed");
+
+    await retryReconnectableQueuedChatSends(host);
+    await retryQueuedChatMessage(host, clear.id);
+
+    expect(request.mock.calls.filter(([method]) => method === "sessions.reset")).toHaveLength(1);
+    expect(sentMessages).toEqual([]);
+
+    await retryQueuedChatMessage(host, successor.id);
+
+    expect(sentMessages).toEqual([successor.text]);
+    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+  });
+
+  it("fails closed when history refresh rejects after an uncertain clear", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.reset") {
+        throw new Error("post-commit lifecycle failed");
+      }
+      if (method === "chat.history") {
+        throw new Error("history unavailable");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/clear",
+      chatMessages: [{ role: "user", content: "possibly cleared" }],
     });
 
-    await retryQueuedChatMessage(host, item.id);
+    await handleSendChat(host);
 
-    expect(resetAttempts).toBe(2);
-    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatMessages).toEqual([]);
+    expect(host.lastError).toContain("clear request may have completed");
+    expect(host.lastError).toContain("could not be refreshed");
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+  });
+
+  it("keeps the uncertain clear as a durable barrier when parking its successor fails", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("sessionStorage", storage);
+    const write = storage.setItem.bind(storage);
+    let resetIssued = false;
+    let failedBarrierWrites = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.reset") {
+        resetIssued = true;
+        throw new Error("post-commit lifecycle failed");
+      }
+      if (method === "chat.history") {
+        return {
+          messages: [],
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const clear = {
+      id: "uncertain-clear-storage-barrier",
+      text: "/clear",
+      createdAt: 1,
+      localCommandArgs: "",
+      localCommandName: "clear",
+      sessionKey: "agent:main",
+    };
+    const successor = {
+      id: "successor-storage-barrier",
+      text: "must stay parked",
+      createdAt: 2,
+      sessionKey: "agent:main",
+    };
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [clear, successor],
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, clear)).toBe(true);
+    expect(admitQueuedMessageForSession(host, host.sessionKey, successor)).toBe(true);
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      const successorIndex = value.indexOf(`"id":"${successor.id}"`);
+      const successorRecord =
+        successorIndex >= 0 ? value.slice(successorIndex, successorIndex + 500) : "";
+      if (
+        resetIssued &&
+        failedBarrierWrites === 0 &&
+        successorRecord.includes('"sendState":"unconfirmed"')
+      ) {
+        failedBarrierWrites += 1;
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      write(key, value);
+    });
+
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(failedBarrierWrites).toBe(1);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.reset")).toHaveLength(1);
+    expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([
+      expect.objectContaining({ id: clear.id, sendState: "unconfirmed" }),
+      expect.objectContaining({ id: successor.id }),
+    ]);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(request.mock.calls.filter(([method]) => method === "sessions.reset")).toHaveLength(1);
   });
 
   it("does not resurrect a send deleted by another pane before its ACK", async () => {
@@ -4433,6 +4718,9 @@ describe("handleSendChat", () => {
   it("projects an in-flight normal send to panes that subscribe after transport starts", async () => {
     const sent = createDeferred<unknown>();
     const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return Promise.resolve(idleChatHistory());
+      }
       if (method === "chat.send") {
         return sent.promise;
       }
@@ -4453,7 +4741,9 @@ describe("handleSendChat", () => {
     expect(admitQueuedMessageForSession(host, host.sessionKey, item)).toBe(true);
 
     const send = retryReconnectableQueuedChatSends(host);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1),
+    );
     const runId = host.chatQueue[0]?.sendRunId;
     expect(runId).toMatch(uuidPattern);
     expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue[0]?.sendState).toBe(
@@ -4471,7 +4761,7 @@ describe("handleSendChat", () => {
         }),
       ]);
       await retryQueuedChatMessage(latePeer, item.id);
-      expect(request).toHaveBeenCalledOnce();
+      expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
 
       removeQueuedMessage(stalePeer, item.id);
       expect(listStoredChatOutboxes(host)[0]?.queue[0]?.id).toBe(item.id);
@@ -4785,7 +5075,7 @@ describe("handleSendChat", () => {
     ]);
   });
 
-  it("restores input when durable admission fails before transport", async () => {
+  it("restores input when a volatile send fails before transport", async () => {
     const storage = createStorageMock();
     vi.spyOn(storage, "setItem").mockImplementation(() => {
       throw new DOMException("quota exceeded", "QuotaExceededError");
@@ -4806,7 +5096,230 @@ describe("handleSendChat", () => {
 
     expect(host.chatMessage).toBe("safe to restore");
     expect(host.chatQueue).toStrictEqual([]);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a connected attachment when browser quota rejects durable admission", async () => {
+    const storage = createStorageMock();
+    vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+    vi.stubGlobal("sessionStorage", storage);
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "chat.send") {
+        const payload = requireRecord(params, "volatile connected send payload");
+        return { runId: payload.idempotencyKey, status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const attachment = {
+      id: "large-connected-attachment",
+      dataUrl: "data:application/pdf;base64,JVBERi0xLjQ=",
+      fileName: "large.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 20 * 1024 * 1024,
+    };
+    const host = makeHost({
+      chatAttachments: [attachment],
+      chatMessage: "send the large file",
+      client: { request } as unknown as ChatHost["client"],
+    });
+
+    await handleSendChat(host);
+
+    const sends = request.mock.calls.filter(([method]) => method === "chat.send");
+    expect(sends).toHaveLength(1);
+    const sendPayload = requireRecord(sends[0]?.[1], "volatile connected send payload");
+    expect(sendPayload).toMatchObject({
+      attachments: [
+        {
+          content: "JVBERi0xLjQ=",
+          fileName: "large.pdf",
+          mimeType: "application/pdf",
+        },
+      ],
+      message: "send the large file",
+    });
+    expect(host.chatAttachments).toStrictEqual([]);
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatRunId).toEqual(expect.any(String));
+    expect(sendPayload.idempotencyKey).toBe(host.chatRunId);
+    expect(host.lastError).toBeNull();
+    expect(
+      host.chatMessages.map((message) => requireRecord(message, "volatile transcript").role),
+    ).toEqual(["user"]);
+    markQueuedChatSendsWaitingForReconnect(host);
+    expect(host.chatQueue).toStrictEqual([]);
+  });
+
+  it("retries an unconfirmed volatile send with the same run id", async () => {
+    const storage = createStorageMock();
+    vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+    vi.stubGlobal("sessionStorage", storage);
+    const runIds: unknown[] = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method !== "chat.send") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const payload = requireRecord(params, "volatile retry payload");
+      runIds.push(payload.idempotencyKey);
+      if (runIds.length === 1) {
+        throw new Error("gateway closed (1006): network lost");
+      }
+      return { runId: payload.idempotencyKey, status: "started" };
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "retry the oversized turn",
+    });
+
+    await handleSendChat(host);
+
+    const itemId = host.chatQueue[0]?.id ?? "missing-volatile-retry";
+    const originalRunId = host.chatQueue[0]?.sendRunId;
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({ sendRunId: originalRunId, sendState: "unconfirmed" }),
+    ]);
+
+    await retryReconnectableQueuedChatSends(host);
+    expect(runIds).toEqual([originalRunId]);
+
+    await retryQueuedChatMessage(host, itemId);
+
+    expect(runIds).toEqual([originalRunId, originalRunId]);
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatRunId).toBe(originalRunId);
+    expect(
+      host.chatMessages.map((message) => requireRecord(message, "retried transcript").role),
+    ).toEqual(["user"]);
+  });
+
+  it("retries a failed volatile send with a fresh run id", async () => {
+    const storage = createStorageMock();
+    vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+    vi.stubGlobal("sessionStorage", storage);
+    const firstAttempt = createDeferred<unknown>();
+    const runIds: unknown[] = [];
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method !== "chat.send") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const payload = requireRecord(params, "failed volatile retry payload");
+      runIds.push(payload.idempotencyKey);
+      return runIds.length === 1
+        ? firstAttempt.promise
+        : Promise.resolve({ runId: payload.idempotencyKey, status: "started" });
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "retry after definite failure",
+    });
+
+    const sending = handleSendChat(host);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    host.chatMessage = "newer composer input";
+    firstAttempt.reject(new Error("send rejected"));
+    await sending;
+
+    const itemId = host.chatQueue[0]?.id ?? "missing-failed-volatile-retry";
+    expect(host.chatQueue[0]?.sendState).toBe("failed");
+    expect(host.chatMessage).toBe("newer composer input");
+
+    await retryQueuedChatMessage(host, itemId);
+
+    expect(runIds).toHaveLength(2);
+    expect(runIds[1]).not.toBe(runIds[0]);
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatMessage).toBe("newer composer input");
+  });
+
+  it("keeps a volatile in-flight row when another durable item publishes", async () => {
+    const storage = createStorageMock();
+    const setItem = storage.setItem.bind(storage);
+    let rejectWrites = true;
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (rejectWrites) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      setItem(key, value);
+    });
+    vi.stubGlobal("sessionStorage", storage);
+    const volatileSend = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return volatileSend.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "volatile first",
+    });
+
+    const firstSend = handleSendChat(host);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    const volatileId = host.chatQueue[0]?.id;
+    const volatileRunId = host.chatQueue[0]?.sendRunId;
+
+    rejectWrites = false;
+    host.chatMessage = "durable second";
+    await handleSendChat(host);
+    expect(listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue)).toEqual([
+      expect.objectContaining({ text: "durable second", sendState: "waiting-idle" }),
+    ]);
+
+    volatileSend.reject(new Error("gateway closed (1006): network lost"));
+    await firstSend;
+
+    expect(host.chatQueue).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: volatileId,
+          sendRunId: volatileRunId,
+          sendState: "unconfirmed",
+        }),
+        expect.objectContaining({ text: "durable second", sendState: "waiting-idle" }),
+      ]),
+    );
+  });
+
+  it("does not send a volatile item ahead of a durable backlog", async () => {
+    const storage = createStorageMock();
+    const setItem = storage.setItem.bind(storage);
+    let rejectWrites = false;
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (rejectWrites) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      setItem(key, value);
+    });
+    vi.stubGlobal("sessionStorage", storage);
+    const request = vi.fn();
+    const host = makeHost({
+      connected: false,
+      chatMessage: "durable first",
+    });
+    await handleSendChat(host);
+
+    host.connected = true;
+    host.client = { request } as unknown as ChatHost["client"];
+    rejectWrites = true;
+    host.chatMessage = "volatile second";
+    await handleSendChat(host);
+
     expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("volatile second");
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({ text: "durable first", sendState: "waiting-reconnect" }),
+    ]);
+    expect(host.lastError).toBe(
+      "Could not store this message for reconnect. Free browser storage or reconnect before sending.",
+    );
   });
 
   it("keeps a pre-ack send queued when newer composer input blocks restoration", async () => {
@@ -4968,6 +5481,12 @@ describe("handleSendChat", () => {
   it("persists queueable local commands entered while disconnected", async () => {
     executeSlashCommandMock.mockResolvedValueOnce({ content: "Thinking level set." });
     const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return {
+          messages: [],
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+        };
+      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const attachment = {
@@ -5009,6 +5528,53 @@ describe("handleSendChat", () => {
 
     expect(executeSlashCommandMock).toHaveBeenCalledTimes(1);
     expect(host.chatAttachments).toEqual([attachment]);
+    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+  });
+
+  it("reconciles startup history before replaying an offline local command", async () => {
+    executeSlashCommandMock.mockResolvedValue({ content: "Thinking level set." });
+    const startupHistory = createDeferred<unknown>();
+    let historyRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method !== "chat.history") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      historyRequests += 1;
+      if (historyRequests === 1) {
+        return startupHistory.promise;
+      }
+      return Promise.resolve({
+        messages: [],
+        sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+      });
+    });
+    const host = makeHost({
+      client: null,
+      connected: false,
+      chatMessage: "/think high",
+    });
+    await handleSendChat(host);
+
+    host.client = { request } as unknown as ChatHost["client"];
+    host.connected = true;
+    const replay = retryReconnectableQueuedChatSends(host);
+    await vi.waitFor(() => expect(historyRequests).toBe(1));
+    expect(executeSlashCommandMock).not.toHaveBeenCalled();
+
+    startupHistory.resolve({
+      messages: [],
+      sessionInfo: row("agent:main", { hasActiveRun: true, status: "running" }),
+    });
+    await replay;
+
+    expect(executeSlashCommandMock).not.toHaveBeenCalled();
+    expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue).toEqual([
+      expect.objectContaining({ localCommandName: "think", sendState: "waiting-reconnect" }),
+    ]);
+
+    await flushChatQueueForEvent(host);
+
+    expect(executeSlashCommandMock).toHaveBeenCalledTimes(1);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
@@ -5455,6 +6021,9 @@ describe("handleSendChat", () => {
   it("keeps a settings-blocked Skill Workshop revision retryable", async () => {
     const settingsPatch = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory();
+      }
       if (method === "skills.proposals.requestRevision") {
         return { runId: "revision-retry", status: "started" };
       }
@@ -5978,7 +6547,49 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
-  it("keeps a queued clear for review when its Gateway connection is replaced", async () => {
+  it("invalidates the captured session cache when a rejected clear switches routes", async () => {
+    const reset = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "sessions.reset") {
+        return reset.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const sourceSessionKey = "agent:main:source";
+    const visibleSessionKey = "agent:main:visible";
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/clear",
+      chatMessages: [{ role: "user", content: "source history" }],
+      chatMessagesBySession: new Map([
+        [sourceSessionKey, [{ role: "user", content: "cached source history" }]],
+        [visibleSessionKey, [{ role: "user", content: "cached visible history" }]],
+      ]),
+      sessionKey: sourceSessionKey,
+    });
+
+    const clearing = handleSendChat(host);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("sessions.reset", { key: sourceSessionKey }),
+    );
+    host.chatQueueByScope = { [queueScopeKey(host, sourceSessionKey)]: host.chatQueue };
+    host.chatQueue = [];
+    host.sessionKey = visibleSessionKey;
+    host.chatMessages = [{ role: "user", content: "visible history" }];
+    reset.reject(new Error("post-commit lifecycle failed"));
+    await clearing;
+
+    expect(host.chatMessagesBySession?.has(sourceSessionKey)).toBe(false);
+    expect(host.chatMessagesBySession?.get(visibleSessionKey)).toEqual([
+      { role: "user", content: "cached visible history" },
+    ]);
+    expect(host.chatMessages).toEqual([{ role: "user", content: "visible history" }]);
+    expect(host.lastError).toContain("clear request may have completed");
+    expect(host.lastError).toContain("could not be refreshed");
+    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+  });
+
+  it("retires an uncertain clear and refreshes replacement history without retrying", async () => {
     const reset = createDeferred<unknown>();
     const request = vi.fn((method: string) => {
       if (method === "sessions.reset") {
@@ -5997,23 +6608,84 @@ describe("handleSendChat", () => {
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("sessions.reset", { key: "agent:main" }),
     );
-    host.client = {
-      request: vi.fn(async (method: string) => {
-        throw new Error(`Unexpected replacement request: ${method}`);
-      }),
-    } as unknown as ChatHost["client"];
+    const queuedId = host.chatQueue[0]?.id ?? "missing-clear";
+    const replacementRequest = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: "newer replacement history" }],
+          thinkingLevel: null,
+        };
+      }
+      throw new Error(`Unexpected replacement request: ${method}`);
+    });
+    host.client = { request: replacementRequest } as unknown as ChatHost["client"];
     host.connectionEpoch = 2;
     reset.resolve({ ok: true });
     await clearing;
 
-    expect(host.chatMessages).toEqual([{ role: "user", content: "do not clear ambiguously" }]);
-    expect(host.chatQueue).toEqual([
-      expect.objectContaining({ localCommandName: "clear", sendState: "failed" }),
+    expect(host.chatMessages).toEqual([
+      { role: "assistant", content: "newer replacement history" },
     ]);
-    expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue).toEqual([
-      expect.objectContaining({ localCommandName: "clear", sendState: "failed" }),
+    expect(host.chatQueue).toEqual([]);
+    expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue ?? []).toEqual([]);
+    expect(host.lastError).toContain("clear request may have completed");
+    expect(replacementRequest).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "agent:main",
+      limit: 100,
+    });
+
+    await retryQueuedChatMessage(host, queuedId);
+
+    expect(request.mock.calls.filter(([method]) => method === "sessions.reset")).toHaveLength(1);
+    expect(
+      replacementRequest.mock.calls.filter(([method]) => method === "sessions.reset"),
+    ).toHaveLength(0);
+  });
+
+  it("clears a canonically equivalent alias that becomes visible while reset is pending", async () => {
+    const reset = createDeferred<unknown>();
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method === "sessions.reset") {
+        return reset.promise;
+      }
+      if (method === "chat.history") {
+        return Promise.resolve({
+          messages: [{ role: "assistant", content: "canonical refreshed history" }],
+          thinkingLevel: null,
+        });
+      }
+      throw new Error(`Unexpected request: ${method} ${JSON.stringify(params)}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:work:main",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      chatMessage: "/clear",
+      chatMessages: [{ role: "user", content: "alias history" }],
+    });
+
+    const clearing = handleSendChat(host);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("sessions.reset", {
+        key: "agent:work:main",
+        agentId: "work",
+      }),
+    );
+    host.sessionKey = "global";
+    host.chatMessages = [{ role: "user", content: "same canonical history" }];
+    reset.resolve({ ok: true });
+    await clearing;
+
+    expect(host.chatMessages).toEqual([
+      { role: "assistant", content: "canonical refreshed history" },
     ]);
-    expect(host.lastError).toBe("Gateway connection changed while clearing chat history.");
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "global",
+      agentId: "work",
+      limit: 100,
+    });
+    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
   it("shows a visible pending item for /steer on the active run", async () => {

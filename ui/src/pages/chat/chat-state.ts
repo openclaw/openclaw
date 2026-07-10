@@ -36,6 +36,7 @@ import {
 import {
   DEFAULT_MAIN_KEY,
   areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -99,7 +100,6 @@ import {
   type ChatComposerPersistResult,
   loadChatComposerCommittedDraftRevision,
   loadChatComposerDraftRevision,
-  loadChatComposerSnapshot,
   persistChatComposerState,
   resolveStoredChatOutboxScope,
   restoreChatComposerState,
@@ -412,15 +412,32 @@ function resolveChatComposerMemoryFallback(
   }
   const configuredMainKey = resolveUiConfiguredMainKey(state);
   const isSelectedTarget = scope.agentId === selectedGlobalAgentId;
-  const isDefaultTarget =
-    configuredMainKey !== DEFAULT_MAIN_KEY && scope.agentId === resolveUiDefaultAgentId(state);
-  if (!isSelectedTarget && !isDefaultTarget) {
+  const isDefaultTarget = scope.agentId === resolveUiDefaultAgentId(state);
+  const qualifiedMainScopeKey =
+    configuredMainKey === DEFAULT_MAIN_KEY
+      ? undefined
+      : storedChatOutboxScopeKey({
+          sessionKey: buildAgentMainSessionKey({
+            agentId: scope.agentId,
+            mainKey: configuredMainKey,
+          }),
+          agentId: scope.agentId,
+        });
+  if (!isSelectedTarget && !isDefaultTarget && !qualifiedMainScopeKey) {
     return { fallback, scopeKey };
   }
   const fallbackSourceKeys = [
-    scopeKey,
-    ...(isSelectedTarget ? [storedChatOutboxScopeKey({ sessionKey: "global" })] : []),
-    ...(isDefaultTarget ? [storedChatOutboxScopeKey({ sessionKey: configuredMainKey })] : []),
+    ...new Set([
+      scopeKey,
+      ...(isSelectedTarget ? [storedChatOutboxScopeKey({ sessionKey: "global" })] : []),
+      ...(isDefaultTarget
+        ? [
+            storedChatOutboxScopeKey({ sessionKey: DEFAULT_MAIN_KEY }),
+            storedChatOutboxScopeKey({ sessionKey: configuredMainKey }),
+          ]
+        : []),
+      ...(qualifiedMainScopeKey ? [qualifiedMainScopeKey] : []),
+    ]),
   ];
   const candidates = fallbackSourceKeys
     .map((candidateScopeKey) => ({
@@ -1515,7 +1532,7 @@ function preserveDeliveredQueuedUserTurn(state: ChatPageHost, item: ChatQueueIte
       if (!message || typeof message !== "object" || Array.isArray(message)) {
         return false;
       }
-      const marker = (message as { __openclaw?: unknown }).__openclaw;
+      const marker = (message as { __openclaw?: unknown })["__openclaw"];
       return (
         Boolean(marker && typeof marker === "object" && !Array.isArray(marker)) &&
         (marker as { idempotencyKey?: unknown }).idempotencyKey === idempotencyKey

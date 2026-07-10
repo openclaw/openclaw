@@ -41,9 +41,12 @@ const chatOutboxProjectionHosts = new Set<ChatQueueScopedSessionHost>();
 // Durable rows use crash-safe states. Overlay live work process-wide so panes
 // attached mid-operation cannot retry or remove it before the owner settles.
 const transientQueueProjections = new Map<string, ChatQueueItem>();
-// A failed row may exist only in one pane when storage admission fails. Track
-// that provenance so projection keeps it without resurrecting removed durable rows.
+// A storage-rejected row may exist only in one pane. Track that provenance so
+// projection keeps its active/manual-retry copy without resurrecting removed rows.
 const localRecoveryItemIds = new WeakMap<ChatQueueScopedSessionHost, Set<string>>();
+// Volatile provenance is stricter than local recovery: only the connected
+// quota fallback may bypass durable admission on an explicit retry.
+const volatileQueueItemIds = new WeakMap<ChatQueueScopedSessionHost, Set<string>>();
 
 function markLocalRecoveryItem(host: ChatQueueScopedSessionHost, id: string): void {
   const ids = localRecoveryItemIds.get(host) ?? new Set<string>();
@@ -56,6 +59,24 @@ function clearLocalRecoveryItem(host: ChatQueueScopedSessionHost, id: string): v
   ids?.delete(id);
   if (ids?.size === 0) {
     localRecoveryItemIds.delete(host);
+  }
+}
+
+export function isVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: string): boolean {
+  return volatileQueueItemIds.get(host)?.has(id) === true;
+}
+
+function markVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: string): void {
+  const ids = volatileQueueItemIds.get(host) ?? new Set<string>();
+  ids.add(id);
+  volatileQueueItemIds.set(host, ids);
+}
+
+function clearVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: string): void {
+  const ids = volatileQueueItemIds.get(host);
+  ids?.delete(id);
+  if (ids?.size === 0) {
+    volatileQueueItemIds.delete(host);
   }
 }
 
@@ -128,14 +149,11 @@ export function syncChatQueueFromStoredOutbox(
   const ephemeral = current.filter((item) => item.pendingRunId);
   const ephemeralById = new Map(ephemeral.map((item) => [item.id, item]));
   const storedIds = new Set(outbox.queue.map((item) => item.id));
-  // Storage failures can leave a manual-retry row in memory only. Projection
-  // must not erase that last recoverable copy while another send is active.
+  // Storage failures can leave an active or manual-retry row in memory only.
+  // Projection must not erase that last copy while another send publishes.
   const localRecovery = current.filter(
     (item) =>
-      item.sendState === "failed" &&
-      !item.pendingRunId &&
-      !storedIds.has(item.id) &&
-      localRecoveryItemIds.get(host)?.has(item.id),
+      !item.pendingRunId && !storedIds.has(item.id) && localRecoveryItemIds.get(host)?.has(item.id),
   );
   const projected = outbox.queue.map((item) => {
     const ephemeralItem = ephemeralById.get(item.id);
@@ -445,6 +463,27 @@ export function updateQueuedMessage(
   return updateQueuedMessageForSession(host, host.sessionKey, id, update);
 }
 
+export function updateVolatileQueuedMessage(
+  host: ChatQueueScopedSessionHost,
+  id: string,
+  update: (item: ChatQueueItem) => ChatQueueItem,
+): ChatQueueItem | null {
+  const location = locateChatQueueItem(host, id);
+  const current = location?.queue.find((item) => item.id === id);
+  if (!location || !current) {
+    return null;
+  }
+  markLocalRecoveryItem(host, id);
+  markVolatileQueuedMessage(host, id);
+  const nextItem = update(current);
+  writeLocatedChatQueue(
+    host,
+    location,
+    location.queue.map((item) => (item.id === id ? nextItem : item)),
+  );
+  return nextItem;
+}
+
 export function updateQueuedMessageForSession(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
@@ -512,6 +551,7 @@ export function admitQueuedMessageForSession(
     return false;
   }
   clearLocalRecoveryItem(host, item.id);
+  clearVolatileQueuedMessage(host, item.id);
   const stored = storedOutboxContainingItem(host, item.id);
   if (!stored) {
     return false;
@@ -565,6 +605,7 @@ export function removeQueuedMessageWithoutReleasing(
   }
   if (item) {
     clearLocalRecoveryItem(host, id);
+    clearVolatileQueuedMessage(host, id);
   }
   return item;
 }
@@ -650,6 +691,13 @@ export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueScopedSess
   const items = [...host.chatQueue, ...Object.values(host.chatQueueByScope ?? {}).flat()];
   for (const item of items) {
     if (!item.sendRunId || (item.sendState !== "sending" && item.sendState !== "waiting-idle")) {
+      continue;
+    }
+    if (isVolatileQueuedMessage(host, item.id)) {
+      updateVolatileQueuedMessage(host, item.id, (current) => ({
+        ...current,
+        sendState: "unconfirmed",
+      }));
       continue;
     }
     updateQueuedMessageForSession(

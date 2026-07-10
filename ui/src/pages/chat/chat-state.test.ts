@@ -476,7 +476,7 @@ describe("route composer fallback", () => {
     expect(resetChatScroll).toHaveBeenCalledTimes(2);
   });
 
-  it("adopts an unresolved global fallback when the selected agent becomes known", () => {
+  it("adopts an unresolved bare-main fallback when the default agent becomes known", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const { state } = createRouteState("unresolved memory draft");
     state.assistantAgentId = null;
@@ -487,7 +487,7 @@ describe("route composer fallback", () => {
       retainPreviousComposerInMemory: true,
       previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
     });
-    const unresolvedScopeKey = storedChatOutboxScopeKey({ sessionKey: "global" });
+    const unresolvedScopeKey = storedChatOutboxScopeKey({ sessionKey: "main" });
     expect(state.chatComposerFallbackByScope[unresolvedScopeKey]?.message).toBe(
       "unresolved memory draft",
     );
@@ -506,6 +506,44 @@ describe("route composer fallback", () => {
       "unresolved memory draft",
     );
     expect(state.chatComposerFallbackByScope[unresolvedScopeKey]).toBeUndefined();
+  });
+
+  it("keeps unresolved bare-main and raw-global fallbacks with their resolved owners", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    const unresolvedMainScopeKey = storedChatOutboxScopeKey({ sessionKey: "main" });
+    const unresolvedGlobalScopeKey = storedChatOutboxScopeKey({ sessionKey: "global" });
+    state.chatComposerFallbackByScope = {
+      [unresolvedMainScopeKey]: {
+        message: "default-agent fallback",
+        attachments: [],
+        storageFailed: false,
+        sequence: 1,
+      },
+      [unresolvedGlobalScopeKey]: {
+        message: "selected-agent fallback",
+        attachments: [],
+        storageFailed: false,
+        sequence: 2,
+      },
+    };
+    state.assistantAgentId = "alpha";
+    state.agentsList = {
+      agents: [],
+      defaultId: "work",
+      mainKey: "main",
+      scope: "global",
+    };
+
+    resetChatStateForRouteSession(state, "main");
+    expect(state.chatMessage).toBe("default-agent fallback");
+    expect(state.chatComposerFallbackByScope[unresolvedGlobalScopeKey]?.message).toBe(
+      "selected-agent fallback",
+    );
+
+    resetChatStateForRouteSession(state, "agent:work:other");
+    resetChatStateForRouteSession(state, "global");
+    expect(state.chatMessage).toBe("selected-agent fallback");
   });
 
   it("adopts a failed custom-main fallback when defaults identify the alias", () => {
@@ -546,6 +584,50 @@ describe("route composer fallback", () => {
     expect(retryChatComposerMemoryFallback(state, "agent:work:workspace")).toBe(true);
     expect(loadChatComposerSnapshot(state, "agent:work:workspace")?.draft).toBe(
       "custom alias memory draft",
+    );
+  });
+
+  it("adopts a qualified custom-main fallback when defaults identify the alias", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("qualified alias memory draft");
+    state.assistantAgentId = null;
+    state.agentsList = null;
+    state.sessionKey = "agent:work:workspace";
+
+    resetChatStateForRouteSession(state, "agent:alpha:other", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+    const qualifiedScopeKey = storedChatOutboxScopeKey({
+      agentId: "work",
+      sessionKey: "agent:work:workspace",
+    });
+    expect(state.chatComposerFallbackByScope[qualifiedScopeKey]?.message).toBe(
+      "qualified alias memory draft",
+    );
+
+    state.assistantAgentId = "alpha";
+    state.agentsList = {
+      agents: [],
+      defaultId: "work",
+      mainKey: "workspace",
+      scope: "global",
+    };
+    expect(resetChatStateForRouteSession(state, "agent:work:workspace")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: true,
+    });
+
+    const resolvedScopeKey = storedChatOutboxScopeKey({ agentId: "work", sessionKey: "global" });
+    expect(state.chatMessage).toBe("qualified alias memory draft");
+    expect(state.chatAttachments).toHaveLength(1);
+    expect(state.chatComposerFallbackByScope[qualifiedScopeKey]).toBeUndefined();
+    expect(state.chatComposerFallbackByScope[resolvedScopeKey]?.message).toBe(
+      "qualified alias memory draft",
+    );
+    expect(retryChatComposerMemoryFallback(state, "agent:work:workspace")).toBe(true);
+    expect(loadChatComposerSnapshot(state, "agent:work:workspace")?.draft).toBe(
+      "qualified alias memory draft",
     );
   });
 

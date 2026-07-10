@@ -121,6 +121,8 @@ export type SessionResetOptions = {
   agentId?: string | null;
 };
 
+export type SessionResetResult = "completed" | "not-started" | "uncertain";
+
 type SessionGateway = {
   readonly snapshot: {
     client: GatewayBrowserClient | null;
@@ -167,7 +169,7 @@ export type SessionCapability = {
   setModelOverride: (key: string, value: string | null | undefined) => void;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<boolean>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
-  reset: (key: string, options?: SessionResetOptions) => Promise<boolean>;
+  reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;
   compact: (key: string, options?: { agentId?: string | null }) => Promise<SessionCompactResult>;
   steer: (
     key: string,
@@ -938,20 +940,26 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return isCurrentConnection(scope) ? { deleted, errors } : { deleted: [], errors: [] };
   };
 
-  const reset = async (key: string, options: SessionResetOptions = {}): Promise<boolean> => {
+  const reset = async (
+    key: string,
+    options: SessionResetOptions = {},
+  ): Promise<SessionResetResult> => {
     const scope = captureConnection();
     if (!scope) {
-      return false;
+      return "not-started";
     }
     try {
       await requestSessionReset(scope.client, key, options);
-      return isCurrentConnection(scope);
+      return isCurrentConnection(scope) ? "completed" : "uncertain";
     } catch (error) {
-      if (!isCurrentConnection(scope)) {
-        return false;
+      if (isCurrentConnection(scope)) {
+        publish({ ...state, error: String(error) });
       }
-      publish({ ...state, error: String(error) });
-      throw error;
+      // The gateway commits the new session identity before every awaited
+      // post-reset lifecycle step finishes. Once requested, even a rejection
+      // on the same connection cannot prove that the destructive reset did not
+      // commit, so callers must never retry it automatically.
+      return "uncertain";
     }
   };
 

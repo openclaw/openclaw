@@ -2081,7 +2081,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         page.evaluate(
           ({ expectedAttachmentName, expectedAttachmentDataUrl, expectedPrompt }) => {
             const storedValues = Object.entries(sessionStorage)
-              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v1:"))
+              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v2:"))
               .map(([, value]) => value);
             const stored = storedValues.join("\n");
             let runId: string | null = null;

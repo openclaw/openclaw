@@ -48,6 +48,8 @@ type ChatCommandSendOptions = ChatCommandResetOptions & {
   sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
 };
 
+export type ChatCommandDispatchResult = "completed" | "failed" | "uncertain";
+
 export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
   Parameters<typeof clearChatHistory>[0] & {
     sessions: SessionCapability;
@@ -199,26 +201,26 @@ export async function dispatchChatSlashCommand(
   name: string,
   args: string,
   opts: ChatCommandSendOptions,
-): Promise<boolean> {
+): Promise<ChatCommandDispatchResult> {
   switch (name) {
     case "stop":
       await handleAbortChat(host);
-      return true;
+      return "completed";
     case "new":
       if (!host.createChatSession) {
         setChatCommandError(host, "New Chat is unavailable.");
-        return false;
+        return "failed";
       }
       await host.createChatSession();
-      return true;
+      return "completed";
     case "reset":
       await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", opts);
-      return true;
+      return "completed";
     case "clear":
       return await clearChatHistory(host);
     case "export-session":
       await host.exportCurrentChat?.();
-      return true;
+      return "completed";
   }
 
   if (!host.client || !host.connected) {
@@ -230,7 +232,7 @@ export async function dispatchChatSlashCommand(
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
       contentChanged: true,
     });
-    return false;
+    return "failed";
   }
 
   const targetClient = host.client;
@@ -265,7 +267,7 @@ export async function dispatchChatSlashCommand(
         },
       );
     }
-    return false;
+    return "failed";
   }
 
   if (result.content && targetIsCurrent()) {
@@ -283,7 +285,7 @@ export async function dispatchChatSlashCommand(
         },
       );
     }
-    return false;
+    return "failed";
   }
 
   if (result.trackRunId && targetIsCurrent()) {
@@ -315,7 +317,7 @@ export async function dispatchChatSlashCommand(
       contentChanged: Boolean(result.content),
     });
   }
-  return true;
+  return "completed";
 }
 
 function injectCommandResult(host: ChatCommandHost, content: string) {

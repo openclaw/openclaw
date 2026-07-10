@@ -17,6 +17,21 @@ import {
 
 type ComposerState = Parameters<typeof persistChatComposerState>[0];
 
+const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
+const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
+
+function gatewayOwner(gatewayUrl: string | null | undefined): string {
+  return gatewayUrl?.trim() || "default";
+}
+
+function legacyStorageKeyForGateway(gatewayUrl: string | null | undefined): string {
+  return `${LEGACY_STORAGE_KEY_PREFIX}${encodeURIComponent(gatewayOwner(gatewayUrl)).slice(0, 240)}`;
+}
+
+function storageKeyForGateway(gatewayUrl: string | null | undefined): string {
+  return `${STORAGE_KEY_PREFIX}${encodeURIComponent(gatewayOwner(gatewayUrl))}`;
+}
+
 function createState(overrides: Partial<ComposerState> = {}): ComposerState {
   return {
     settings: { gatewayUrl: "ws://gateway.test/control" },
@@ -302,32 +317,84 @@ describe("chat composer persistence", () => {
     });
   });
 
-  it("migrates unresolved bare-main input when the selected agent becomes known", () => {
-    const unresolved = createState({ sessionKey: "main" });
-    const item = reconnectItem("unresolved-main", 1);
-    expect(admitStoredChatComposerQueueItem(unresolved, "main", item)).toBe(true);
-    expect(listStoredChatOutboxes(unresolved)).toEqual([
+  it("keeps unresolved bare main and raw global independent until their owners resolve", () => {
+    const offlineMain = createState({ agentsList: null, hello: null, sessionKey: "main" });
+    const offlineGlobal = createState({ agentsList: null, hello: null, sessionKey: "global" });
+    const mainItem = reconnectItem("unresolved-main", 1);
+    const globalItem = reconnectItem("unresolved-global", 2);
+    expect(admitStoredChatComposerQueueItem(offlineMain, "main", mainItem)).toBe(true);
+    expect(admitStoredChatComposerQueueItem(offlineGlobal, "global", globalItem)).toBe(true);
+    expect(listStoredChatOutboxes(offlineMain)).toEqual([
+      {
+        sessionKey: "main",
+        queue: [{ ...mainItem, sessionKey: "main" }],
+      },
       {
         sessionKey: "global",
-        queue: [{ ...item, sessionKey: "global" }],
+        queue: [{ ...globalItem, sessionKey: "global" }],
       },
     ]);
 
-    const resolved = createState({ assistantAgentId: "work", sessionKey: "global" });
-    expect(loadChatComposerSnapshot(resolved, "agent:work:main")?.queue).toEqual([
-      {
-        ...item,
-        sessionKey: "agent:work:main",
-        agentId: "work",
-      },
-    ]);
+    const resolved = createState({
+      agentsList: { defaultId: "work", mainKey: "main" },
+      assistantAgentId: "alpha",
+      sessionKey: "global",
+    });
     expect(listStoredChatOutboxes(resolved)).toEqual([
       {
         sessionKey: "global",
         agentId: "work",
-        queue: [{ ...item, sessionKey: "global", agentId: "work" }],
+        queue: [{ ...mainItem, sessionKey: "global", agentId: "work" }],
+      },
+      {
+        sessionKey: "global",
+        agentId: "alpha",
+        queue: [{ ...globalItem, sessionKey: "global", agentId: "alpha" }],
       },
     ]);
+
+    const attemptedMain = {
+      ...mainItem,
+      agentId: "work",
+      sendAttempts: 1,
+      sessionKey: "global",
+    };
+    const attemptedGlobal = {
+      ...globalItem,
+      agentId: "alpha",
+      sendAttempts: 1,
+      sessionKey: "global",
+    };
+    expect(
+      updateStoredChatComposerQueueItem(
+        resolved,
+        "main",
+        { ...mainItem, agentId: "work", sessionKey: "global" },
+        attemptedMain,
+      ),
+    ).toBe(true);
+    expect(
+      updateStoredChatComposerQueueItem(
+        resolved,
+        "global",
+        { ...globalItem, agentId: "alpha", sessionKey: "global" },
+        attemptedGlobal,
+      ),
+    ).toBe(true);
+    expect(removeStoredChatComposerQueueItem(resolved, "main", mainItem.id, attemptedMain)).toBe(
+      true,
+    );
+    expect(listStoredChatOutboxes(resolved)).toEqual([
+      {
+        sessionKey: "global",
+        agentId: "alpha",
+        queue: [attemptedGlobal],
+      },
+    ]);
+    expect(
+      removeStoredChatComposerQueueItem(resolved, "global", globalItem.id, attemptedGlobal),
+    ).toBe(true);
+    expect(listStoredChatOutboxes(resolved)).toEqual([]);
   });
 
   it("migrates an unknown bare main alias to the default agent", () => {
@@ -366,11 +433,12 @@ describe("chat composer persistence", () => {
     "migrates shipped bare main aliases from selected-agent buckets via %s",
     (trigger) => {
       const gatewayUrl = "ws://gateway.test/control";
-      const storageKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;
+      const legacyStorageKey = legacyStorageKeyForGateway(gatewayUrl);
+      const storageKey = storageKeyForGateway(gatewayUrl);
       const customAliasItem = reconnectItem("legacy-custom-selected", 1);
       const mainAliasItem = reconnectItem("legacy-main-selected", 2);
       sessionStorage.setItem(
-        storageKey,
+        legacyStorageKey,
         JSON.stringify({
           version: 1,
           sessions: {
@@ -400,6 +468,7 @@ describe("chat composer persistence", () => {
       ]);
       expect(sessionStorage.getItem(storageKey)).not.toContain("workspace\\u0000agent:alpha");
       expect(sessionStorage.getItem(storageKey)).not.toContain("main\\u0000agent:beta");
+      expect(sessionStorage.getItem(legacyStorageKey)).toBeNull();
     },
   );
 
@@ -422,6 +491,65 @@ describe("chat composer persistence", () => {
         sessionKey: state.sessionKey,
       },
     ]);
+  });
+
+  it("migrates and mutates shipped selected-agent opaque rows", () => {
+    const gatewayUrl = "ws://gateway.test/control";
+    const legacyStorageKey = legacyStorageKeyForGateway(gatewayUrl);
+    const storageKey = storageKeyForGateway(gatewayUrl);
+    const sessionKey = "matrix:group:RoomCase";
+    const first = reconnectItem("legacy-work", 1);
+    const second = reconnectItem("legacy-alpha", 2);
+    sessionStorage.setItem(
+      legacyStorageKey,
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          [`${sessionKey}\u0000agent:work`]: {
+            draft: "older draft",
+            queue: [first],
+            updatedAt: 1,
+          },
+          [`${sessionKey}\u0000agent:alpha`]: {
+            draft: "newer draft",
+            queue: [second],
+            updatedAt: 2,
+          },
+        },
+      }),
+    );
+    const state = createState({ assistantAgentId: "alpha", sessionKey });
+
+    expect(listStoredChatOutboxes(state)).toEqual([
+      {
+        queue: [
+          { ...first, sessionKey },
+          { ...second, sessionKey },
+        ],
+        sessionKey,
+      },
+    ]);
+    expect(loadChatComposerSnapshot(state, sessionKey)).toEqual({
+      draft: "newer draft",
+      queue: [
+        { ...first, sessionKey },
+        { ...second, sessionKey },
+      ],
+    });
+
+    const attempted = { ...first, sendAttempts: 1, sessionKey };
+    expect(
+      updateStoredChatComposerQueueItem(state, sessionKey, { ...first, sessionKey }, attempted),
+    ).toBe(true);
+    expect(removeStoredChatComposerQueueItem(state, sessionKey, first.id, attempted)).toBe(true);
+    expect(loadChatComposerSnapshot(state, sessionKey)).toEqual({
+      draft: "newer draft",
+      queue: [{ ...second, sessionKey }],
+    });
+    const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
+      sessions?: Record<string, unknown>;
+    };
+    expect(Object.keys(stored.sessions ?? {})).toEqual([`${sessionKey}\u0000agent:main`]);
   });
 
   it("does not retarget an explicit agent when a custom main alias becomes known", () => {
@@ -489,7 +617,7 @@ describe("chat composer persistence", () => {
     }
 
     const gatewayUrl = offline.settings?.gatewayUrl;
-    const storageKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl ?? "default")}`;
+    const storageKey = storageKeyForGateway(gatewayUrl);
     const stored = sessionStorage.getItem(storageKey);
     expect(stored).not.toBeNull();
     const freshStorage = createStorageMock();
@@ -512,7 +640,7 @@ describe("chat composer persistence", () => {
     expect(loadChatComposerSnapshot(connected, "global")).toBeNull();
 
     const gatewayUrl = connected.settings?.gatewayUrl;
-    const storageKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl ?? "default")}`;
+    const storageKey = storageKeyForGateway(gatewayUrl);
     const stored = sessionStorage.getItem(storageKey);
     expect(stored).not.toBeNull();
     const freshStorage = createStorageMock();
@@ -563,7 +691,7 @@ describe("chat composer persistence", () => {
     });
     expect(
       resolveStoredChatOutboxScope({ ...offlineAfterReset, assistantAgentId: "alpha" }, "main"),
-    ).toEqual({ sessionKey: "global" });
+    ).toEqual({ sessionKey: "main" });
   });
 
   it("restores an agent-qualified custom main alias before defaults load", () => {
@@ -578,7 +706,7 @@ describe("chat composer persistence", () => {
     expect(admitStoredChatComposerQueueItem(connected, connected.sessionKey, queued)).toBe(true);
 
     const gatewayUrl = connected.settings?.gatewayUrl;
-    const storageKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl ?? "default")}`;
+    const storageKey = storageKeyForGateway(gatewayUrl);
     const stored = sessionStorage.getItem(storageKey);
     expect(stored).not.toBeNull();
     const freshStorage = createStorageMock();
@@ -622,7 +750,7 @@ describe("chat composer persistence", () => {
     expect(loadChatComposerSnapshot(connectedOnAlpha, "global")).toBeNull();
 
     const gatewayUrl = connectedOnAlpha.settings?.gatewayUrl;
-    const storageKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl ?? "default")}`;
+    const storageKey = storageKeyForGateway(gatewayUrl);
     const stored = sessionStorage.getItem(storageKey);
     expect(stored).not.toBeNull();
     const freshStorage = createStorageMock();
@@ -669,9 +797,9 @@ describe("chat composer persistence", () => {
     const alphaItem = reconnectItem("alpha-existing", 1);
     expect(admitStoredChatComposerQueueItem(alpha, "global", alphaItem)).toBe(true);
 
-    const unresolved = createState({ sessionKey: "main" });
+    const unresolved = createState({ agentsList: null, hello: null, sessionKey: "global" });
     const unresolvedItem = reconnectItem("selected-work", 2);
-    expect(admitStoredChatComposerQueueItem(unresolved, "main", unresolvedItem)).toBe(true);
+    expect(admitStoredChatComposerQueueItem(unresolved, "global", unresolvedItem)).toBe(true);
 
     const selectedWork = createState({ assistantAgentId: "work", sessionKey: "global" });
     expect(listStoredChatOutboxes(selectedWork)).toEqual([
@@ -690,7 +818,7 @@ describe("chat composer persistence", () => {
 
   it("retains every queued input when shipped alias rows consolidate above the admission cap", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;
+    const storageKey = legacyStorageKeyForGateway(gatewayUrl);
     const first = Array.from({ length: 50 }, (_, index) =>
       reconnectItem(`canonical-${index}`, index),
     );
@@ -718,10 +846,11 @@ describe("chat composer persistence", () => {
 
   it("retains an older alias draft when a newer canonical row only updates the queue", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;
+    const legacyStorageKey = legacyStorageKeyForGateway(gatewayUrl);
+    const storageKey = storageKeyForGateway(gatewayUrl);
     const item = reconnectItem("newer-queue", 2);
     sessionStorage.setItem(
-      storageKey,
+      legacyStorageKey,
       JSON.stringify({
         version: 1,
         sessions: {
@@ -737,6 +866,7 @@ describe("chat composer persistence", () => {
       queue: [{ ...item, sessionKey: "global", agentId: "work" }],
     });
     expect(sessionStorage.getItem(storageKey)).not.toContain("agent:work:main");
+    expect(sessionStorage.getItem(legacyStorageKey)).toBeNull();
   });
 
   it("restores one agent-scoped main outbox before Gateway defaults load", () => {
@@ -767,16 +897,20 @@ describe("chat composer persistence", () => {
     persistence.schedule();
     expect(persistence.persistForRouteSwitch()).toBe(true);
 
-    const reconnected = createState({ assistantAgentId: "work", sessionKey: "global" });
+    const reconnected = createState({
+      agentsList: { defaultId: "work", mainKey: "main" },
+      assistantAgentId: "work",
+      sessionKey: "global",
+    });
     expect(loadChatComposerSnapshot(reconnected, "global")?.draft).toBe("edited while offline");
   });
 
-  it("restores a shipped qualified-main alias before Gateway defaults load", () => {
+  it("restores and mutates a shipped qualified-main alias before Gateway defaults load", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;
+    const legacyStorageKey = legacyStorageKeyForGateway(gatewayUrl);
     const item = reconnectItem("legacy-offline-reload", 1);
     sessionStorage.setItem(
-      storageKey,
+      legacyStorageKey,
       JSON.stringify({
         version: 1,
         sessions: {
@@ -789,9 +923,17 @@ describe("chat composer persistence", () => {
     );
 
     const offline = createState({ sessionKey: "main" });
-    expect(loadChatComposerSnapshot(offline, "main")?.queue).toEqual([
-      { ...item, agentId: "work", sessionKey: "main" },
-    ]);
+    const restored = { ...item, agentId: "work", sessionKey: "main" };
+    expect(loadChatComposerSnapshot(offline, "main")?.queue).toEqual([restored]);
+    expect(sessionStorage.getItem(storageKeyForGateway(gatewayUrl))).not.toContain(
+      "agent:work:main",
+    );
+
+    const attempted = { ...restored, sendAttempts: 1 };
+    expect(updateStoredChatComposerQueueItem(offline, "main", restored, attempted)).toBe(true);
+    expect(loadChatComposerSnapshot(offline, "main")?.queue).toEqual([attempted]);
+    expect(removeStoredChatComposerQueueItem(offline, "main", item.id, attempted)).toBe(true);
+    expect(loadChatComposerSnapshot(offline, "main")).toBeNull();
   });
 
   it("does not guess between agent-scoped main outboxes before defaults load", () => {
@@ -815,6 +957,24 @@ describe("chat composer persistence", () => {
     expect(loadChatComposerSnapshot(createState({ sessionKey: "main" }), "main")).toBeNull();
   });
 
+  it("counts a cleared agent draft when deciding whether an offline main owner is unique", () => {
+    const staleAlpha = createState({
+      assistantAgentId: "alpha",
+      chatMessage: "stale alpha draft",
+      sessionKey: "global",
+    });
+    expect(persistChatComposerState(staleAlpha)).toBe(true);
+    const clearedWork = createState({
+      assistantAgentId: "work",
+      chatMessage: "work draft",
+      sessionKey: "global",
+    });
+    expect(persistChatComposerState(clearedWork)).toBe(true);
+    expect(persistChatComposerState({ ...clearedWork, chatMessage: "" })).toBe(true);
+
+    expect(loadChatComposerSnapshot(createState({ sessionKey: "main" }), "main")).toBeNull();
+  });
+
   it("keeps readable migrated composer state when the migration write fails", () => {
     const storage = createStorageMock();
     vi.stubGlobal("sessionStorage", storage);
@@ -829,7 +989,11 @@ describe("chat composer persistence", () => {
       throw new DOMException("quota exceeded", "QuotaExceededError");
     });
 
-    const resolved = createState({ assistantAgentId: "work", sessionKey: "global" });
+    const resolved = createState({
+      agentsList: { defaultId: "work", mainKey: "main" },
+      assistantAgentId: "work",
+      sessionKey: "global",
+    });
     expect(loadChatComposerSnapshot(resolved, "global")).toEqual({
       draft: "unresolved draft",
       queue: [{ ...item, agentId: "work", sessionKey: "global" }],
@@ -854,9 +1018,10 @@ describe("chat composer persistence", () => {
 
   it("migrates shipped alias rows and consumes legacy tombstones", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;
+    const legacyStorageKey = legacyStorageKeyForGateway(gatewayUrl);
+    const storageKey = storageKeyForGateway(gatewayUrl);
     sessionStorage.setItem(
-      storageKey,
+      legacyStorageKey,
       JSON.stringify({
         version: 1,
         sessions: {
@@ -887,6 +1052,7 @@ describe("chat composer persistence", () => {
     state.chatMessage = "updated draft";
     persistChatComposerState(state);
     expect(sessionStorage.getItem(storageKey)).not.toContain("removedQueueItemIds");
+    expect(sessionStorage.getItem(legacyStorageKey)).toBeNull();
   });
 
   it("lists inactive outboxes for explicit reconnect routing", () => {
@@ -982,24 +1148,99 @@ describe("chat composer persistence", () => {
     expect(listStoredChatOutboxes(otherGateway)).toEqual([]);
   });
 
-  it("keeps gateways isolated when long URLs share the same encoded prefix", () => {
+  it("isolates long same-prefix gateways in owner-tagged v2 buckets", () => {
     const sharedPrefix = `wss://gateway.test/${"a".repeat(260)}`;
-    const first = createState({
-      chatMessage: "first long gateway draft",
-      settings: { gatewayUrl: `${sharedPrefix}?route=first` },
-    });
-    const item = reconnectItem("first-long-gateway", 1);
-    expect(persistChatComposerState(first)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(first, first.sessionKey, item)).toBe(true);
+    const firstGatewayUrl = `${sharedPrefix}?route=first`;
+    const secondGatewayUrl = `${sharedPrefix}?route=second`;
+    expect(legacyStorageKeyForGateway(firstGatewayUrl)).toBe(
+      legacyStorageKeyForGateway(secondGatewayUrl),
+    );
+    expect(storageKeyForGateway(firstGatewayUrl)).not.toBe(storageKeyForGateway(secondGatewayUrl));
 
-    const second = createState({
-      settings: { gatewayUrl: `${sharedPrefix}?route=second` },
+    const first = createState({
+      chatMessage: "first gateway draft",
+      settings: { gatewayUrl: firstGatewayUrl },
     });
-    expect(loadChatComposerSnapshot(second, second.sessionKey)).toBeNull();
-    expect(listStoredChatOutboxes(second)).toEqual([]);
+    const second = createState({
+      chatMessage: "second gateway draft",
+      settings: { gatewayUrl: secondGatewayUrl },
+    });
+    const firstItem = reconnectItem("first-long-gateway", 1);
+    const secondItem = reconnectItem("second-long-gateway", 2);
+    expect(persistChatComposerState(first)).toBe(true);
+    expect(admitStoredChatComposerQueueItem(first, first.sessionKey, firstItem)).toBe(true);
+    expect(persistChatComposerState(second)).toBe(true);
+    expect(admitStoredChatComposerQueueItem(second, second.sessionKey, secondItem)).toBe(true);
+
     expect(loadChatComposerSnapshot(first, first.sessionKey)).toEqual({
-      draft: "first long gateway draft",
-      queue: [{ ...item, agentId: "lily", sessionKey: first.sessionKey }],
+      draft: "first gateway draft",
+      queue: [{ ...firstItem, agentId: "lily", sessionKey: first.sessionKey }],
+    });
+    expect(loadChatComposerSnapshot(second, second.sessionKey)).toEqual({
+      draft: "second gateway draft",
+      queue: [{ ...secondItem, agentId: "lily", sessionKey: second.sessionKey }],
+    });
+    for (const gatewayUrl of [firstGatewayUrl, secondGatewayUrl]) {
+      const stored = JSON.parse(sessionStorage.getItem(storageKeyForGateway(gatewayUrl)) ?? "{}");
+      expect(stored).toMatchObject({ gatewayOwner: gatewayUrl, version: 2 });
+    }
+  });
+
+  it("does not replay an exact-240 legacy key to a longer same-prefix gateway", () => {
+    const prefix = "wss://gateway.test/";
+    const exactGatewayUrl = `${prefix}${"a".repeat(240 - encodeURIComponent(prefix).length)}`;
+    const longerGatewayUrl = `${exactGatewayUrl}b`;
+    expect(encodeURIComponent(exactGatewayUrl)).toHaveLength(240);
+    expect(legacyStorageKeyForGateway(exactGatewayUrl)).toBe(
+      legacyStorageKeyForGateway(longerGatewayUrl),
+    );
+    const item = reconnectItem("ambiguous-legacy-owner", 1);
+    sessionStorage.setItem(
+      legacyStorageKeyForGateway(exactGatewayUrl),
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          "agent:lily:main\u0000agent:lily": { queue: [item], updatedAt: 1 },
+        },
+      }),
+    );
+
+    for (const gatewayUrl of [exactGatewayUrl, longerGatewayUrl]) {
+      const state = createState({ settings: { gatewayUrl } });
+      expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+      expect(listStoredChatOutboxes(state)).toEqual([]);
+      expect(sessionStorage.getItem(storageKeyForGateway(gatewayUrl))).toBeNull();
+    }
+  });
+
+  it("migrates an unambiguous shipped v1 bucket into owner-tagged v2", () => {
+    const gatewayUrl = "ws://gateway.test/control";
+    const legacyStorageKey = legacyStorageKeyForGateway(gatewayUrl);
+    const storageKey = storageKeyForGateway(gatewayUrl);
+    const item = reconnectItem("legacy-short-gateway", 1);
+    sessionStorage.setItem(
+      legacyStorageKey,
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          "agent:lily:main\u0000agent:lily": {
+            draft: "shipped gateway draft",
+            queue: [item],
+            updatedAt: 1,
+          },
+        },
+      }),
+    );
+    const state = createState({ settings: { gatewayUrl } });
+
+    expect(loadChatComposerSnapshot(state, state.sessionKey)).toEqual({
+      draft: "shipped gateway draft",
+      queue: [{ ...item, agentId: "lily", sessionKey: state.sessionKey }],
+    });
+    expect(sessionStorage.getItem(legacyStorageKey)).toBeNull();
+    expect(JSON.parse(sessionStorage.getItem(storageKey) ?? "{}")).toMatchObject({
+      gatewayOwner: gatewayUrl,
+      version: 2,
     });
   });
 
@@ -1098,7 +1339,7 @@ describe("chat composer persistence", () => {
     expect(listStoredChatOutboxes(offline)).toHaveLength(20);
 
     const gatewayUrl = offline.settings?.gatewayUrl;
-    const storageKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl ?? "default")}`;
+    const storageKey = storageKeyForGateway(gatewayUrl);
     const stored = sessionStorage.getItem(storageKey);
     expect(stored).not.toBeNull();
     const freshStorage = createStorageMock();
@@ -1106,7 +1347,11 @@ describe("chat composer persistence", () => {
     vi.stubGlobal("sessionStorage", freshStorage);
 
     expect(loadChatComposerSnapshot(createState({ sessionKey: "main" }), "main")).toBeNull();
-    const reconnected = createState({ assistantAgentId: "work", sessionKey: "global" });
+    const reconnected = createState({
+      agentsList: { defaultId: "work", mainKey: "main" },
+      assistantAgentId: "work",
+      sessionKey: "global",
+    });
     expect(loadChatComposerSnapshot(reconnected, "global")).toEqual({
       draft: "",
       queue: [{ ...queued, agentId: "work", sessionKey: "global" }],
