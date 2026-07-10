@@ -152,12 +152,13 @@ struct IOSGatewayChatTransportTests {
             #"""
             {"models":[
               {"id":"claude-opus-4","name":"Claude Opus 4","provider":"anthropic","contextWindow":200000,"reasoning":true},
-              {"id":"gpt-5","name":"  ","provider":"openai","extra":"ignored"}
+              {"id":"gpt-5","name":"  ","provider":"openai","extra":"ignored"},
+              {"id":"claude-opus-4-padded","name":"  Claude Opus 4  ","provider":"anthropic"}
             ]}
             """#.utf8)
         let choices = try IOSGatewayChatTransport.decodeModelChoices(data)
 
-        #expect(choices.count == 2)
+        #expect(choices.count == 3)
         #expect(choices[0].modelID == "claude-opus-4")
         #expect(choices[0].name == "Claude Opus 4")
         #expect(choices[0].provider == "anthropic")
@@ -168,6 +169,9 @@ struct IOSGatewayChatTransportTests {
         #expect(choices[1].provider == "openai")
         #expect(choices[1].contextWindow == nil)
         #expect(choices[1].reasoning == nil)
+        // Regression: the trimmed name must be used, not the padded raw value.
+        #expect(choices[2].modelID == "claude-opus-4-padded")
+        #expect(choices[2].name == "Claude Opus 4")
     }
 
     @Test func `commands list params request text scope with args`() throws {

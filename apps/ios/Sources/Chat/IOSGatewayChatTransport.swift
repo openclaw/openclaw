@@ -301,7 +301,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             let name = model.name.trimmingCharacters(in: .whitespacesAndNewlines)
             return OpenClawChatModelChoice(
                 modelID: model.id,
-                name: name.isEmpty ? model.id : model.name,
+                name: name.isEmpty ? model.id : name,
                 provider: model.provider,
                 contextWindow: model.contextWindow,
                 reasoning: model.reasoning)
