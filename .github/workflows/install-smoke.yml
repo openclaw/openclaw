@@ -10,6 +10,14 @@ on:
         required: false
         default: false
         type: boolean
+      root_image_transport:
+        description: How full-smoke jobs share the exact-target root image
+        required: false
+        default: registry
+        type: choice
+        options:
+          - registry
+          - artifact
       update_baseline_version:
         description: Baseline openclaw version or dist-tag for installer update smoke
         required: false
@@ -26,6 +34,11 @@ on:
         required: false
         default: true
         type: boolean
+      root_image_transport:
+        description: How full-smoke jobs share the exact-target root image
+        required: false
+        default: registry
+        type: string
       update_baseline_version:
         description: Baseline openclaw version or dist-tag for installer update smoke
         required: false
@@ -34,7 +47,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && format('{0}-{1}-{2}', github.workflow, github.event_name, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
@@ -54,11 +66,12 @@ jobs:
       run_bun_global_install_smoke: ${{ steps.manifest.outputs.run_bun_global_install_smoke }}
       target_sha: ${{ steps.manifest.outputs.target_sha }}
       dockerfile_image: ${{ steps.manifest.outputs.dockerfile_image }}
+      root_image_transport: ${{ steps.manifest.outputs.root_image_transport }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -69,17 +82,31 @@ jobs:
         env:
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
           OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE: ${{ inputs.run_bun_global_install_smoke || 'false' }}
+          OPENCLAW_CI_ROOT_IMAGE_TRANSPORT: ${{ inputs.root_image_transport || 'registry' }}
         run: |
+          set -euo pipefail
           event_name="${OPENCLAW_CI_EVENT_NAME:-}"
           workflow_bun_global_install_smoke="${OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:-false}"
+          root_image_transport="${OPENCLAW_CI_ROOT_IMAGE_TRANSPORT:-registry}"
+          case "$root_image_transport" in
+            registry | artifact) ;;
+            *)
+              echo "root_image_transport must be registry or artifact" >&2
+              exit 1
+              ;;
+          esac
           docs_only=false
           run_fast_install_smoke=true
           run_full_install_smoke=true
           run_bun_global_install_smoke=false
           run_install_smoke=true
           target_sha="$(git rev-parse HEAD)"
-          owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER:-openclaw}" | tr '[:upper:]' '[:lower:]')"
-          dockerfile_image="ghcr.io/${owner}/openclaw-dockerfile-smoke:${target_sha}"
+          if [ "$root_image_transport" = "artifact" ]; then
+            dockerfile_image="openclaw-dockerfile-smoke:${target_sha}"
+          else
+            owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER:-openclaw}" | tr '[:upper:]' '[:lower:]')"
+            dockerfile_image="ghcr.io/${owner}/openclaw-dockerfile-smoke:${target_sha}"
+          fi
           if [ "$event_name" = "schedule" ]; then
             run_bun_global_install_smoke=true
           elif [ "$event_name" = "workflow_dispatch" ] || [ "$event_name" = "workflow_call" ]; then
@@ -95,6 +122,7 @@ jobs:
             echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"
             echo "target_sha=$target_sha"
             echo "dockerfile_image=$dockerfile_image"
+            echo "root_image_transport=$root_image_transport"
           } >> "$GITHUB_OUTPUT"
 
   install-smoke-fast:
@@ -108,7 +136,7 @@ jobs:
       - name: Checkout CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
@@ -208,8 +236,11 @@ jobs:
 
   root_dockerfile_image:
     needs: [preflight]
-    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.root_image_transport == 'registry'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     outputs:
       image_ref: ${{ steps.image.outputs.image_ref }}
     env:
@@ -219,7 +250,7 @@ jobs:
       - name: Checkout CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Log in to GHCR
@@ -283,6 +314,193 @@ jobs:
             echo "- Reused existing image: \`${{ steps.existing.outputs.exists }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  root_dockerfile_image_artifact:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.root_image_transport == 'artifact'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      image_ref: ${{ steps.artifact_image.outputs.image_ref }}
+      image_artifact_name: ${{ steps.artifact_image.outputs.artifact_name }}
+      image_archive_name: ${{ steps.artifact_image.outputs.archive_name }}
+      image_artifact_id: ${{ steps.upload_image.outputs.artifact-id }}
+      image_artifact_digest: ${{ format('sha256:{0}', steps.upload_image.outputs.artifact-digest) }}
+      image_artifact_url: ${{ steps.upload_image.outputs.artifact-url }}
+      image_archive_sha256: ${{ steps.artifact_image.outputs.archive_sha256 }}
+      image_archive_size_bytes: ${{ steps.artifact_image.outputs.archive_size_bytes }}
+      image_config_digest: ${{ steps.artifact_image.outputs.image_config_digest }}
+      container_image_digest: ${{ steps.artifact_image.outputs.container_image_digest }}
+      image_evidence_sha256: ${{ steps.artifact_image.outputs.evidence_sha256 }}
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Checkout candidate CLI
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        with:
+          max-cache-size-mb: 800000
+
+      - name: Build exact-target root image artifact
+        id: artifact_image
+        env:
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null
+          [ "$(git rev-parse HEAD)" = "$TARGET_SHA" ]
+
+          artifact_name="install-smoke-root-image-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          archive_name="openclaw-dockerfile-smoke-${TARGET_SHA}.tar.zst"
+          evidence_name="install-smoke-root-image-evidence.json"
+          artifact_dir="${RUNNER_TEMP}/install-smoke-root-image"
+          image_tar="${RUNNER_TEMP}/openclaw-dockerfile-smoke.tar"
+          metadata_path="${RUNNER_TEMP}/openclaw-dockerfile-smoke-build-metadata.json"
+          rm -rf "$artifact_dir"
+          rm -f "$image_tar" "$metadata_path"
+          mkdir -p "$artifact_dir"
+          context_tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          dockerfile_blob_sha="$(git rev-parse HEAD:Dockerfile)"
+          dockerfile_sha256="$(sha256sum Dockerfile | awk '{print $1}')"
+
+          timeout --kill-after=30s 45m docker buildx build \
+            --progress=plain \
+            --output "type=docker,dest=${image_tar}" \
+            --metadata-file "$metadata_path" \
+            --build-arg OPENCLAW_EXTENSIONS=matrix \
+            -t "$IMAGE_REF" \
+            -f ./Dockerfile \
+            .
+          docker image load --input "$image_tar"
+
+          image_config_digest="$(docker image inspect --format '{{.Id}}' "$IMAGE_REF")"
+          mapfile -t metadata < <(
+            node - "$metadata_path" "$image_config_digest" <<'NODE'
+          const fs = require("node:fs");
+          const [path, expectedConfigDigest] = process.argv.slice(2);
+          const metadata = JSON.parse(fs.readFileSync(path, "utf8"));
+          const imageDigest = metadata["containerimage.digest"];
+          const configDigest = metadata["containerimage.config.digest"];
+          const digestPattern = /^sha256:[a-f0-9]{64}$/;
+          if (!digestPattern.test(imageDigest ?? "")) {
+            throw new Error("build metadata is missing containerimage.digest");
+          }
+          if (!digestPattern.test(configDigest ?? "")) {
+            throw new Error("build metadata is missing containerimage.config.digest");
+          }
+          if (configDigest !== expectedConfigDigest) {
+            throw new Error("build metadata config digest does not match the loaded image");
+          }
+          process.stdout.write(`${imageDigest}\n${configDigest}\n`);
+          NODE
+          )
+          [ "${#metadata[@]}" -eq 2 ]
+
+          build_metadata_sha256="$(sha256sum "$metadata_path" | awk '{print $1}')"
+          zstd -T0 -10 --no-progress -f "$image_tar" -o "$artifact_dir/$archive_name"
+          zstd -t "$artifact_dir/$archive_name"
+          archive_sha256="$(sha256sum "$artifact_dir/$archive_name" | awk '{print $1}')"
+          archive_size_bytes="$(stat -c '%s' "$artifact_dir/$archive_name")"
+
+          IMAGE_CONFIG_DIGEST="${metadata[1]}" \
+          CONTAINER_IMAGE_DIGEST="${metadata[0]}" \
+          BUILD_METADATA_SHA256="$build_metadata_sha256" \
+          CONTEXT_TREE_SHA="$context_tree_sha" \
+          DOCKERFILE_BLOB_SHA="$dockerfile_blob_sha" \
+          DOCKERFILE_SHA256="$dockerfile_sha256" \
+          ARCHIVE_NAME="$archive_name" \
+          ARCHIVE_SHA256="$archive_sha256" \
+          ARCHIVE_SIZE_BYTES="$archive_size_bytes" \
+            node - "$artifact_dir/$evidence_name" <<'NODE'
+          const fs = require("node:fs");
+          const evidencePath = process.argv[2];
+          const runId = Number(process.env.GITHUB_RUN_ID);
+          const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+          if (!Number.isSafeInteger(runId) || runId <= 0) throw new Error("invalid run id");
+          if (runAttempt !== 1) throw new Error("artifact evidence requires run attempt 1");
+          const evidence = {
+            schema: "openclaw.install-smoke-root-image-evidence/v1",
+            schemaVersion: 1,
+            workflowPath: ".github/workflows/install-smoke.yml",
+            workflowSha: process.env.WORKFLOW_SHA,
+            rootImageTransport: "artifact",
+            targetSha: process.env.TARGET_SHA,
+            buildContext: {
+              path: ".",
+              gitTreeSha: process.env.CONTEXT_TREE_SHA,
+            },
+            dockerfile: {
+              path: "Dockerfile",
+              gitBlobSha: process.env.DOCKERFILE_BLOB_SHA,
+              sha256: process.env.DOCKERFILE_SHA256,
+            },
+            imageRef: process.env.IMAGE_REF,
+            imageTag: process.env.TARGET_SHA,
+            containerImageDigest: process.env.CONTAINER_IMAGE_DIGEST,
+            dockerImageId: process.env.IMAGE_CONFIG_DIGEST,
+            imageConfigDigest: process.env.IMAGE_CONFIG_DIGEST,
+            buildMetadataSha256: process.env.BUILD_METADATA_SHA256,
+            archive: {
+              filename: process.env.ARCHIVE_NAME,
+              format: "docker-tar+zstd",
+              sha256: process.env.ARCHIVE_SHA256,
+              sizeBytes: Number(process.env.ARCHIVE_SIZE_BYTES),
+            },
+            conclusion: "success",
+            runId,
+            runAttempt,
+          };
+          fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+
+          evidence_sha256="$(sha256sum "$artifact_dir/$evidence_name" | awk '{print $1}')"
+          rm -f "$image_tar" "$metadata_path"
+          {
+            echo "image_ref=$IMAGE_REF"
+            echo "artifact_name=$artifact_name"
+            echo "archive_name=$archive_name"
+            echo "artifact_path=$artifact_dir"
+            echo "archive_sha256=$archive_sha256"
+            echo "archive_size_bytes=$archive_size_bytes"
+            echo "image_config_digest=${metadata[1]}"
+            echo "container_image_digest=${metadata[0]}"
+            echo "evidence_sha256=$evidence_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload root image artifact
+        id: upload_image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.artifact_image.outputs.artifact_name }}
+          path: ${{ steps.artifact_image.outputs.artifact_path }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Summarize root image artifact
+        env:
+          ARTIFACT_NAME: ${{ steps.artifact_image.outputs.artifact_name }}
+          IMAGE_REF: ${{ steps.artifact_image.outputs.image_ref }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          {
+            echo "## Root Dockerfile smoke image"
+            echo
+            echo "- Target SHA: \`${TARGET_SHA}\`"
+            echo "- Image: \`${IMAGE_REF}\`"
+            echo "- Transport: \`artifact\`"
+            echo "- Registry push: \`disabled\`"
+            echo "- Reusable artifact: \`${ARTIFACT_NAME}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   qr_package_install_smoke:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
@@ -291,7 +509,7 @@ jobs:
       - name: Checkout CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Run QR package install smoke
@@ -300,17 +518,39 @@ jobs:
         run: bash scripts/e2e/qr-import-docker.sh
 
   root_dockerfile_smokes:
-    needs: [preflight, root_dockerfile_image]
-    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    needs: [preflight, root_dockerfile_image, root_dockerfile_image_artifact]
+    if: >-
+      always() &&
+      needs.preflight.result == 'success' &&
+      needs.preflight.outputs.run_full_install_smoke == 'true' &&
+      (
+        (needs.preflight.outputs.root_image_transport == 'registry' &&
+          needs.root_dockerfile_image.result == 'success') ||
+        (needs.preflight.outputs.root_image_transport == 'artifact' &&
+          needs.root_dockerfile_image_artifact.result == 'success')
+      )
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     steps:
       - name: Checkout CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Checkout trusted install-smoke harness
+        if: needs.preflight.outputs.root_image_transport == 'artifact'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: .release-harness
           persist-credentials: false
 
       - name: Log in to GHCR
+        if: needs.preflight.outputs.root_image_transport == 'registry'
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ghcr.io
@@ -318,13 +558,35 @@ jobs:
           password: ${{ github.token }}
 
       - name: Pull root Dockerfile smoke image
+        if: needs.preflight.outputs.root_image_transport == 'registry'
         env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: timeout --kill-after=30s 600s docker pull "$IMAGE_REF"
+
+      - name: Download root Dockerfile smoke image artifact
+        if: needs.preflight.outputs.root_image_transport == 'artifact'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ needs.root_dockerfile_image_artifact.outputs.image_artifact_name }}
+          path: install-smoke-root-image
+
+      - name: Verify and load root Dockerfile smoke image artifact
+        if: needs.preflight.outputs.root_image_transport == 'artifact'
+        env:
+          ARCHIVE_NAME: ${{ needs.root_dockerfile_image_artifact.outputs.image_archive_name }}
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
+        run: |
+          bash .release-harness/scripts/docker/load-install-smoke-image.sh \
+            install-smoke-root-image \
+            "$TARGET_SHA" \
+            "$IMAGE_REF" \
+            "$ARCHIVE_NAME"
 
       - name: Run root Dockerfile CLI smoke
         env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: |
           timeout --kill-after=30s 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
@@ -345,19 +607,19 @@ jobs:
 
       - name: Run agents delete shared workspace Docker CLI smoke
         env:
-          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: ${{ needs.preflight.outputs.dockerfile_image }}
           OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD: "1"
         run: bash scripts/e2e/agents-delete-shared-workspace-docker.sh
 
       - name: Run Docker gateway network e2e
         env:
-          OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: ${{ needs.preflight.outputs.dockerfile_image }}
           OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
         run: bash scripts/e2e/gateway-network-docker.sh
 
       - name: Smoke test Dockerfile with matrix extension build arg
         env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: |
           timeout --kill-after=30s 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
@@ -403,9 +665,21 @@ jobs:
           '
 
   installer_smoke:
-    needs: [preflight, root_dockerfile_image]
-    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    needs: [preflight, root_dockerfile_image, root_dockerfile_image_artifact]
+    if: >-
+      always() &&
+      needs.preflight.result == 'success' &&
+      needs.preflight.outputs.run_full_install_smoke == 'true' &&
+      (
+        (needs.preflight.outputs.root_image_transport == 'registry' &&
+          needs.root_dockerfile_image.result == 'success') ||
+        (needs.preflight.outputs.root_image_transport == 'artifact' &&
+          needs.root_dockerfile_image_artifact.result == 'success')
+      )
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -413,17 +687,19 @@ jobs:
       - name: Checkout trusted installer harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
           persist-credentials: false
 
       - name: Checkout candidate CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.preflight.outputs.target_sha }}
           path: candidate
           persist-credentials: false
 
       - name: Log in to GHCR
+        if: needs.preflight.outputs.root_image_transport == 'registry'
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ghcr.io
@@ -431,9 +707,31 @@ jobs:
           password: ${{ github.token }}
 
       - name: Pull root Dockerfile smoke image
+        if: needs.preflight.outputs.root_image_transport == 'registry'
         env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: timeout --kill-after=30s 600s docker pull "$IMAGE_REF"
+
+      - name: Download root Dockerfile smoke image artifact
+        if: needs.preflight.outputs.root_image_transport == 'artifact'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ needs.root_dockerfile_image_artifact.outputs.image_artifact_name }}
+          path: install-smoke-root-image
+
+      - name: Verify and load root Dockerfile smoke image artifact
+        if: needs.preflight.outputs.root_image_transport == 'artifact'
+        env:
+          ARCHIVE_NAME: ${{ needs.root_dockerfile_image_artifact.outputs.image_archive_name }}
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
+        run: |
+          bash scripts/docker/load-install-smoke-image.sh \
+            install-smoke-root-image \
+            "$TARGET_SHA" \
+            "$IMAGE_REF" \
+            "$ARCHIVE_NAME"
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
@@ -476,9 +774,10 @@ jobs:
           OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
           OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: ${{ inputs.update_baseline_version || 'latest' }}
-          OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: ${{ needs.preflight.outputs.dockerfile_image }}
           OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
           OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: ${{ github.workspace }}/candidate
+          OPENCLAW_INSTALL_SMOKE_EXPECT_SOURCE_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: bash scripts/test-install-sh-docker.sh
 
       - name: Run Rocky Linux installer smoke
@@ -502,17 +801,40 @@ jobs:
             bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli --version latest --no-onboard && /tmp/openclaw-cli/bin/openclaw --version'
 
   bun_global_install_smoke:
-    needs: [preflight, root_dockerfile_image]
-    if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'
+    needs: [preflight, root_dockerfile_image, root_dockerfile_image_artifact]
+    if: >-
+      always() &&
+      needs.preflight.result == 'success' &&
+      needs.preflight.outputs.run_full_install_smoke == 'true' &&
+      needs.preflight.outputs.run_bun_global_install_smoke == 'true' &&
+      (
+        (needs.preflight.outputs.root_image_transport == 'registry' &&
+          needs.root_dockerfile_image.result == 'success') ||
+        (needs.preflight.outputs.root_image_transport == 'artifact' &&
+          needs.root_dockerfile_image_artifact.result == 'success')
+      )
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     steps:
       - name: Checkout CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Checkout trusted install-smoke harness
+        if: needs.preflight.outputs.root_image_transport == 'artifact'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: .release-harness
           persist-credentials: false
 
       - name: Log in to GHCR
+        if: needs.preflight.outputs.root_image_transport == 'registry'
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ghcr.io
@@ -520,9 +842,31 @@ jobs:
           password: ${{ github.token }}
 
       - name: Pull root Dockerfile smoke image
+        if: needs.preflight.outputs.root_image_transport == 'registry'
         env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: timeout --kill-after=30s 600s docker pull "$IMAGE_REF"
+
+      - name: Download root Dockerfile smoke image artifact
+        if: needs.preflight.outputs.root_image_transport == 'artifact'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ needs.root_dockerfile_image_artifact.outputs.image_artifact_name }}
+          path: install-smoke-root-image
+
+      - name: Verify and load root Dockerfile smoke image artifact
+        if: needs.preflight.outputs.root_image_transport == 'artifact'
+        env:
+          ARCHIVE_NAME: ${{ needs.root_dockerfile_image_artifact.outputs.image_archive_name }}
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
+        run: |
+          bash .release-harness/scripts/docker/load-install-smoke-image.sh \
+            install-smoke-root-image \
+            "$TARGET_SHA" \
+            "$IMAGE_REF" \
+            "$ARCHIVE_NAME"
 
       - name: Setup Node environment for Bun smoke
         uses: ./.github/actions/setup-node-env
@@ -532,7 +876,7 @@ jobs:
 
       - name: Run Bun global install image-provider smoke
         env:
-          OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.preflight.outputs.dockerfile_image }}
           OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
         run: bash scripts/e2e/bun-global-install-smoke.sh
 
@@ -548,7 +892,7 @@ jobs:
       - name: Checkout CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
@@ -561,3 +905,194 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "true"
+
+  install_smoke_evidence:
+    needs:
+      - preflight
+      - install-smoke-fast
+      - root_dockerfile_image
+      - root_dockerfile_image_artifact
+      - qr_package_install_smoke
+      - root_dockerfile_smokes
+      - installer_smoke
+      - bun_global_install_smoke
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted install-smoke evidence harness
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          persist-credentials: false
+
+      - name: Write terminal install-smoke evidence
+        env:
+          ARTIFACT_PRODUCER_RESULT: ${{ needs.root_dockerfile_image_artifact.result }}
+          BUN_RESULT: ${{ needs.bun_global_install_smoke.result }}
+          CONTAINER_IMAGE_DIGEST: ${{ needs.root_dockerfile_image_artifact.outputs.container_image_digest }}
+          FAST_RESULT: ${{ needs.install-smoke-fast.result }}
+          IMAGE_ARCHIVE_NAME: ${{ needs.root_dockerfile_image_artifact.outputs.image_archive_name }}
+          IMAGE_ARCHIVE_SHA256: ${{ needs.root_dockerfile_image_artifact.outputs.image_archive_sha256 }}
+          IMAGE_ARCHIVE_SIZE_BYTES: ${{ needs.root_dockerfile_image_artifact.outputs.image_archive_size_bytes }}
+          IMAGE_ARTIFACT_DIGEST: ${{ needs.root_dockerfile_image_artifact.outputs.image_artifact_digest }}
+          IMAGE_ARTIFACT_ID: ${{ needs.root_dockerfile_image_artifact.outputs.image_artifact_id }}
+          IMAGE_ARTIFACT_NAME: ${{ needs.root_dockerfile_image_artifact.outputs.image_artifact_name }}
+          IMAGE_ARTIFACT_URL: ${{ needs.root_dockerfile_image_artifact.outputs.image_artifact_url }}
+          IMAGE_CONFIG_DIGEST: ${{ needs.root_dockerfile_image_artifact.outputs.image_config_digest }}
+          IMAGE_EVIDENCE_SHA256: ${{ needs.root_dockerfile_image_artifact.outputs.image_evidence_sha256 }}
+          INSTALLER_RESULT: ${{ needs.installer_smoke.result }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          QR_RESULT: ${{ needs.qr_package_install_smoke.result }}
+          REGISTRY_PRODUCER_RESULT: ${{ needs.root_dockerfile_image.result }}
+          ROOT_SMOKES_RESULT: ${{ needs.root_dockerfile_smokes.result }}
+          RUN_BUN: ${{ needs.preflight.outputs.run_bun_global_install_smoke }}
+          RUN_FAST: ${{ needs.preflight.outputs.run_fast_install_smoke }}
+          RUN_FULL: ${{ needs.preflight.outputs.run_full_install_smoke }}
+          ROOT_IMAGE_TRANSPORT: ${{ needs.preflight.outputs.root_image_transport }}
+          TARGET_IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/install-smoke-evidence"
+          evidence_path="${evidence_dir}/install-smoke-evidence.json"
+          rm -rf "$evidence_dir"
+          mkdir -p "$evidence_dir"
+
+          node --input-type=module - "$evidence_path" <<'NODE'
+          import fs from "node:fs";
+          import { validateInstallSmokeJobResults } from "./scripts/lib/install-smoke-result-policy.mjs";
+          const evidencePath = process.argv[2];
+          const runId = Number(process.env.GITHUB_RUN_ID);
+          const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+          const jobs = {
+            preflight: process.env.PREFLIGHT_RESULT,
+            fastInstallSmoke: process.env.FAST_RESULT,
+            registryImageProducer: process.env.REGISTRY_PRODUCER_RESULT,
+            artifactImageProducer: process.env.ARTIFACT_PRODUCER_RESULT,
+            qrPackageInstallSmoke: process.env.QR_RESULT,
+            rootDockerfileSmokes: process.env.ROOT_SMOKES_RESULT,
+            installerSmoke: process.env.INSTALLER_RESULT,
+            bunGlobalInstallSmoke: process.env.BUN_RESULT,
+          };
+          const runBunGlobalInstallSmoke = process.env.RUN_BUN === "true";
+          const runFastInstallSmoke = process.env.RUN_FAST === "true";
+          const runFullInstallSmoke = process.env.RUN_FULL === "true";
+          const errors = validateInstallSmokeJobResults({
+            jobs,
+            rootImageTransport: process.env.ROOT_IMAGE_TRANSPORT,
+            runBunGlobalInstallSmoke,
+            runFastInstallSmoke,
+            runFullInstallSmoke,
+          });
+
+          if (!Number.isSafeInteger(runId) || runId <= 0) errors.push("invalid run id");
+          if (runAttempt !== 1) errors.push("install-smoke evidence requires run attempt 1");
+          if (!/^[a-f0-9]{40}$/.test(process.env.TARGET_SHA ?? "")) {
+            errors.push("invalid target SHA");
+          }
+          if (!/^[a-f0-9]{40}$/.test(process.env.WORKFLOW_SHA ?? "")) {
+            errors.push("invalid workflow SHA");
+          }
+          const artifactTransport = process.env.ROOT_IMAGE_TRANSPORT === "artifact";
+          const artifactProduced = artifactTransport && runFullInstallSmoke;
+
+          const rootArtifact = artifactProduced
+            ? {
+                id: process.env.IMAGE_ARTIFACT_ID,
+                name: process.env.IMAGE_ARTIFACT_NAME,
+                digest: process.env.IMAGE_ARTIFACT_DIGEST,
+                url: process.env.IMAGE_ARTIFACT_URL,
+              }
+            : null;
+          const rootImage = artifactProduced
+            ? {
+                ref: process.env.TARGET_IMAGE_REF,
+                artifact: rootArtifact,
+                archive: {
+                  filename: process.env.IMAGE_ARCHIVE_NAME,
+                  sha256: process.env.IMAGE_ARCHIVE_SHA256,
+                  sizeBytes: Number(process.env.IMAGE_ARCHIVE_SIZE_BYTES),
+                },
+                containerImageDigest: process.env.CONTAINER_IMAGE_DIGEST,
+                imageConfigDigest: process.env.IMAGE_CONFIG_DIGEST,
+                evidenceSchema: "openclaw.install-smoke-root-image-evidence/v1",
+                evidenceSha256: process.env.IMAGE_EVIDENCE_SHA256,
+              }
+            : { ref: process.env.TARGET_IMAGE_REF };
+
+          if (artifactProduced) {
+            if (!/^[1-9][0-9]*$/.test(rootArtifact?.id ?? "")) {
+              errors.push("invalid root image artifact id");
+            }
+            if (rootArtifact?.name !== `install-smoke-root-image-${runId}-${runAttempt}`) {
+              errors.push("invalid root image artifact name");
+            }
+            if (!/^sha256:[a-f0-9]{64}$/.test(rootArtifact?.digest ?? "")) {
+              errors.push("invalid root image artifact digest");
+            }
+            if (
+              !new RegExp(`/actions/runs/${runId}/artifacts/${rootArtifact?.id}$`).test(
+                rootArtifact?.url ?? "",
+              )
+            ) {
+              errors.push("invalid root image artifact URL");
+            }
+            if (rootImage.ref !== `openclaw-dockerfile-smoke:${process.env.TARGET_SHA}`) {
+              errors.push("invalid root image ref");
+            }
+            if (
+              rootImage.archive?.filename !==
+              `openclaw-dockerfile-smoke-${process.env.TARGET_SHA}.tar.zst`
+            ) {
+              errors.push("invalid root image archive filename");
+            }
+            if (!/^[a-f0-9]{64}$/.test(rootImage.archive?.sha256 ?? "")) {
+              errors.push("invalid root image archive digest");
+            }
+            if (!Number.isSafeInteger(rootImage.archive?.sizeBytes) || rootImage.archive.sizeBytes <= 0) {
+              errors.push("invalid root image archive size");
+            }
+            if (!/^sha256:[a-f0-9]{64}$/.test(rootImage.containerImageDigest ?? "")) {
+              errors.push("invalid container image digest");
+            }
+            if (!/^sha256:[a-f0-9]{64}$/.test(rootImage.imageConfigDigest ?? "")) {
+              errors.push("invalid image config digest");
+            }
+            if (!/^[a-f0-9]{64}$/.test(rootImage.evidenceSha256 ?? "")) {
+              errors.push("invalid root image evidence digest");
+            }
+          }
+
+          const evidence = {
+            schema: "openclaw.install-smoke-evidence/v1",
+            schemaVersion: 1,
+            workflowPath: ".github/workflows/install-smoke.yml",
+            workflowSha: process.env.WORKFLOW_SHA,
+            targetSha: process.env.TARGET_SHA,
+            rootImageTransport: process.env.ROOT_IMAGE_TRANSPORT,
+            rootImage,
+            jobs,
+            conclusion: errors.length === 0 ? "success" : "failure",
+            errors,
+            runId,
+            runAttempt,
+          };
+          fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+          if (errors.length > 0) {
+            throw new Error(`install-smoke evidence failed: ${errors.join("; ")}`);
+          }
+          NODE
+
+      - name: Upload terminal install-smoke evidence
+        if: always()
+        id: upload_evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: install-smoke-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/install-smoke-evidence/install-smoke-evidence.json
+          if-no-files-found: error
+          retention-days: 30

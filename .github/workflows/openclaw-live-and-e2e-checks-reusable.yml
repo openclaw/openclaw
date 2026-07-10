@@ -58,6 +58,14 @@ on:
         required: false
         default: ""
         type: string
+      shared_image_policy:
+        description: Shared Docker image policy
+        required: false
+        default: allow-push
+        type: choice
+        options:
+          - allow-push
+          - existing-only
       docker_e2e_bare_image:
         description: Existing bare Docker E2E image to reuse; blank derives from package SHA/ref
         required: false
@@ -177,6 +185,76 @@ on:
         description: Prior run id containing package_artifact_name; blank uses this run or packs the selected ref
         required: false
         default: ""
+        type: string
+      package_artifact_id:
+        description: Immutable package artifact id for shared_image_policy=artifact
+        required: false
+        default: ""
+        type: string
+      package_artifact_digest:
+        description: Immutable package artifact digest for shared_image_policy=artifact
+        required: false
+        default: ""
+        type: string
+      package_ai_sha256:
+        description: Exact @openclaw/ai package SHA-256 for shared_image_policy=artifact
+        required: false
+        default: ""
+        type: string
+      package_ai_version:
+        description: Exact @openclaw/ai package version for shared_image_policy=artifact
+        required: false
+        default: ""
+        type: string
+      package_set_manifest_sha256:
+        description: Exact OpenWebUI package-set manifest SHA-256
+        required: false
+        default: ""
+        type: string
+      package_sha256:
+        description: Exact root OpenClaw package SHA-256 for shared_image_policy=artifact
+        required: false
+        default: ""
+        type: string
+      package_version:
+        description: Exact OpenClaw package version for shared_image_policy=artifact
+        required: false
+        default: ""
+        type: string
+      npm_preflight_run_id:
+        description: Source npm preflight run id for exact-target package evidence
+        required: false
+        default: ""
+        type: string
+      npm_preflight_artifact_id:
+        description: Source npm preflight artifact id for exact-target package evidence
+        required: false
+        default: ""
+        type: string
+      npm_preflight_artifact_digest:
+        description: Source npm preflight artifact digest for exact-target package evidence
+        required: false
+        default: ""
+        type: string
+      npm_preflight_artifact_name:
+        description: Source npm preflight artifact name for exact-target package evidence
+        required: false
+        default: ""
+        type: string
+      npm_preflight_manifest_sha256:
+        description: Source npm preflight manifest SHA-256
+        required: false
+        default: ""
+        type: string
+      trusted_workflow_sha:
+        description: Trusted main SHA containing package acceptance and Docker harness workflow files
+        required: false
+        default: ""
+        type: string
+      shared_image_policy:
+        description: "Shared Docker image policy: allow-push, existing-only, or artifact"
+        required: false
+        default: allow-push
         type: string
       docker_e2e_bare_image:
         description: Existing bare Docker E2E image to reuse; blank derives from package SHA/ref
@@ -336,12 +414,38 @@ jobs:
       - name: Checkout workflow repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          repository: ${{ inputs.shared_image_policy == 'artifact' && fromJSON(toJSON(job)).workflow_repository || github.repository }}
+          ref: ${{ inputs.shared_image_policy == 'artifact' && fromJSON(toJSON(job)).workflow_sha || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate selected ref
         id: validate
         env:
+          ACTUAL_WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
           INPUT_REF: ${{ inputs.ref }}
+          DOCKER_LANES: ${{ inputs.docker_lanes }}
+          INCLUDE_LIVE_SUITES: ${{ inputs.include_live_suites }}
+          INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+          INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
+          PACKAGE_ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
+          PACKAGE_ARTIFACT_ID: ${{ inputs.package_artifact_id }}
+          PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name }}
+          PACKAGE_AI_SHA256: ${{ inputs.package_ai_sha256 }}
+          PACKAGE_AI_VERSION: ${{ inputs.package_ai_version }}
+          PACKAGE_SET_MANIFEST_SHA256: ${{ inputs.package_set_manifest_sha256 }}
+          PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+          PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
+          PROVIDED_FUNCTIONAL_IMAGE: ${{ inputs.docker_e2e_functional_image }}
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
+          NPM_PREFLIGHT_ARTIFACT_DIGEST: ${{ inputs.npm_preflight_artifact_digest }}
+          NPM_PREFLIGHT_ARTIFACT_ID: ${{ inputs.npm_preflight_artifact_id }}
+          NPM_PREFLIGHT_ARTIFACT_NAME: ${{ inputs.npm_preflight_artifact_name }}
+          NPM_PREFLIGHT_MANIFEST_SHA256: ${{ inputs.npm_preflight_manifest_sha256 }}
+          NPM_PREFLIGHT_RUN_ID: ${{ inputs.npm_preflight_run_id }}
+          TRUSTED_WORKFLOW_SHA: ${{ inputs.trusted_workflow_sha }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
         shell: bash
         run: |
           set -euo pipefail
@@ -368,6 +472,108 @@ jobs:
             echo "Allowed refs must be reachable from an OpenClaw branch or release tag." >&2
             exit 1
           fi
+
+          case "$SHARED_IMAGE_POLICY" in
+            allow-push) ;;
+            existing-only)
+              if [[ -z "${PROVIDED_BARE_IMAGE// }" && -z "${PROVIDED_FUNCTIONAL_IMAGE// }" ]]; then
+                echo "shared_image_policy=existing-only requires explicit shared image refs." >&2
+                exit 1
+              fi
+              ;;
+            artifact)
+              [[ "$WORKFLOW_RUN_ATTEMPT" == "1" ]] || {
+                echo "shared_image_policy=artifact requires workflow run attempt 1." >&2
+                exit 1
+              }
+              [[ "$INPUT_REF" =~ ^[0-9a-f]{40}$ && "$INPUT_REF" == "$selected_sha" ]] || {
+                echo "shared_image_policy=artifact requires ref to be the exact lowercase target SHA." >&2
+                exit 1
+              }
+              [[ "$INCLUDE_OPENWEBUI" == "true" ]] || {
+                echo "shared_image_policy=artifact currently requires include_openwebui=true." >&2
+                exit 1
+              }
+              [[ "$INCLUDE_RELEASE_PATH_SUITES" == "false" &&
+                 "$INCLUDE_LIVE_SUITES" == "false" &&
+                 -z "${DOCKER_LANES// }" ]] || {
+                echo "shared_image_policy=artifact is a focused OpenWebUI-only mode." >&2
+                exit 1
+              }
+              [[ -z "${PROVIDED_BARE_IMAGE// }" && -z "${PROVIDED_FUNCTIONAL_IMAGE// }" ]] || {
+                echo "shared_image_policy=artifact builds the exact package locally and rejects provided images." >&2
+                exit 1
+              }
+              [[ "$PACKAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+                echo "package_artifact_id must be a positive decimal artifact ID." >&2
+                exit 1
+              }
+              [[ "$PACKAGE_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+                echo "package_artifact_digest must be a lowercase sha256 digest." >&2
+                exit 1
+              }
+              [[ -n "${PACKAGE_ARTIFACT_NAME// }" ]] || {
+                echo "package_artifact_name is required for shared_image_policy=artifact." >&2
+                exit 1
+              }
+              [[ "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+                echo "package_sha256 must be a lowercase SHA-256 digest." >&2
+                exit 1
+              }
+              [[ "$PACKAGE_AI_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+                echo "package_ai_sha256 must be a lowercase SHA-256 digest." >&2
+                exit 1
+              }
+              [[ -n "${PACKAGE_VERSION// }" ]] || {
+                echo "package_version is required for shared_image_policy=artifact." >&2
+                exit 1
+              }
+              [[ "$PACKAGE_AI_VERSION" == "$PACKAGE_VERSION" ]] || {
+                echo "package_ai_version must match package_version." >&2
+                exit 1
+              }
+              [[ "$PACKAGE_SET_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+                echo "package_set_manifest_sha256 must be a lowercase SHA-256 digest." >&2
+                exit 1
+              }
+              [[ "$NPM_PREFLIGHT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+                echo "npm_preflight_run_id must be a positive decimal run ID." >&2
+                exit 1
+              }
+              [[ "$NPM_PREFLIGHT_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+                echo "npm_preflight_artifact_id must be a positive decimal artifact ID." >&2
+                exit 1
+              }
+              [[ "$NPM_PREFLIGHT_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+                echo "npm_preflight_artifact_digest must be a lowercase sha256 digest." >&2
+                exit 1
+              }
+              [[ -n "${NPM_PREFLIGHT_ARTIFACT_NAME// }" ]] || {
+                echo "npm_preflight_artifact_name is required for shared_image_policy=artifact." >&2
+                exit 1
+              }
+              [[ "$NPM_PREFLIGHT_ARTIFACT_NAME" == "openclaw-npm-preflight-${selected_sha}" ]] || {
+                echo "npm_preflight_artifact_name must be bound to the exact target SHA." >&2
+                exit 1
+              }
+              [[ "$NPM_PREFLIGHT_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+                echo "npm_preflight_manifest_sha256 must be a lowercase SHA-256 digest." >&2
+                exit 1
+              }
+              [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+                echo "trusted_workflow_sha must be a full lowercase commit SHA." >&2
+                exit 1
+              }
+              [[ "$TRUSTED_WORKFLOW_SHA" == "$ACTUAL_WORKFLOW_SHA" ]] || {
+                echo "trusted_workflow_sha must equal the called reusable workflow SHA." >&2
+                exit 1
+              }
+              ;;
+            *)
+              echo "shared_image_policy must be allow-push, existing-only, or artifact." >&2
+              exit 1
+              ;;
+          esac
 
           echo "selected_sha=$selected_sha" >> "$GITHUB_OUTPUT"
           echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
@@ -533,6 +739,7 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1241,43 +1448,53 @@ jobs:
 
   validate_docker_openwebui:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
-    if: inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
+    if: ${{ always() && needs.validate_selected_ref.result == 'success' && inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full') && (inputs.shared_image_policy == 'artifact' || needs.prepare_docker_e2e_image.result == 'success') }}
     name: Docker E2E (openwebui)
     continue-on-error: ${{ inputs.advisory }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-      OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
-      OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+      OPENCLAW_DOCKER_E2E_IMAGE: ${{ inputs.shared_image_policy == 'artifact' && format('openclaw-docker-e2e-functional:pkg-{0}', inputs.package_sha256) || needs.prepare_docker_e2e_image.outputs.image }}
+      OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ inputs.shared_image_policy == 'artifact' && format('openclaw-docker-e2e-functional:pkg-{0}', inputs.package_sha256) || needs.prepare_docker_e2e_image.outputs.functional_image }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
+      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'artifact' && '1' || '0' }}
+      OPENCLAW_OPENWEBUI_EVIDENCE_FILE: ${{ github.workspace }}/.artifacts/docker-tests/release-openwebui/openwebui-probe-evidence.json
+      OPENCLAW_OPENWEBUI_MODEL: openai/gpt-5.5
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
+      SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout trusted release harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.sha }}
+          repository: ${{ inputs.shared_image_policy == 'artifact' && fromJSON(toJSON(job)).workflow_repository || github.repository }}
+          ref: ${{ inputs.shared_image_policy == 'artifact' && fromJSON(toJSON(job)).workflow_sha || github.sha }}
           fetch-depth: 1
           path: .release-harness
+          persist-credentials: false
 
       - name: Log in to GHCR for shared Docker E2E image
+        if: inputs.shared_image_policy != 'artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Setup Node environment
+        if: inputs.shared_image_policy != 'artifact'
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -1285,7 +1502,24 @@ jobs:
           install-deps: "false"
           use-actions-cache: "false"
 
+      - name: Setup trusted Node environment
+        if: inputs.shared_image_policy == 'artifact'
+        uses: ./.release-harness/.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "false"
+          use-actions-cache: "false"
+
+      - name: Setup local Docker builder
+        if: inputs.shared_image_policy == 'artifact'
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        with:
+          max-cache-size-mb: 800000
+
       - name: Validate Open WebUI credentials
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1310,39 +1544,154 @@ jobs:
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
       - name: Download OpenClaw Docker E2E package
-        if: steps.plan.outputs.needs_package == '1'
+        if: steps.plan.outputs.needs_package == '1' && inputs.shared_image_policy != 'artifact'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
           path: .artifacts/docker-e2e-package
 
+      - name: Download and verify exact OpenWebUI package artifact
+        id: exact_package
+        if: steps.plan.outputs.needs_package == '1' && inputs.shared_image_policy == 'artifact'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_AI_SHA256: ${{ inputs.package_ai_sha256 }}
+          PACKAGE_AI_VERSION: ${{ inputs.package_ai_version }}
+          PACKAGE_ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
+          PACKAGE_ARTIFACT_ID: ${{ inputs.package_artifact_id }}
+          PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name }}
+          PACKAGE_SET_MANIFEST_SHA256: ${{ inputs.package_set_manifest_sha256 }}
+          PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+          NPM_PREFLIGHT_ARTIFACT_DIGEST: ${{ inputs.npm_preflight_artifact_digest }}
+          NPM_PREFLIGHT_ARTIFACT_ID: ${{ inputs.npm_preflight_artifact_id }}
+          NPM_PREFLIGHT_ARTIFACT_NAME: ${{ inputs.npm_preflight_artifact_name }}
+          NPM_PREFLIGHT_MANIFEST_SHA256: ${{ inputs.npm_preflight_manifest_sha256 }}
+          NPM_PREFLIGHT_RUN_ID: ${{ inputs.npm_preflight_run_id }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          TRUSTED_WORKFLOW_SHA: ${{ inputs.trusted_workflow_sha }}
+        shell: bash
+        run: bash .release-harness/scripts/verify-openwebui-exact-package-artifact.sh
+
+      - name: Build exact-target local functional image
+        id: exact_image
+        if: inputs.shared_image_policy == 'artifact'
+        env:
+          FUNCTIONAL_IMAGE: ${{ env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --load \
+            --file .release-harness/scripts/e2e/Dockerfile \
+            --target functional-local-ai \
+            --build-context openclaw_package=.artifacts/docker-e2e-package \
+            --platform linux/amd64 \
+            --tag "$FUNCTIONAL_IMAGE" \
+            --sbom=true \
+            --provenance=mode=max \
+            .release-harness
+          image_id="$(docker image inspect --format '{{.Id}}' "$FUNCTIONAL_IMAGE")"
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Built exact-target image has an invalid image ID." >&2
+            exit 1
+          }
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+
       - name: Pull shared bare Docker E2E image
-        if: steps.plan.outputs.needs_bare_image == '1'
+        if: inputs.shared_image_policy != 'artifact' && steps.plan.outputs.needs_bare_image == '1'
         shell: bash
         run: |
           set -euo pipefail
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
 
       - name: Pull shared functional Docker E2E image
-        if: steps.plan.outputs.needs_functional_image == '1'
+        if: inputs.shared_image_policy != 'artifact' && steps.plan.outputs.needs_functional_image == '1'
         shell: bash
         run: |
           set -euo pipefail
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
       - name: Run Open WebUI Docker E2E chunk
+        id: openwebui
+        env:
+          EXACT_FUNCTIONAL_IMAGE_ID: ${{ steps.exact_image.outputs.image_id }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
         shell: bash
         run: |
           set -euo pipefail
           export OPENCLAW_DOCKER_ALL_PROFILE=release-path
           export OPENCLAW_DOCKER_ALL_CHUNK=openwebui
-          export OPENCLAW_DOCKER_ALL_BUILD=0
           export OPENCLAW_DOCKER_ALL_PREFLIGHT=0
           export OPENCLAW_DOCKER_ALL_FAIL_FAST=0
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI=1
           export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/release-openwebui"
           export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/release-openwebui-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
+          export OPENCLAW_DOCKER_ALL_BUILD=0
+          export OPENCLAW_SKIP_DOCKER_BUILD=1
+          if [[ "$SHARED_IMAGE_POLICY" == "artifact" ]]; then
+            export OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE=1
+            before_image_id="$(
+              docker image inspect --format '{{.Id}}' "$OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE"
+            )"
+            [[ "$before_image_id" == "$EXACT_FUNCTIONAL_IMAGE_ID" ]] || {
+              echo "Exact-target functional image identity changed before OpenWebUI execution." >&2
+              exit 1
+            }
+            log_dir=".artifacts/docker-tests/release-openwebui"
+            log_file="$log_dir/openwebui.log"
+            summary="$log_dir/summary.json"
+            mkdir -p "$log_dir"
+            started_at="$(date +%s)"
+            set +e
+            (
+              cd .release-harness
+              bash scripts/e2e/openwebui-docker.sh
+            ) >"$log_file" 2>&1
+            status="$?"
+            set -e
+            cat "$log_file"
+            elapsed_seconds="$(( $(date +%s) - started_at ))"
+            after_image_id="$(
+              docker image inspect --format '{{.Id}}' "$OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE" 2>/dev/null ||
+                true
+            )"
+            if [[ "$after_image_id" != "$before_image_id" ]]; then
+              echo "Exact-target functional image identity changed during OpenWebUI execution." >&2
+              status=1
+            fi
+            {
+              echo "before_image_id=$before_image_id"
+              echo "after_image_id=$after_image_id"
+            } >> "$GITHUB_OUTPUT"
+            conclusion="passed"
+            failures='[]'
+            if [[ "$status" != "0" ]]; then
+              conclusion="failed"
+              failures='[{"name":"openwebui","status":1}]'
+            fi
+            jq -n \
+              --arg status "$conclusion" \
+              --arg image "$OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE" \
+              --argjson laneStatus "$status" \
+              --argjson elapsedSeconds "$elapsed_seconds" \
+              --argjson failures "$failures" \
+              '{
+                version: 1,
+                status: $status,
+                chunk: "openwebui",
+                images: {functional: $image},
+                failures: $failures,
+                lanes: [{
+                  name: "openwebui",
+                  status: $laneStatus,
+                  elapsedSeconds: $elapsedSeconds
+                }]
+              }' > "$summary"
+            exit "$status"
+          fi
           if [[ "${{ steps.plan.outputs.needs_live_image }}" == "1" ]]; then
             OPENCLAW_DOCKER_BUILD_ON_MISSING=1 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
           fi
@@ -1361,6 +1710,256 @@ jobs:
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: openwebui" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Write exact-target OpenWebUI evidence
+        if: inputs.shared_image_policy == 'artifact'
+        env:
+          BUILT_IMAGE_ID: ${{ steps.exact_image.outputs.image_id }}
+          FUNCTIONAL_IMAGE: ${{ env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE }}
+          NPM_PREFLIGHT_ARTIFACT_NAME: ${{ inputs.npm_preflight_artifact_name }}
+          NPM_PREFLIGHT_ARTIFACT_DIGEST: ${{ inputs.npm_preflight_artifact_digest }}
+          NPM_PREFLIGHT_ARTIFACT_ID: ${{ inputs.npm_preflight_artifact_id }}
+          NPM_PREFLIGHT_MANIFEST_SHA256: ${{ inputs.npm_preflight_manifest_sha256 }}
+          NPM_PREFLIGHT_RUN_ID: ${{ inputs.npm_preflight_run_id }}
+          PACKAGE_AI_SHA256: ${{ steps.exact_package.outputs.ai_sha256 }}
+          PACKAGE_AI_RUNTIME_SHA256: ${{ steps.exact_package.outputs.ai_runtime_sha256 }}
+          PACKAGE_AI_VERSION: ${{ steps.exact_package.outputs.ai_version }}
+          PACKAGE_ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
+          PACKAGE_ARTIFACT_ID: ${{ inputs.package_artifact_id }}
+          PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name }}
+          PACKAGE_SET_MANIFEST_SHA256: ${{ steps.exact_package.outputs.package_set_sha256 }}
+          PACKAGE_SHA256: ${{ steps.exact_package.outputs.root_sha256 }}
+          PACKAGE_ROOT_ENTRY_SHA256: ${{ steps.exact_package.outputs.root_entry_sha256 }}
+          PACKAGE_VERSION: ${{ steps.exact_package.outputs.root_version }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          TRUSTED_WORKFLOW_SHA: ${{ inputs.trusted_workflow_sha }}
+          RUN_AFTER_IMAGE_ID: ${{ steps.openwebui.outputs.after_image_id }}
+          RUN_BEFORE_IMAGE_ID: ${{ steps.openwebui.outputs.before_image_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=".artifacts/docker-tests/release-openwebui/summary.json"
+          evidence=".artifacts/docker-tests/release-openwebui/openwebui-exact-target-evidence.json"
+          probe_evidence="$OPENCLAW_OPENWEBUI_EVIDENCE_FILE"
+
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]] || {
+            echo "Exact-target OpenWebUI evidence requires workflow run attempt 1." >&2
+            exit 1
+          }
+
+          jq -e \
+            --arg image "$FUNCTIONAL_IMAGE" \
+            '
+              .status == "passed" and
+              .chunk == "openwebui" and
+              .images.functional == $image and
+              (.failures | length) == 0 and
+              (.lanes | length) == 1 and
+              .lanes[0].name == "openwebui" and
+              .lanes[0].status == 0
+            ' "$summary" >/dev/null || {
+              echo "OpenWebUI scheduler summary does not prove one successful openwebui lane." >&2
+              exit 1
+            }
+          jq -e \
+            --arg providerModel "$OPENCLAW_OPENWEBUI_MODEL" \
+            '
+              .schema == "openclaw.openwebui-probe-evidence/v1" and
+              .ok == true and
+              .mode == "chat" and
+              .providerModel == $providerModel and
+              (.openWebuiModel | type) == "string" and
+              (.openWebuiModel | length) > 0 and
+              (.nonceSha256 | test("^[0-9a-f]{64}$")) and
+              (.replySha256 | test("^[0-9a-f]{64}$")) and
+              (.probeLogSha256 | test("^[0-9a-f]{64}$")) and
+              .replyContainsNonce == true
+            ' "$probe_evidence" >/dev/null || {
+              echo "OpenWebUI probe evidence does not prove the nonce-bound live provider chat." >&2
+              exit 1
+            }
+
+          image_id="$(docker image inspect --format '{{.Id}}' "$FUNCTIONAL_IMAGE")"
+          [[ "$BUILT_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Built OpenWebUI functional image has an invalid image ID." >&2
+            exit 1
+          }
+          [[ "$RUN_BEFORE_IMAGE_ID" == "$BUILT_IMAGE_ID" &&
+             "$RUN_AFTER_IMAGE_ID" == "$BUILT_IMAGE_ID" &&
+             "$image_id" == "$BUILT_IMAGE_ID" ]] || {
+            echo "OpenWebUI functional image identity was not stable from build through evidence." >&2
+            exit 1
+          }
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Local OpenWebUI functional image has an invalid image ID." >&2
+            exit 1
+          }
+          installed_json="$(
+            docker run --rm "$FUNCTIONAL_IMAGE" node -e \
+              'const crypto=require("node:crypto"); const fs=require("node:fs"); const root=require("/app/package.json"); const ai=require("/app/node_modules/@openclaw/ai/package.json"); const rootEntry="/app/dist/index.js"; const aiRuntime="/app/node_modules/@openclaw/ai/dist/internal/runtime.mjs"; const hash=(path)=>crypto.createHash("sha256").update(fs.readFileSync(path)).digest("hex"); if(!fs.statSync(rootEntry).isFile()||!fs.statSync(aiRuntime).isFile()) process.exit(2); process.stdout.write(JSON.stringify({root:{name:root.name,version:root.version,entry:rootEntry,entrySha256:hash(rootEntry)},ai:{name:ai.name,version:ai.version,runtime:aiRuntime,runtimeSha256:hash(aiRuntime)}}))'
+          )"
+          jq -e \
+            --arg version "$PACKAGE_VERSION" \
+            --arg aiVersion "$PACKAGE_AI_VERSION" \
+            --arg rootEntrySha256 "$PACKAGE_ROOT_ENTRY_SHA256" \
+            --arg aiRuntimeSha256 "$PACKAGE_AI_RUNTIME_SHA256" \
+            '
+              .root == {
+                name: "openclaw",
+                version: $version,
+                entry: "/app/dist/index.js",
+                entrySha256: $rootEntrySha256
+              } and
+              .ai == {
+                name: "@openclaw/ai",
+                version: $aiVersion,
+                runtime: "/app/node_modules/@openclaw/ai/dist/internal/runtime.mjs",
+                runtimeSha256: $aiRuntimeSha256
+              }
+            ' <<< "$installed_json" >/dev/null || {
+              echo "Local OpenWebUI image does not contain the exact root and @openclaw/ai runtime." >&2
+              exit 1
+            }
+
+          image_archive="$RUNNER_TEMP/openwebui-functional-image.tar"
+          docker save --output "$image_archive" "$FUNCTIONAL_IMAGE"
+          image_archive_sha256="$(sha256sum "$image_archive" | awk '{print $1}')"
+          image_archive_bytes="$(wc -c < "$image_archive" | tr -d '[:space:]')"
+          summary_sha256="$(sha256sum "$summary" | awk '{print $1}')"
+          probe_evidence_sha256="$(sha256sum "$probe_evidence" | awk '{print $1}')"
+          openwebui_model="$(jq -r '.openWebuiModel' "$probe_evidence")"
+          nonce_sha256="$(jq -r '.nonceSha256' "$probe_evidence")"
+          reply_sha256="$(jq -r '.replySha256' "$probe_evidence")"
+          probe_log_sha256="$(jq -r '.probeLogSha256' "$probe_evidence")"
+          rm -f "$image_archive"
+
+          jq -n \
+            --argjson workflowRunId "$GITHUB_RUN_ID" \
+            --argjson workflowRunAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg workflowJob "$GITHUB_JOB" \
+            --arg trustedWorkflowSha "$TRUSTED_WORKFLOW_SHA" \
+            --arg targetSha "$TARGET_SHA" \
+            --arg packageVersion "$PACKAGE_VERSION" \
+            --arg packageSha256 "$PACKAGE_SHA256" \
+            --arg packageRootEntrySha256 "$PACKAGE_ROOT_ENTRY_SHA256" \
+            --arg packageAiVersion "$PACKAGE_AI_VERSION" \
+            --arg packageAiSha256 "$PACKAGE_AI_SHA256" \
+            --arg packageAiRuntimeSha256 "$PACKAGE_AI_RUNTIME_SHA256" \
+            --arg packageSetManifestSha256 "$PACKAGE_SET_MANIFEST_SHA256" \
+            --argjson packageArtifactId "$PACKAGE_ARTIFACT_ID" \
+            --arg packageArtifactName "$PACKAGE_ARTIFACT_NAME" \
+            --arg packageArtifactDigest "$PACKAGE_ARTIFACT_DIGEST" \
+            --argjson npmPreflightRunId "$NPM_PREFLIGHT_RUN_ID" \
+            --argjson npmPreflightArtifactId "$NPM_PREFLIGHT_ARTIFACT_ID" \
+            --arg npmPreflightArtifactName "$NPM_PREFLIGHT_ARTIFACT_NAME" \
+            --arg npmPreflightArtifactDigest "$NPM_PREFLIGHT_ARTIFACT_DIGEST" \
+            --arg npmPreflightManifestSha256 "$NPM_PREFLIGHT_MANIFEST_SHA256" \
+            --arg image "$FUNCTIONAL_IMAGE" \
+            --arg imageId "$image_id" \
+            --arg imageBeforeRunId "$RUN_BEFORE_IMAGE_ID" \
+            --arg imageAfterRunId "$RUN_AFTER_IMAGE_ID" \
+            --arg imageArchiveSha256 "$image_archive_sha256" \
+            --argjson imageArchiveBytes "$image_archive_bytes" \
+            --arg summarySha256 "$summary_sha256" \
+            --arg probeEvidenceSha256 "$probe_evidence_sha256" \
+            --arg openwebuiModel "$openwebui_model" \
+            --arg nonceSha256 "$nonce_sha256" \
+            --arg replySha256 "$reply_sha256" \
+            --arg probeLogSha256 "$probe_log_sha256" \
+            --arg providerModel "$OPENCLAW_OPENWEBUI_MODEL" \
+            '{
+              schema: "openclaw.openwebui-exact-target-evidence/v1",
+              workflow: {
+                runId: $workflowRunId,
+                runAttempt: $workflowRunAttempt,
+                job: $workflowJob,
+                packageAcceptance: {
+                  path: ".github/workflows/package-acceptance.yml",
+                  sha: $trustedWorkflowSha
+                },
+                reusableHarness: {
+                  path: ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
+                  sha: $trustedWorkflowSha
+                }
+              },
+              targetSha: $targetSha,
+              npmPreflightArtifact: {
+                runId: $npmPreflightRunId,
+                id: $npmPreflightArtifactId,
+                name: $npmPreflightArtifactName,
+                digest: $npmPreflightArtifactDigest,
+                manifestSha256: $npmPreflightManifestSha256
+              },
+              packageArtifact: {
+                runId: $workflowRunId,
+                id: $packageArtifactId,
+                name: $packageArtifactName,
+                digest: $packageArtifactDigest,
+                packageSetManifestSha256: $packageSetManifestSha256
+              },
+              packages: {
+                root: {
+                  name: "openclaw",
+                  version: $packageVersion,
+                  tarballSha256: $packageSha256,
+                  entrySha256: $packageRootEntrySha256
+                },
+                ai: {
+                  name: "@openclaw/ai",
+                  version: $packageAiVersion,
+                  tarballSha256: $packageAiSha256,
+                  runtimeSha256: $packageAiRuntimeSha256
+                }
+              },
+              image: {
+                distribution: "local-buildx-load",
+                buildTarget: "functional-local-ai",
+                ref: $image,
+                id: $imageId,
+                localImageRequired: true,
+                beforeRunId: $imageBeforeRunId,
+                afterRunId: $imageAfterRunId,
+                archive: {
+                  format: "docker-archive",
+                  sha256: $imageArchiveSha256,
+                  bytes: $imageArchiveBytes
+                },
+                installedPackage: {
+                  path: "/app/package.json",
+                  name: "openclaw",
+                  version: $packageVersion,
+                  entry: "/app/dist/index.js",
+                  entrySha256: $packageRootEntrySha256
+                },
+                installedAiPackage: {
+                  path: "/app/node_modules/@openclaw/ai/package.json",
+                  name: "@openclaw/ai",
+                  version: $packageAiVersion,
+                  runtime: "/app/node_modules/@openclaw/ai/dist/internal/runtime.mjs",
+                  runtimeSha256: $packageAiRuntimeSha256
+                }
+              },
+              scenario: {
+                id: "openwebui-chat",
+                provider: "openai",
+                providerModel: $providerModel,
+                openWebuiModel: $openwebuiModel,
+                nonceSha256: $nonceSha256,
+                replySha256: $replySha256,
+                probeLogSha256: $probeLogSha256,
+                evidenceSha256: $probeEvidenceSha256
+              },
+              mutations: {
+                sharedGhcrLogin: false,
+                sharedImagePull: false,
+                candidateImagePull: false,
+                imagePush: false
+              },
+              result: {
+                summarySha256: $summarySha256,
+                conclusion: "success"
+              }
+            }' > "$evidence"
+
       - name: Upload Open WebUI Docker E2E artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -1369,9 +1968,17 @@ jobs:
           path: .artifacts/docker-tests/
           if-no-files-found: error
 
+      - name: Upload exact-target OpenWebUI evidence
+        if: inputs.shared_image_policy == 'artifact' && success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openwebui-exact-target-evidence
+          path: .artifacts/docker-tests/release-openwebui/openwebui-exact-target-evidence.json
+          if-no-files-found: error
+
   prepare_docker_e2e_image:
     needs: validate_selected_ref
-    if: inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
+    if: inputs.shared_image_policy != 'artifact' && (inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != '')
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
@@ -1388,6 +1995,8 @@ jobs:
       needs_functional_image: ${{ steps.plan.outputs.needs_functional_image }}
       needs_live_image: ${{ steps.plan.outputs.needs_live_image }}
       needs_package: ${{ steps.plan.outputs.needs_package }}
+      package_sha256: ${{ steps.package.outputs.sha256 }}
+      package_version: ${{ steps.package.outputs.version }}
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -1444,6 +2053,34 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Validate immutable package artifact identity
+        if: steps.plan.outputs.needs_package == '1' && inputs.shared_image_policy == 'artifact'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
+          PACKAGE_ARTIFACT_ID: ${{ inputs.package_artifact_id }}
+          PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name }}
+          PACKAGE_ARTIFACT_RUN_ID: ${{ inputs.package_artifact_run_id || github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${PACKAGE_ARTIFACT_ID}")"
+          jq -e \
+            --argjson artifact_id "$PACKAGE_ARTIFACT_ID" \
+            --argjson run_id "$PACKAGE_ARTIFACT_RUN_ID" \
+            --arg digest "$PACKAGE_ARTIFACT_DIGEST" \
+            --arg name "$PACKAGE_ARTIFACT_NAME" \
+            '
+              .id == $artifact_id and
+              .name == $name and
+              .expired == false and
+              .digest == $digest and
+              .workflow_run.id == $run_id
+            ' <<< "$artifact_json" >/dev/null || {
+              echo "Package artifact identity, digest, name, or run differs." >&2
+              exit 1
+            }
+
       - name: Download current-run OpenClaw Docker E2E package
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -1493,9 +2130,36 @@ jobs:
           finished_at="$(date +%s)"
           echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           digest="$(sha256sum "$target" | awk '{print $1}')"
+          version="$(tar -xOf "$target" package/package.json | jq -r '.version')"
+          name="$(tar -xOf "$target" package/package.json | jq -r '.name')"
+          if [[ "${{ inputs.shared_image_policy }}" == "artifact" ]]; then
+            [[ "$digest" == "${{ inputs.package_sha256 }}" ]] || {
+              echo "Exact-target package SHA-256 differs from package_sha256." >&2
+              exit 1
+            }
+            [[ "$name" == "openclaw" && "$version" == "${{ inputs.package_version }}" ]] || {
+              echo "Exact-target package name/version differs from declared package identity." >&2
+              exit 1
+            }
+            metadata=".artifacts/docker-e2e-package/package-candidate.json"
+            jq -e \
+              --arg sha "${{ needs.validate_selected_ref.outputs.selected_sha }}" \
+              --arg digest "$digest" \
+              --arg version "$version" \
+              '
+                .name == "openclaw" and
+                .packageSourceSha == $sha and
+                .sha256 == $digest and
+                .version == $version
+              ' "$metadata" >/dev/null || {
+                echo "Exact-target package metadata does not bind the selected SHA and tarball." >&2
+                exit 1
+              }
+          fi
           tag="pkg-${digest:0:32}"
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           {
             echo "Docker E2E package: \`$target\`"
             echo "Docker E2E package SHA-256: \`$digest\`"
@@ -1517,12 +2181,18 @@ jobs:
           SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
           PROVIDED_FUNCTIONAL_IMAGE: ${{ inputs.docker_e2e_functional_image }}
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
           image_tag="${PACKAGE_TAG:-$SELECTED_SHA}"
-          bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"
-          functional_image="${PROVIDED_FUNCTIONAL_IMAGE:-ghcr.io/${repository}-docker-e2e-functional:${image_tag}}"
+          if [[ "$SHARED_IMAGE_POLICY" == "artifact" ]]; then
+            bare_image="openclaw-docker-e2e-bare:${image_tag}"
+            functional_image="openclaw-docker-e2e-functional:${image_tag}"
+          else
+            bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"
+            functional_image="${PROVIDED_FUNCTIONAL_IMAGE:-ghcr.io/${repository}-docker-e2e-functional:${image_tag}}"
+          fi
           image="$functional_image"
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "bare_image=$bare_image" >> "$GITHUB_OUTPUT"
@@ -1531,7 +2201,7 @@ jobs:
           echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
-        if: steps.plan.outputs.needs_e2e_image == '1'
+        if: steps.plan.outputs.needs_e2e_image == '1' && inputs.shared_image_policy != 'artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -1539,11 +2209,12 @@ jobs:
 
       - name: Check existing shared Docker E2E images
         id: image_exists
-        if: steps.plan.outputs.needs_e2e_image == '1'
+        if: steps.plan.outputs.needs_e2e_image == '1' && inputs.shared_image_policy != 'artifact'
         shell: bash
         env:
           PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
           PROVIDED_FUNCTIONAL_IMAGE: ${{ inputs.docker_e2e_functional_image }}
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         run: |
           set -euo pipefail
           bare_exists=0
@@ -1574,18 +2245,23 @@ jobs:
             fi
           fi
 
+          if [[ "$SHARED_IMAGE_POLICY" == "existing-only" && "$needs_build" == "1" ]]; then
+            echo "shared_image_policy=existing-only forbids building or pushing missing shared images." >&2
+            exit 1
+          fi
+
           echo "bare_exists=$bare_exists" >> "$GITHUB_OUTPUT"
           echo "functional_exists=$functional_exists" >> "$GITHUB_OUTPUT"
           echo "needs_build=$needs_build" >> "$GITHUB_OUTPUT"
 
       - name: Setup Docker builder
-        if: steps.image_exists.outputs.needs_build == '1'
+        if: inputs.shared_image_policy == 'allow-push' && steps.image_exists.outputs.needs_build == '1'
         uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
       - name: Build and push bare Docker E2E image
-        if: steps.plan.outputs.needs_bare_image == '1' && steps.image_exists.outputs.bare_exists != '1'
+        if: inputs.shared_image_policy == 'allow-push' && steps.plan.outputs.needs_bare_image == '1' && steps.image_exists.outputs.bare_exists != '1'
         shell: bash
         env:
           IMAGE_REF: ${{ steps.image.outputs.bare_image }}
@@ -1616,7 +2292,7 @@ jobs:
           done
 
       - name: Build and push functional Docker E2E image
-        if: steps.plan.outputs.needs_functional_image == '1' && steps.image_exists.outputs.functional_exists != '1'
+        if: inputs.shared_image_policy == 'allow-push' && steps.plan.outputs.needs_functional_image == '1' && steps.image_exists.outputs.functional_exists != '1'
         shell: bash
         env:
           IMAGE_REF: ${{ steps.image.outputs.functional_image }}

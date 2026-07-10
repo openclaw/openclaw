@@ -54,6 +54,34 @@ on:
         required: false
         default: package-under-test
         type: string
+      preflight_run_id:
+        description: Exact successful OpenClaw NPM Release run for exact-target OpenWebUI
+        required: false
+        default: ""
+        type: string
+      preflight_artifact_id:
+        description: Immutable npm preflight artifact id; required for exact-target OpenWebUI
+        required: false
+        default: ""
+        type: string
+      preflight_artifact_digest:
+        description: Immutable npm preflight artifact digest; required for exact-target OpenWebUI
+        required: false
+        default: ""
+        type: string
+      target_sha:
+        description: Exact target commit SHA for exact-target OpenWebUI
+        required: false
+        default: ""
+        type: string
+      openwebui_mode:
+        description: OpenWebUI package-acceptance image mode
+        required: true
+        default: standard
+        type: choice
+        options:
+          - standard
+          - exact-target-local
       suite_profile:
         description: Acceptance profile
         required: true
@@ -154,6 +182,31 @@ on:
         description: Artifact name containing one .tgz when source=artifact
         required: false
         default: package-under-test
+        type: string
+      preflight_run_id:
+        description: Exact successful OpenClaw NPM Release run for exact-target OpenWebUI
+        required: false
+        default: ""
+        type: string
+      preflight_artifact_id:
+        description: Immutable npm preflight artifact id; required for exact-target OpenWebUI
+        required: false
+        default: ""
+        type: string
+      preflight_artifact_digest:
+        description: Immutable npm preflight artifact digest; required for exact-target OpenWebUI
+        required: false
+        default: ""
+        type: string
+      target_sha:
+        description: Exact target commit SHA for exact-target OpenWebUI
+        required: false
+        default: ""
+        type: string
+      openwebui_mode:
+        description: "OpenWebUI image mode: standard or exact-target-local"
+        required: false
+        default: standard
         type: string
       suite_profile:
         description: "Acceptance profile: smoke, package, product, full, or custom"
@@ -310,25 +363,41 @@ jobs:
     name: Resolve package candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
     outputs:
       docker_lanes: ${{ steps.profile.outputs.docker_lanes }}
+      exact_openwebui: ${{ steps.profile.outputs.exact_openwebui }}
       include_live_suites: ${{ steps.profile.outputs.include_live_suites }}
       include_openwebui: ${{ steps.profile.outputs.include_openwebui }}
       include_release_path_suites: ${{ steps.profile.outputs.include_release_path_suites }}
+      package_ai_sha256: ${{ steps.stage_exact_package.outputs.ai_sha256 }}
+      package_ai_version: ${{ steps.stage_exact_package.outputs.ai_version }}
+      package_artifact_digest: ${{ format('sha256:{0}', steps.upload_package.outputs.artifact-digest) }}
+      package_artifact_id: ${{ steps.upload_package.outputs.artifact-id }}
       package_artifact_name: ${{ steps.profile.outputs.package_artifact_name }}
+      package_set_manifest_sha256: ${{ steps.stage_exact_package.outputs.manifest_sha256 }}
       package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}
       package_sha256: ${{ steps.resolve.outputs.sha256 }}
       package_version: ${{ steps.resolve.outputs.package_version }}
+      preflight_artifact_digest: ${{ steps.exact_preflight.outputs.artifact_digest }}
+      preflight_artifact_id: ${{ steps.exact_preflight.outputs.artifact_id }}
+      preflight_artifact_name: ${{ steps.exact_preflight.outputs.artifact_name }}
+      preflight_manifest_sha256: ${{ steps.exact_preflight.outputs.manifest_sha256 }}
+      preflight_run_id: ${{ steps.exact_preflight.outputs.run_id }}
       published_upgrade_survivor_baselines: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
       published_upgrade_survivor_scenarios: ${{ inputs.published_upgrade_survivor_scenarios }}
       telegram_enabled: ${{ steps.profile.outputs.telegram_enabled }}
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
+      trusted_workflow_sha: ${{ steps.stage_exact_package.outputs.trusted_workflow_sha }}
     steps:
       - name: Checkout package workflow ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.workflow_ref }}
+          ref: ${{ inputs.openwebui_mode == 'exact-target-local' && github.workflow_sha || inputs.workflow_ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -337,15 +406,275 @@ jobs:
           install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
           install-deps: "false"
 
+      - name: Validate exact-target OpenWebUI inputs
+        env:
+          ADVISORY: ${{ inputs.advisory }}
+          ARTIFACT_ID: ${{ inputs.preflight_artifact_id }}
+          ARTIFACT_DIGEST: ${{ inputs.preflight_artifact_digest }}
+          OPENWEBUI_MODE: ${{ inputs.openwebui_mode }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          SOURCE: ${{ inputs.source }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          TELEGRAM_MODE: ${{ inputs.telegram_mode }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$OPENWEBUI_MODE" in
+            standard)
+              if [[ -n "${PREFLIGHT_RUN_ID// }" ||
+                    -n "${ARTIFACT_ID// }" ||
+                    -n "${ARTIFACT_DIGEST// }" ||
+                    -n "${TARGET_SHA// }" ]]; then
+                echo "Exact npm preflight inputs require openwebui_mode=exact-target-local." >&2
+                exit 1
+              fi
+              ;;
+            exact-target-local)
+              [[ "$WORKFLOW_RUN_ATTEMPT" == "1" ]] || {
+                echo "openwebui_mode=exact-target-local requires workflow run attempt 1." >&2
+                exit 1
+              }
+              [[ "$ADVISORY" == "false" ]] || {
+                echo "openwebui_mode=exact-target-local is blocking and cannot be advisory." >&2
+                exit 1
+              }
+              [[ "$SOURCE" == "artifact" ]] || {
+                echo "openwebui_mode=exact-target-local requires source=artifact." >&2
+                exit 1
+              }
+              [[ "$PREFLIGHT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+                echo "preflight_run_id must be a positive decimal Actions run ID." >&2
+                exit 1
+              }
+              [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+                echo "target_sha must be a full lowercase commit SHA." >&2
+                exit 1
+              }
+              [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+                echo "preflight_artifact_id must be a positive decimal Actions artifact ID." >&2
+                exit 1
+              }
+              [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+                echo "preflight_artifact_digest must be an explicit lowercase sha256 digest." >&2
+                exit 1
+              }
+              [[ "$TELEGRAM_MODE" == "none" ]] || {
+                echo "Exact-target OpenWebUI is a focused package lane; run Telegram package acceptance separately." >&2
+                exit 1
+              }
+              ;;
+            *)
+              echo "openwebui_mode must be standard or exact-target-local; got: $OPENWEBUI_MODE" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Download exact npm preflight artifact
+        id: exact_preflight
+        if: inputs.openwebui_mode == 'exact-target-local'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_ARTIFACT_DIGEST: ${{ inputs.preflight_artifact_digest }}
+          PREFLIGHT_ARTIFACT_ID: ${{ inputs.preflight_artifact_id }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}")"
+          jq -e \
+            --argjson run_id "$PREFLIGHT_RUN_ID" \
+            --arg target_sha "$TARGET_SHA" \
+            '
+              .id == $run_id and
+              .name == "OpenClaw NPM Release" and
+              .path == ".github/workflows/openclaw-npm-release.yml" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .run_attempt == 1 and
+              .head_sha == $target_sha
+            ' <<< "$run_json" >/dev/null || {
+              echo "npm preflight run does not match the exact successful target workflow." >&2
+              exit 1
+            }
+
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${PREFLIGHT_ARTIFACT_ID}")"
+
+          jq -e \
+            --argjson artifact_id "$PREFLIGHT_ARTIFACT_ID" \
+            --argjson run_id "$PREFLIGHT_RUN_ID" \
+            --arg digest "$PREFLIGHT_ARTIFACT_DIGEST" \
+            --arg target_sha "$TARGET_SHA" \
+            '
+              .id == $artifact_id and
+              .expired == false and
+              .digest == $digest and
+              .workflow_run.id == $run_id and
+              .workflow_run.head_sha == $target_sha
+            ' <<< "$artifact_json" >/dev/null || {
+              echo "npm preflight artifact identity, digest, run, or target SHA differs." >&2
+              exit 1
+            }
+          artifact_name="$(jq -r '.name' <<< "$artifact_json")"
+          [[ "$artifact_name" == "openclaw-npm-preflight-${TARGET_SHA}" ]] || {
+            echo "npm preflight artifact must be the exact target-SHA artifact; got: $artifact_name" >&2
+            exit 1
+          }
+
+          archive="$RUNNER_TEMP/npm-preflight-${PREFLIGHT_ARTIFACT_ID}.zip"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${PREFLIGHT_ARTIFACT_ID}/zip" > "$archive"
+          actual_artifact_digest="sha256:$(sha256sum "$archive" | awk '{print $1}')"
+          [[ "$actual_artifact_digest" == "$PREFLIGHT_ARTIFACT_DIGEST" ]] || {
+            echo "Raw npm preflight artifact ZIP digest mismatch." >&2
+            exit 1
+          }
+
+          input_dir=".artifacts/package-candidate-input"
+          dependency_dir=".artifacts/exact-openwebui-dependencies"
+          rm -rf "$input_dir" "$dependency_dir"
+          mkdir -p "$input_dir" "$dependency_dir"
+          mapfile -t archive_entries < <(unzip -Z1 "$archive")
+          entry_count() {
+            local expected="$1"
+            local count=0
+            local entry
+            for entry in "${archive_entries[@]}"; do
+              [[ "$entry" == "$expected" ]] && count=$((count + 1))
+            done
+            printf '%s' "$count"
+          }
+          [[ "$(entry_count preflight-manifest.json)" == "1" ]] || {
+            echo "npm preflight artifact must contain one root preflight-manifest.json." >&2
+            exit 1
+          }
+          unzip -p "$archive" preflight-manifest.json > "$input_dir/preflight-manifest.json"
+
+          manifest_values="$(
+            node - "$input_dir/preflight-manifest.json" "$TARGET_SHA" <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const [manifestPath, targetSha] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const sha256 = /^[0-9a-f]{64}$/u;
+          const safeTarball = /^[A-Za-z0-9._-]+\.tgz$/u;
+          const ai = Array.isArray(manifest.dependencyTarballs)
+            ? manifest.dependencyTarballs.find((entry) => entry?.packageName === "@openclaw/ai")
+            : undefined;
+          if (
+            manifest.version !== 1 ||
+            manifest.releaseSha !== targetSha ||
+            manifest.packageName !== "openclaw" ||
+            typeof manifest.packageVersion !== "string" ||
+            !manifest.packageVersion ||
+            manifest.releaseTag !== `v${manifest.packageVersion}` ||
+            manifest.npmDistTag !== "beta" ||
+            typeof manifest.tarballName !== "string" ||
+            manifest.tarballName !== path.basename(manifest.tarballName) ||
+            !safeTarball.test(manifest.tarballName) ||
+            !sha256.test(manifest.tarballSha256 ?? "") ||
+            manifest.dependencyTarballs?.length !== 1 ||
+            !ai ||
+            ai.packageVersion !== manifest.packageVersion ||
+            typeof ai.tarballName !== "string" ||
+            ai.tarballName !== path.basename(ai.tarballName) ||
+            !safeTarball.test(ai.tarballName) ||
+            !sha256.test(ai.tarballSha256 ?? "") ||
+            ai.tarballName === manifest.tarballName
+          ) {
+            throw new Error("npm preflight manifest does not describe one exact root and @openclaw/ai package set");
+          }
+          process.stdout.write(
+            [
+              manifest.packageVersion,
+              manifest.tarballName,
+              manifest.tarballSha256,
+              ai.tarballName,
+              ai.tarballSha256,
+            ].join("\t"),
+          );
+          NODE
+          )"
+          IFS=$'\t' read -r package_version root_name root_sha256 ai_name ai_sha256 <<< "$manifest_values"
+          for tarball_name in "$root_name" "$ai_name"; do
+            [[ "$(entry_count "$tarball_name")" == "1" ]] || {
+              echo "npm preflight artifact must contain one ${tarball_name}." >&2
+              exit 1
+            }
+          done
+          unzip -p "$archive" "$root_name" > "$input_dir/$root_name"
+          unzip -p "$archive" "$ai_name" > "$dependency_dir/$ai_name"
+          [[ "$(sha256sum "$input_dir/$root_name" | awk '{print $1}')" == "$root_sha256" ]] || {
+            echo "npm preflight root tarball digest mismatch." >&2
+            exit 1
+          }
+          [[ "$(sha256sum "$dependency_dir/$ai_name" | awk '{print $1}')" == "$ai_sha256" ]] || {
+            echo "npm preflight @openclaw/ai tarball digest mismatch." >&2
+            exit 1
+          }
+          node - "$input_dir/$root_name" "$dependency_dir/$ai_name" "$package_version" <<'NODE'
+          const childProcess = require("node:child_process");
+          const [rootTarball, aiTarball, expectedVersion] = process.argv.slice(2);
+          const readManifest = (tarball) =>
+            JSON.parse(
+              childProcess.execFileSync("tar", ["-xOf", tarball, "package/package.json"], {
+                encoding: "utf8",
+              }),
+            );
+          const root = readManifest(rootTarball);
+          const ai = readManifest(aiTarball);
+          if (root.name !== "openclaw" || root.version !== expectedVersion) {
+            throw new Error("root package metadata differs from npm preflight manifest");
+          }
+          if (ai.name !== "@openclaw/ai" || ai.version !== expectedVersion) {
+            throw new Error("@openclaw/ai package metadata differs from npm preflight manifest");
+          }
+          childProcess.execFileSync(
+            "tar",
+            ["-xOf", aiTarball, "package/dist/internal/runtime.mjs"],
+            {
+              encoding: "utf8",
+              stdio: ["ignore", "ignore", "pipe"],
+            },
+          );
+          NODE
+          mv "$input_dir/$root_name" "$input_dir/openclaw-current.tgz"
+          mv "$dependency_dir/$ai_name" "$dependency_dir/openclaw-ai-current.tgz"
+          jq -n \
+            --arg packageRef "$TARGET_SHA" \
+            --arg packageSourceSha "$TARGET_SHA" \
+            --arg sha256 "$root_sha256" \
+            '{
+              packageRef: $packageRef,
+              packageSourceSha: $packageSourceSha,
+              packageTrustedReason: "npm-preflight-artifact",
+              sha256: $sha256
+            }' > "$input_dir/package-candidate.json"
+
+          {
+            echo "artifact_digest=$PREFLIGHT_ARTIFACT_DIGEST"
+            echo "artifact_id=$PREFLIGHT_ARTIFACT_ID"
+            echo "artifact_name=$artifact_name"
+            echo "ai_sha256=$ai_sha256"
+            echo "ai_version=$package_version"
+            echo "manifest_sha256=$(sha256sum "$input_dir/preflight-manifest.json" | awk '{print $1}')"
+            echo "package_version=$package_version"
+            echo "root_sha256=$root_sha256"
+            echo "run_id=$PREFLIGHT_RUN_ID"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Download current-run package artifact input
-        if: inputs.source == 'artifact' && inputs.artifact_run_id == ''
+        if: inputs.source == 'artifact' && inputs.openwebui_mode != 'exact-target-local' && inputs.artifact_run_id == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.artifact_name }}
           path: .artifacts/package-candidate-input
 
       - name: Download previous-run package artifact input
-        if: inputs.source == 'artifact' && inputs.artifact_run_id != ''
+        if: inputs.source == 'artifact' && inputs.openwebui_mode != 'exact-target-local' && inputs.artifact_run_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
@@ -367,7 +696,7 @@ jobs:
           PACKAGE_REF: ${{ inputs.package_ref }}
           PACKAGE_SPEC: ${{ inputs.package_spec }}
           PACKAGE_URL: ${{ inputs.package_url }}
-          PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+          PACKAGE_SHA256: ${{ steps.exact_preflight.outputs.root_sha256 || inputs.package_sha256 }}
           TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}
           OPENCLAW_TRUSTED_PACKAGE_TOKEN: ${{ secrets.OPENCLAW_TRUSTED_PACKAGE_TOKEN }}
         shell: bash
@@ -391,52 +720,153 @@ jobs:
             --metadata .artifacts/docker-e2e-package/package-candidate.json \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Stage exact OpenWebUI package set
+        id: stage_exact_package
+        if: inputs.openwebui_mode == 'exact-target-local'
+        env:
+          AI_SHA256: ${{ steps.exact_preflight.outputs.ai_sha256 }}
+          AI_VERSION: ${{ steps.exact_preflight.outputs.ai_version }}
+          NPM_PREFLIGHT_ARTIFACT_DIGEST: ${{ steps.exact_preflight.outputs.artifact_digest }}
+          NPM_PREFLIGHT_ARTIFACT_ID: ${{ steps.exact_preflight.outputs.artifact_id }}
+          NPM_PREFLIGHT_ARTIFACT_NAME: ${{ steps.exact_preflight.outputs.artifact_name }}
+          NPM_PREFLIGHT_MANIFEST_SHA256: ${{ steps.exact_preflight.outputs.manifest_sha256 }}
+          NPM_PREFLIGHT_RUN_ID: ${{ steps.exact_preflight.outputs.run_id }}
+          ROOT_SHA256: ${{ steps.resolve.outputs.sha256 }}
+          ROOT_VERSION: ${{ steps.resolve.outputs.package_version }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          EXPECTED_TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir=".artifacts/docker-e2e-package"
+          ai_source=".artifacts/exact-openwebui-dependencies/openclaw-ai-current.tgz"
+          ai_target="$package_dir/openclaw-ai-current.tgz"
+          cp "$ai_source" "$ai_target"
+
+          [[ "$(sha256sum "$package_dir/openclaw-current.tgz" | awk '{print $1}')" == "$ROOT_SHA256" ]] || {
+            echo "Resolved root package bytes differ from the npm preflight tarball." >&2
+            exit 1
+          }
+          [[ "$(sha256sum "$ai_target" | awk '{print $1}')" == "$AI_SHA256" ]] || {
+            echo "Staged @openclaw/ai bytes differ from the npm preflight tarball." >&2
+            exit 1
+          }
+          trusted_workflow_sha="$(git rev-parse HEAD)"
+          [[ "$trusted_workflow_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "Trusted package-acceptance workflow ref did not resolve to a commit SHA." >&2
+            exit 1
+          }
+          [[ "$trusted_workflow_sha" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]] || {
+            echo "Exact package acceptance checkout differs from github.workflow_sha." >&2
+            exit 1
+          }
+
+          manifest="$package_dir/exact-package-set.json"
+          jq -n \
+            --arg targetSha "$TARGET_SHA" \
+            --arg trustedWorkflowSha "$trusted_workflow_sha" \
+            --argjson trustedWorkflowRunId "$WORKFLOW_RUN_ID" \
+            --argjson trustedWorkflowRunAttempt "$WORKFLOW_RUN_ATTEMPT" \
+            --argjson npmPreflightRunId "$NPM_PREFLIGHT_RUN_ID" \
+            --argjson npmPreflightArtifactId "$NPM_PREFLIGHT_ARTIFACT_ID" \
+            --arg npmPreflightArtifactName "$NPM_PREFLIGHT_ARTIFACT_NAME" \
+            --arg npmPreflightArtifactDigest "$NPM_PREFLIGHT_ARTIFACT_DIGEST" \
+            --arg npmPreflightManifestSha256 "$NPM_PREFLIGHT_MANIFEST_SHA256" \
+            --arg rootVersion "$ROOT_VERSION" \
+            --arg rootSha256 "$ROOT_SHA256" \
+            --arg aiVersion "$AI_VERSION" \
+            --arg aiSha256 "$AI_SHA256" \
+            '{
+              schema: "openclaw.openwebui-package-set/v1",
+              targetSha: $targetSha,
+              trustedWorkflow: {
+                path: ".github/workflows/package-acceptance.yml",
+                sha: $trustedWorkflowSha,
+                runId: $trustedWorkflowRunId,
+                runAttempt: $trustedWorkflowRunAttempt
+              },
+              npmPreflightArtifact: {
+                runId: $npmPreflightRunId,
+                id: $npmPreflightArtifactId,
+                name: $npmPreflightArtifactName,
+                digest: $npmPreflightArtifactDigest,
+                manifestSha256: $npmPreflightManifestSha256
+              },
+              root: {
+                file: "openclaw-current.tgz",
+                name: "openclaw",
+                version: $rootVersion,
+                sha256: $rootSha256
+              },
+              ai: {
+                file: "openclaw-ai-current.tgz",
+                name: "@openclaw/ai",
+                version: $aiVersion,
+                sha256: $aiSha256
+              }
+            }' > "$manifest"
+          {
+            echo "ai_sha256=$AI_SHA256"
+            echo "ai_version=$AI_VERSION"
+            echo "manifest_sha256=$(sha256sum "$manifest" | awk '{print $1}')"
+            echo "trusted_workflow_sha=$trusted_workflow_sha"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Select acceptance profile
         id: profile
         env:
           SOURCE: ${{ inputs.source }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
           CUSTOM_DOCKER_LANES: ${{ inputs.docker_lanes }}
+          OPENWEBUI_MODE: ${{ inputs.openwebui_mode }}
           TELEGRAM_MODE: ${{ inputs.telegram_mode }}
         shell: bash
         run: |
           set -euo pipefail
 
+          exact_openwebui=false
           include_release_path_suites=false
           include_openwebui=false
           include_live_suites=false
           docker_lanes=""
 
-          case "$SUITE_PROFILE" in
-            smoke)
-              docker_lanes="npm-onboard-channel-agent gateway-network config-reload"
-              ;;
-            package)
-              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update"
-              ;;
-            product)
-              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
-              include_openwebui=true
-              ;;
-            full)
-              include_release_path_suites=true
-              include_openwebui=true
-              ;;
-            custom)
-              docker_lanes="$CUSTOM_DOCKER_LANES"
-              if [[ -z "${docker_lanes// }" ]]; then
-                echo "docker_lanes is required when suite_profile=custom." >&2
-                exit 1
-              fi
-              if [[ "$docker_lanes" == *"openwebui"* ]]; then
+          if [[ "$OPENWEBUI_MODE" == "exact-target-local" ]]; then
+            exact_openwebui=true
+            include_openwebui=true
+          else
+            case "$SUITE_PROFILE" in
+              smoke)
+                docker_lanes="npm-onboard-channel-agent gateway-network config-reload"
+                ;;
+              package)
+                docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update"
+                ;;
+              product)
+                docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
                 include_openwebui=true
-              fi
-              ;;
-            *)
-              echo "Unknown suite_profile: $SUITE_PROFILE" >&2
-              exit 1
-              ;;
-          esac
+                ;;
+              full)
+                include_release_path_suites=true
+                include_openwebui=true
+                ;;
+              custom)
+                docker_lanes="$CUSTOM_DOCKER_LANES"
+                if [[ -z "${docker_lanes// }" ]]; then
+                  echo "docker_lanes is required when suite_profile=custom." >&2
+                  exit 1
+                fi
+                if [[ "$docker_lanes" == *"openwebui"* ]]; then
+                  include_openwebui=true
+                fi
+                ;;
+              *)
+                echo "Unknown suite_profile: $SUITE_PROFILE" >&2
+                exit 1
+                ;;
+            esac
+          fi
 
           telegram_enabled=false
           if [[ "$TELEGRAM_MODE" != "none" ]]; then
@@ -445,6 +875,7 @@ jobs:
 
           {
             echo "docker_lanes=$docker_lanes"
+            echo "exact_openwebui=$exact_openwebui"
             echo "include_release_path_suites=$include_release_path_suites"
             echo "include_openwebui=$include_openwebui"
             echo "include_live_suites=$include_live_suites"
@@ -492,12 +923,15 @@ jobs:
           node scripts/resolve-upgrade-survivor-baselines.mjs "${args[@]}" >/dev/null
 
       - name: Upload package-under-test artifact
+        id: upload_package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ env.PACKAGE_ARTIFACT_NAME }}
           path: |
             .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/openclaw-ai-current.tgz
             .artifacts/docker-e2e-package/package-candidate.json
+            .artifacts/docker-e2e-package/exact-package-set.json
           retention-days: 14
           if-no-files-found: error
 
@@ -509,6 +943,7 @@ jobs:
           TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}
           SOURCE: ${{ inputs.source }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
+          OPENWEBUI_MODE: ${{ inputs.openwebui_mode }}
           WORKFLOW_REF: ${{ inputs.workflow_ref }}
           PUBLISHED_UPGRADE_SURVIVOR_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
           PUBLISHED_UPGRADE_SURVIVOR_BASELINES: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
@@ -529,6 +964,7 @@ jobs:
             echo "- Version: \`${PACKAGE_VERSION}\`"
             echo "- SHA-256: \`${PACKAGE_SHA256}\`"
             echo "- Profile: \`${SUITE_PROFILE}\`"
+            echo "- OpenWebUI mode: \`${OPENWEBUI_MODE}\`"
             echo "- Published upgrade survivor baseline: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINE}\`"
             echo "- Published upgrade survivor baselines: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINES}\`"
             echo "- Published upgrade survivor scenarios: \`${PUBLISHED_UPGRADE_SURVIVOR_SCENARIOS}\`"
@@ -539,12 +975,16 @@ jobs:
     needs: resolve_package
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
     steps:
       - name: Checkout package workflow ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.workflow_ref }}
+          ref: ${{ inputs.openwebui_mode == 'exact-target-local' && github.workflow_sha || inputs.workflow_ref }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Download package-under-test artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -563,6 +1003,7 @@ jobs:
   docker_acceptance:
     name: Docker product acceptance
     needs: [resolve_package, package_integrity]
+    if: needs.resolve_package.outputs.exact_openwebui != 'true'
     permissions:
       actions: read
       contents: read
@@ -630,6 +1071,45 @@ jobs:
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
 
+  openwebui_exact_target:
+    name: Focused exact-target OpenWebUI package acceptance
+    needs: [resolve_package, package_integrity]
+    if: needs.resolve_package.outputs.exact_openwebui == 'true'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      advisory: false
+      ref: ${{ inputs.target_sha }}
+      include_repo_e2e: false
+      include_release_path_suites: false
+      include_openwebui: true
+      docker_lanes: ""
+      package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
+      package_artifact_id: ${{ needs.resolve_package.outputs.package_artifact_id }}
+      package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
+      package_ai_sha256: ${{ needs.resolve_package.outputs.package_ai_sha256 }}
+      package_ai_version: ${{ needs.resolve_package.outputs.package_ai_version }}
+      package_set_manifest_sha256: ${{ needs.resolve_package.outputs.package_set_manifest_sha256 }}
+      package_sha256: ${{ needs.resolve_package.outputs.package_sha256 }}
+      package_version: ${{ needs.resolve_package.outputs.package_version }}
+      npm_preflight_run_id: ${{ needs.resolve_package.outputs.preflight_run_id }}
+      npm_preflight_artifact_id: ${{ needs.resolve_package.outputs.preflight_artifact_id }}
+      npm_preflight_artifact_digest: ${{ needs.resolve_package.outputs.preflight_artifact_digest }}
+      npm_preflight_artifact_name: ${{ needs.resolve_package.outputs.preflight_artifact_name }}
+      npm_preflight_manifest_sha256: ${{ needs.resolve_package.outputs.preflight_manifest_sha256 }}
+      trusted_workflow_sha: ${{ needs.resolve_package.outputs.trusted_workflow_sha }}
+      shared_image_policy: artifact
+      include_live_suites: false
+      live_models_only: false
+      release_test_profile: full
+      use_github_hosted_runners: true
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+
   package_telegram:
     name: Telegram package acceptance
     needs: [resolve_package, package_integrity]
@@ -650,7 +1130,14 @@ jobs:
 
   summary:
     name: Verify package acceptance
-    needs: [resolve_package, package_integrity, docker_acceptance, package_telegram]
+    needs:
+      [
+        resolve_package,
+        package_integrity,
+        docker_acceptance,
+        openwebui_exact_target,
+        package_telegram,
+      ]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -659,6 +1146,8 @@ jobs:
         env:
           ADVISORY: ${{ inputs.advisory }}
           DOCKER_RESULT: ${{ needs.docker_acceptance.result }}
+          EXACT_OPENWEBUI_ENABLED: ${{ needs.resolve_package.outputs.exact_openwebui }}
+          EXACT_OPENWEBUI_RESULT: ${{ needs.openwebui_exact_target.result }}
           PACKAGE_INTEGRITY_RESULT: ${{ needs.package_integrity.result }}
           PACKAGE_TELEGRAM_RESULT: ${{ needs.package_telegram.result }}
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
@@ -671,6 +1160,7 @@ jobs:
             "resolve_package=${RESOLVE_RESULT}" \
             "package_integrity=${PACKAGE_INTEGRITY_RESULT}" \
             "docker_acceptance=${DOCKER_RESULT}" \
+            "openwebui_exact_target=${EXACT_OPENWEBUI_RESULT:-skipped}" \
             "package_telegram=${PACKAGE_TELEGRAM_RESULT}"
           do
             name="${item%%=*}"
@@ -681,6 +1171,11 @@ jobs:
             fi
             if [[ "$name" == "package_telegram" &&
                   "$TELEGRAM_ENABLED" == "true" &&
+                  "$result" != "success" ]]; then
+              result_failed=true
+            fi
+            if [[ "$name" == "openwebui_exact_target" &&
+                  "${EXACT_OPENWEBUI_ENABLED:-false}" == "true" &&
                   "$result" != "success" ]]; then
               result_failed=true
             fi

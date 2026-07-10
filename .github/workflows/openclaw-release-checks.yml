@@ -596,11 +596,13 @@ jobs:
     if: contains(fromJSON('["all","install-smoke"]'), needs.resolve_target.outputs.rerun_group)
     permissions:
       contents: read
-      packages: write
+      packages: read
     uses: ./.github/workflows/install-smoke.yml
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
+      root_image_transport: artifact
       run_bun_global_install_smoke: true
+      update_baseline_version: 2026.6.11
 
   cross_os_release_checks:
     needs: [resolve_target, prepare_release_package]

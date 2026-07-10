@@ -25,6 +25,26 @@ on:
         required: false
         default: ""
         type: string
+      preflight_run_id:
+        description: Exact OpenClaw NPM Release preflight run for strict artifact consumption
+        required: false
+        default: ""
+        type: string
+      preflight_artifact_id:
+        description: Exact npm preflight artifact ID; requires the complete strict input tuple
+        required: false
+        default: ""
+        type: string
+      preflight_artifact_digest:
+        description: Exact sha256 digest of the raw npm preflight artifact ZIP
+        required: false
+        default: ""
+        type: string
+      target_sha:
+        description: Exact release target SHA recorded by the npm preflight artifact
+        required: false
+        default: ""
+        type: string
       harness_ref:
         description: Source ref for the private QA harness; defaults to the dispatched workflow ref
         required: false
@@ -73,6 +93,26 @@ on:
         required: false
         default: ""
         type: string
+      preflight_run_id:
+        description: Exact OpenClaw NPM Release preflight run for strict artifact consumption
+        required: false
+        default: ""
+        type: string
+      preflight_artifact_id:
+        description: Exact npm preflight artifact ID; requires the complete strict input tuple
+        required: false
+        default: ""
+        type: string
+      preflight_artifact_digest:
+        description: Exact sha256 digest of the raw npm preflight artifact ZIP
+        required: false
+        default: ""
+        type: string
+      target_sha:
+        description: Exact release target SHA recorded by the npm preflight artifact
+        required: false
+        default: ""
+        type: string
       package_label:
         description: Optional display label for an artifact-backed package candidate
         required: false
@@ -118,8 +158,92 @@ env:
   NODE_VERSION: "24.15.0"
 
 jobs:
+  resolve_harness:
+    name: Resolve package Telegram harness
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
+      strict_mode: ${{ steps.resolve.outputs.strict_mode }}
+    steps:
+      - name: Resolve trusted strict harness
+        id: resolve
+        env:
+          HARNESS_REF: ${{ inputs.harness_ref || '' }}
+          PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || '' }}
+          PACKAGE_ARTIFACT_RUN_ID: ${{ inputs.package_artifact_run_id || '' }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id || '' }}
+          PREFLIGHT_ARTIFACT_ID: ${{ inputs.preflight_artifact_id || '' }}
+          PREFLIGHT_ARTIFACT_DIGEST: ${{ inputs.preflight_artifact_digest || '' }}
+          TARGET_SHA: ${{ inputs.target_sha || '' }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          strict_values=(
+            "$PREFLIGHT_RUN_ID"
+            "$PREFLIGHT_ARTIFACT_ID"
+            "$PREFLIGHT_ARTIFACT_DIGEST"
+            "$TARGET_SHA"
+          )
+          strict_count=0
+          for value in "${strict_values[@]}"; do
+            if [[ -n "${value// }" ]]; then
+              strict_count=$((strict_count + 1))
+            fi
+          done
+          if (( strict_count != 0 && strict_count != ${#strict_values[@]} )); then
+            echo "preflight_run_id, preflight_artifact_id, preflight_artifact_digest, and target_sha must be supplied together." >&2
+            exit 1
+          fi
+
+          checkout_ref="${HARNESS_REF:-$GITHUB_SHA}"
+          strict_mode=false
+          if (( strict_count == ${#strict_values[@]} )); then
+            if [[ -n "${PACKAGE_ARTIFACT_NAME// }" || -n "${PACKAGE_ARTIFACT_RUN_ID// }" ]]; then
+              echo "Strict npm preflight inputs cannot be combined with legacy package artifact selectors." >&2
+              exit 1
+            fi
+            [[ "$PREFLIGHT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+              echo "preflight_run_id must be a positive decimal Actions run ID." >&2
+              exit 1
+            }
+            [[ "$PREFLIGHT_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+              echo "preflight_artifact_id must be a positive decimal Actions artifact ID." >&2
+              exit 1
+            }
+            [[ "$PREFLIGHT_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "preflight_artifact_digest must be a lowercase sha256 digest." >&2
+              exit 1
+            }
+            [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "target_sha must be a full lowercase commit SHA." >&2
+              exit 1
+            }
+            if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" || "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "Strict npm preflight consumption requires a direct trusted-main workflow dispatch." >&2
+              exit 1
+            fi
+            if [[ -n "${HARNESS_REF// }" && "$HARNESS_REF" != "main" && "$HARNESS_REF" != "$WORKFLOW_SHA" ]]; then
+              echo "Strict npm preflight consumption only accepts the trusted main workflow harness." >&2
+              exit 1
+            fi
+            checkout_ref="$WORKFLOW_SHA"
+            strict_mode=true
+            echo "STRICT_HARNESS_REF: main"
+            echo "STRICT_HARNESS_SHA: $WORKFLOW_SHA"
+          fi
+
+          {
+            echo "checkout_ref=$checkout_ref"
+            echo "strict_mode=$strict_mode"
+          } >> "$GITHUB_OUTPUT"
+
   run_package_telegram_e2e:
     name: Run package Telegram E2E
+    needs: resolve_harness
     runs-on: blacksmith-32vcpu-ubuntu-2404
     continue-on-error: ${{ inputs.advisory }}
     timeout-minutes: 60
@@ -134,8 +258,9 @@ jobs:
       - name: Checkout dispatch ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.harness_ref || github.sha }}
+          ref: ${{ needs.resolve_harness.outputs.checkout_ref }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
@@ -164,6 +289,7 @@ jobs:
         env:
           PACKAGE_SPEC: ${{ inputs.package_spec }}
           PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || '' }}
+          STRICT_MODE: ${{ needs.resolve_harness.outputs.strict_mode }}
           PROVIDER_MODE: ${{ inputs.provider_mode }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -172,7 +298,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
+          if [[ -z "${PACKAGE_ARTIFACT_NAME// }" && "$STRICT_MODE" != "true" ]]; then
             if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
               echo "package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
               exit 1
@@ -201,20 +327,192 @@ jobs:
           fi
 
       - name: Download package-under-test artifact
-        if: inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''
+        if: inputs.preflight_artifact_id == '' && inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.package_artifact_name }}
           path: .artifacts/telegram-package-under-test
 
       - name: Download package-under-test artifact from release run
-        if: inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''
+        if: inputs.preflight_artifact_id == '' && inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.package_artifact_name }}
           path: .artifacts/telegram-package-under-test
           run-id: ${{ inputs.package_artifact_run_id }}
           github-token: ${{ github.token }}
+
+      - name: Download exact npm preflight artifact
+        id: exact_preflight
+        if: inputs.preflight_artifact_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          PREFLIGHT_ARTIFACT_ID: ${{ inputs.preflight_artifact_id }}
+          PREFLIGHT_ARTIFACT_DIGEST: ${{ inputs.preflight_artifact_digest }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}")"
+          jq -e \
+            --argjson run_id "$PREFLIGHT_RUN_ID" \
+            --arg target_sha "$TARGET_SHA" \
+            '
+              .id == $run_id and
+              .name == "OpenClaw NPM Release" and
+              .path == ".github/workflows/openclaw-npm-release.yml" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .run_attempt == 1 and
+              .head_sha == $target_sha
+            ' <<< "$run_json" >/dev/null || {
+              echo "npm preflight run does not match the exact successful target workflow." >&2
+              exit 1
+            }
+
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${PREFLIGHT_ARTIFACT_ID}")"
+          jq -e \
+            --argjson artifact_id "$PREFLIGHT_ARTIFACT_ID" \
+            --argjson run_id "$PREFLIGHT_RUN_ID" \
+            --arg digest "$PREFLIGHT_ARTIFACT_DIGEST" \
+            --arg target_sha "$TARGET_SHA" \
+            '
+              .id == $artifact_id and
+              .expired == false and
+              .digest == $digest and
+              .workflow_run.id == $run_id and
+              .workflow_run.head_sha == $target_sha
+            ' <<< "$artifact_json" >/dev/null || {
+              echo "npm preflight artifact identity, digest, run, or target SHA differs." >&2
+              exit 1
+            }
+          artifact_name="$(jq -r '.name' <<< "$artifact_json")"
+          expected_artifact_name="openclaw-npm-preflight-${TARGET_SHA}"
+          if [[ "$artifact_name" != "$expected_artifact_name" ]]; then
+            echo "npm preflight artifact name mismatch: expected $expected_artifact_name, got $artifact_name" >&2
+            exit 1
+          fi
+
+          archive="$RUNNER_TEMP/npm-preflight-${PREFLIGHT_ARTIFACT_ID}.zip"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${PREFLIGHT_ARTIFACT_ID}/zip" > "$archive"
+          actual_artifact_digest="sha256:$(sha256sum "$archive" | awk '{print $1}')"
+          if [[ "$actual_artifact_digest" != "$PREFLIGHT_ARTIFACT_DIGEST" ]]; then
+            echo "Raw npm preflight artifact ZIP digest mismatch." >&2
+            exit 1
+          fi
+
+          package_dir=".artifacts/telegram-package-under-test"
+          rm -rf "$package_dir"
+          mkdir -p "$package_dir"
+          mapfile -t archive_entries < <(unzip -Z1 "$archive")
+          entry_count() {
+            local expected="$1"
+            local count=0
+            local entry
+            for entry in "${archive_entries[@]}"; do
+              if [[ "$entry" == "$expected" ]]; then
+                count=$((count + 1))
+              fi
+            done
+            printf '%s' "$count"
+          }
+          if [[ "$(entry_count preflight-manifest.json)" != "1" ]]; then
+            echo "npm preflight artifact must contain exactly one root preflight-manifest.json." >&2
+            exit 1
+          fi
+          unzip -p "$archive" preflight-manifest.json > "$package_dir/preflight-manifest.json"
+
+          manifest_values="$(
+            node - "$package_dir/preflight-manifest.json" "$TARGET_SHA" <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const [manifestPath, targetSha] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const sha256 = /^[0-9a-f]{64}$/u;
+          const safeTarball = /^[A-Za-z0-9._-]+\.tgz$/u;
+          const ai = Array.isArray(manifest.dependencyTarballs)
+            ? manifest.dependencyTarballs.find((entry) => entry?.packageName === "@openclaw/ai")
+            : undefined;
+          if (
+            manifest.version !== 1 ||
+            manifest.releaseSha !== targetSha ||
+            manifest.packageName !== "openclaw" ||
+            typeof manifest.packageVersion !== "string" ||
+            !manifest.packageVersion ||
+            manifest.releaseTag !== `v${manifest.packageVersion}` ||
+            manifest.npmDistTag !== "beta" ||
+            typeof manifest.tarballName !== "string" ||
+            manifest.tarballName !== path.basename(manifest.tarballName) ||
+            !safeTarball.test(manifest.tarballName) ||
+            !sha256.test(manifest.tarballSha256 ?? "") ||
+            manifest.dependencyTarballs?.length !== 1 ||
+            !ai ||
+            ai.packageVersion !== manifest.packageVersion ||
+            typeof ai.tarballName !== "string" ||
+            ai.tarballName !== path.basename(ai.tarballName) ||
+            !safeTarball.test(ai.tarballName) ||
+            !sha256.test(ai.tarballSha256 ?? "") ||
+            ai.tarballName === manifest.tarballName
+          ) {
+            throw new Error("npm preflight manifest does not describe one exact root and @openclaw/ai package set");
+          }
+          process.stdout.write(
+            [
+              manifest.packageVersion,
+              manifest.tarballName,
+              manifest.tarballSha256,
+              ai.tarballName,
+              ai.tarballSha256,
+            ].join("\t"),
+          );
+          NODE
+          )"
+          IFS=$'\t' read -r package_version root_name root_sha256 ai_name ai_sha256 <<< "$manifest_values"
+          for tarball_name in "$root_name" "$ai_name"; do
+            if [[ "$(entry_count "$tarball_name")" != "1" ]]; then
+              echo "npm preflight artifact must contain exactly one ${tarball_name}." >&2
+              exit 1
+            fi
+            unzip -p "$archive" "$tarball_name" > "$package_dir/$tarball_name"
+          done
+          actual_root_sha256="$(sha256sum "$package_dir/$root_name" | awk '{print $1}')"
+          actual_ai_sha256="$(sha256sum "$package_dir/$ai_name" | awk '{print $1}')"
+          if [[ "$actual_root_sha256" != "$root_sha256" || "$actual_ai_sha256" != "$ai_sha256" ]]; then
+            echo "npm preflight root or @openclaw/ai tarball digest mismatch." >&2
+            exit 1
+          fi
+
+          verify_tarball_manifest() {
+            local tarball="$1"
+            local expected_name="$2"
+            local expected_version="$3"
+            node - "$tarball" "$expected_name" "$expected_version" <<'NODE'
+          const childProcess = require("node:child_process");
+          const [tarball, expectedName, expectedVersion] = process.argv.slice(2);
+          const manifest = JSON.parse(
+            childProcess.execFileSync("tar", ["-xOf", tarball, "package/package.json"], {
+              encoding: "utf8",
+            }),
+          );
+          if (manifest.name !== expectedName || manifest.version !== expectedVersion) {
+            throw new Error(`package metadata mismatch for ${expectedName}`);
+          }
+          NODE
+          }
+          verify_tarball_manifest "$package_dir/$root_name" "openclaw" "$package_version"
+          verify_tarball_manifest "$package_dir/$ai_name" "@openclaw/ai" "$package_version"
+
+          {
+            echo "artifact_name=$artifact_name"
+            echo "package_version=$package_version"
+            echo "root_name=$root_name"
+            echo "root_sha256=$root_sha256"
+            echo "ai_name=$ai_name"
+            echo "ai_sha256=$ai_sha256"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Run package Telegram E2E
         id: run_lane
@@ -232,8 +530,9 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_PACKAGE_SOURCE_SHA: ${{ inputs.target_sha || '' }}
           INPUT_SCENARIO: ${{ inputs.scenario }}
-          PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || '' }}
+          PACKAGE_ARTIFACT_NAME: ${{ inputs.preflight_artifact_id != '' && steps.exact_preflight.outputs.artifact_name || inputs.package_artifact_name || '' }}
         run: |
           set -euo pipefail
 
@@ -380,6 +679,83 @@ jobs:
           fi
 
           pnpm test:docker:npm-telegram-live
+
+      - name: Write exact package consumption attestation
+        if: ${{ !inputs.advisory && inputs.preflight_artifact_id != '' && steps.run_lane.outcome == 'success' }}
+        env:
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          PREFLIGHT_ARTIFACT_ID: ${{ inputs.preflight_artifact_id }}
+          PREFLIGHT_ARTIFACT_DIGEST: ${{ inputs.preflight_artifact_digest }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          PACKAGE_VERSION: ${{ steps.exact_preflight.outputs.package_version }}
+          PACKAGE_ARTIFACT_NAME: ${{ steps.exact_preflight.outputs.artifact_name }}
+          ROOT_TARBALL_NAME: ${{ steps.exact_preflight.outputs.root_name }}
+          ROOT_TARBALL_SHA256: ${{ steps.exact_preflight.outputs.root_sha256 }}
+          AI_TARBALL_NAME: ${{ steps.exact_preflight.outputs.ai_name }}
+          AI_TARBALL_SHA256: ${{ steps.exact_preflight.outputs.ai_sha256 }}
+          PROVIDER_MODE: ${{ inputs.provider_mode }}
+          SCENARIO: ${{ inputs.scenario }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/qa-e2e
+          jq -n \
+            --argjson workflowRunId "$GITHUB_RUN_ID" \
+            --argjson workflowRunAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg workflowPath ".github/workflows/npm-telegram-beta-e2e.yml" \
+            --arg workflowSha "$WORKFLOW_SHA" \
+            --arg targetSha "$TARGET_SHA" \
+            --arg packageVersion "$PACKAGE_VERSION" \
+            --argjson packageRunId "$PREFLIGHT_RUN_ID" \
+            --argjson packageArtifactId "$PREFLIGHT_ARTIFACT_ID" \
+            --arg packageArtifactName "$PACKAGE_ARTIFACT_NAME" \
+            --arg packageArtifactDigest "$PREFLIGHT_ARTIFACT_DIGEST" \
+            --arg rootName "$ROOT_TARBALL_NAME" \
+            --arg rootSha256 "$ROOT_TARBALL_SHA256" \
+            --arg aiName "$AI_TARBALL_NAME" \
+            --arg aiSha256 "$AI_TARBALL_SHA256" \
+            --arg providerMode "$PROVIDER_MODE" \
+            --arg scenario "$SCENARIO" \
+            '{
+              schemaVersion: 1,
+              workflow: {
+                runId: $workflowRunId,
+                runAttempt: $workflowRunAttempt,
+                path: $workflowPath,
+                sha: $workflowSha
+              },
+              targetSha: $targetSha,
+              packageVersion: $packageVersion,
+              packageArtifact: {
+                runId: $packageRunId,
+                id: $packageArtifactId,
+                name: $packageArtifactName,
+                digest: $packageArtifactDigest,
+                root: {
+                  name: $rootName,
+                  sha256: $rootSha256
+                },
+                ai: {
+                  name: $aiName,
+                  sha256: $aiSha256
+                }
+              },
+              qa: {
+                providerMode: $providerMode,
+                scenario: $scenario,
+                conclusion: "success"
+              }
+            }' > .artifacts/qa-e2e/package-consumption.json
+
+      - name: Upload exact package consumption attestation
+        if: ${{ !inputs.advisory && inputs.preflight_artifact_id != '' && steps.run_lane.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: npm-telegram-package-consumption-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/package-consumption.json
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Upload npm Telegram E2E artifacts
         if: always()

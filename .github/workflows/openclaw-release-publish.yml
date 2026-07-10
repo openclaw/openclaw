@@ -12,7 +12,11 @@ on:
         required: false
         type: string
       full_release_validation_run_id:
-        description: Successful Full Release Validation run id for this tag/SHA, required when publish_openclaw_npm=true
+        description: Successful Full Release Validation run id for this tag/SHA; required unless release delta evidence is supplied
+        required: false
+        type: string
+      release_delta_evidence_run_id:
+        description: Optional successful Release Delta Evidence run for an audited beta tooling delta
         required: false
         type: string
       windows_node_tag:
@@ -88,8 +92,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
-      sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
+      sha: ${{ steps.ref.outputs.sha }}
       preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}
+      release_delta_artifact_digest: ${{ steps.delta_evidence.outputs.artifact_digest }}
+      release_delta_artifact_id: ${{ steps.delta_evidence.outputs.artifact_id }}
+      release_delta_manifest_sha256: ${{ steps.delta_evidence.outputs.manifest_sha256 }}
       windows_node_installer_digests: ${{ steps.windows_source.outputs.installer_digests }}
     steps:
       - name: Validate inputs
@@ -97,6 +104,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RELEASE_DELTA_EVIDENCE_RUN_ID: ${{ inputs.release_delta_evidence_run_id }}
+          NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
@@ -107,6 +116,18 @@ jobs:
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          validate_optional_run_id() {
+            local name="$1"
+            local value="$2"
+            if [[ -n "$value" && ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+              echo "${name} must be a positive decimal Actions run ID." >&2
+              exit 1
+            fi
+          }
+          validate_optional_run_id preflight_run_id "$PREFLIGHT_RUN_ID"
+          validate_optional_run_id full_release_validation_run_id "$FULL_RELEASE_VALIDATION_RUN_ID"
+          validate_optional_run_id release_delta_evidence_run_id "$RELEASE_DELTA_EVIDENCE_RUN_ID"
+          validate_optional_run_id npm_telegram_run_id "$NPM_TELEGRAM_RUN_ID"
           if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             echo "Invalid release tag: ${RELEASE_TAG}" >&2
             exit 1
@@ -123,8 +144,20 @@ jobs:
             echo "publish_openclaw_npm=true requires preflight_run_id." >&2
             exit 1
           fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
-            echo "publish_openclaw_npm=true requires full_release_validation_run_id." >&2
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && -z "${FULL_RELEASE_VALIDATION_RUN_ID}" && -z "${RELEASE_DELTA_EVIDENCE_RUN_ID}" ]]; then
+            echo "publish_openclaw_npm=true requires full_release_validation_run_id or release_delta_evidence_run_id." >&2
+            exit 1
+          fi
+          if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ID}" && -n "${RELEASE_DELTA_EVIDENCE_RUN_ID}" ]]; then
+            echo "full_release_validation_run_id and release_delta_evidence_run_id are mutually exclusive." >&2
+            exit 1
+          fi
+          if [[ -n "${RELEASE_DELTA_EVIDENCE_RUN_ID}" && "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "release_delta_evidence_run_id requires the trusted main workflow." >&2
+            exit 1
+          fi
+          if [[ -n "${RELEASE_DELTA_EVIDENCE_RUN_ID}" && "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
+            echo "release_delta_evidence_run_id requires publish_openclaw_npm=true." >&2
             exit 1
           fi
           stable_release=true
@@ -290,7 +323,7 @@ jobs:
           echo "name=${fallback_name}" >> "$GITHUB_OUTPUT"
 
       - name: Download full release validation manifest
-        if: ${{ inputs.publish_openclaw_npm }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.release_delta_evidence_run_id == '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}
@@ -310,6 +343,33 @@ jobs:
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout trusted delta verifier
+        if: ${{ inputs.release_delta_evidence_run_id != '' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: .release-delta-tooling
+          persist-credentials: false
+
+      - name: Verify release delta evidence
+        id: delta_evidence
+        if: ${{ inputs.publish_openclaw_npm && inputs.release_delta_evidence_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          RELEASE_DELTA_EVIDENCE_RUN_ID: ${{ inputs.release_delta_evidence_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          node .release-delta-tooling/scripts/release-delta-evidence.mjs verify \
+            --run-id "$RELEASE_DELTA_EVIDENCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --target-sha "$TARGET_SHA" \
+            --npm-preflight-run "$NPM_PREFLIGHT_RUN_ID" \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Validate OpenClaw npm preflight manifest
         id: manifest
         if: ${{ inputs.publish_openclaw_npm }}
@@ -328,6 +388,7 @@ jobs:
           fi
           release_tag="$(jq -r '.releaseTag // ""' "$manifest")"
           release_sha="$(jq -r '.releaseSha // ""' "$manifest")"
+          package_version="$(jq -r '.packageVersion // ""' "$manifest")"
           npm_dist_tag="$(jq -r '.npmDistTag // ""' "$manifest")"
           tarball_name="$(jq -r '.tarballName // ""' "$manifest")"
           tarball_sha256="$(jq -r '.tarballSha256 // ""' "$manifest")"
@@ -337,6 +398,10 @@ jobs:
           fi
           if [[ "$release_sha" != "$EXPECTED_SHA" ]]; then
             echo "Preflight manifest SHA mismatch: expected $EXPECTED_SHA, got $release_sha" >&2
+            exit 1
+          fi
+          if [[ "$package_version" != "${RELEASE_TAG#v}" ]]; then
+            echo "Preflight manifest version mismatch: expected ${RELEASE_TAG#v}, got $package_version" >&2
             exit 1
           fi
           if [[ "$npm_dist_tag" != "$RELEASE_NPM_DIST_TAG" ]]; then
@@ -356,7 +421,7 @@ jobs:
 
       - name: Validate full release validation manifest
         id: full_manifest
-        if: ${{ inputs.publish_openclaw_npm }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.release_delta_evidence_run_id == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -440,9 +505,10 @@ jobs:
       - name: Summarize release target
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          TARGET_SHA: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
+          TARGET_SHA: ${{ steps.ref.outputs.sha }}
           RELEASE_PROFILE: ${{ steps.full_manifest.outputs.release_profile || inputs.release_profile }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RELEASE_DELTA_EVIDENCE_RUN_ID: ${{ inputs.release_delta_evidence_run_id }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
         run: |
           {
@@ -453,6 +519,9 @@ jobs:
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ID// }" ]]; then
               echo "- Full release validation: \`${FULL_RELEASE_VALIDATION_RUN_ID}\`"
+            fi
+            if [[ -n "${RELEASE_DELTA_EVIDENCE_RUN_ID// }" ]]; then
+              echo "- Release delta evidence: \`${RELEASE_DELTA_EVIDENCE_RUN_ID}\`"
             fi
             if [[ -n "${WINDOWS_NODE_TAG// }" ]]; then
               echo "- Windows Node source release: \`${WINDOWS_NODE_TAG}\`"
@@ -475,11 +544,11 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.resolve_release_target.outputs.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Download full release validation manifest
-        if: ${{ inputs.publish_openclaw_npm }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.release_delta_evidence_run_id == '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}
@@ -492,6 +561,91 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      - name: Download verified release delta manifest
+        id: delta_manifest
+        if: ${{ inputs.publish_openclaw_npm && inputs.release_delta_evidence_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_DELTA_ARTIFACT_DIGEST: ${{ needs.resolve_release_target.outputs.release_delta_artifact_digest }}
+          RELEASE_DELTA_ARTIFACT_ID: ${{ needs.resolve_release_target.outputs.release_delta_artifact_id }}
+          RELEASE_DELTA_EVIDENCE_RUN_ID: ${{ inputs.release_delta_evidence_run_id }}
+          RELEASE_DELTA_MANIFEST_SHA256: ${{ needs.resolve_release_target.outputs.release_delta_manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          artifact_name="release-delta-evidence-${RELEASE_DELTA_EVIDENCE_RUN_ID}-1"
+          output_dir="${RUNNER_TEMP}/verified-release-delta-evidence"
+          archive="${output_dir}/artifact.zip"
+          manifest="${output_dir}/release-delta-evidence.json"
+          rm -rf "$output_dir"
+          mkdir -p "$output_dir"
+
+          if [[ ! "$RELEASE_DELTA_EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "release_delta_evidence_run_id must be a positive decimal Actions run ID." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_DELTA_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Verified release delta artifact ID is invalid." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_DELTA_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Verified release delta artifact digest is invalid." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_DELTA_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Verified release delta manifest SHA-256 is invalid." >&2
+            exit 1
+          fi
+
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_DELTA_EVIDENCE_RUN_ID}")"
+          if ! jq -e \
+            --argjson run_id "$RELEASE_DELTA_EVIDENCE_RUN_ID" \
+            '.id == $run_id and
+             .name == "Release Delta Evidence" and
+             .path == ".github/workflows/release-delta-evidence.yml" and
+             .event == "workflow_dispatch" and
+             .head_branch == "main" and
+             .status == "completed" and
+             .conclusion == "success" and
+             .run_attempt == 1' <<<"$run_json" >/dev/null; then
+            echo "Release delta evidence producer is no longer trusted-main attempt 1." >&2
+            exit 1
+          fi
+
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RELEASE_DELTA_ARTIFACT_ID}")"
+          if ! jq -e \
+            --argjson artifact_id "$RELEASE_DELTA_ARTIFACT_ID" \
+            --argjson run_id "$RELEASE_DELTA_EVIDENCE_RUN_ID" \
+            --arg artifact_name "$artifact_name" \
+            --arg artifact_digest "$RELEASE_DELTA_ARTIFACT_DIGEST" \
+            '.id == $artifact_id and
+             .name == $artifact_name and
+             .digest == $artifact_digest and
+             .expired == false and
+             .workflow_run.id == $run_id' <<<"$artifact_json" >/dev/null; then
+            echo "Release delta evidence artifact identity or digest changed after verification." >&2
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RELEASE_DELTA_ARTIFACT_ID}/zip" >"$archive"
+          actual_archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          if [[ "$actual_archive_sha256" != "${RELEASE_DELTA_ARTIFACT_DIGEST#sha256:}" ]]; then
+            echo "Downloaded release delta evidence archive does not match its verified digest." >&2
+            exit 1
+          fi
+          mapfile -t archive_entries < <(unzip -Z1 "$archive")
+          if [[ "${#archive_entries[@]}" != "1" || "${archive_entries[0]}" != "release-delta-evidence.json" ]]; then
+            echo "Release delta evidence artifact must contain only release-delta-evidence.json." >&2
+            printf 'Archive entries:\n' >&2
+            printf -- '- %s\n' "${archive_entries[@]:-<none>}" >&2
+            exit 1
+          fi
+          unzip -p "$archive" release-delta-evidence.json >"$manifest"
+          actual_manifest_sha256="$(sha256sum "$manifest" | awk '{print $1}')"
+          if [[ "$actual_manifest_sha256" != "$RELEASE_DELTA_MANIFEST_SHA256" ]]; then
+            echo "Release delta evidence manifest hash changed after verification." >&2
+            exit 1
+          fi
+          echo "manifest_path=$manifest" >> "$GITHUB_OUTPUT"
 
       - name: Prepare GitHub release notes
         if: ${{ inputs.publish_openclaw_npm }}
@@ -564,6 +718,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RELEASE_DELTA_EVIDENCE_RUN_ID: ${{ inputs.release_delta_evidence_run_id }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
@@ -575,6 +730,10 @@ jobs:
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ needs.resolve_release_target.outputs.windows_node_installer_digests }}
           POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
           FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
+          RELEASE_DELTA_EVIDENCE_MANIFEST_PATH: ${{ steps.delta_manifest.outputs.manifest_path }}
+          RELEASE_DELTA_EVIDENCE_ARTIFACT_ID: ${{ needs.resolve_release_target.outputs.release_delta_artifact_id }}
+          RELEASE_DELTA_EVIDENCE_ARTIFACT_DIGEST: ${{ needs.resolve_release_target.outputs.release_delta_artifact_digest }}
+          RELEASE_DELTA_EVIDENCE_MANIFEST_SHA256: ${{ needs.resolve_release_target.outputs.release_delta_manifest_sha256 }}
         run: |
           set -euo pipefail
 
@@ -638,6 +797,48 @@ jobs:
 
           dispatch_workflow() {
             dispatch_workflow_at_ref "$CHILD_WORKFLOW_REF" "$@"
+          }
+
+          recheck_remote_release_refs() {
+            local direct_tag_sha="" peeled_tag_sha="" remote_ref remote_sha
+            local release_line publish_branch branch_sha
+
+            while read -r remote_sha remote_ref; do
+              case "$remote_ref" in
+                "refs/tags/${RELEASE_TAG}")
+                  direct_tag_sha="$remote_sha"
+                  ;;
+                "refs/tags/${RELEASE_TAG}^{}")
+                  peeled_tag_sha="$remote_sha"
+                  ;;
+                *)
+                  echo "Unexpected remote tag ref while rechecking ${RELEASE_TAG}: ${remote_ref}" >&2
+                  exit 1
+                  ;;
+              esac
+            done < <(git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+
+            remote_sha="${peeled_tag_sha:-$direct_tag_sha}"
+            if [[ ! "$remote_sha" =~ ^[0-9a-f]{40}$ || "$remote_sha" != "$TARGET_SHA" ]]; then
+              echo "Remote tag ${RELEASE_TAG} must peel to ${TARGET_SHA}; got ${remote_sha:-<missing>}." >&2
+              exit 1
+            fi
+
+            release_line="${RELEASE_TAG#v}"
+            release_line="${release_line%%-*}"
+            case "$CHILD_WORKFLOW_REF" in
+              release/*|extended-stable/*|tideclaw/alpha/*)
+                publish_branch="$CHILD_WORKFLOW_REF"
+                ;;
+              *)
+                publish_branch="release/${release_line}"
+                ;;
+            esac
+            branch_sha="$(git ls-remote --heads origin "refs/heads/${publish_branch}" | awk 'NR == 1 { print $1 } NR > 1 { exit 2 }')"
+            if [[ ! "$branch_sha" =~ ^[0-9a-f]{40}$ || "$branch_sha" != "$TARGET_SHA" ]]; then
+              echo "Remote branch ${publish_branch} must point to ${TARGET_SHA}; got ${branch_sha:-<missing>}." >&2
+              exit 1
+            fi
           }
 
           print_pending_deployments() {
@@ -1413,14 +1614,25 @@ jobs:
           upload_release_evidence_assets() {
             local release_version manifest_path evidence_path manifest_asset evidence_asset
             release_version="${RELEASE_TAG#v}"
-            manifest_path="${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json"
+            if [[ -n "${RELEASE_DELTA_EVIDENCE_RUN_ID// }" ]]; then
+              manifest_path="${RELEASE_DELTA_EVIDENCE_MANIFEST_PATH}"
+            else
+              manifest_path="${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json"
+            fi
             evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
             manifest_asset="openclaw-${release_version}-release-manifest.json"
             evidence_asset="openclaw-${release_version}-postpublish-evidence.json"
 
             if [[ ! -f "${manifest_path}" ]]; then
-              echo "Full release validation manifest is missing from ${FULL_RELEASE_VALIDATION_MANIFEST_DIR}." >&2
+              echo "Release validation manifest is missing: ${manifest_path}." >&2
               exit 1
+            fi
+            if [[ -n "${RELEASE_DELTA_EVIDENCE_RUN_ID// }" ]]; then
+              actual_manifest_sha256="$(sha256sum "${manifest_path}" | awk '{print $1}')"
+              if [[ "$actual_manifest_sha256" != "$RELEASE_DELTA_EVIDENCE_MANIFEST_SHA256" ]]; then
+                echo "Release delta evidence manifest changed before immutable upload." >&2
+                exit 1
+              fi
             fi
             if [[ ! -f "${evidence_path}" ]]; then
               echo "Postpublish release evidence is missing from ${POSTPUBLISH_EVIDENCE_DIR}." >&2
@@ -1468,7 +1680,6 @@ jobs:
               --repo "${GITHUB_REPOSITORY}"
               --workflow-ref "${CHILD_WORKFLOW_REF}"
               --clawhub-workflow-ref "${clawhub_workflow_ref}"
-              --full-release-validation-run "${FULL_RELEASE_VALIDATION_RUN_ID}"
               --plugin-npm-run "${plugin_npm_run_id}"
               --evidence-out "${evidence_path}"
               --skip-github-release
@@ -1489,10 +1700,25 @@ jobs:
             if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
               verify_args+=(--npm-telegram-run "${NPM_TELEGRAM_RUN_ID}")
             fi
+            if [[ -z "${RELEASE_DELTA_EVIDENCE_RUN_ID// }" ]]; then
+              verify_args+=(--full-release-validation-run "${FULL_RELEASE_VALIDATION_RUN_ID}")
+            fi
 
             pnpm "${verify_args[@]}"
             jq --arg release_publish_run_id "$GITHUB_RUN_ID" \
-              '.releasePublishRunId = $release_publish_run_id' \
+              --arg release_delta_run_id "$RELEASE_DELTA_EVIDENCE_RUN_ID" \
+              --arg release_delta_artifact_id "$RELEASE_DELTA_EVIDENCE_ARTIFACT_ID" \
+              --arg release_delta_artifact_digest "$RELEASE_DELTA_EVIDENCE_ARTIFACT_DIGEST" \
+              --arg release_delta_manifest_sha256 "$RELEASE_DELTA_EVIDENCE_MANIFEST_SHA256" \
+              '.releasePublishRunId = $release_publish_run_id |
+               if $release_delta_run_id == "" then . else
+                 .releaseDeltaEvidence = {
+                   runId: $release_delta_run_id,
+                   artifactId: $release_delta_artifact_id,
+                   artifactDigest: $release_delta_artifact_digest,
+                   manifestSha256: $release_delta_manifest_sha256
+                 }
+               end' \
               "${evidence_path}" > "${evidence_path}.next"
             mv "${evidence_path}.next" "${evidence_path}"
             {
@@ -1514,6 +1740,8 @@ jobs:
 
             if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
               telegram_line="- npm Telegram beta E2E: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${NPM_TELEGRAM_RUN_ID}"
+            elif [[ -n "${RELEASE_DELTA_EVIDENCE_RUN_ID// }" ]]; then
+              telegram_line="- npm Telegram beta E2E: covered by release delta evidence https://github.com/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_DELTA_EVIDENCE_RUN_ID}"
             else
               telegram_line="- npm Telegram beta E2E: not supplied"
             fi
@@ -1540,6 +1768,7 @@ jobs:
               RELEASE_PUBLISH_RUN_ID="${GITHUB_RUN_ID}" \
               PREFLIGHT_RUN_ID="${PREFLIGHT_RUN_ID}" \
               FULL_RELEASE_VALIDATION_RUN_ID="${FULL_RELEASE_VALIDATION_RUN_ID}" \
+              RELEASE_DELTA_EVIDENCE_RUN_ID="${RELEASE_DELTA_EVIDENCE_RUN_ID}" \
               PLUGIN_NPM_RUN_ID="${plugin_npm_run_id}" \
               OPENCLAW_NPM_RUN_ID="${openclaw_npm_run_id}" \
               CLAWHUB_LINE="${clawhub_line}" \
@@ -1555,6 +1784,9 @@ jobs:
             throw new Error("Missing release proof file path.");
           }
 
+          const validationLine = process.env.RELEASE_DELTA_EVIDENCE_RUN_ID
+            ? `- release delta evidence: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_DELTA_EVIDENCE_RUN_ID}`
+            : `- full release validation: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.FULL_RELEASE_VALIDATION_RUN_ID}`;
           const section = [
             "### Release verification",
             "",
@@ -1565,7 +1797,7 @@ jobs:
             `- full release CI report: https://github.com/openclaw/releases/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
             `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
             `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_RUN_ID}`,
-            `- full release validation: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.FULL_RELEASE_VALIDATION_RUN_ID}`,
+            validationLine,
             `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`,
             process.env.CLAWHUB_LINE,
             process.env.CLAWHUB_BOOTSTRAP_LINE,
@@ -1639,6 +1871,7 @@ jobs:
             npm_args+=(-f plugins="${PLUGINS}")
           fi
 
+          recheck_remote_release_refs
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
           plugin_clawhub_run_id=""
           if [[ "$(jq -r '.normal.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
@@ -1706,6 +1939,7 @@ jobs:
                 -f preflight_only=false \
                 -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
                 -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}" \
+                -f release_delta_evidence_run_id="${RELEASE_DELTA_EVIDENCE_RUN_ID}" \
                 -f release_publish_run_id="${GITHUB_RUN_ID}" \
                 -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
               echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"

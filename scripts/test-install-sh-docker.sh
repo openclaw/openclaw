@@ -2,8 +2,81 @@
 set -euo pipefail
 
 HARNESS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ROOT_DIR="${OPENCLAW_INSTALL_SMOKE_SOURCE_DIR:-$HARNESS_ROOT}"
-ROOT_DIR="$(cd "$ROOT_DIR" && pwd)"
+
+resolve_install_smoke_source_root() {
+  local configured_root=""
+  local expected_sha=""
+  local actual_sha=""
+  local git_root=""
+  local resolved_root=""
+  local required_path=""
+
+  if [[ "${OPENCLAW_INSTALL_SMOKE_SOURCE_DIR+x}" != "x" ]]; then
+    printf '%s\n' "$HARNESS_ROOT"
+    return 0
+  fi
+
+  configured_root="$OPENCLAW_INSTALL_SMOKE_SOURCE_DIR"
+  expected_sha="${OPENCLAW_INSTALL_SMOKE_EXPECT_SOURCE_SHA:-}"
+  if [[ -z "$configured_root" || "$configured_root" != /* ]]; then
+    echo "ERROR: OPENCLAW_INSTALL_SMOKE_SOURCE_DIR must be a non-empty absolute path" >&2
+    return 2
+  fi
+  if [[ ! -d "$configured_root" || -L "$configured_root" ]]; then
+    echo "ERROR: install-smoke source root must be an existing non-symlink directory: $configured_root" >&2
+    return 2
+  fi
+  resolved_root="$(cd "$configured_root" && pwd -P)"
+  if [[ "$resolved_root" == "/" ]]; then
+    echo "ERROR: refusing unsafe install-smoke source root: $resolved_root" >&2
+    return 2
+  fi
+  git_root="$(git -C "$resolved_root" rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "ERROR: install-smoke source root is not a git worktree: $resolved_root" >&2
+    return 2
+  }
+  git_root="$(cd "$git_root" && pwd -P)"
+  if [[ "$git_root" != "$resolved_root" ]]; then
+    echo "ERROR: install-smoke source root must be the git worktree root: $resolved_root" >&2
+    return 2
+  fi
+  for required_path in \
+    package.json \
+    pnpm-workspace.yaml \
+    scripts/install.sh \
+    scripts/install-cli.sh; do
+    if [[ ! -f "$resolved_root/$required_path" ]]; then
+      echo "ERROR: install-smoke source root is missing $required_path" >&2
+      return 2
+    fi
+  done
+  for required_path in extensions packages scripts; do
+    if [[ ! -d "$resolved_root/$required_path" ]]; then
+      echo "ERROR: install-smoke source root is missing $required_path/" >&2
+      return 2
+    fi
+  done
+  if [[ ! "$expected_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "ERROR: OPENCLAW_INSTALL_SMOKE_EXPECT_SOURCE_SHA must be an exact 40-character commit SHA" >&2
+    return 2
+  fi
+  expected_sha="$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')"
+  actual_sha="$(git -C "$resolved_root" rev-parse --verify 'HEAD^{commit}')"
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
+    echo "ERROR: install-smoke source root HEAD $actual_sha does not match expected $expected_sha" >&2
+    return 2
+  fi
+  if ! git -C "$resolved_root" diff --quiet --ignore-submodules -- ||
+    ! git -C "$resolved_root" diff --cached --quiet --ignore-submodules -- ||
+    [[ -n "$(git -C "$resolved_root" ls-files --others --exclude-standard)" ]]; then
+    echo "ERROR: install-smoke source root must be clean before exact-target packaging" >&2
+    return 2
+  fi
+
+  printf '%s\n' "$resolved_root"
+}
+
+ROOT_DIR="$(resolve_install_smoke_source_root)"
 # shellcheck source=./docker/install-sh-common/version-parse.sh
 source "$HARNESS_ROOT/scripts/docker/install-sh-common/version-parse.sh"
 source "$HARNESS_ROOT/scripts/lib/docker-build.sh"

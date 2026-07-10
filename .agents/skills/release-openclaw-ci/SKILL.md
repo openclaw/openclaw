@@ -24,6 +24,15 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   fails, the parent cancels the remaining child matrix and prints the failed
   job summary. Inspect that first red job instead of waiting for unrelated
   matrix tails.
+- For a beta whose delta matches a checked-in release delta policy, use the
+  trusted-main `Release Delta Evidence` workflow instead of restarting
+  unaffected product lanes. The terminal manifest binds one direct
+  source-to-target hop, the exact changed paths and artifact hashes, the
+  terminal target parent SHA, and every selected run/job/artifact identity.
+  Reuse never chains. Cancelled aggregate runs are acceptable only when the
+  policy names exact successful leaf jobs; failed or cancelled leaves are
+  rejected.
+  Fresh target package proof and every path-impacted gate remain required.
 - In a sparse worktree or Testbox source sync, first confirm `package.json`,
   `pnpm-lock.yaml`, and every source path the selected check reads. If any are
   absent, that checkout cannot validate a release dependency or Docker lane:
@@ -61,6 +70,55 @@ ambient env only when it was already intentionally injected for this release.
 The script prints only provider status and HTTP class, never tokens.
 The Anthropic check performs a tiny message completion so exhausted or
 non-billable credentials fail before the expensive release matrix.
+
+## Delta Evidence
+
+Use delta evidence only with a reviewed policy committed directly under
+`.github/release-delta-policies/` on trusted `main`. The policy owns the
+release ref, version, tag, changelog base, source and baseline SHAs, allowed
+paths, metadata exclusions, evidence inputs, impact patterns, and any
+exact-target producer roles. Do not add those release-specific values to the
+generic workflow.
+
+Dispatch attempt 1 from `main`:
+
+```bash
+ghx workflow run release-delta-evidence.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f target_sha=<full-release-sha> \
+  -f policy_path=.github/release-delta-policies/<policy>.json \
+  -f evidence_runs_json="$(jq -c . evidence-runs.json)"
+```
+
+Before accepting the result:
+
+1. Confirm the source is an ancestor of the target, the range is linear, the
+   terminal commit is `CHANGELOG.md`-only, and the commit path union equals the
+   endpoint diff.
+2. Confirm every changed non-metadata path matches fresh evidence and matches
+   no reused role. Producer roles schedule only their fixed exact-target jobs;
+   undeclared producer jobs must be skipped.
+3. Confirm each reused role has no impacted path and resolves one successful
+   native run and exact job, with the configured run, log, or artifact binding
+   the source SHA. A cancelled aggregate may contribute successful leaves, but
+   a failed or cancelled leaf cannot.
+4. Check the manifest's policy blob/hash, source/terminal-parent/target SHAs,
+   path audit, runtime-tree hashes, package hashes, ClawHub roster, role
+   gates and conclusions, producer evidence, cancelled-aggregate dispositions,
+   and reuse rationale.
+5. Keep the exact-target npm preflight authoritative. Canonical package
+   equivalence is required when selected by policy; otherwise require the
+   policy's fresh exact-target package proof. The source npm, target npm, and
+   Telegram package roles must be three distinct single-run inputs with their
+   fixed workflow, job, artifact, report, and binding contracts.
+
+Never use a prior delta manifest as an evidence input. Publish consumers
+resolve the policy from the authenticated producer artifact, recompute the
+delta, trust bundle, ClawHub roster, changelog, and release notes, verify the
+promotable npm bytes against the recorded exact-target hashes, and recheck the
+live release branch, verified signature, and tag peel immediately before
+mutation.
 
 ## Dispatch
 
@@ -113,6 +171,11 @@ Use `release_profile=stable` unless the operator explicitly asks for the broad a
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
+Pass `release_delta_evidence_run_id` only for a verified audited beta delta.
+The producer records pre-tag state without requiring the release tag to
+be current. Both publish workflows keep the checked-out tag SHA and
+exact-target npm preflight artifact authoritative, then recheck the remote tag
+peel and release-branch head immediately before promotion.
 
 ## Watch
 

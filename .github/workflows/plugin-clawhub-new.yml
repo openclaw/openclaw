@@ -222,7 +222,7 @@ jobs:
   validate_release_publish_approval:
     name: Validate release publish approval
     needs: resolve_bootstrap_plan
-    if: github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -255,6 +255,153 @@ jobs:
           fi
           RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
+
+  pack_bootstrap_plugins_dry_run:
+    needs: resolve_bootstrap_plan
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        plugin: ${{ fromJson(needs.resolve_bootstrap_plan.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Checkout target revision
+        env:
+          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          git checkout --detach "${TARGET_SHA}"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+          install-deps: "true"
+
+      - name: Verify dry-run bootstrap package identity
+        env:
+          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          PACKAGE_ARTIFACT_NAME: ${{ matrix.plugin.artifactName }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [[ "${actual_sha}" != "${TARGET_SHA}" ]]; then
+            echo "Dry-run bootstrap checkout ${actual_sha} does not match target ${TARGET_SHA}." >&2
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const packageName = process.env.PACKAGE_NAME?.trim();
+          const packageVersion = process.env.PACKAGE_VERSION?.trim();
+          const packageDir = process.env.PACKAGE_DIR?.trim();
+          const artifactName = process.env.PACKAGE_ARTIFACT_NAME?.trim();
+          if (!packageName || !packageVersion || !packageDir || !artifactName) {
+            throw new Error("Missing dry-run bootstrap package identity.");
+          }
+          if (packageDir.startsWith("/") || packageDir.split("/").includes("..")) {
+            throw new Error(`Unsafe dry-run bootstrap package path: ${packageDir}`);
+          }
+
+          const manifest = JSON.parse(readFileSync(`${packageDir}/package.json`, "utf8"));
+          if (manifest.name !== packageName || manifest.version !== packageVersion) {
+            throw new Error(
+              `${packageDir}: expected ${packageName}@${packageVersion}, found ${manifest.name ?? "<missing>"}@${manifest.version ?? "<missing>"}.`,
+            );
+          }
+          if (manifest.openclaw?.release?.publishToClawHub !== true) {
+            throw new Error(`${packageDir}: package is not marked publishToClawHub.`);
+          }
+
+          const safeName = packageName
+            .replace(/^@/u, "")
+            .replace(/[^A-Za-z0-9_.-]+/gu, "-")
+            .replace(/^-+|-+$/gu, "");
+          const expectedArtifactName = `clawhub-package-${safeName}-${packageVersion}`;
+          if (artifactName !== expectedArtifactName) {
+            throw new Error(
+              `${packageName}: artifact ${artifactName} does not match ${expectedArtifactName}.`,
+            );
+          }
+          NODE
+
+      - name: Verify package-local runtime build
+        run: node scripts/check-plugin-npm-runtime-builds.mjs --package "${{ matrix.plugin.packageDir }}"
+
+      - name: Install pinned ClawHub CLI wrapper
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/clawhub" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- clawhub "$@"
+          EOF
+          chmod +x "${RUNNER_TEMP}/clawhub"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Pack dry-run ClawHub package artifact
+        env:
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          SOURCE_REF: ${{ inputs.ref || github.ref }}
+          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: ${{ runner.temp }}/clawhub-package-artifact
+        run: bash scripts/plugin-clawhub-publish.sh --pack "${PACKAGE_DIR}"
+
+      - name: Upload dry-run ClawHub package artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.plugin.artifactName }}
+          path: ${{ runner.temp }}/clawhub-package-artifact/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  inspect_bootstrap_plugins_dry_run:
+    needs: [resolve_bootstrap_plan, pack_bootstrap_plugins_dry_run]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run == true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.pack_bootstrap_plugins_dry_run.result == 'success'
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        plugin: ${{ fromJson(needs.resolve_bootstrap_plan.outputs.matrix) }}
+    with:
+      package_artifact_name: ${{ matrix.plugin.artifactName }}
+      dry_run: true
+      registry: https://clawhub.ai
+      site: https://clawhub.ai
+      family: ${{ contains(fromJson('["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu","@openclaw/qqbot"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}
+      version: ${{ matrix.plugin.version }}
+      tags: ${{ matrix.plugin.publishTag }}
+      source_repo: ${{ github.repository }}
+      source_commit: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+      source_ref: ${{ inputs.ref || github.ref }}
+      source_path: ${{ matrix.plugin.packageDir }}
+      inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector
+      publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json
 
   validate_bootstrap_trusted_publisher_cli:
     needs: [resolve_bootstrap_plan, validate_release_publish_approval]
@@ -291,7 +438,7 @@ jobs:
         validate_release_publish_approval,
         validate_bootstrap_trusted_publisher_cli,
       ]
-    if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && (inputs.dry_run == true || needs.validate_bootstrap_trusted_publisher_cli.result == 'success')
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && needs.validate_bootstrap_trusted_publisher_cli.result == 'success'
     runs-on: ubuntu-latest
     environment: clawhub-plugin-bootstrap
     permissions:

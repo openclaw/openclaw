@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -226,6 +227,79 @@ read_pack_tarball_filename "$pack_json_file"`,
   );
 }
 
+function extractInstallSmokeSourceRootResolver(): string {
+  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const match = script.match(
+    /(resolve_install_smoke_source_root\(\) \{[\s\S]*?\n\})\n\nROOT_DIR=/u,
+  );
+  if (!match) {
+    throw new Error("install-smoke source-root resolver was not found");
+  }
+  return match[1];
+}
+
+function createInstallSmokeSourceFixture() {
+  const root = tempDirs.make("openclaw-install-source-");
+  const files: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.3" }),
+    "pnpm-workspace.yaml": "packages:\n  - packages/*\n  - extensions/*\n",
+    "packages/ai/package.json": JSON.stringify({
+      name: "@openclaw/ai",
+      version: "2026.7.1-beta.3",
+    }),
+    "scripts/install.sh": "#!/usr/bin/env bash\n",
+    "scripts/install-cli.sh": "#!/usr/bin/env bash\n",
+    "extensions/meta/package.json": JSON.stringify({
+      name: "@openclaw/meta",
+      version: "2026.7.1-beta.3",
+    }),
+  };
+  for (const [relativePath, contents] of Object.entries(files)) {
+    const target = join(root, relativePath);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, contents);
+  }
+  for (const args of [
+    ["init", "-q"],
+    ["config", "user.email", "install-smoke@example.invalid"],
+    ["config", "user.name", "Install Smoke"],
+    ["add", "."],
+    ["commit", "-qm", "fixture"],
+  ]) {
+    const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+  }
+  const sha = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
+  expect(sha.status, sha.stderr).toBe(0);
+  return { root, sha: sha.stdout.trim() };
+}
+
+function runInstallSmokeSourceRootResolver(sourceRoot: string, expectedSha: string | undefined) {
+  return spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `set -euo pipefail
+HARNESS_ROOT="$FIXTURE_HARNESS_ROOT"
+${extractInstallSmokeSourceRootResolver()}
+resolve_install_smoke_source_root
+`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        HOME: "/tmp",
+        FIXTURE_HARNESS_ROOT: process.cwd(),
+        OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: sourceRoot,
+        ...(expectedSha ? { OPENCLAW_INSTALL_SMOKE_EXPECT_SOURCE_SHA: expectedSha } : {}),
+        PATH: process.env.PATH ?? "",
+      },
+    },
+  );
+}
+
 function extractEnsureLocalUpdateDistImportClosure(): string {
   const script = readFileSync(SCRIPT_PATH, "utf8");
   const match = script.match(
@@ -235,6 +309,123 @@ function extractEnsureLocalUpdateDistImportClosure(): string {
     throw new Error("ensure_local_update_dist_import_closure helper was not found");
   }
   return match[1];
+}
+
+function extractCandidatePackagingFunctions(): string {
+  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const match = script.match(
+    /(read_candidate_version\(\) \{[\s\S]*?\n\})\n\n(prepare_update_tarball\(\) \{[\s\S]*?\n\})\n\nprepare_update_host_access/u,
+  );
+  if (!match) {
+    throw new Error("candidate packaging helpers were not found");
+  }
+  return `${match[1]}\n\n${match[2]}`;
+}
+
+function runCandidatePackagingFixture() {
+  const harnessRoot = tempDirs.make("openclaw-install-harness-");
+  const candidateRoot = tempDirs.make("openclaw-install-candidate-");
+  const outputDir = tempDirs.make("openclaw-install-package-");
+  mkdirSync(join(harnessRoot, "scripts"), { recursive: true });
+  writeFileSync(join(harnessRoot, "trusted-marker.txt"), "trusted-harness-bytes\n");
+  writeFileSync(
+    join(candidateRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.3" }),
+  );
+  writeFileSync(join(candidateRoot, "candidate-marker.txt"), "candidate-release-bytes\n");
+  writeFileSync(
+    join(harnessRoot, "scripts/package-openclaw-for-docker.mjs"),
+    `import { execFileSync } from "node:child_process";
+import { basename, join } from "node:path";
+import { copyFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+const readArg = (name) => {
+  const index = args.indexOf(name);
+  if (index < 0 || !args[index + 1]) throw new Error(\`missing \${name}\`);
+  return args[index + 1];
+};
+const sourceDir = readArg("--source-dir");
+if (sourceDir !== process.env.EXPECTED_SOURCE_ROOT) {
+  throw new Error(\`unexpected source root: \${sourceDir}\`);
+}
+const outputDir = readArg("--output-dir");
+const packJson = readArg("--pack-json");
+const stageRoot = join(outputDir, "fixture");
+const packageRoot = join(stageRoot, "package");
+const tarball = join(outputDir, "openclaw-2026.7.1-beta.3.tgz");
+mkdirSync(packageRoot, { recursive: true });
+copyFileSync(join(sourceDir, "candidate-marker.txt"), join(packageRoot, "candidate-marker.txt"));
+execFileSync("tar", ["-czf", tarball, "-C", stageRoot, "package"]);
+const version = JSON.parse(readFileSync(join(sourceDir, "package.json"), "utf8")).version;
+const size = statSync(tarball).size;
+writeFileSync(
+  packJson,
+  JSON.stringify([{ filename: basename(tarball), version, size, unpackedSize: size, entryCount: 1 }]),
+);
+process.stdout.write(\`\${tarball}\\n\`);
+`,
+  );
+  writeFileSync(
+    join(harnessRoot, "scripts/check-openclaw-package-tarball.mjs"),
+    "process.exit(0);\n",
+  );
+
+  return spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `set -euo pipefail
+HARNESS_ROOT="$FIXTURE_HARNESS_ROOT"
+ROOT_DIR="$FIXTURE_CANDIDATE_ROOT"
+UPDATE_DIR="$FIXTURE_OUTPUT_DIR"
+UPDATE_PACKAGE_SPEC=""
+UPDATE_DIST_IMAGE=""
+UPDATE_SKIP_LOCAL_BUILD=1
+UPDATE_EXPECT_VERSION=""
+UPDATE_TGZ_FILE=""
+BASELINE_TGZ_FILE=""
+PACKAGE_NAME=openclaw
+UPDATE_BASELINE_VERSION=2026.6.11
+quiet_npm() {
+  local destination=""
+  while (( "$#" )); do
+    if [[ "$1" == "--pack-destination" ]]; then
+      destination="$2"
+      shift 2
+      continue
+    fi
+    shift
+  done
+  printf 'baseline\\n' >"$destination/openclaw-2026.6.11.tgz"
+  printf '%s\\n' '[{"filename":"openclaw-2026.6.11.tgz","version":"2026.6.11","size":9,"unpackedSize":9,"entryCount":1}]'
+}
+print_pack_audit() { :; }
+assert_pack_unpacked_size_budget() { :; }
+print_pack_delta_audit() { :; }
+docker_e2e_restore_package_dist_from_image() { return 99; }
+ensure_local_update_dist_import_closure() { return 99; }
+${extractReadPackTarballFilename()}
+${extractCandidatePackagingFunctions()}
+prepare_update_tarball
+printf 'version=%s\\n' "$UPDATE_EXPECT_VERSION"
+printf 'marker='
+tar -xOf "$UPDATE_DIR/$UPDATE_TGZ_FILE" package/candidate-marker.txt
+`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        EXPECTED_SOURCE_ROOT: candidateRoot,
+        FIXTURE_CANDIDATE_ROOT: candidateRoot,
+        FIXTURE_HARNESS_ROOT: harnessRoot,
+        FIXTURE_OUTPUT_DIR: outputDir,
+      },
+    },
+  );
 }
 
 function runRestoreLocalDistFixture(options: { failAiSwap?: boolean } = {}) {
@@ -312,6 +503,61 @@ printf 'ai=%s\\n' "$(cat "$ROOT_DIR/packages/ai/dist/ai.txt")"
 }
 
 describe("test-install-sh-docker", () => {
+  it("resolves an exact clean candidate worktree as the install-smoke source root", () => {
+    const fixture = createInstallSmokeSourceFixture();
+    const result = runInstallSmokeSourceRootResolver(fixture.root, fixture.sha);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(realpathSync(fixture.root));
+  });
+
+  it("rejects missing, unsafe, dirty, and wrong-revision candidate roots", () => {
+    const fixture = createInstallSmokeSourceFixture();
+    const cases = [
+      {
+        label: "missing expected SHA",
+        result: runInstallSmokeSourceRootResolver(fixture.root, undefined),
+        error: "OPENCLAW_INSTALL_SMOKE_EXPECT_SOURCE_SHA must be an exact 40-character commit SHA",
+      },
+      {
+        label: "wrong revision",
+        result: runInstallSmokeSourceRootResolver(fixture.root, "0".repeat(40)),
+        error: "does not match expected",
+      },
+      {
+        label: "nested worktree path",
+        result: runInstallSmokeSourceRootResolver(join(fixture.root, "scripts"), fixture.sha),
+        error: "must be the git worktree root",
+      },
+      {
+        label: "relative path",
+        result: runInstallSmokeSourceRootResolver("candidate", fixture.sha),
+        error: "must be a non-empty absolute path",
+      },
+    ];
+
+    writeFileSync(join(fixture.root, "untracked-release-byte.txt"), "dirty\n");
+    cases.push({
+      label: "dirty worktree",
+      result: runInstallSmokeSourceRootResolver(fixture.root, fixture.sha),
+      error: "must be clean before exact-target packaging",
+    });
+
+    for (const testCase of cases) {
+      expect(testCase.result.status, testCase.label).not.toBe(0);
+      expect(testCase.result.stderr, testCase.label).toContain(testCase.error);
+    }
+  });
+
+  it("packs candidate source bytes through the trusted package helper", () => {
+    const result = runCandidatePackagingFixture();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("version=2026.7.1-beta.3");
+    expect(result.stdout).toContain("marker=candidate-release-bytes");
+    expect(result.stdout).not.toContain("trusted-harness-bytes");
+  });
+
   it("defaults ARM hosts to native arm64 while keeping x64 CI on amd64", () => {
     expect(runDefaultSmokePlatform({ CI: "true" }, "aarch64")).toBe("linux/arm64");
     expect(runDefaultSmokePlatform({ GITHUB_ACTIONS: "true" }, "x86_64")).toBe("linux/amd64");
@@ -444,7 +690,8 @@ describe("test-install-sh-docker", () => {
     const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
     const dockerfile = readFileSync("Dockerfile", "utf8");
 
-    expect(script).toContain('ROOT_DIR="${OPENCLAW_INSTALL_SMOKE_SOURCE_DIR:-$HARNESS_ROOT}"');
+    expect(script).toContain("resolve_install_smoke_source_root");
+    expect(script).toContain("OPENCLAW_INSTALL_SMOKE_EXPECT_SOURCE_SHA");
     expect(script).toContain('UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"');
     expect(script).toContain("docker_e2e_restore_package_dist_from_image");
     expect(script).toContain('source "$HARNESS_ROOT/scripts/lib/docker-e2e-package.sh"');
@@ -474,6 +721,7 @@ describe("test-install-sh-docker", () => {
       'node "$HARNESS_ROOT/scripts/check-package-dist-imports.mjs" "$ROOT_DIR"',
     );
     expect(script).toContain("WARN: reused Docker image dist failed import-closure check");
+    expect(script).toContain("exact-image mode forbids a local rebuild");
     expect(script).toContain("pnpm build");
     expect(script).not.toContain("pnpm ui:build");
     expect(script).toContain('-f "$HARNESS_ROOT/scripts/docker/install-sh-smoke/Dockerfile"');
@@ -1354,9 +1602,8 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     expect(workflow).toContain("workflow_call:");
     expect(workflow).toContain('cron: "17 3 * * *"');
     expect(workflow).toContain("run_bun_global_install_smoke:");
-    expect(workflow).toContain(
-      "if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'",
-    );
+    expect(workflow).toContain("needs.preflight.outputs.run_full_install_smoke == 'true'");
+    expect(workflow).toContain("needs.preflight.outputs.run_bun_global_install_smoke == 'true'");
     expect(workflow).toContain("bun_global_install_smoke:");
     expect(workflow).toContain("Setup Node environment for Bun smoke");
     expect(workflow).toContain('install-bun: "true"');
@@ -1364,7 +1611,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     expect(workflow).toContain("Run Bun global install image-provider smoke");
     expect(workflow).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
     expect(workflow).toContain(
-      "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}",
+      "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.preflight.outputs.dockerfile_image }}",
     );
     expect(workflow).toContain(
       "github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'",
@@ -1432,11 +1679,12 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     };
 
     expect(step("Checkout trusted installer harness").with).toMatchObject({
-      ref: "${{ github.workflow_sha }}",
+      repository: "${{ fromJSON(toJSON(job)).workflow_repository }}",
+      ref: "${{ fromJSON(toJSON(job)).workflow_sha }}",
       "persist-credentials": false,
     });
     expect(step("Checkout candidate CLI").with).toMatchObject({
-      ref: "${{ inputs.ref || github.ref }}",
+      ref: "${{ needs.preflight.outputs.target_sha }}",
       path: "candidate",
       "persist-credentials": false,
     });
@@ -1445,6 +1693,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     );
     expect(step("Run installer docker tests").env).toMatchObject({
       OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: "${{ github.workspace }}/candidate",
+      OPENCLAW_INSTALL_SMOKE_EXPECT_SOURCE_SHA: "${{ needs.preflight.outputs.target_sha }}",
     });
     expect(step("Run installer docker tests").run).toBe("bash scripts/test-install-sh-docker.sh");
     expect(step("Build installer smoke image").run).toContain(

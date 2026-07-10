@@ -49,6 +49,7 @@ const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64
 type WorkflowStep = {
   "continue-on-error"?: boolean | string;
   env?: Record<string, string>;
+  id?: string;
   if?: string;
   name?: string;
   run?: string;
@@ -73,6 +74,7 @@ type WorkflowJob = {
   if?: string;
   name?: string;
   needs?: string | string[];
+  outputs?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on"?: string;
   strategy?: {
@@ -1538,7 +1540,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("package_artifact_name:");
     expect(workflow).toContain("Download package-under-test artifact");
     expect(workflow).toContain("harness_ref:");
-    expect(workflow).toContain("ref: ${{ inputs.harness_ref || github.sha }}");
+    expect(workflow).toContain('checkout_ref="${HARNESS_REF:-$GITHUB_SHA}"');
+    expect(workflow).toContain("ref: ${{ needs.resolve_harness.outputs.checkout_ref }}");
+    expect(workflow).toContain("persist-credentials: false");
     expect(workflow).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ");
     expect(workflow).toContain("provider_mode:");
     expect(workflow).toContain("provider_mode must be mock-openai or live-frontier");
@@ -2013,17 +2017,48 @@ describe("package artifact reuse", () => {
   });
 
   it("lets npm Telegram consume current-run or release-run package artifacts", () => {
+    const workflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");
+    const resolverJob = workflowJob(NPM_TELEGRAM_WORKFLOW, "resolve_harness");
+    const resolveHarness = workflowStep(resolverJob, "Resolve trusted strict harness");
     const job = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
+    const checkoutStep = workflowStep(job, "Checkout dispatch ref");
     const currentRunDownload = workflowStep(job, "Download package-under-test artifact");
     const releaseRunDownload = workflowStep(
       job,
       "Download package-under-test artifact from release run",
     );
+    const exactPreflightDownload = workflowStep(job, "Download exact npm preflight artifact");
     const validateStep = workflowStep(job, "Validate inputs and secrets");
     const runStep = workflowStep(job, "Run package Telegram E2E");
+    const attestationStep = workflowStep(job, "Write exact package consumption attestation");
+    const attestationUpload = workflowStep(job, "Upload exact package consumption attestation");
+    const uploadStep = workflowStep(job, "Upload npm Telegram E2E artifacts");
 
+    expect(job.needs).toBe("resolve_harness");
+    expect(resolverJob.outputs).toEqual({
+      checkout_ref: "${{ steps.resolve.outputs.checkout_ref }}",
+      strict_mode: "${{ steps.resolve.outputs.strict_mode }}",
+    });
+    expectTextToIncludeAll(resolveHarness.run, [
+      "preflight_run_id, preflight_artifact_id, preflight_artifact_digest, and target_sha must be supplied together",
+      "Strict npm preflight inputs cannot be combined with legacy package artifact selectors",
+      "preflight_run_id must be a positive decimal Actions run ID",
+      "preflight_artifact_id must be a positive decimal Actions artifact ID",
+      "preflight_artifact_digest must be a lowercase sha256 digest",
+      "target_sha must be a full lowercase commit SHA",
+      '"$GITHUB_EVENT_NAME" != "workflow_dispatch"',
+      '"$GITHUB_REF" != "refs/heads/main"',
+      "Strict npm preflight consumption requires a direct trusted-main workflow dispatch",
+      '"$HARNESS_REF" != "main"',
+      '"$HARNESS_REF" != "$WORKFLOW_SHA"',
+      'checkout_ref="$WORKFLOW_SHA"',
+      "STRICT_HARNESS_REF: main",
+      "STRICT_HARNESS_SHA: $WORKFLOW_SHA",
+    ]);
+    expect(checkoutStep.with?.ref).toBe("${{ needs.resolve_harness.outputs.checkout_ref }}");
+    expect(checkoutStep.with?.["persist-credentials"]).toBe(false);
     expect(currentRunDownload).toEqual({
-      if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''",
+      if: "inputs.preflight_artifact_id == '' && inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''",
       name: "Download package-under-test artifact",
       uses: DOWNLOAD_ARTIFACT_V8,
       with: {
@@ -2032,7 +2067,7 @@ describe("package artifact reuse", () => {
       },
     });
     expect(releaseRunDownload).toEqual({
-      if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''",
+      if: "inputs.preflight_artifact_id == '' && inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''",
       name: "Download package-under-test artifact from release run",
       uses: DOWNLOAD_ARTIFACT_V8,
       with: {
@@ -2042,10 +2077,59 @@ describe("package artifact reuse", () => {
         "run-id": "${{ inputs.package_artifact_run_id }}",
       },
     });
-    expectTextToIncludeAll(validateStep.run, [
-      'if [[ -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then',
-      "package_spec must be openclaw@alpha",
+    expectTextToIncludeAll(workflow, [
+      "preflight_run_id:",
+      "preflight_artifact_id:",
+      "preflight_artifact_digest:",
+      "target_sha:",
     ]);
+    expect(validateStep.env?.STRICT_MODE).toBe("${{ needs.resolve_harness.outputs.strict_mode }}");
+    expect(validateStep.run).toContain("package_spec must be openclaw@alpha");
+    expect(exactPreflightDownload).toMatchObject({
+      id: "exact_preflight",
+      if: "inputs.preflight_artifact_id != ''",
+      name: "Download exact npm preflight artifact",
+      env: {
+        GH_TOKEN: "${{ github.token }}",
+        PREFLIGHT_RUN_ID: "${{ inputs.preflight_run_id }}",
+        PREFLIGHT_ARTIFACT_ID: "${{ inputs.preflight_artifact_id }}",
+        PREFLIGHT_ARTIFACT_DIGEST: "${{ inputs.preflight_artifact_digest }}",
+        TARGET_SHA: "${{ inputs.target_sha }}",
+      },
+    });
+    expectTextToIncludeAll(exactPreflightDownload.run, [
+      'gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}"',
+      '.name == "OpenClaw NPM Release"',
+      '.path == ".github/workflows/openclaw-npm-release.yml"',
+      ".run_attempt == 1",
+      ".head_sha == $target_sha",
+      'gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${PREFLIGHT_ARTIFACT_ID}"',
+      ".workflow_run.id == $run_id",
+      ".digest == $digest",
+      'expected_artifact_name="openclaw-npm-preflight-${TARGET_SHA}"',
+      'if [[ "$artifact_name" != "$expected_artifact_name" ]]',
+      'gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${PREFLIGHT_ARTIFACT_ID}/zip" > "$archive"',
+      'actual_artifact_digest="sha256:$(sha256sum "$archive"',
+      'if [[ "$actual_artifact_digest" != "$PREFLIGHT_ARTIFACT_DIGEST" ]]',
+      'unzip -p "$archive" preflight-manifest.json',
+      "manifest.releaseSha !== targetSha",
+      'manifest.packageName !== "openclaw"',
+      "manifest.releaseTag !== `v${manifest.packageVersion}`",
+      'manifest.npmDistTag !== "beta"',
+      'entry?.packageName === "@openclaw/ai"',
+      'verify_tarball_manifest "$package_dir/$root_name" "openclaw" "$package_version"',
+      'verify_tarball_manifest "$package_dir/$ai_name" "@openclaw/ai" "$package_version"',
+      'echo "artifact_name=$artifact_name"',
+      'echo "root_sha256=$root_sha256"',
+      'echo "ai_sha256=$ai_sha256"',
+    ]);
+    expect(exactPreflightDownload.run).not.toContain("gh run download");
+    expect(exactPreflightDownload.run).not.toContain("--name");
+    expect(exactPreflightDownload.run).not.toContain("fallback");
+    expect(runStep.env?.OPENCLAW_QA_PACKAGE_SOURCE_SHA).toBe("${{ inputs.target_sha || '' }}");
+    expect(runStep.env?.PACKAGE_ARTIFACT_NAME).toBe(
+      "${{ inputs.preflight_artifact_id != '' && steps.exact_preflight.outputs.artifact_name || inputs.package_artifact_name || '' }}",
+    );
     expectTextToIncludeAll(runStep.run, [
       'manifest="${package_dir}/preflight-manifest.json"',
       'candidate_manifest="${package_dir}/package-candidate.json"',
@@ -2057,6 +2141,46 @@ describe("package artifact reuse", () => {
       'export OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR="${package_dir}"',
       'export OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ="${package_tgz}"',
     ]);
+    expect(attestationStep.if).toBe(
+      "${{ !inputs.advisory && inputs.preflight_artifact_id != '' && steps.run_lane.outcome == 'success' }}",
+    );
+    expectTextToIncludeAll(attestationStep.run, [
+      '--argjson workflowRunId "$GITHUB_RUN_ID"',
+      '--argjson workflowRunAttempt "$GITHUB_RUN_ATTEMPT"',
+      '--arg workflowPath ".github/workflows/npm-telegram-beta-e2e.yml"',
+      '--arg workflowSha "$WORKFLOW_SHA"',
+      "schemaVersion: 1",
+      "workflow:",
+      "path: $workflowPath",
+      "sha: $workflowSha",
+      "targetSha: $targetSha",
+      "packageVersion: $packageVersion",
+      "packageArtifact:",
+      "runId: $packageRunId",
+      "id: $packageArtifactId",
+      "name: $packageArtifactName",
+      "digest: $packageArtifactDigest",
+      "root:",
+      "ai:",
+      "providerMode: $providerMode",
+      "scenario: $scenario",
+      'conclusion: "success"',
+      "> .artifacts/qa-e2e/package-consumption.json",
+    ]);
+    expect(attestationStep.env?.WORKFLOW_SHA).toBe("${{ fromJSON(toJSON(job)).workflow_sha }}");
+    expect(attestationUpload).toEqual({
+      if: "${{ !inputs.advisory && inputs.preflight_artifact_id != '' && steps.run_lane.outcome == 'success' }}",
+      name: "Upload exact package consumption attestation",
+      uses: UPLOAD_ARTIFACT_V7,
+      with: {
+        name: "npm-telegram-package-consumption-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: ".artifacts/qa-e2e/package-consumption.json",
+        "retention-days": 30,
+        "if-no-files-found": "error",
+      },
+    });
+    expect(uploadStep.if).toBe("always()");
+    expect(uploadStep.with?.path).toBe(".artifacts/qa-e2e/");
   });
 
   it("lets CI Telegram consumers wait on Convex leases instead of GitHub concurrency", () => {
@@ -2205,6 +2329,13 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("Download full release validation manifest");
     expect(workflow).toContain("Validate full release validation manifest");
     expect(workflow).toContain("full_release_validation_run_id");
+    expect(workflow).toContain("release_delta_evidence_run_id");
+    expect(workflow).toContain("scripts/release-delta-evidence.mjs verify");
+    expect(workflow).toContain("sha: ${{ steps.ref.outputs.sha }}");
+    expect(workflow).not.toContain("--full-release-run");
+    expect(workflow).toContain(
+      "full_release_validation_run_id and release_delta_evidence_run_id are mutually exclusive",
+    );
     expect(workflow).toContain(
       "Full release validation must run rerun_group=all before npm publish",
     );
@@ -2229,8 +2360,16 @@ describe("package artifact reuse", () => {
     // enforces its result instead.
     expect(fullReleaseWorkflow).toContain('"$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success"');
     expect(npmWorkflow).toContain("full_release_validation_run_id");
+    expect(npmWorkflow).toContain("release_delta_evidence_run_id");
+    expect(npmWorkflow).toContain("scripts/release-delta-evidence.mjs verify");
+    expect(npmWorkflow).not.toContain("--full-release-run");
     expect(npmWorkflow).toContain("release_publish_run_id");
-    expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
+    expect(npmWorkflow).toContain(
+      "full_release_validation_run_id and release_delta_evidence_run_id are mutually exclusive",
+    );
+    expect(npmWorkflow).toContain(
+      "inputs.release_delta_evidence_run_id == '' && inputs.full_release_validation_run_id != ''",
+    );
     expect(npmWorkflow).toContain(
       "Workflow-dispatched real publish requires release_publish_run_id",
     );
@@ -2269,6 +2408,141 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('--notes-file "${prepared_release_notes_file}"');
     expect(workflow).not.toContain("gh api --repo");
     expect(workflow).not.toContain("timeout-minutes: 360");
+  });
+
+  it("binds delta evidence to immutable artifacts and rechecks publish refs", () => {
+    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const npmWorkflowPath = ".github/workflows/openclaw-npm-release.yml";
+    const npmWorkflow = readFileSync(npmWorkflowPath, "utf8");
+    const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const validateInputs = workflowStep(resolveJob, "Validate inputs");
+    const verifyDelta = workflowStep(resolveJob, "Verify release delta evidence");
+    const trustedVerifier = workflowStep(resolveJob, "Checkout trusted delta verifier");
+    const downloadDelta = workflowStep(publishJob, "Download verified release delta manifest");
+    const dispatch = workflowStep(publishJob, "Dispatch publish workflows");
+    const npmPublishJob = workflowJob(npmWorkflowPath, "publish_openclaw_npm");
+    const npmValidateInputs = workflowStep(
+      workflowJob(npmWorkflowPath, "validate_publish_request"),
+      "Require trusted workflow ref for publish",
+    );
+    const npmVerifyDelta = workflowStep(npmPublishJob, "Verify release delta evidence");
+    const npmTrustedVerifier = workflowStep(npmPublishJob, "Checkout trusted delta verifier");
+    const npmSetupNode = workflowStep(npmPublishJob, "Setup Node environment");
+    const npmRecheck = workflowStep(npmPublishJob, "Recheck remote release refs");
+    const npmPublish = workflowStep(npmPublishJob, "Publish");
+
+    expectTextToIncludeAll(validateInputs.run, [
+      'validate_optional_run_id preflight_run_id "$PREFLIGHT_RUN_ID"',
+      'validate_optional_run_id full_release_validation_run_id "$FULL_RELEASE_VALIDATION_RUN_ID"',
+      'validate_optional_run_id release_delta_evidence_run_id "$RELEASE_DELTA_EVIDENCE_RUN_ID"',
+      'validate_optional_run_id npm_telegram_run_id "$NPM_TELEGRAM_RUN_ID"',
+      "must be a positive decimal Actions run ID",
+    ]);
+    expect(trustedVerifier.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(verifyDelta.env?.RELEASE_DELTA_EVIDENCE_RUN_ID).toBe(
+      "${{ inputs.release_delta_evidence_run_id }}",
+    );
+    expect(verifyDelta.env?.NPM_PREFLIGHT_RUN_ID).toBe("${{ inputs.preflight_run_id }}");
+    expectTextToIncludeAll(verifyDelta.run, [
+      '--run-id "$RELEASE_DELTA_EVIDENCE_RUN_ID"',
+      '--tag "$RELEASE_TAG"',
+      '--target-sha "$TARGET_SHA"',
+      '--npm-preflight-run "$NPM_PREFLIGHT_RUN_ID"',
+      '--github-output "$GITHUB_OUTPUT"',
+    ]);
+    expect(verifyDelta.run).not.toContain("${{ inputs.");
+    expect(releaseWorkflow.match(/release-delta-evidence\.mjs verify/gu) ?? []).toHaveLength(1);
+    expect(resolveJob.outputs?.release_delta_artifact_id).toBe(
+      "${{ steps.delta_evidence.outputs.artifact_id }}",
+    );
+    expect(resolveJob.outputs?.release_delta_artifact_digest).toBe(
+      "${{ steps.delta_evidence.outputs.artifact_digest }}",
+    );
+    expect(resolveJob.outputs?.release_delta_manifest_sha256).toBe(
+      "${{ steps.delta_evidence.outputs.manifest_sha256 }}",
+    );
+    expect(resolveJob.outputs?.release_delta_manifest_path).toBeUndefined();
+
+    expectTextToIncludeAll(downloadDelta.run, [
+      '.name == "Release Delta Evidence"',
+      '.path == ".github/workflows/release-delta-evidence.yml"',
+      '.head_branch == "main"',
+      ".run_attempt == 1",
+      ".workflow_run.id == $run_id",
+      ".digest == $artifact_digest",
+      'sha256sum "$archive"',
+      '"$actual_archive_sha256" != "${RELEASE_DELTA_ARTIFACT_DIGEST#sha256:}"',
+      'archive_entries[0]}" != "release-delta-evidence.json"',
+      'sha256sum "$manifest"',
+      '"$actual_manifest_sha256" != "$RELEASE_DELTA_MANIFEST_SHA256"',
+    ]);
+    expect(
+      publishJob.steps?.filter((step) => step.name === "Checkout trusted delta verifier"),
+    ).toEqual([]);
+    expect(releaseWorkflow).not.toContain("manifestPath: $release_delta_manifest");
+    expect(releaseWorkflow).toContain("artifactId: $release_delta_artifact_id");
+    expect(releaseWorkflow).toContain("artifactDigest: $release_delta_artifact_digest");
+    expect(releaseWorkflow).toContain("manifestSha256: $release_delta_manifest_sha256");
+    expect(releaseWorkflow).toContain(
+      'if [[ "$actual_manifest_sha256" != "$RELEASE_DELTA_EVIDENCE_MANIFEST_SHA256" ]]',
+    );
+    expectTextToIncludeAll(dispatch.run, [
+      'git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}"',
+      'remote_sha="${peeled_tag_sha:-$direct_tag_sha}"',
+      'publish_branch="release/${release_line}"',
+      'git ls-remote --heads origin "refs/heads/${publish_branch}"',
+      '"$branch_sha" != "$TARGET_SHA"',
+    ]);
+    const releaseRecheckIndex =
+      dispatch.run?.lastIndexOf("\n          recheck_remote_release_refs\n") ?? -1;
+    const firstReleaseDispatchIndex =
+      dispatch.run?.lastIndexOf("dispatch_workflow plugin-npm-release.yml") ?? -1;
+    expect(releaseRecheckIndex).toBeGreaterThan(-1);
+    expect(firstReleaseDispatchIndex).toBeGreaterThan(releaseRecheckIndex);
+
+    expectTextToIncludeAll(npmValidateInputs.run, [
+      'validate_optional_run_id preflight_run_id "$PREFLIGHT_RUN_ID"',
+      'validate_optional_run_id full_release_validation_run_id "$FULL_RELEASE_VALIDATION_RUN_ID"',
+      'validate_optional_run_id release_delta_evidence_run_id "$RELEASE_DELTA_EVIDENCE_RUN_ID"',
+      'validate_optional_run_id release_publish_run_id "$RELEASE_PUBLISH_RUN_ID"',
+      'validate_optional_run_id plugin_npm_run_id "$PLUGIN_NPM_RUN_ID"',
+    ]);
+    expect(npmTrustedVerifier.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(npmVerifyDelta.env?.RELEASE_DELTA_EVIDENCE_RUN_ID).toBe(
+      "${{ inputs.release_delta_evidence_run_id }}",
+    );
+    expectTextToIncludeAll(npmVerifyDelta.run, [
+      'target_sha="$(git rev-parse HEAD)"',
+      '--run-id "$RELEASE_DELTA_EVIDENCE_RUN_ID"',
+      '--target-sha "$target_sha"',
+      '--npm-preflight-run "$NPM_PREFLIGHT_RUN_ID"',
+    ]);
+    expect(npmVerifyDelta.run).not.toContain("${{ inputs.");
+    expect(npmWorkflow.match(/release-delta-evidence\.mjs verify/gu) ?? []).toHaveLength(1);
+    const npmTrustedVerifierIndex = npmPublishJob.steps?.indexOf(npmTrustedVerifier) ?? -1;
+    const npmVerifyDeltaIndex = npmPublishJob.steps?.indexOf(npmVerifyDelta) ?? -1;
+    const npmSetupNodeIndex = npmPublishJob.steps?.indexOf(npmSetupNode) ?? -1;
+    expect(npmTrustedVerifierIndex).toBeGreaterThan(-1);
+    expect(npmVerifyDeltaIndex).toBe(npmTrustedVerifierIndex + 1);
+    expect(npmSetupNodeIndex).toBeGreaterThan(npmVerifyDeltaIndex);
+    expect(npmSetupNode.uses).toBe("./.github/actions/setup-node-env");
+    expectTextToIncludeAll(npmRecheck.run, [
+      'git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}"',
+      'remote_tag_sha="${peeled_tag_sha:-$direct_tag_sha}"',
+      'publish_branch="release/${release_line}"',
+      '"$branch_sha" != "$target_sha"',
+    ]);
+    const npmRecheckIndex = npmPublishJob.steps?.indexOf(npmRecheck) ?? -1;
+    const npmPublishIndex = npmPublishJob.steps?.indexOf(npmPublish) ?? -1;
+    expect(npmRecheckIndex).toBeGreaterThan(-1);
+    expect(npmPublishIndex).toBeGreaterThan(npmRecheckIndex);
+    expect(npmPublish.env?.PUBLISH_TARBALL_PATH).toBe(
+      "${{ steps.preflight_provenance.outputs.tarball_path }}",
+    );
+    expect(npmPublish.run).toContain(
+      'bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
+    );
   });
 
   it("keeps OpenClaw npm release pack tarball paths local before preflight upload", () => {

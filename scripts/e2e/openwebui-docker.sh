@@ -41,6 +41,7 @@ PROVIDER_TIMEOUT_SECONDS_DECIMAL=$((10#$PROVIDER_TIMEOUT_SECONDS))
 PROBE_FETCH_TIMEOUT_MS="${OPENCLAW_OPENWEBUI_FETCH_TIMEOUT_MS:-$((PROVIDER_TIMEOUT_SECONDS_DECIMAL * 1000 + 60000))}"
 validate_positive_int OPENCLAW_OPENWEBUI_FETCH_TIMEOUT_MS "$PROBE_FETCH_TIMEOUT_MS"
 DOCKER_COMMAND_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_COMMAND_TIMEOUT:-$((PROVIDER_TIMEOUT_SECONDS_DECIMAL + 90))s}"
+EVIDENCE_FILE="${OPENCLAW_OPENWEBUI_EVIDENCE_FILE:-}"
 
 case "$SMOKE_MODE" in
   chat | models) ;;
@@ -248,4 +249,50 @@ fi
 sample_openwebui_stats_once
 stop_openwebui_stats_samplers
 assert_openwebui_stats
+if [ -n "$EVIDENCE_FILE" ]; then
+  mkdir -p "$(dirname "$EVIDENCE_FILE")"
+  OPENWEBUI_EVIDENCE_FILE="$EVIDENCE_FILE" \
+    OPENWEBUI_EXPECTED_NONCE="$PROMPT_NONCE" \
+    OPENWEBUI_PROBE_LOG="$PROBE_LOG" \
+    OPENWEBUI_PROVIDER_MODEL="$MODEL" \
+    OPENWEBUI_SMOKE_MODE="$SMOKE_MODE" \
+    node <<'NODE'
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+
+const raw = fs.readFileSync(process.env.OPENWEBUI_PROBE_LOG, "utf8").trim();
+let result;
+for (let offset = raw.indexOf("{"); offset >= 0; offset = raw.indexOf("{", offset + 1)) {
+  try {
+    result = JSON.parse(raw.slice(offset));
+    break;
+  } catch {
+    // Ignore diagnostic prefixes and keep looking for the terminal JSON object.
+  }
+}
+const nonce = process.env.OPENWEBUI_EXPECTED_NONCE;
+if (
+  result?.ok !== true ||
+  typeof result.model !== "string" ||
+  !result.model ||
+  typeof result.reply !== "string" ||
+  !result.reply.includes(nonce)
+) {
+  throw new Error("OpenWebUI probe output does not contain a successful nonce-bound chat result");
+}
+const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+const evidence = {
+  schema: "openclaw.openwebui-probe-evidence/v1",
+  ok: true,
+  mode: process.env.OPENWEBUI_SMOKE_MODE,
+  providerModel: process.env.OPENWEBUI_PROVIDER_MODEL,
+  openWebuiModel: result.model,
+  nonceSha256: sha256(nonce),
+  replySha256: sha256(result.reply),
+  probeLogSha256: sha256(raw),
+  replyContainsNonce: true,
+};
+fs.writeFileSync(process.env.OPENWEBUI_EVIDENCE_FILE, `${JSON.stringify(evidence, null, 2)}\n`);
+NODE
+fi
 echo "OK"

@@ -1,0 +1,789 @@
+name: Release Delta Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact signed head of the policy release branch
+        required: true
+        type: string
+      policy_path:
+        description: Checked-in release delta policy under .github/release-delta-policies/
+        required: true
+        type: string
+      evidence_runs_json:
+        description: Strict v3 source and fresh evidence run IDs
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: release-delta-evidence-${{ inputs.target_sha }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.15.0"
+
+jobs:
+  validate:
+    name: Validate strict v3 release target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      changelog_base_ref: ${{ steps.contract.outputs.changelog_base_ref }}
+      producer_jobs_json: ${{ steps.contract.outputs.producer_jobs_json }}
+      run_focused_openwebui: ${{ steps.contract.outputs.run_focused_openwebui }}
+      run_target_container: ${{ steps.contract.outputs.run_target_container }}
+      run_target_provider_preflight: ${{ steps.contract.outputs.run_target_provider_preflight }}
+      run_target_tooling: ${{ steps.contract.outputs.run_target_tooling }}
+      stable_version: ${{ steps.contract.outputs.stable_version }}
+      target_ref: ${{ steps.contract.outputs.target_ref }}
+      target_npm_preflight_artifact_digest: ${{ steps.contract.outputs.target_npm_preflight_artifact_digest }}
+      target_npm_preflight_artifact_id: ${{ steps.contract.outputs.target_npm_preflight_artifact_id }}
+      target_npm_preflight_run_id: ${{ steps.contract.outputs.target_npm_preflight_run_id }}
+    steps:
+      - name: Checkout trusted workflow
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate workflow, target, inputs, and signature
+        id: contract
+        env:
+          EVIDENCE_RUNS_JSON: ${{ inputs.evidence_runs_json }}
+          GH_TOKEN: ${{ github.token }}
+          POLICY_PATH: ${{ inputs.policy_path }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]]
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$POLICY_PATH" =~ ^\.github/release-delta-policies/[A-Za-z0-9][A-Za-z0-9._-]*\.json$ ]] || {
+            echo "policy_path must name one JSON file directly under .github/release-delta-policies/." >&2
+            exit 1
+          }
+          git cat-file -e "${WORKFLOW_SHA}:${POLICY_PATH}"
+          [[ "$(git cat-file -t "${WORKFLOW_SHA}:${POLICY_PATH}")" == "blob" ]]
+
+          policy_values="$(
+            node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import {
+            parseEvidenceRuns,
+            parseReleaseDeltaPolicy,
+          } from "./scripts/lib/release-delta-evidence.mjs";
+
+          const policy = parseReleaseDeltaPolicy(
+            readFileSync(process.env.POLICY_PATH, "utf8"),
+          );
+          const evidenceRuns = parseEvidenceRuns(
+            process.env.EVIDENCE_RUNS_JSON,
+            policy,
+          );
+          const supportedProducerJobs = new Set([
+            "target-tooling",
+            "target-container",
+            "target-provider-preflight",
+            "focused-openwebui",
+          ]);
+          const producerJobs = [
+            ...new Set(
+              policy.roles
+                .filter((role) => role.input === "producer")
+                .map((role) => role.producerJob),
+            ),
+          ].toSorted();
+          const unknownProducerJobs = producerJobs.filter(
+            (producerJob) => !supportedProducerJobs.has(producerJob),
+          );
+          if (unknownProducerJobs.length > 0) {
+            throw new Error(
+              `policy declares unsupported producer jobs: ${unknownProducerJobs.join(", ")}`,
+            );
+          }
+
+          let targetNpmPreflightRunId = 0;
+          if (producerJobs.includes("focused-openwebui")) {
+            const targetRole = policy.roles.find(
+              (role) => role.id === policy.packageEquivalence.targetRole,
+            );
+            if (!targetRole || targetRole.input === "producer") {
+              throw new Error(
+                "focused-openwebui requires a non-producer package-equivalence target role",
+              );
+            }
+            const candidates = evidenceRuns[targetRole.input];
+            if (!Array.isArray(candidates) || candidates.length !== 1) {
+              throw new Error(
+                "focused-openwebui requires exactly one target npm preflight run",
+              );
+            }
+            targetNpmPreflightRunId = candidates[0];
+          }
+          const stableVersion = policy.release.version.replace(/-beta\.[1-9][0-9]*$/u, "");
+          process.stdout.write(
+            [
+              targetNpmPreflightRunId,
+              policy.release.targetRef,
+              stableVersion,
+              policy.release.changelogBaseRef,
+              JSON.stringify(producerJobs),
+              String(producerJobs.includes("target-tooling")),
+              String(producerJobs.includes("target-container")),
+              String(producerJobs.includes("target-provider-preflight")),
+              String(producerJobs.includes("focused-openwebui")),
+            ].join("\t"),
+          );
+          NODE
+          )"
+          IFS=$'\t' read -r \
+            target_npm_preflight_run_id \
+            target_ref \
+            stable_version \
+            changelog_base_ref \
+            producer_jobs_json \
+            run_target_tooling \
+            run_target_container \
+            run_target_provider_preflight \
+            run_focused_openwebui <<< "$policy_values"
+          [[ "$target_npm_preflight_run_id" =~ ^(0|[1-9][0-9]*)$ ]]
+          [[ "$target_ref" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]
+          [[ "$stable_version" =~ ^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]
+          [[ "$changelog_base_ref" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]
+          jq -e \
+            'type == "array" and all(.[]; type == "string")' \
+            <<< "$producer_jobs_json" >/dev/null
+          for value in \
+            "$run_target_tooling" \
+            "$run_target_container" \
+            "$run_target_provider_preflight" \
+            "$run_focused_openwebui"
+          do
+            [[ "$value" == "true" || "$value" == "false" ]]
+          done
+          if [[ "$run_focused_openwebui" == "true" ]]; then
+            [[ "$target_npm_preflight_run_id" =~ ^[1-9][0-9]*$ ]]
+          else
+            [[ "$target_npm_preflight_run_id" == "0" ]]
+          fi
+
+          git fetch --no-tags origin \
+            "+refs/heads/${target_ref}:refs/remotes/origin/${target_ref}"
+          resolved="$(git rev-parse "refs/remotes/origin/${target_ref}")"
+          [[ "$resolved" == "$TARGET_SHA" ]] || {
+            echo "${target_ref} resolves to ${resolved}, expected ${TARGET_SHA}." >&2
+            exit 1
+          }
+
+          TARGET_SHA="$TARGET_SHA" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import {
+            parseReleaseDeltaPolicy,
+            validateReleaseDelta,
+          } from "./scripts/lib/release-delta-evidence.mjs";
+
+          const policy = parseReleaseDeltaPolicy(
+            readFileSync(process.env.POLICY_PATH, "utf8"),
+          );
+          validateReleaseDelta(process.cwd(), policy, process.env.TARGET_SHA);
+          NODE
+
+          target_npm_preflight_artifact_id=""
+          target_npm_preflight_artifact_digest=""
+          if [[ "$run_focused_openwebui" == "true" ]]; then
+            preflight_run_json="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${target_npm_preflight_run_id}"
+            )"
+            jq -e \
+              --argjson run_id "$target_npm_preflight_run_id" \
+              --arg target_sha "$TARGET_SHA" \
+              '
+                .id == $run_id and
+                .name == "OpenClaw NPM Release" and
+                .path == ".github/workflows/openclaw-npm-release.yml" and
+                .event == "workflow_dispatch" and
+                .status == "completed" and
+                .conclusion == "success" and
+                .run_attempt == 1 and
+                .head_sha == $target_sha
+              ' <<< "$preflight_run_json" >/dev/null
+
+            preflight_artifact_name="openclaw-npm-preflight-${TARGET_SHA}"
+            mapfile -t preflight_artifacts < <(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${target_npm_preflight_run_id}/artifacts?per_page=100" \
+                --jq \
+                ".artifacts[] | select(.expired == false and .name == \"${preflight_artifact_name}\") | @base64"
+            )
+            [[ "${#preflight_artifacts[@]}" -eq 1 ]] || {
+              echo "Expected one unexpired ${preflight_artifact_name} artifact; found ${#preflight_artifacts[@]}." >&2
+              exit 1
+            }
+            preflight_artifact_json="$(
+              printf '%s' "${preflight_artifacts[0]}" | base64 --decode
+            )"
+            target_npm_preflight_artifact_id="$(
+              jq -er '.id | select(type == "number" and . > 0)' <<< "$preflight_artifact_json"
+            )"
+            target_npm_preflight_artifact_digest="$(
+              jq -er \
+                '.digest | select(test("^sha256:[0-9a-f]{64}$"))' \
+                <<< "$preflight_artifact_json"
+            )"
+            jq -e \
+              --argjson run_id "$target_npm_preflight_run_id" \
+              --arg target_sha "$TARGET_SHA" \
+              '
+                .workflow_run.id == $run_id and
+                .workflow_run.head_sha == $target_sha
+              ' <<< "$preflight_artifact_json" >/dev/null
+          fi
+
+          {
+            echo "changelog_base_ref=$changelog_base_ref"
+            echo "producer_jobs_json=$producer_jobs_json"
+            echo "run_focused_openwebui=$run_focused_openwebui"
+            echo "run_target_container=$run_target_container"
+            echo "run_target_provider_preflight=$run_target_provider_preflight"
+            echo "run_target_tooling=$run_target_tooling"
+            echo "stable_version=$stable_version"
+            echo "target_ref=$target_ref"
+            echo "target_npm_preflight_run_id=$target_npm_preflight_run_id"
+            echo "target_npm_preflight_artifact_id=$target_npm_preflight_artifact_id"
+            echo "target_npm_preflight_artifact_digest=$target_npm_preflight_artifact_digest"
+          } >> "$GITHUB_OUTPUT"
+
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${TARGET_SHA}" > "$RUNNER_TEMP/target-commit.json"
+          jq -e --arg sha "$TARGET_SHA" \
+            '.sha == $sha and .commit.verification.verified == true' \
+            "$RUNNER_TEMP/target-commit.json" >/dev/null
+
+  target_tooling:
+    name: Target release tooling
+    needs: validate
+    if: needs.validate.outputs.run_target_tooling == 'true'
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted workflow
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch exact release history
+        env:
+          TARGET_REF: ${{ needs.validate.outputs.target_ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/${TARGET_REF}:refs/remotes/origin/${TARGET_REF}"
+          [[ "$(git rev-parse "refs/remotes/origin/${TARGET_REF}")" == "$TARGET_SHA" ]]
+
+      - name: Setup trusted Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Run exact tooling delta checks
+        env:
+          POLICY_PATH: ${{ inputs.policy_path }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TARGET_SHA="$TARGET_SHA" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          import {
+            parseReleaseDeltaPolicy,
+            validateReleaseDelta,
+          } from "./scripts/lib/release-delta-evidence.mjs";
+
+          const policy = parseReleaseDeltaPolicy(
+            readFileSync(process.env.POLICY_PATH, "utf8"),
+          );
+          const delta = validateReleaseDelta(
+            process.cwd(),
+            policy,
+            process.env.TARGET_SHA,
+          );
+          writeFileSync(
+            `${process.env.RUNNER_TEMP}/release-delta-shape.json`,
+            `${JSON.stringify(delta, null, 2)}\n`,
+          );
+          NODE
+
+          source_sha="$(jq -r .sourceSha "$RUNNER_TEMP/release-delta-shape.json")"
+          parent_sha="$(jq -r .parentSha "$RUNNER_TEMP/release-delta-shape.json")"
+          git worktree add --detach "$RUNNER_TEMP/release-tooling" "$parent_sha"
+          dependency_paths=(
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            .npmrc
+            patches
+          )
+          if git diff --quiet "$WORKFLOW_SHA" "$parent_sha" -- "${dependency_paths[@]}"; then
+            ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/release-tooling/node_modules"
+          else
+            (
+              cd "$RUNNER_TEMP/release-tooling"
+              install_args=(
+                install
+                --frozen-lockfile
+                --prefer-offline
+                --ignore-scripts=false
+                --config.engine-strict=false
+                --config.enable-pre-post-scripts=true
+                --config.side-effects-cache=true
+              )
+              pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+            )
+          fi
+          (
+            cd "$RUNNER_TEMP/release-tooling"
+            OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 \
+              OPENCLAW_CHANGED_LANES_RAW_SYNC=1 \
+              CI=1 \
+              pnpm check:changed --base "$source_sha" --head "$parent_sha"
+          )
+
+          changed_paths="$(
+            git diff --name-only -z "$source_sha" "$parent_sha" |
+              jq -Rsc 'split("\u0000") | map(select(length > 0)) | sort'
+          )"
+          jq -n \
+            --arg sourceSha "$source_sha" \
+            --arg parentSha "$parent_sha" \
+            --arg targetSha "$TARGET_SHA" \
+            --arg command "pnpm check:changed --base ${source_sha} --head ${parent_sha}" \
+            --argjson changedPaths "$changed_paths" \
+            '{
+              schemaVersion: 1,
+              sourceSha: $sourceSha,
+              parentSha: $parentSha,
+              targetSha: $targetSha,
+              changedPaths: $changedPaths,
+              command: $command,
+              conclusion: "success"
+            }' > "$RUNNER_TEMP/tooling-check-evidence.json"
+
+      - name: Upload tooling evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-delta-tooling-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tooling-check-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  target_container:
+    name: Target release container
+    needs: validate
+    if: needs.validate.outputs.run_target_container == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      DOCKER_BUILD_SUMMARY: "false"
+    steps:
+      - name: Checkout exact release target
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Docker builder
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+
+      - name: Build and hash release container without pushing
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+          oci_archive="$RUNNER_TEMP/openclaw-release-delta.oci.tar"
+          context_tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          dockerfile_blob_sha="$(git rev-parse HEAD:Dockerfile)"
+          dockerfile_sha256="$(sha256sum Dockerfile | awk '{print $1}')"
+          dockerignore_blob_sha="$(git rev-parse HEAD:.dockerignore)"
+          dockerignore_sha256="$(sha256sum .dockerignore | awk '{print $1}')"
+          [[ "$context_tree_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$dockerfile_blob_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$dockerfile_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$dockerignore_blob_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$dockerignore_sha256" =~ ^[0-9a-f]{64}$ ]]
+          docker buildx build --provenance=false \
+            --build-arg OPENCLAW_EXTENSIONS=matrix \
+            --output "type=oci,dest=${oci_archive}" \
+            -f Dockerfile .
+
+          manifest_digest="$(
+            tar -xOf "$oci_archive" index.json |
+              jq -er '
+                .manifests
+                | select(length == 1)
+                | .[0].digest
+                | select(test("^sha256:[0-9a-f]{64}$"))
+              '
+          )"
+          manifest_algorithm="${manifest_digest%%:*}"
+          manifest_hex="${manifest_digest#*:}"
+          image_id="$(
+            tar -xOf "$oci_archive" "blobs/${manifest_algorithm}/${manifest_hex}" |
+              jq -er '.config.digest | select(test("^sha256:[0-9a-f]{64}$"))'
+          )"
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          oci_archive_sha256="$(sha256sum "$oci_archive" | awk '{print $1}')"
+          oci_archive_size="$(wc -c < "$oci_archive" | tr -d '[:space:]')"
+          [[ "$oci_archive_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$oci_archive_size" =~ ^[1-9][0-9]*$ ]]
+
+          jq -n \
+            --arg schema "openclaw.release-delta-container-evidence/v1" \
+            --arg workflowPath ".github/workflows/release-delta-evidence.yml" \
+            --arg workflowSha "$WORKFLOW_SHA" \
+            --argjson runId "$GITHUB_RUN_ID" \
+            --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg targetSha "$TARGET_SHA" \
+            --arg contextRevision "$TARGET_SHA" \
+            --arg contextTreeSha "$context_tree_sha" \
+            --arg dockerfilePath "Dockerfile" \
+            --arg dockerfileBlobSha "$dockerfile_blob_sha" \
+            --arg dockerfileSha256 "$dockerfile_sha256" \
+            --arg dockerignorePath ".dockerignore" \
+            --arg dockerignoreBlobSha "$dockerignore_blob_sha" \
+            --arg dockerignoreSha256 "$dockerignore_sha256" \
+            --arg imageId "$image_id" \
+            --arg ociArchiveSha256 "$oci_archive_sha256" \
+            --argjson ociArchiveSize "$oci_archive_size" \
+            '{
+              schema: $schema,
+              schemaVersion: 1,
+              workflowPath: $workflowPath,
+              workflowSha: $workflowSha,
+              runId: $runId,
+              runAttempt: $runAttempt,
+              targetSha: $targetSha,
+              context: {
+                revision: $contextRevision,
+                treeSha: $contextTreeSha,
+                dockerignore: {
+                  path: $dockerignorePath,
+                  blobSha: $dockerignoreBlobSha,
+                  sha256: $dockerignoreSha256
+                }
+              },
+              dockerfile: {
+                path: $dockerfilePath,
+                blobSha: $dockerfileBlobSha,
+                sha256: $dockerfileSha256
+              },
+              imageId: $imageId,
+              ociArchiveSha256: $ociArchiveSha256,
+              ociArchiveSize: $ociArchiveSize,
+              conclusion: "success"
+            }' > "$RUNNER_TEMP/container-build-evidence.json"
+
+      - name: Upload container build evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-delta-container-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/container-build-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  target_provider_preflight:
+    name: Target provider secret preflight
+    needs: validate
+    if: needs.validate.outputs.run_target_provider_preflight == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted workflow
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run required provider preflight
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]]
+
+          node .agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs \
+            --required openai,anthropic,fireworks \
+            > "$RUNNER_TEMP/provider-secret-preflight.txt"
+
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const required = ["openai", "anthropic", "fireworks"];
+          const results = readFileSync(
+            `${process.env.RUNNER_TEMP}/provider-secret-preflight.txt`,
+            "utf8",
+          )
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => {
+              const match =
+                /^(openai|anthropic|fireworks): (ok) env=([A-Z0-9_|]+) required$/u.exec(line);
+              if (!match) {
+                throw new Error(`unexpected provider preflight output: ${line}`);
+              }
+              return {
+                provider: match[1],
+                status: match[2],
+                env: match[3],
+                required: true,
+              };
+            });
+          if (
+            results.length !== required.length ||
+            required.some((provider) => !results.some((result) => result.provider === provider))
+          ) {
+            throw new Error("provider preflight did not cover the exact required set");
+          }
+          const evidence = {
+            schema: "openclaw.release-delta-provider-preflight/v1",
+            schemaVersion: 1,
+            workflowPath: ".github/workflows/release-delta-evidence.yml",
+            workflowSha: process.env.WORKFLOW_SHA,
+            runId: Number(process.env.GITHUB_RUN_ID),
+            runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            targetSha: process.env.TARGET_SHA,
+            required,
+            results,
+            conclusion: "success",
+          };
+          if (
+            !Number.isSafeInteger(evidence.runId) ||
+            evidence.runId <= 0 ||
+            evidence.runAttempt !== 1 ||
+            !/^[0-9a-f]{40}$/u.test(evidence.workflowSha ?? "") ||
+            !/^[0-9a-f]{40}$/u.test(evidence.targetSha ?? "")
+          ) {
+            throw new Error("provider evidence has invalid workflow run identity");
+          }
+          writeFileSync(
+            `${process.env.RUNNER_TEMP}/provider-secret-preflight.json`,
+            `${JSON.stringify(evidence, null, 2)}\n`,
+          );
+          NODE
+
+      - name: Upload provider preflight evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-delta-provider-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/provider-secret-preflight.json
+          if-no-files-found: error
+          retention-days: 30
+
+  focused_openwebui:
+    name: Focused exact-target OpenWebUI package acceptance
+    needs: validate
+    if: needs.validate.outputs.run_focused_openwebui == 'true'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/package-acceptance.yml
+    with:
+      workflow_ref: ${{ github.workflow_sha }}
+      source: artifact
+      package_ref: ${{ inputs.target_sha }}
+      suite_profile: package
+      openwebui_mode: exact-target-local
+      preflight_run_id: ${{ needs.validate.outputs.target_npm_preflight_run_id }}
+      preflight_artifact_id: ${{ needs.validate.outputs.target_npm_preflight_artifact_id }}
+      preflight_artifact_digest: ${{ needs.validate.outputs.target_npm_preflight_artifact_digest }}
+      target_sha: ${{ inputs.target_sha }}
+      telegram_mode: none
+      advisory: false
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+
+  create:
+    name: Create strict v3 evidence
+    needs:
+      - validate
+      - target_tooling
+      - target_container
+      - target_provider_preflight
+      - focused_openwebui
+    if: >-
+      ${{
+        always() &&
+        needs.validate.result == 'success' &&
+        (
+          (needs.validate.outputs.run_target_tooling == 'true' &&
+            needs.target_tooling.result == 'success') ||
+          (needs.validate.outputs.run_target_tooling == 'false' &&
+            needs.target_tooling.result == 'skipped')
+        ) &&
+        (
+          (needs.validate.outputs.run_target_container == 'true' &&
+            needs.target_container.result == 'success') ||
+          (needs.validate.outputs.run_target_container == 'false' &&
+            needs.target_container.result == 'skipped')
+        ) &&
+        (
+          (needs.validate.outputs.run_target_provider_preflight == 'true' &&
+            needs.target_provider_preflight.result == 'success') ||
+          (needs.validate.outputs.run_target_provider_preflight == 'false' &&
+            needs.target_provider_preflight.result == 'skipped')
+        ) &&
+        (
+          (needs.validate.outputs.run_focused_openwebui == 'true' &&
+            needs.focused_openwebui.result == 'success') ||
+          (needs.validate.outputs.run_focused_openwebui == 'false' &&
+            needs.focused_openwebui.result == 'skipped')
+        )
+      }}
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout trusted workflow
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch exact release history
+        env:
+          TARGET_REF: ${{ needs.validate.outputs.target_ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/${TARGET_REF}:refs/remotes/origin/${TARGET_REF}"
+          [[ "$(git rev-parse "refs/remotes/origin/${TARGET_REF}")" == "$TARGET_SHA" ]]
+
+      - name: Setup trusted Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Write fixed evidence run inputs
+        env:
+          EVIDENCE_RUNS_JSON: ${{ inputs.evidence_runs_json }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs";
+
+          const value = JSON.parse(process.env.EVIDENCE_RUNS_JSON);
+          writeFileSync(
+            `${process.env.RUNNER_TEMP}/release-delta-evidence-runs.json`,
+            `${JSON.stringify(value, null, 2)}\n`,
+          );
+          NODE
+
+      - name: Expose GitHub CLI compatibility shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -s "$(command -v gh)" "$RUNNER_TEMP/bin/ghx"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Verify release notes and contribution ledger
+        env:
+          CHANGELOG_BASE_REF: ${{ needs.validate.outputs.changelog_base_ref }}
+          GH_TOKEN: ${{ github.token }}
+          STABLE_VERSION: ${{ needs.validate.outputs.stable_version }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+            --base "$CHANGELOG_BASE_REF" \
+            --target "$TARGET_SHA" \
+            --version "$STABLE_VERSION" \
+            --manifest "$RUNNER_TEMP/release-notes-verification.json" \
+            --json
+
+      - name: Create delta evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POLICY_PATH: ${{ inputs.policy_path }}
+          TARGET_REF: ${{ needs.validate.outputs.target_ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release-delta-evidence.mjs create \
+            --repo "$GITHUB_REPOSITORY" \
+            --policy "$POLICY_PATH" \
+            --target-ref "$TARGET_REF" \
+            --target-sha "$TARGET_SHA" \
+            --evidence-runs "$RUNNER_TEMP/release-delta-evidence-runs.json" \
+            --release-notes-verification "$RUNNER_TEMP/release-notes-verification.json" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --output "$RUNNER_TEMP/release-delta-evidence.json"
+
+      - name: Upload immutable delta evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-delta-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-delta-evidence.json
+          if-no-files-found: error
+          retention-days: 30

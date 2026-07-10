@@ -54,3 +54,23 @@ RUN npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-
  && rm -rf /tmp/openclaw-prefix /tmp/openclaw-current.tgz
 
 CMD ["bash"]
+
+FROM bare AS functional-local-ai
+
+# Exact prerelease acceptance supplies the unpublished @openclaw/ai tarball
+# beside the root package so npm never resolves candidate bytes from a registry.
+COPY --from=openclaw_package --chown=appuser:appuser openclaw-ai-current.tgz /tmp/openclaw-ai-current.tgz
+COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/openclaw-current.tgz
+RUN npm install --prefix /tmp/openclaw-prefix \
+      /tmp/openclaw-ai-current.tgz \
+      /tmp/openclaw-current.tgz \
+      --no-fund --no-audit --no-save \
+ && cp -a /tmp/openclaw-prefix/node_modules/openclaw/. /app/ \
+ && cp -a /tmp/openclaw-prefix/node_modules/. /app/node_modules/ \
+ && mkdir -p "$HOME/.local/bin" \
+ && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \
+ && rm -rf /app/node_modules/openclaw \
+ && ln -sf /app /app/node_modules/openclaw \
+ && rm -rf /tmp/openclaw-prefix /tmp/openclaw-ai-current.tgz /tmp/openclaw-current.tgz
+
+CMD ["bash"]

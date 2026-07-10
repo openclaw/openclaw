@@ -65,7 +65,12 @@
 
 # Release workflow and its supporting release-path checks.
 /.github/workflows/openclaw-npm-release.yml @openclaw/openclaw-release-managers
+/.github/workflows/openclaw-release-publish.yml @openclaw/openclaw-release-managers
+/.github/workflows/release-delta-evidence.yml @openclaw/openclaw-release-managers
 /docs/reference/RELEASING.md @openclaw/openclaw-release-managers
+/scripts/release-delta-evidence.mjs @openclaw/openclaw-release-managers
+/scripts/lib/release-delta-evidence.mjs @openclaw/openclaw-release-managers
+/scripts/lib/release-package-equivalence.mjs @openclaw/openclaw-release-managers
 /scripts/openclaw-npm-publish.sh @openclaw/openclaw-release-managers
 /scripts/openclaw-npm-release-check.ts @openclaw/openclaw-release-managers
 /scripts/release-check.ts @openclaw/openclaw-release-managers

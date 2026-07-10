@@ -16,8 +16,33 @@ on:
         description: Existing successful preflight workflow run id to promote without rebuilding
         required: false
         type: string
+      oidc_readiness:
+        description: Validate npm OIDC token acquisition against an immutable exact-target preflight artifact without publishing
+        required: true
+        default: false
+        type: boolean
+      oidc_preflight_run_id:
+        description: Successful attempt-1 OpenClaw NPM Release preflight run containing the exact-target root and AI packages
+        required: false
+        type: string
+      oidc_preflight_artifact_id:
+        description: Immutable artifact ID for the exact-target npm preflight bundle
+        required: false
+        type: string
+      oidc_preflight_artifact_digest:
+        description: GitHub SHA-256 digest for the exact-target npm preflight artifact ZIP
+        required: false
+        type: string
+      oidc_target_sha:
+        description: Exact release target SHA bound by the OIDC readiness proof
+        required: false
+        type: string
       full_release_validation_run_id:
-        description: Successful Full Release Validation run id for this tag/SHA, required for real publish
+        description: Successful Full Release Validation run id for this tag/SHA; required unless release delta evidence is supplied
+        required: false
+        type: string
+      release_delta_evidence_run_id:
+        description: Optional successful Release Delta Evidence run for an audited beta tooling delta
         required: false
         type: string
       release_publish_run_id:
@@ -45,8 +70,8 @@ on:
         type: boolean
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.oidc_readiness && format('openclaw-npm-release-oidc-readiness-{0}-{1}', inputs.oidc_target_sha, github.run_id) || github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && !inputs.oidc_readiness && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -60,7 +85,7 @@ jobs:
   # openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml
   # so this source workflow can stay focused on OIDC publish only.
   preflight_openclaw_npm:
-    if: ${{ inputs.preflight_only }}
+    if: ${{ inputs.preflight_only && !inputs.oidc_readiness }}
     # Preflight builds the full release package before publish; ubuntu-latest can OOM in tsdown.
     runs-on: blacksmith-16vcpu-ubuntu-2404
     permissions:
@@ -533,8 +558,714 @@ jobs:
           path: ${{ steps.packed_tarball.outputs.dir }}
           if-no-files-found: error
 
+  npm_oidc_readiness:
+    if: ${{ inputs.oidc_readiness }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: npm-release
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Validate OIDC readiness inputs
+        env:
+          ARTIFACT_DIGEST: ${{ inputs.oidc_preflight_artifact_digest }}
+          ARTIFACT_ID: ${{ inputs.oidc_preflight_artifact_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
+          PREFLIGHT_RUN_ID: ${{ inputs.oidc_preflight_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          TARGET_SHA: ${{ inputs.oidc_target_sha }}
+          WORKFLOW_REF: ${{ fromJSON(toJSON(job)).workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
+        run: |
+          set -euo pipefail
+          expected_workflow_ref="openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@refs/heads/main"
+          if [[ "$EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "oidc_readiness must be dispatched from the trusted main workflow." >&2
+            exit 1
+          fi
+          if [[ "$WORKFLOW_REPOSITORY" != "openclaw/openclaw" || "$WORKFLOW_REF" != "$expected_workflow_ref" ]]; then
+            echo "oidc_readiness must execute the called OpenClaw npm workflow from main." >&2
+            exit 1
+          fi
+          if [[ "$RUN_ATTEMPT" != "1" ]]; then
+            echo "oidc_readiness evidence requires producer run attempt 1." >&2
+            exit 1
+          fi
+          if [[ ! "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "oidc_readiness requires an immutable 40-character workflow SHA." >&2
+            exit 1
+          fi
+          if [[ "$PREFLIGHT_ONLY" != "true" ]]; then
+            echo "oidc_readiness requires preflight_only=true." >&2
+            exit 1
+          fi
+          if [[ "$NPM_DIST_TAG" != "beta" ]]; then
+            echo "oidc_readiness supports only npm_dist_tag=beta." >&2
+            exit 1
+          fi
+          if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "oidc_target_sha must be an exact lowercase 40-character commit SHA." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" != "$TARGET_SHA" ]]; then
+            echo "oidc_readiness requires tag to equal oidc_target_sha." >&2
+            exit 1
+          fi
+          if [[ ! "$PREFLIGHT_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "oidc_preflight_run_id must be a positive decimal Actions run ID." >&2
+            exit 1
+          fi
+          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "oidc_preflight_artifact_id must be a positive decimal Actions artifact ID." >&2
+            exit 1
+          fi
+          if [[ ! "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "oidc_preflight_artifact_digest must be a lowercase SHA-256 digest." >&2
+            exit 1
+          fi
+          PREFLIGHT_RUN_ID="$PREFLIGHT_RUN_ID" ARTIFACT_ID="$ARTIFACT_ID" node <<'NODE'
+          for (const [name, value] of [
+            ["oidc_preflight_run_id", process.env.PREFLIGHT_RUN_ID],
+            ["oidc_preflight_artifact_id", process.env.ARTIFACT_ID],
+          ]) {
+            const parsed = Number(value);
+            if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+              throw new Error(`${name} must be a safe positive integer`);
+            }
+          }
+          NODE
+
+      - name: Prepare isolated npm environment
+        run: |
+          set -euo pipefail
+          work_dir="${RUNNER_TEMP}/npm-oidc-readiness"
+          isolated_home="$work_dir/home"
+          npm_cache="$work_dir/npm-cache"
+          npm_userconfig="$work_dir/npmrc"
+          rm -rf "$work_dir"
+          install -d -m 0700 "$isolated_home" "$npm_cache" "$work_dir/preflight" "$work_dir/evidence"
+          printf 'registry=https://registry.npmjs.org/\n' > "$npm_userconfig"
+          chmod 0600 "$npm_userconfig"
+          {
+            echo "HOME=$isolated_home"
+            echo "NPM_CONFIG_CACHE=$npm_cache"
+            echo "NPM_CONFIG_USERCONFIG=$npm_userconfig"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install exact npm CLI
+        id: npm_cli
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN NPM_TOKEN NPM_AUTH_TOKEN
+          unset npm_config__auth npm_config__authToken npm_config_auth npm_config_authtoken
+          unset npm_config_userconfig NPM_CONFIG__AUTH NPM_CONFIG__AUTHTOKEN
+          export NPM_CONFIG_USERCONFIG="${RUNNER_TEMP}/npm-oidc-readiness/npmrc"
+          toolchain="${RUNNER_TEMP}/npm-oidc-readiness/npm-toolchain"
+          npm install --global --prefix "$toolchain" npm@11.12.1 \
+            --ignore-scripts \
+            --no-audit \
+            --no-fund
+          npm_cli="$toolchain/bin/npm"
+          npm_version="$("$npm_cli" --version)"
+          if [[ "$npm_version" != "11.12.1" ]]; then
+            echo "Expected npm 11.12.1, got ${npm_version}." >&2
+            exit 1
+          fi
+          echo "path=$npm_cli" >> "$GITHUB_OUTPUT"
+          echo "version=$npm_version" >> "$GITHUB_OUTPUT"
+
+      - name: Download and verify exact-target npm preflight artifact
+        id: preflight
+        env:
+          ARTIFACT_DIGEST: ${{ inputs.oidc_preflight_artifact_digest }}
+          ARTIFACT_ID: ${{ inputs.oidc_preflight_artifact_id }}
+          GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_RUN_ID: ${{ inputs.oidc_preflight_run_id }}
+          TARGET_SHA: ${{ inputs.oidc_target_sha }}
+        run: |
+          set -euo pipefail
+          work_dir="${RUNNER_TEMP}/npm-oidc-readiness/preflight"
+          archive_path="$work_dir/preflight.zip"
+          artifact_json="$work_dir/artifact.json"
+          checksum_path="$work_dir/ai-runtime-SHA256SUMS"
+          dependency_manifest_path="$work_dir/dependency-evidence-manifest.json"
+          entries_path="$work_dir/entries.txt"
+          manifest_path="$work_dir/preflight-manifest.json"
+          metadata_path="$work_dir/package-metadata.json"
+          release_dist_tag_path="$work_dir/release-npm-dist-tag.txt"
+          release_sha_path="$work_dir/release-sha.txt"
+          release_tag_path="$work_dir/release-tag.txt"
+          run_json="$work_dir/run.json"
+          expected_artifact_name="openclaw-npm-preflight-${TARGET_SHA}"
+
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}" > "$run_json"
+          jq -e \
+            --argjson run_id "$PREFLIGHT_RUN_ID" \
+            --arg target_sha "$TARGET_SHA" \
+            '
+              .id == $run_id and
+              .name == "OpenClaw NPM Release" and
+              .path == ".github/workflows/openclaw-npm-release.yml" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .run_attempt == 1 and
+              .head_sha == $target_sha
+            ' "$run_json" >/dev/null || {
+              echo "OIDC readiness requires a successful attempt-1 OpenClaw NPM Release preflight on the exact target SHA." >&2
+              exit 1
+            }
+
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" > "$artifact_json"
+          jq -e \
+            --arg digest "$ARTIFACT_DIGEST" \
+            --arg expected_name "$expected_artifact_name" \
+            --arg target_sha "$TARGET_SHA" \
+            --argjson artifact_id "$ARTIFACT_ID" \
+            --argjson run_id "$PREFLIGHT_RUN_ID" \
+            '
+              .id == $artifact_id and
+              .name == $expected_name and
+              .expired == false and
+              .digest == $digest and
+              .workflow_run.id == $run_id and
+              .workflow_run.head_sha == $target_sha
+            ' "$artifact_json" >/dev/null || {
+              echo "OIDC readiness preflight artifact identity does not match the immutable input tuple." >&2
+              exit 1
+            }
+
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "$archive_path"
+          artifact_zip_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+          if [[ "sha256:${artifact_zip_sha256}" != "$ARTIFACT_DIGEST" ]]; then
+            echo "OIDC readiness preflight artifact ZIP digest mismatch." >&2
+            exit 1
+          fi
+
+          unzip -Z1 "$archive_path" > "$entries_path"
+          extract_unique_member() {
+            local entry="$1"
+            local destination="$2"
+            local count
+            count="$(awk -v expected="$entry" '$0 == expected { count++ } END { print count + 0 }' "$entries_path")"
+            if [[ "$count" != "1" ]]; then
+              echo "Expected exactly one ${entry} in the OIDC readiness artifact." >&2
+              exit 1
+            fi
+            unzip -p "$archive_path" "$entry" > "$destination"
+          }
+          extract_unique_member preflight-manifest.json "$manifest_path"
+          extract_unique_member dependency-evidence/dependency-evidence-manifest.json "$dependency_manifest_path"
+          extract_unique_member ai-runtime-SHA256SUMS "$checksum_path"
+          extract_unique_member release-npm-dist-tag.txt "$release_dist_tag_path"
+          extract_unique_member release-sha.txt "$release_sha_path"
+          extract_unique_member release-tag.txt "$release_tag_path"
+
+          DEPENDENCY_MANIFEST_PATH="$dependency_manifest_path" \
+          MANIFEST_PATH="$manifest_path" \
+          METADATA_PATH="$metadata_path" \
+          ENTRIES_PATH="$entries_path" \
+          PREFLIGHT_RUN_ID="$PREFLIGHT_RUN_ID" \
+          TARGET_SHA="$TARGET_SHA" \
+            node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const manifest = JSON.parse(fs.readFileSync(process.env.MANIFEST_PATH, "utf8"));
+          const dependencyManifest = JSON.parse(
+            fs.readFileSync(process.env.DEPENDENCY_MANIFEST_PATH, "utf8"),
+          );
+          const entries = fs
+            .readFileSync(process.env.ENTRIES_PATH, "utf8")
+            .split(/\r?\n/u)
+            .filter(Boolean);
+          const sha256Pattern = /^[0-9a-f]{64}$/u;
+          const tarballPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/u;
+          const requireValue = (condition, message) => {
+            if (!condition) throw new Error(message);
+          };
+
+          for (const entry of entries) {
+            const segments = entry.split("/");
+            requireValue(
+              !entry.startsWith("/") &&
+                !entry.includes("\\") &&
+                !segments.includes("..") &&
+                segments.every(Boolean),
+              `Unsafe preflight artifact entry: ${entry}`,
+            );
+          }
+          requireValue(
+            new Set(entries).size === entries.length,
+            "npm preflight artifact contains duplicate ZIP members",
+          );
+          requireValue(manifest.version === 1, "Unsupported npm preflight manifest version");
+          requireValue(
+            manifest.releaseSha === process.env.TARGET_SHA,
+            "npm preflight manifest target SHA mismatch",
+          );
+          requireValue(manifest.npmDistTag === "beta", "npm preflight manifest is not beta");
+          requireValue(manifest.packageName === "openclaw", "npm preflight root package mismatch");
+          requireValue(
+            typeof manifest.packageVersion === "string" && manifest.packageVersion.length > 0,
+            "npm preflight root version is missing",
+          );
+          requireValue(
+            manifest.releaseTag === `v${manifest.packageVersion}`,
+            "npm preflight release tag/version mismatch",
+          );
+          requireValue(
+            tarballPattern.test(manifest.tarballName) &&
+              path.basename(manifest.tarballName) === manifest.tarballName,
+            "npm preflight root tarball name is unsafe",
+          );
+          requireValue(
+            sha256Pattern.test(manifest.tarballSha256),
+            "npm preflight root tarball digest is invalid",
+          );
+          requireValue(
+            Array.isArray(manifest.dependencyTarballs) &&
+              manifest.dependencyTarballs.length === 1,
+            "npm preflight manifest must identify exactly one dependency tarball",
+          );
+          requireValue(
+            manifest.dependencyEvidenceDir === "dependency-evidence" &&
+              manifest.dependencyEvidenceManifest ===
+                "dependency-evidence/dependency-evidence-manifest.json",
+            "npm preflight dependency evidence paths do not match the artifact contract",
+          );
+
+          const ai = manifest.dependencyTarballs[0];
+          requireValue(ai.packageName === "@openclaw/ai", "npm preflight AI package mismatch");
+          requireValue(
+            ai.packageVersion === manifest.packageVersion,
+            "npm preflight root and AI versions differ",
+          );
+          requireValue(
+            tarballPattern.test(ai.tarballName) &&
+              path.basename(ai.tarballName) === ai.tarballName &&
+              ai.tarballName !== manifest.tarballName,
+            "npm preflight AI tarball name is unsafe",
+          );
+          requireValue(
+            sha256Pattern.test(ai.tarballSha256),
+            "npm preflight AI tarball digest is invalid",
+          );
+
+          const expectedReportEntries = new Set([
+            "dependency-evidence/dependency-changes-report.json",
+            "dependency-evidence/dependency-changes-report.md",
+            "dependency-evidence/dependency-ownership-surface-report.json",
+            "dependency-evidence/dependency-ownership-surface-report.md",
+            "dependency-evidence/dependency-vulnerability-gate.json",
+            "dependency-evidence/dependency-vulnerability-gate.md",
+            "dependency-evidence/transitive-manifest-risk-report.json",
+            "dependency-evidence/transitive-manifest-risk-report.md",
+          ]);
+          requireValue(
+            dependencyManifest.schemaVersion === 1 &&
+              dependencyManifest.releaseTag === manifest.releaseTag &&
+              dependencyManifest.releaseRef === process.env.TARGET_SHA &&
+              dependencyManifest.releaseSha === process.env.TARGET_SHA &&
+              dependencyManifest.npmDistTag === "beta" &&
+              dependencyManifest.packageName === manifest.packageName &&
+              dependencyManifest.packageVersion === manifest.packageVersion &&
+              dependencyManifest.workflowRunId === process.env.PREFLIGHT_RUN_ID &&
+              dependencyManifest.workflowRunAttempt === "1",
+            "npm preflight dependency evidence manifest identity mismatch",
+          );
+          requireValue(
+            Array.isArray(dependencyManifest.reports) &&
+              dependencyManifest.reports.length === 4,
+            "npm preflight dependency evidence report set mismatch",
+          );
+          const declaredReportEntries = new Set(
+            dependencyManifest.reports.flatMap((report) => [
+              `dependency-evidence/${report.json}`,
+              `dependency-evidence/${report.markdown}`,
+            ]),
+          );
+          requireValue(
+            declaredReportEntries.size === expectedReportEntries.size &&
+              [...expectedReportEntries].every((entry) => declaredReportEntries.has(entry)),
+            "npm preflight dependency evidence reports do not match the artifact contract",
+          );
+
+          const allowedEntries = new Set([
+            "ai-runtime-SHA256SUMS",
+            "dependency-evidence/dependency-evidence-manifest.json",
+            "dependency-evidence/dependency-evidence-summary.md",
+            ...expectedReportEntries,
+            manifest.tarballName,
+            ai.tarballName,
+            "preflight-manifest.json",
+            "release-npm-dist-tag.txt",
+            "release-sha.txt",
+            "release-tag.txt",
+          ]);
+          requireValue(
+            entries.length === allowedEntries.size &&
+              entries.every((entry) => allowedEntries.has(entry)),
+            "npm preflight artifact contains missing or undeclared ZIP members",
+          );
+
+          fs.writeFileSync(
+            process.env.METADATA_PATH,
+            `${JSON.stringify(
+              {
+                root: {
+                  filename: manifest.tarballName,
+                  name: manifest.packageName,
+                  sha256: manifest.tarballSha256,
+                  version: manifest.packageVersion,
+                },
+                ai: {
+                  filename: ai.tarballName,
+                  name: ai.packageName,
+                  sha256: ai.tarballSha256,
+                  version: ai.packageVersion,
+                },
+                releaseTag: manifest.releaseTag,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          NODE
+
+          root_filename="$(jq -r '.root.filename' "$metadata_path")"
+          root_name="$(jq -r '.root.name' "$metadata_path")"
+          root_version="$(jq -r '.root.version' "$metadata_path")"
+          root_sha256="$(jq -r '.root.sha256' "$metadata_path")"
+          ai_filename="$(jq -r '.ai.filename' "$metadata_path")"
+          ai_name="$(jq -r '.ai.name' "$metadata_path")"
+          ai_version="$(jq -r '.ai.version' "$metadata_path")"
+          ai_sha256="$(jq -r '.ai.sha256' "$metadata_path")"
+          release_tag="$(jq -r '.releaseTag' "$metadata_path")"
+          root_tgz="$work_dir/root.tgz"
+          ai_tgz="$work_dir/ai.tgz"
+          unzip -p "$archive_path" "$root_filename" > "$root_tgz"
+          unzip -p "$archive_path" "$ai_filename" > "$ai_tgz"
+
+          if [[ "$(sha256sum "$root_tgz" | awk '{print $1}')" != "$root_sha256" ]]; then
+            echo "OIDC readiness root tarball digest mismatch." >&2
+            exit 1
+          fi
+          if [[ "$(sha256sum "$ai_tgz" | awk '{print $1}')" != "$ai_sha256" ]]; then
+            echo "OIDC readiness AI tarball digest mismatch." >&2
+            exit 1
+          fi
+          if [[ "$(cat "$checksum_path")" != "${ai_sha256}  ./${ai_filename}" ]]; then
+            echo "OIDC readiness AI checksum manifest does not match the declared tarball." >&2
+            exit 1
+          fi
+          if [[ "$(cat "$release_dist_tag_path")" != "beta" ]]; then
+            echo "OIDC readiness release dist-tag marker is not beta." >&2
+            exit 1
+          fi
+          if [[ "$(cat "$release_sha_path")" != "$TARGET_SHA" ]]; then
+            echo "OIDC readiness release SHA marker does not match the target." >&2
+            exit 1
+          fi
+          if [[ "$(cat "$release_tag_path")" != "$release_tag" ]]; then
+            echo "OIDC readiness release tag marker does not match the manifest." >&2
+            exit 1
+          fi
+          if [[ "$(tar -tzf "$root_tgz" | awk '$0 == "package/package.json" { count++ } END { print count + 0 }')" != "1" ]]; then
+            echo "OIDC readiness root tarball must contain exactly one package/package.json." >&2
+            exit 1
+          fi
+          if [[ "$(tar -tzf "$ai_tgz" | awk '$0 == "package/package.json" { count++ } END { print count + 0 }')" != "1" ]]; then
+            echo "OIDC readiness AI tarball must contain exactly one package/package.json." >&2
+            exit 1
+          fi
+
+          ROOT_TGZ="$root_tgz" \
+          ROOT_NAME="$root_name" \
+          ROOT_VERSION="$root_version" \
+          AI_TGZ="$ai_tgz" \
+          AI_NAME="$ai_name" \
+          AI_VERSION="$ai_version" \
+            node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+
+          for (const [role, tgz, expectedName, expectedVersion] of [
+            ["root", process.env.ROOT_TGZ, process.env.ROOT_NAME, process.env.ROOT_VERSION],
+            ["AI", process.env.AI_TGZ, process.env.AI_NAME, process.env.AI_VERSION],
+          ]) {
+            const packageJson = JSON.parse(
+              execFileSync("tar", ["-xOf", tgz, "package/package.json"], {
+                encoding: "utf8",
+              }),
+            );
+            if (packageJson.name !== expectedName || packageJson.version !== expectedVersion) {
+              throw new Error(`${role} tarball package identity does not match the preflight manifest`);
+            }
+          }
+          NODE
+
+          {
+            echo "artifact_name=$expected_artifact_name"
+            echo "artifact_zip_sha256=$artifact_zip_sha256"
+            echo "root_tgz=$root_tgz"
+            echo "root_filename=$root_filename"
+            echo "root_name=$root_name"
+            echo "root_version=$root_version"
+            echo "root_sha256=$root_sha256"
+            echo "ai_tgz=$ai_tgz"
+            echo "ai_filename=$ai_filename"
+            echo "ai_name=$ai_name"
+            echo "ai_version=$ai_version"
+            echo "ai_sha256=$ai_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Exercise npm OIDC token acquisition without publishing
+        id: oidc
+        env:
+          AI_TGZ: ${{ steps.preflight.outputs.ai_tgz }}
+          NPM_CLI: ${{ steps.npm_cli.outputs.path }}
+          ROOT_TGZ: ${{ steps.preflight.outputs.root_tgz }}
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN NPM_TOKEN NPM_AUTH_TOKEN
+          unset npm_config__auth npm_config__authToken npm_config_auth npm_config_authtoken
+          unset npm_config_userconfig NPM_CONFIG__AUTH NPM_CONFIG__AUTHTOKEN
+          export NPM_CONFIG_USERCONFIG="${RUNNER_TEMP}/npm-oidc-readiness/npmrc"
+          marker_phrase="Successfully retrieved and set token"
+          marker="npm verbose oidc ${marker_phrase}"
+          root_log="${RUNNER_TEMP}/npm-oidc-readiness/root-oidc.log"
+          root_redacted_log="${RUNNER_TEMP}/npm-oidc-readiness/root-oidc.redacted.log"
+          ai_log="${RUNNER_TEMP}/npm-oidc-readiness/ai-oidc.log"
+          ai_redacted_log="${RUNNER_TEMP}/npm-oidc-readiness/ai-oidc.redacted.log"
+
+          validate_oidc_log() {
+            local role="$1"
+            local log_path="$2"
+            local redacted_path="$3"
+            local marker_count
+            local content_match_count
+            local unexpected_oidc_count
+
+            marker_count="$(grep -Fxc "$marker" "$log_path" || true)"
+            if [[ "$marker_count" != "1" ]]; then
+              echo "${role} npm OIDC dry-run requires exactly one full-line token-acquisition marker; found ${marker_count}." >&2
+              exit 1
+            fi
+            content_match_count="$(
+              awk -v phrase="$marker_phrase" -v expected="$marker" \
+                'index($0, phrase) && $0 != expected { count++ } END { print count + 0 }' \
+                "$log_path"
+            )"
+            if [[ "$content_match_count" != "0" ]]; then
+              echo "${role} npm OIDC dry-run contained a notice or content match for the token marker." >&2
+              exit 1
+            fi
+            unexpected_oidc_count="$(
+              awk -v expected="$marker" \
+                '$0 ~ /^npm verbose oidc / && $0 != expected { count++ } END { print count + 0 }' \
+                "$log_path"
+            )"
+            if [[ "$unexpected_oidc_count" != "0" ]]; then
+              echo "${role} npm OIDC dry-run reported an unexpected OIDC diagnostic." >&2
+              exit 1
+            fi
+            if grep -Eiq '^npm (warn|error).*(ENEEDAUTH|E401|E403|log[ -]?in|logged in|login|authenticat|authoriz|token|id_token)' "$log_path"; then
+              echo "${role} npm OIDC dry-run reported an authentication warning or failure." >&2
+              exit 1
+            fi
+
+            # Retain only non-secret package metadata plus the exact OIDC marker.
+            awk -v expected="$marker" '
+              $0 == expected { print; next }
+              /^npm notice (name|version|filename|package size|unpacked size|shasum|integrity|total files):/ {
+                print
+                next
+              }
+              /^npm notice Publishing to https:\/\/registry\.npmjs\.org\/ with tag beta .* \(dry-run\)$/ {
+                print
+              }
+            ' "$log_path" > "$redacted_path"
+            if [[ "$(grep -Fxc "$marker" "$redacted_path" || true)" != "1" ]]; then
+              echo "${role} redacted npm OIDC log lost the exact token-acquisition marker." >&2
+              exit 1
+            fi
+            if grep -Eiq '(_auth|authorization:|bearer[[:space:]]|basic[[:space:]]|npm_[a-z_]*token|gh[opsu]_[A-Za-z0-9_]+|github_pat_|eyJ[A-Za-z0-9_-]{10,}\.)' "$redacted_path"; then
+              echo "${role} redacted npm OIDC log retained authentication material." >&2
+              exit 1
+            fi
+            sha256sum "$redacted_path" | awk '{print $1}'
+          }
+
+          if grep -Eiq '(^|[/:])(_auth|.*token)[=:]' "$NPM_CONFIG_USERCONFIG"; then
+            echo "Isolated npm userconfig unexpectedly contains authentication material." >&2
+            exit 1
+          fi
+          if ! "$NPM_CLI" publish "$ROOT_TGZ" --tag beta --dry-run --ignore-scripts --provenance=false --loglevel=verbose > "$root_log" 2>&1; then
+            echo "Root npm OIDC dry-run failed; verbose output remains only on this ephemeral runner." >&2
+            exit 1
+          fi
+          root_redacted_log_sha256="$(validate_oidc_log "Root" "$root_log" "$root_redacted_log")"
+          if ! "$NPM_CLI" publish "$AI_TGZ" --tag beta --dry-run --ignore-scripts --provenance=false --loglevel=verbose > "$ai_log" 2>&1; then
+            echo "AI npm OIDC dry-run failed; verbose output remains only on this ephemeral runner." >&2
+            exit 1
+          fi
+          ai_redacted_log_sha256="$(validate_oidc_log "AI" "$ai_log" "$ai_redacted_log")"
+          if grep -Eiq '(^|[/:])(_auth|.*token)[=:]' "$NPM_CONFIG_USERCONFIG"; then
+            echo "npm OIDC dry-run persisted authentication material to userconfig." >&2
+            exit 1
+          fi
+
+          rm -f "$root_log" "$ai_log" "$root_redacted_log" "$ai_redacted_log"
+          rm -rf "$NPM_CONFIG_CACHE" "$HOME/.npm"
+          echo "root_marker=true" >> "$GITHUB_OUTPUT"
+          echo "root_redacted_log_sha256=$root_redacted_log_sha256" >> "$GITHUB_OUTPUT"
+          echo "ai_marker=true" >> "$GITHUB_OUTPUT"
+          echo "ai_redacted_log_sha256=$ai_redacted_log_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Write npm OIDC readiness evidence
+        env:
+          AI_FILENAME: ${{ steps.preflight.outputs.ai_filename }}
+          AI_MARKER: ${{ steps.oidc.outputs.ai_marker }}
+          AI_NAME: ${{ steps.preflight.outputs.ai_name }}
+          AI_REDACTED_LOG_SHA256: ${{ steps.oidc.outputs.ai_redacted_log_sha256 }}
+          AI_SHA256: ${{ steps.preflight.outputs.ai_sha256 }}
+          AI_VERSION: ${{ steps.preflight.outputs.ai_version }}
+          ARTIFACT_DIGEST: ${{ inputs.oidc_preflight_artifact_digest }}
+          ARTIFACT_ID: ${{ inputs.oidc_preflight_artifact_id }}
+          ARTIFACT_NAME: ${{ steps.preflight.outputs.artifact_name }}
+          ARTIFACT_ZIP_SHA256: ${{ steps.preflight.outputs.artifact_zip_sha256 }}
+          NPM_VERSION: ${{ steps.npm_cli.outputs.version }}
+          PREFLIGHT_RUN_ID: ${{ inputs.oidc_preflight_run_id }}
+          ROOT_FILENAME: ${{ steps.preflight.outputs.root_filename }}
+          ROOT_MARKER: ${{ steps.oidc.outputs.root_marker }}
+          ROOT_NAME: ${{ steps.preflight.outputs.root_name }}
+          ROOT_REDACTED_LOG_SHA256: ${{ steps.oidc.outputs.root_redacted_log_sha256 }}
+          ROOT_SHA256: ${{ steps.preflight.outputs.root_sha256 }}
+          ROOT_VERSION: ${{ steps.preflight.outputs.root_version }}
+          TARGET_SHA: ${{ inputs.oidc_target_sha }}
+          WORKFLOW_REF: ${{ fromJSON(toJSON(job)).workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/npm-oidc-readiness/evidence"
+          evidence_path="$evidence_dir/npm-oidc-readiness.json"
+          rm -rf "$evidence_dir"
+          install -d -m 0700 "$evidence_dir"
+          EVIDENCE_PATH="$evidence_path" node <<'NODE'
+          const fs = require("node:fs");
+
+          const positiveInteger = (name, value) => {
+            if (!/^[1-9][0-9]*$/u.test(value ?? "")) throw new Error(`Invalid ${name}`);
+            const parsed = Number(value);
+            if (!Number.isSafeInteger(parsed)) throw new Error(`Invalid ${name}`);
+            return parsed;
+          };
+          const sha256Pattern = /^[0-9a-f]{64}$/u;
+          const marker = "npm verbose oidc Successfully retrieved and set token";
+          const evidence = {
+            schema: "openclaw.npm-oidc-readiness/v1",
+            schemaVersion: 1,
+            producer: {
+              workflowPath: ".github/workflows/openclaw-npm-release.yml",
+              workflowRepository: process.env.WORKFLOW_REPOSITORY,
+              workflowRef: process.env.WORKFLOW_REF,
+              workflowSha: process.env.WORKFLOW_SHA,
+              runId: positiveInteger("workflow run ID", process.env.GITHUB_RUN_ID),
+              runAttempt: positiveInteger("workflow run attempt", process.env.GITHUB_RUN_ATTEMPT),
+            },
+            targetSha: process.env.TARGET_SHA,
+            sourcePreflight: {
+              workflowPath: ".github/workflows/openclaw-npm-release.yml",
+              runId: positiveInteger("preflight run ID", process.env.PREFLIGHT_RUN_ID),
+              runAttempt: 1,
+              artifactId: positiveInteger("preflight artifact ID", process.env.ARTIFACT_ID),
+              artifactName: process.env.ARTIFACT_NAME,
+              artifactDigest: process.env.ARTIFACT_DIGEST,
+              artifactZipSha256: process.env.ARTIFACT_ZIP_SHA256,
+            },
+            npmVersion: process.env.NPM_VERSION,
+            proofScope: "oidc-token-acquisition-readiness-only",
+            tokenAcquisitionReady: true,
+            registryTrustedPublisherAcceptance: "not-tested",
+            publicationPerformed: false,
+            commandMode: {
+              operation: "publish",
+              distTag: "beta",
+              dryRun: true,
+              ignoreScripts: true,
+              provenance: false,
+              loglevel: "verbose",
+            },
+            tokenAcquisitionMarker: marker,
+            packages: [
+              {
+                role: "root",
+                name: process.env.ROOT_NAME,
+                version: process.env.ROOT_VERSION,
+                tarballName: process.env.ROOT_FILENAME,
+                tarballSha256: process.env.ROOT_SHA256,
+                markerObserved: process.env.ROOT_MARKER === "true",
+                redactedLogSha256: process.env.ROOT_REDACTED_LOG_SHA256,
+                conclusion: "success",
+              },
+              {
+                role: "ai",
+                name: process.env.AI_NAME,
+                version: process.env.AI_VERSION,
+                tarballName: process.env.AI_FILENAME,
+                tarballSha256: process.env.AI_SHA256,
+                markerObserved: process.env.AI_MARKER === "true",
+                redactedLogSha256: process.env.AI_REDACTED_LOG_SHA256,
+                conclusion: "success",
+              },
+            ],
+            conclusion: "success",
+          };
+          if (
+            evidence.npmVersion !== "11.12.1" ||
+            evidence.producer.runAttempt !== 1 ||
+            evidence.producer.workflowRepository !== "openclaw/openclaw" ||
+            evidence.producer.workflowRef !==
+              "openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@refs/heads/main" ||
+            evidence.tokenAcquisitionReady !== true ||
+            evidence.packages.some(
+              (entry) =>
+                entry.markerObserved !== true || !sha256Pattern.test(entry.redactedLogSha256),
+            )
+          ) {
+            throw new Error("OIDC readiness evidence is incomplete");
+          }
+          fs.writeFileSync(process.env.EVIDENCE_PATH, `${JSON.stringify(evidence, null, 2)}\n`, {
+            mode: 0o600,
+          });
+          NODE
+          if [[ "$(find "$evidence_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')" != "1" ]]; then
+            echo "OIDC readiness must emit exactly one JSON evidence file." >&2
+            exit 1
+          fi
+
+      - name: Upload npm OIDC readiness evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: npm-oidc-readiness-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/npm-oidc-readiness/evidence/npm-oidc-readiness.json
+          if-no-files-found: error
+          retention-days: 14
+
   validate_publish_request:
-    if: ${{ !inputs.preflight_only }}
+    if: ${{ !inputs.preflight_only && !inputs.oidc_readiness }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -558,8 +1289,26 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           WORKFLOW_REF: ${{ github.ref }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RELEASE_DELTA_EVIDENCE_RUN_ID: ${{ inputs.release_delta_evidence_run_id }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          PLUGIN_NPM_RUN_ID: ${{ inputs.plugin_npm_run_id }}
         run: |
           set -euo pipefail
+          validate_optional_run_id() {
+            local name="$1"
+            local value="$2"
+            if [[ -n "$value" && ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+              echo "${name} must be a positive decimal Actions run ID." >&2
+              exit 1
+            fi
+          }
+          validate_optional_run_id preflight_run_id "$PREFLIGHT_RUN_ID"
+          validate_optional_run_id full_release_validation_run_id "$FULL_RELEASE_VALIDATION_RUN_ID"
+          validate_optional_run_id release_delta_evidence_run_id "$RELEASE_DELTA_EVIDENCE_RUN_ID"
+          validate_optional_run_id release_publish_run_id "$RELEASE_PUBLISH_RUN_ID"
+          validate_optional_run_id plugin_npm_run_id "$PLUGIN_NPM_RUN_ID"
           tideclaw_alpha_publish=false
           extended_stable_publish=false
           if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
@@ -572,6 +1321,10 @@ jobs:
             echo "Real publish runs must be dispatched from main, release/YYYY.M.PATCH, the exact validated extended-stable branch, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
             exit 1
           fi
+          if [[ -n "${RELEASE_DELTA_EVIDENCE_RUN_ID}" && "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "release_delta_evidence_run_id requires the trusted main workflow." >&2
+            exit 1
+          fi
 
       - name: Require preflight artifact promotion on real publish
         env:
@@ -579,6 +1332,7 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RELEASE_DELTA_EVIDENCE_RUN_ID: ${{ inputs.release_delta_evidence_run_id }}
           PLUGIN_NPM_RUN_ID: ${{ inputs.plugin_npm_run_id }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
         run: |
@@ -587,13 +1341,13 @@ jobs:
             echo "Real publish requires preflight_run_id from a successful npm preflight run." >&2
             exit 1
           fi
-          if [[ -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
-            if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" == "beta" ]]; then
-              echo "::warning::Beta publish is proceeding from npm preflight only; full release validation remains required before stable/latest promotion."
-            else
-              echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
-              exit 1
-            fi
+          if [[ -z "${FULL_RELEASE_VALIDATION_RUN_ID}" && -z "${RELEASE_DELTA_EVIDENCE_RUN_ID}" ]]; then
+            echo "Real publish requires full_release_validation_run_id or release_delta_evidence_run_id." >&2
+            exit 1
+          fi
+          if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ID}" && -n "${RELEASE_DELTA_EVIDENCE_RUN_ID}" ]]; then
+            echo "full_release_validation_run_id and release_delta_evidence_run_id are mutually exclusive." >&2
+            exit 1
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && -z "${PLUGIN_NPM_RUN_ID// }" ]]; then
             echo "Extended-stable publish requires plugin_npm_run_id from a successful Plugin NPM Release run." >&2
@@ -631,7 +1385,7 @@ jobs:
     # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
     # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
     needs: [validate_publish_request]
-    if: ${{ !inputs.preflight_only }}
+    if: ${{ !inputs.preflight_only && !inputs.oidc_readiness }}
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
@@ -663,6 +1417,32 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
+
+      - name: Checkout trusted delta verifier
+        if: ${{ inputs.release_delta_evidence_run_id != '' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: .release-delta-tooling
+          persist-credentials: false
+
+      - name: Verify release delta evidence
+        if: ${{ inputs.release_delta_evidence_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          RELEASE_DELTA_EVIDENCE_RUN_ID: ${{ inputs.release_delta_evidence_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          target_sha="$(git rev-parse HEAD)"
+          node .release-delta-tooling/scripts/release-delta-evidence.mjs verify \
+            --run-id "$RELEASE_DELTA_EVIDENCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --target-sha "$target_sha" \
+            --npm-preflight-run "$NPM_PREFLIGHT_RUN_ID"
 
       - name: Validate Tideclaw alpha publish target
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
@@ -719,7 +1499,7 @@ jobs:
           printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
 
       - name: Verify full release validation run metadata
-        if: ${{ inputs.full_release_validation_run_id != '' }}
+        if: ${{ inputs.release_delta_evidence_run_id == '' && inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -802,7 +1582,7 @@ jobs:
           download_preflight_artifact
 
       - name: Download full release validation manifest
-        if: ${{ inputs.full_release_validation_run_id != '' }}
+        if: ${{ inputs.release_delta_evidence_run_id == '' && inputs.full_release_validation_run_id != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}
@@ -843,6 +1623,7 @@ jobs:
           fi
           ARTIFACT_RELEASE_TAG="$(jq -r '.releaseTag // ""' "$MANIFEST_FILE")"
           ARTIFACT_RELEASE_SHA="$(jq -r '.releaseSha // ""' "$MANIFEST_FILE")"
+          ARTIFACT_PACKAGE_VERSION="$(jq -r '.packageVersion // ""' "$MANIFEST_FILE")"
           ARTIFACT_RELEASE_NPM_DIST_TAG="$(jq -r '.npmDistTag // ""' "$MANIFEST_FILE")"
           ARTIFACT_TARBALL_NAME="$(jq -r '.tarballName // ""' "$MANIFEST_FILE")"
           ARTIFACT_TARBALL_SHA256="$(jq -r '.tarballSha256 // ""' "$MANIFEST_FILE")"
@@ -857,6 +1638,10 @@ jobs:
           fi
           if [[ "$ARTIFACT_RELEASE_SHA" != "$EXPECTED_RELEASE_SHA" ]]; then
             echo "Prepared preflight SHA mismatch: expected $EXPECTED_RELEASE_SHA, got $ARTIFACT_RELEASE_SHA" >&2
+            exit 1
+          fi
+          if [[ "$ARTIFACT_PACKAGE_VERSION" != "${RELEASE_TAG#v}" ]]; then
+            echo "Prepared preflight version mismatch: expected ${RELEASE_TAG#v}, got $ARTIFACT_PACKAGE_VERSION" >&2
             exit 1
           fi
           if [[ "$ARTIFACT_RELEASE_NPM_DIST_TAG" != "$RELEASE_NPM_DIST_TAG" ]]; then
@@ -882,7 +1667,7 @@ jobs:
           echo "tarball_path=$ARTIFACT_TARBALL_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Verify full release validation target
-        if: ${{ inputs.full_release_validation_run_id != '' }}
+        if: ${{ inputs.release_delta_evidence_run_id == '' && inputs.full_release_validation_run_id != '' }}
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
@@ -926,6 +1711,51 @@ jobs:
         id: previous_extended_stable
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
         run: node scripts/openclaw-npm-extended-stable-release.mjs capture-selector
+
+      - name: Recheck remote release refs
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          target_sha="$(git rev-parse HEAD)"
+          direct_tag_sha=""
+          peeled_tag_sha=""
+          while read -r remote_sha remote_ref; do
+            case "$remote_ref" in
+              "refs/tags/${RELEASE_TAG}")
+                direct_tag_sha="$remote_sha"
+                ;;
+              "refs/tags/${RELEASE_TAG}^{}")
+                peeled_tag_sha="$remote_sha"
+                ;;
+              *)
+                echo "Unexpected remote tag ref while rechecking ${RELEASE_TAG}: ${remote_ref}" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          remote_tag_sha="${peeled_tag_sha:-$direct_tag_sha}"
+          if [[ ! "$remote_tag_sha" =~ ^[0-9a-f]{40}$ || "$remote_tag_sha" != "$target_sha" ]]; then
+            echo "Remote tag ${RELEASE_TAG} must peel to ${target_sha}; got ${remote_tag_sha:-<missing>}." >&2
+            exit 1
+          fi
+
+          release_line="${RELEASE_TAG#v}"
+          release_line="${release_line%%-*}"
+          case "$WORKFLOW_REF_NAME" in
+            release/*|extended-stable/*|tideclaw/alpha/*)
+              publish_branch="$WORKFLOW_REF_NAME"
+              ;;
+            *)
+              publish_branch="release/${release_line}"
+              ;;
+          esac
+          branch_sha="$(git ls-remote --heads origin "refs/heads/${publish_branch}" | awk 'NR == 1 { print $1 } NR > 1 { exit 2 }')"
+          if [[ ! "$branch_sha" =~ ^[0-9a-f]{40}$ || "$branch_sha" != "$target_sha" ]]; then
+            echo "Remote branch ${publish_branch} must point to ${target_sha}; got ${branch_sha:-<missing>}." >&2
+            exit 1
+          fi
 
       - name: Publish
         id: publish
