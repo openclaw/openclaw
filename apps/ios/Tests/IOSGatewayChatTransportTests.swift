@@ -106,13 +106,13 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `list sessions params request archived sessions explicitly`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makeListSessionsParamsJSON(limit: 12, archived: true))
         #expect(params["archived"] as? Bool == true)
     }
 
     @Test func `patch session params preserve explicit null clearing`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makePatchSessionParamsJSON(
                 key: "session-1",
                 label: .some(nil),
@@ -128,7 +128,7 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `patch session params include selected global agent`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makePatchSessionParamsJSON(
                 key: "global",
                 agentId: "reviewer",
@@ -139,7 +139,7 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `fork session params preserve parent agent`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makeForkSessionParamsJSON(
                 parentKey: "agent:reviewer:telegram:group:1",
                 agentId: "reviewer"))
@@ -149,7 +149,7 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `session model patch params include model and selected agent`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makeSessionPatchModelParamsJSON(
                 sessionKey: "global",
                 agentId: "reviewer",
@@ -160,7 +160,7 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `session model patch params encode default model as null`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makeSessionPatchModelParamsJSON(
                 sessionKey: "agent:main:main",
                 model: nil))
@@ -304,27 +304,27 @@ struct IOSGatewayChatTransportTests {
         let requests = await recorder.all()
         #expect(requests.map(\.method) == Array(
             repeating: ["sessions.patch", "sessions.delete", "sessions.create"],
-            count: 3).flatMap { $0 })
+            count: 3).flatMap(\.self))
         #expect(requests.map(\.timeoutSeconds) == Array(repeating: 15, count: 9))
 
-        for (offset, expectedKey, expectedAgentID) in [
-            (0, "agent:reviewer:Matrix:Channel:Room", nil),
-            (3, "global", "reviewer"),
-            (6, "agent:ops:main", nil),
-        ] as [(Int, String, String?)] {
-            let patch = try self.object(from: requests[offset].paramsJSON)
+        for (offset, expectedKey, expectedMutationAgentID, expectedForkAgentID) in [
+            (0, "agent:reviewer:Matrix:Channel:Room", nil, "reviewer"),
+            (3, "global", "reviewer", "reviewer"),
+            (6, "agent:ops:main", nil, "ops"),
+        ] as [(Int, String, String?, String?)] {
+            let patch = try object(from: requests[offset].paramsJSON)
             #expect(patch["key"] as? String == expectedKey)
-            #expect(patch["agentId"] as? String == expectedAgentID)
+            #expect(patch["agentId"] as? String == expectedMutationAgentID)
             #expect(patch["pinned"] as? Bool == true)
 
-            let delete = try self.object(from: requests[offset + 1].paramsJSON)
+            let delete = try object(from: requests[offset + 1].paramsJSON)
             #expect(delete["key"] as? String == expectedKey)
-            #expect(delete["agentId"] as? String == expectedAgentID)
+            #expect(delete["agentId"] as? String == expectedMutationAgentID)
             #expect(delete["deleteTranscript"] as? Bool == true)
 
-            let fork = try self.object(from: requests[offset + 2].paramsJSON)
+            let fork = try object(from: requests[offset + 2].paramsJSON)
             #expect(fork["parentSessionKey"] as? String == expectedKey)
-            #expect(fork["agentId"] as? String == expectedAgentID)
+            #expect(fork["agentId"] as? String == expectedForkAgentID)
             #expect(fork["fork"] as? Bool == true)
         }
     }
