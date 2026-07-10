@@ -57,6 +57,7 @@ Denied flags by safe-bin profile:
 - `grep`: `--dereference-recursive`, `--directories`, `--exclude-from`, `--file`, `--recursive`, `-R`, `-d`, `-f`, `-r`
 - `jq`: `--argfile`, `--from-file`, `--library-path`, `--rawfile`, `--slurpfile`, `-L`, `-f`
 - `sort`: `--compress-program`, `--files0-from`, `--output`, `--random-source`, `--temporary-directory`, `-T`, `-o`
+- `tail`: `--follow`, `--retry`, `-F`, `-f`
 - `wc`: `--files0-from`
 
 [//]: # "SAFE_BIN_DENIED_FLAGS:END"

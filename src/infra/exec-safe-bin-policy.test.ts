@@ -162,6 +162,10 @@ describe("exec safe bin policy boolean flags", () => {
     expect(validateSafeBinArgv(["-Z"], SAFE_BIN_PROFILES.wc)).toBe(false);
   });
 
+  it("keeps tail -fn 1 follow mode fail-closed", () => {
+    expect(validateSafeBinArgv(["-fn", "1"], SAFE_BIN_PROFILES.tail)).toBe(false);
+  });
+
   it("keeps mixed boolean+value short clusters working", () => {
     expect(validateSafeBinArgv(["-cf", "2"], SAFE_BIN_PROFILES.uniq)).toBe(true);
   });

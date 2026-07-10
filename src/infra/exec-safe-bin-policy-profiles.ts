@@ -262,6 +262,8 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixt
       "-v",
       "-z",
     ],
+    // Follow/retry modes are unbounded and do not belong in auto-approved safe-bin use.
+    deniedFlags: ["--follow", "--retry", "-F", "-f"],
   },
   tr: {
     minPositional: 1,
