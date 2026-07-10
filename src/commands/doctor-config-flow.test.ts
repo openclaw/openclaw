@@ -1628,6 +1628,31 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("does not refresh gateway before writing a config-only auth repair", async () => {
+    runDoctorRepairSequenceMock.mockImplementation(
+      async (params: { state: { candidate: Record<string, unknown> } }) => ({
+        state: {
+          ...params.state,
+          candidate: { ...params.state.candidate, auth: { order: {} } },
+          pendingChanges: true,
+        },
+        changeNotes: ["Removed a stale configured auth order."],
+        warningNotes: [],
+        authProfilesRepaired: false,
+      }),
+    );
+
+    const result = await runDoctorConfigWithInput({
+      config: { auth: { order: { anthropic: ["anthropic:missing"] } } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.auth?.order).toEqual({});
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("keeps doctor repair silent when gateway secrets reload fails", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("gateway unavailable"));
     runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({

@@ -82,14 +82,23 @@ function parseJsonCell(raw: string | null | undefined): unknown {
   }
 }
 
+export type PersistedAuthProfileStoreInspection =
+  | { status: "missing" }
+  | { status: "readable"; raw: unknown }
+  | { status: "unreadable" };
+
 function getAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthProfileDatabase>(db);
 }
 
-function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "state"): unknown {
+function inspectAuthProfileJsonCellReadOnly(
+  pathname: string,
+  target: "store" | "state",
+): PersistedAuthProfileStoreInspection {
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  let db: DatabaseSync | undefined;
   try {
+    db = new sqlite.DatabaseSync(pathname, { readOnly: true });
     // This short-lived reader bypasses the canonical agent DB bootstrap, but it
     // must share its busy policy so brief rollback-journal locks do not look
     // like missing credentials.
@@ -103,7 +112,14 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
           .select("store_json")
           .where("store_key", "=", PRIMARY_ROW_KEY),
       );
-      return parseJsonCell(row?.store_json);
+      if (!row) {
+        return { status: "missing" };
+      }
+      try {
+        return { status: "readable", raw: JSON.parse(row.store_json) as unknown };
+      } catch {
+        return { status: "unreadable" };
+      }
     }
     const row = executeSqliteQueryTakeFirstSync(
       db,
@@ -112,13 +128,38 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
         .select("state_json")
         .where("state_key", "=", PRIMARY_ROW_KEY),
     );
-    return parseJsonCell(row?.state_json);
+    if (!row) {
+      return { status: "missing" };
+    }
+    try {
+      return { status: "readable", raw: JSON.parse(row.state_json) as unknown };
+    } catch {
+      return { status: "unreadable" };
+    }
   } catch {
-    return null;
+    return { status: "unreadable" };
   } finally {
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
+    if (db) {
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      db.close();
+    }
   }
+}
+
+function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "state"): unknown {
+  const result = inspectAuthProfileJsonCellReadOnly(pathname, target);
+  return result.status === "readable" ? result.raw : null;
+}
+
+/** Distinguishes an absent auth row from a present store that could not be read. */
+export function inspectPersistedAuthProfileStoreRaw(
+  agentDir?: string,
+): PersistedAuthProfileStoreInspection {
+  const databasePath = resolveAuthProfileDatabasePath(agentDir);
+  if (!fs.existsSync(databasePath)) {
+    return { status: "missing" };
+  }
+  return inspectAuthProfileJsonCellReadOnly(databasePath, "store");
 }
 
 /** Reads the raw persisted secrets-store payload without coercing the schema. */
