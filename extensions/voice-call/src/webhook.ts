@@ -422,7 +422,7 @@ export class VoiceCallWebhookServer {
       },
       onTranscriptionReady: (callId) => {
         this.manager.speakInitialMessage(callId).catch((err: unknown) => {
-          log.warn(`Failed to speak initial message:`, err);
+          log.warn(`Failed to speak initial message:`, { err: String(err) });
         });
       },
       onDisconnect: (callId, streamSid) => {
@@ -448,7 +448,7 @@ export class VoiceCallWebhookServer {
 
           log.info(`Auto-ending call ${disconnectedCall.callId} after stream disconnect grace`);
           void this.manager.endCall(disconnectedCall.callId).catch((err: unknown) => {
-            log.warn(`Failed to auto-end call ${disconnectedCall.callId}:`, err);
+            log.warn(`Failed to auto-end call ${disconnectedCall.callId}:`, { err: String(err) });
           });
         }, STREAM_DISCONNECT_HANGUP_GRACE_MS);
         timer.unref?.();
@@ -486,7 +486,7 @@ export class VoiceCallWebhookServer {
     this.startPromise = new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
         this.handleRequest(req, res, webhookPath).catch((err: unknown) => {
-          log.error("Webhook error:", err);
+          log.error("Webhook error:", { err: String(err) });
           res.statusCode = 500;
           res.end("Internal Server Error");
         });
@@ -914,7 +914,7 @@ export class VoiceCallWebhookServer {
       try {
         this.processEventWithAutoResponse(event);
       } catch (err) {
-        log.error(`Error processing event ${event.type}:`, err);
+        log.error(`Error processing event ${event.type}:`, { err: String(err) });
       }
     }
   }
@@ -932,7 +932,7 @@ export class VoiceCallWebhookServer {
     // Both media-stream and carrier-webhook transcripts share this handoff.
     // The manager result excludes replays and turn-token mismatches.
     void this.handleInboundResponse(result.call.callId, result.transcript).catch((err: unknown) => {
-      log.warn(`Failed to auto-respond:`, err);
+      log.warn(`Failed to auto-respond:`, { err: String(err) });
     });
   }
 
@@ -1012,7 +1012,7 @@ export class VoiceCallWebhookServer {
         await this.manager.speak(callId, result.text, { listenAfterPlayback: true });
       }
     } catch (err) {
-      log.error(`Auto-response error:`, err);
+      log.error(`Auto-response error:`, { err: String(err) });
     }
   }
 }
