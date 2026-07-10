@@ -1642,6 +1642,35 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("routes runtime-aware model commands through the server directive path", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const command = "/model openai/gpt-5.6-luna --runtime codex continue with the selected model";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(command);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(sendRequest.params)).toMatchObject({
+        message: command,
+        sessionKey: "agent:main:main",
+      });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps a session model override selected after switching away and back", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

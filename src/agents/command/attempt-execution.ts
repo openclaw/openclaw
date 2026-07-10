@@ -484,6 +484,7 @@ export function runAgentAttempt(params: {
   originalProvider: string;
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
+  agentHarnessRuntimeOverride?: string;
   sessionId: string;
   sessionKey: string | undefined;
   sessionAgentId: string;
@@ -556,15 +557,24 @@ export function runAgentAttempt(params: {
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
+  const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
+  const sessionCliRuntime =
+    sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
+      ? sessionRuntimeOverride
+      : undefined;
+  const configuredCliRuntime =
+    !isRawModelRun && !sessionRuntimeOverride
+      ? resolveCliRuntimeExecutionProvider({
+          provider: params.providerOverride,
+          cfg: params.cfg,
+          agentId: params.sessionAgentId,
+          modelId: params.modelOverride,
+          authProfileId: params.sessionEntry?.authProfileOverride,
+        })
+      : undefined;
   const cliExecutionProvider = isRawModelRun
     ? params.providerOverride
-    : (resolveCliRuntimeExecutionProvider({
-        provider: params.providerOverride,
-        cfg: params.cfg,
-        agentId: params.sessionAgentId,
-        modelId: params.modelOverride,
-        authProfileId: params.sessionEntry?.authProfileOverride,
-      }) ?? params.providerOverride);
+    : (sessionCliRuntime ?? configuredCliRuntime ?? params.providerOverride);
   const isCliExecutionProvider = isCliProvider(cliExecutionProvider, params.cfg);
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
@@ -581,13 +591,15 @@ export function runAgentAttempt(params: {
     });
   const agentHarnessPolicy = isRawModelRun
     ? ({ runtime: "openclaw", runtimeSource: "model" } as const)
-    : resolveAvailableAgentHarnessPolicy({
-        provider: params.providerOverride,
-        modelId: params.modelOverride,
-        config: params.cfg,
-        agentId: params.sessionAgentId,
-        sessionKey: params.sessionKey ?? params.sessionId,
-      });
+    : sessionRuntimeOverride
+      ? ({ runtime: sessionRuntimeOverride, runtimeSource: "model" } as const)
+      : resolveAvailableAgentHarnessPolicy({
+          provider: params.providerOverride,
+          modelId: params.modelOverride,
+          config: params.cfg,
+          agentId: params.sessionAgentId,
+          sessionKey: params.sessionKey ?? params.sessionId,
+        });
   const harnessAuthSelection = resolveHarnessAuthProfileSelection({
     config: params.cfg,
     agentDir: params.agentDir,
@@ -636,6 +648,7 @@ export function runAgentAttempt(params: {
   });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
+    sessionRuntimeOverride ??
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);

@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -36,6 +36,16 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
+
+const providerArtifactMocks = vi.hoisted(() => ({
+  resolveBundledProviderPolicySurface: vi.fn<
+    typeof import("../plugins/provider-public-artifacts.js").resolveBundledProviderPolicySurface
+  >(() => null),
+}));
+
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
+}));
 
 function resolveSyncRealpath(filePath: string): string {
   return fs.realpathSync.native(filePath);
@@ -101,6 +111,11 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("gateway session utils", () => {
+  beforeEach(() => {
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReset();
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue(null);
+  });
+
   beforeAll(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     listSessionsFromStore({
@@ -621,6 +636,18 @@ describe("gateway session utils", () => {
   });
 
   test("session defaults and rows expose bundled startup-lazy provider thinking without catalog", () => {
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+        ],
+      }),
+    });
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.5" });
 
     const defaults = getSessionDefaults(cfg);
@@ -634,6 +661,78 @@ describe("gateway session utils", () => {
     expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
   });
+
+  test("preserves persisted Ultra while projecting picker levels without a catalog", () => {
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
+      resolveThinkingProfile: ({ modelId, agentRuntime }) => ({
+        levels: [
+          { id: "off" },
+          { id: "high" },
+          { id: "xhigh" },
+          { id: "max" },
+          ...(modelId.startsWith("gpt-5.6") &&
+          (agentRuntime === "openclaw" || !modelId.startsWith("gpt-5.6-luna"))
+            ? [{ id: "ultra" as const }]
+            : []),
+        ],
+      }),
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const defaults = getSessionDefaults(cfg);
+    const row = (entry: SessionEntry) =>
+      buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry,
+      });
+
+    const codex = row({ sessionId: "codex", thinkingLevel: "ultra" } as SessionEntry);
+    const openClawOverride = row({
+      sessionId: "openclaw",
+      thinkingLevel: "ultra",
+      agentRuntimeOverride: "openclaw",
+    } as SessionEntry);
+    const legacyObservedOpenClaw = row({
+      sessionId: "legacy-observed-openclaw",
+      thinkingLevel: "ultra",
+      agentHarnessId: "openclaw",
+    } as SessionEntry);
+
+    expect(defaults.agentRuntime?.id).toBe("codex");
+    expect(codex.thinkingLevel).toBe("ultra");
+    expect(codex.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
+    expect(openClawOverride.thinkingLevel).toBe("ultra");
+    expect(openClawOverride.agentRuntime?.id).toBe("openclaw");
+    expect(legacyObservedOpenClaw.thinkingLevel).toBe("ultra");
+    expect(legacyObservedOpenClaw.agentRuntime?.id).toBe("codex");
+    expect(legacyObservedOpenClaw.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
+  });
+
+  test.each(["xhigh", "max"] as const)(
+    "preserves catalog-less persisted %s in session change projections",
+    (thinkingLevel) => {
+      const row = buildGatewaySessionRow({
+        cfg: createModelDefaultsConfig({ primary: "custom/reasoner" }),
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: { sessionId: thinkingLevel, thinkingLevel } as SessionEntry,
+      });
+
+      expect(row.thinkingLevel).toBe(thinkingLevel);
+    },
+  );
 
   test("session defaults use configured thinking default", () => {
     const defaults = getSessionDefaults({

@@ -1,4 +1,5 @@
 // Control UI module implements app chat behavior.
+import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/commands-registry.shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import {
   GatewayRequestError,
@@ -1185,7 +1186,9 @@ export async function handleSendChat(
     }
 
     // Intercept local slash commands (/status, /model, /compact, etc.)
-    if (parsed?.command.executeLocal) {
+    const forwardModelCommand =
+      parsed?.command.key === "model" && shouldForwardModelCommandToServer(parsed.args);
+    if (parsed?.command.executeLocal && !forwardModelCommand) {
       if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.key)) {
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, message);
