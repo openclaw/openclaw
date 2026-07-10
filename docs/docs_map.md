@@ -4831,6 +4831,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Related
 
+## plan/mobile-kmp-native-ui.md
+
+- Route: /plan/mobile-kmp-native-ui
+- Headings:
+  - H2: Status
+  - H2: Decision
+  - H2: What stays native
+  - H2: Evidence and migration order
+  - H2: Target boundaries
+  - H2: Swift API policy
+  - H2: Contract-first rollout
+  - H2: Net-negative gate
+  - H2: Required verification
+  - H2: Milestones and stop conditions
+  - H2: Research and precedents
+  - H2: Related
+
 ## plan/ui-channels.md
 
 - Route: /plan/ui-channels
