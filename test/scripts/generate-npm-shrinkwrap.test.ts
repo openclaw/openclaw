@@ -97,7 +97,9 @@ describe("generate-npm-shrinkwrap", () => {
     const results = await runBoundedTasks(["slow", "fast", "last"], 2, async (value) => {
       active += 1;
       maxActive = Math.max(maxActive, active);
-      await new Promise((resolve) => setTimeout(resolve, value === "slow" ? 30 : 5));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, value === "slow" ? 30 : 5);
+      });
       active -= 1;
       return value;
     });
