@@ -469,6 +469,10 @@ type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  /** Managed worktree bound to this session (repo checkout + branch). */
+  worktree?: { id: string; branch: string; repoRoot: string };
+  /** Session-scoped exec node binding (exec host=node routing). */
+  execNode?: string;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */

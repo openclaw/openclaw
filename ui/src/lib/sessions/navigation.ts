@@ -189,17 +189,19 @@ export function filterSessionRows(
   };
 }
 
-export function getVisibleSessionRows(
-  result: SessionsListResult | null,
-  options: {
-    currentSessionKey?: string;
-    agentId: string;
-    defaultAgentId: string;
-    filterByAgent?: boolean;
-    hideCron?: boolean;
-  },
+type VisibleSessionRowOptions = {
+  currentSessionKey?: string;
+  agentId: string;
+  defaultAgentId: string;
+  filterByAgent?: boolean;
+  hideCron?: boolean;
+};
+
+export function filterVisibleSessionRows(
+  rows: readonly GatewaySessionRow[],
+  options: VisibleSessionRowOptions,
 ): GatewaySessionRow[] {
-  return (result?.sessions ?? []).filter((row) => {
+  return rows.filter((row) => {
     if (row.key === options.currentSessionKey) {
       return true;
     }
@@ -214,6 +216,13 @@ export function getVisibleSessionRows(
         isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
     );
   });
+}
+
+export function getVisibleSessionRows(
+  result: SessionsListResult | null,
+  options: VisibleSessionRowOptions,
+): GatewaySessionRow[] {
+  return filterVisibleSessionRows(result?.sessions ?? [], options);
 }
 
 export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
