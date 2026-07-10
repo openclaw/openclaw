@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { resolveTenkiRuntimePaths } from "./backend.js";
+import { buildPositionalArgsPrefix, resolveTenkiRuntimePaths } from "./backend.js";
+
+describe("buildPositionalArgsPrefix", () => {
+  it("returns empty for no args", () => {
+    expect(buildPositionalArgsPrefix(undefined)).toBe("");
+    expect(buildPositionalArgsPrefix([])).toBe("");
+  });
+
+  it("preserves empty-string positionals via quoting", () => {
+    expect(buildPositionalArgsPrefix(["read", "/mnt", "", "file.txt"])).toBe(
+      "set -- 'read' '/mnt' '' 'file.txt'\n",
+    );
+  });
+
+  it("escapes single quotes", () => {
+    expect(buildPositionalArgsPrefix(["it's"])).toBe(`set -- 'it'"'"'s'\n`);
+  });
+});
 
 describe("resolveTenkiRuntimePaths", () => {
   it("builds stable per-scope remote paths", () => {

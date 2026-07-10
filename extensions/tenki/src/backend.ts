@@ -23,6 +23,7 @@ import {
   buildValidatedExecRemoteCommand,
   createRemoteShellSandboxFsBridge,
   sanitizeEnvVars,
+  shellEscape,
 } from "openclaw/plugin-sdk/sandbox";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTenkiPluginConfig, type ResolvedTenkiPluginConfig } from "./config.js";
@@ -449,8 +450,12 @@ class TenkiSandboxBackendImpl {
       env = { OPENCLAW_STDIN_FILE: stdinFile };
       script = `exec 0<"$OPENCLAW_STDIN_FILE" && rm -f -- "$OPENCLAW_STDIN_FILE"\n${script}`;
     }
+    // Tenki's exec API rejects empty argv elements (protovalidate min_len: 1),
+    // but fs-bridge scripts legitimately pass "" positionals. Inline them with
+    // `set --` and shell quoting so empty strings survive as ''.
+    script = `${buildPositionalArgsPrefix(params.args)}${script}`;
     const result = await session.exec("/bin/sh", {
-      args: ["-c", script, "openclaw-sandbox", ...(params.args ?? [])],
+      args: ["-c", script],
       env,
       signal: params.signal,
     });
@@ -480,6 +485,13 @@ class TenkiSandboxBackendImpl {
       args: [remoteDir, this.params.runtimePaths.runtimeRootDir, remoteTar],
     });
   }
+}
+
+export function buildPositionalArgsPrefix(args: readonly string[] | undefined): string {
+  if (!args || args.length === 0) {
+    return "";
+  }
+  return `set -- ${args.map((arg) => shellEscape(arg)).join(" ")}\n`;
 }
 
 async function createLocalTarball(localDir: string): Promise<Buffer> {
