@@ -1,6 +1,7 @@
 /** Tests silent-reply and heartbeat token parsing helpers. */
 import { describe, it, expect } from "vitest";
 import {
+  hasLeadingSilentToken,
   isInternalFormattingArtifact,
   isSilentReplyPrefixText,
   isSilentReplyPayloadText,
@@ -281,6 +282,24 @@ describe("startsWithSilentToken", () => {
     expect(startsWithSilentToken("NO_REPLY—note")).toBe(false);
     expect(startsWithSilentToken("NO_REPLY")).toBe(false);
     expect(startsWithSilentToken("  NO_REPLY  ")).toBe(false);
+  });
+});
+
+describe("hasLeadingSilentToken", () => {
+  it("matches leading tokens separated by whitespace or newlines", () => {
+    expect(hasLeadingSilentToken("NO_REPLY The user is saying")).toBe(true);
+    expect(hasLeadingSilentToken("NO_REPLY\n\nThe user is saying")).toBe(true);
+    expect(hasLeadingSilentToken("  no_reply  The user is saying")).toBe(true);
+  });
+
+  it("still matches glued leading tokens", () => {
+    expect(hasLeadingSilentToken("NO_REPLYThe user is saying")).toBe(true);
+  });
+
+  it("rejects punctuation-start content and token-only text", () => {
+    expect(hasLeadingSilentToken("NO_REPLY: explanation")).toBe(false);
+    expect(hasLeadingSilentToken("NO_REPLY—note")).toBe(false);
+    expect(hasLeadingSilentToken("NO_REPLY")).toBe(false);
   });
 });
 

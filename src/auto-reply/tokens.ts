@@ -287,6 +287,25 @@ export function startsWithSilentToken(
   return getSilentLeadingAttachedRegex(token).test(text);
 }
 
+/**
+ * Check whether text starts with one or more leading silent reply tokens,
+ * including tokens separated from the remaining content by whitespace or
+ * newlines before the first visible (word-start) character.
+ */
+export function hasLeadingSilentToken(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  if (startsWithSilentToken(text, token)) {
+    return true;
+  }
+  const escaped = escapeRegExp(token);
+  return new RegExp(`^(?:\\s*${escaped})+\\s+(?=[\\p{L}\\p{N}])`, "iu").test(text);
+}
+
 export function isSilentReplyPrefixText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,

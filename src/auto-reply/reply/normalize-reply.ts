@@ -5,12 +5,12 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import {
+  hasLeadingSilentToken,
   HEARTBEAT_TOKEN,
   isInternalFormattingArtifact,
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../tokens.js";
@@ -68,11 +68,11 @@ export function normalizeReplyPayload(
   // token never leaks to end users.  If stripping leaves nothing, treat it as
   // silent just like the exact-match path above.  (#30916, #30955)
   if (text && !isSilentReplyText(text, silentToken)) {
-    const hasLeadingSilentToken = startsWithSilentToken(text, silentToken);
-    if (hasLeadingSilentToken) {
+    const leadingTokenStripped = hasLeadingSilentToken(text, silentToken);
+    if (leadingTokenStripped) {
       text = stripLeadingSilentToken(text, silentToken);
     }
-    if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
+    if (leadingTokenStripped || text.toLowerCase().includes(silentToken.toLowerCase())) {
       text = stripSilentToken(text, silentToken);
       if (!hasContent(text)) {
         opts.onSkip?.("silent");

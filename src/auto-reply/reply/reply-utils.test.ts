@@ -214,6 +214,16 @@ describe("normalizeReplyPayload", () => {
     expect(expectNormalizedReply(result).text).toBe("The user is saying hello");
   });
 
+  it("strips leading newline-separated NO_REPLY token without leaking it to the channel", () => {
+    const result = normalizeReplyPayload({
+      text: "NO_REPLY\n\nWait — the user mentioned me directly. I should respond.\n\nHi! How can I help?",
+    });
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).not.toContain("NO_REPLY");
+    expect(reply.text).toContain("Wait — the user mentioned me directly");
+    expect(reply.text).toContain("Hi! How can I help?");
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(expectNormalizedReply(result).text).toBe("NO_REPLY -- nope");
