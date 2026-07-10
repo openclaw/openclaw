@@ -51,7 +51,7 @@ export function parseRunWithEnvArgs(argv) {
  * Resolves node to the current executable so wrapper and child use the same runtime.
  */
 export function resolveSpawnCommand(command, args, execPath = process.execPath) {
-  if (command === "node") {
+  if (command === "node" || command.toLowerCase() === "node.exe") {
     return {
       command: execPath,
       args,

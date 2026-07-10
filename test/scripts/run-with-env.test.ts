@@ -148,6 +148,12 @@ describe("run-with-env", () => {
       command: "node.exe",
       args: ["scripts/run-vitest.mjs"],
     });
+    expect(
+      resolveSpawnCommand("node.exe", ["scripts/run-vitest.mjs"], "C:\\Node24\\node.exe"),
+    ).toEqual({
+      command: "C:\\Node24\\node.exe",
+      args: ["scripts/run-vitest.mjs"],
+    });
   });
 
   it("rejects malformed force-kill grace configuration before spawning", () => {
