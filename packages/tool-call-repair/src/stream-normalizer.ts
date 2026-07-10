@@ -83,6 +83,23 @@ function couldStillBeXmlishParameterPayload(text: string, start: number): boolea
   return matchesLiteralPrefix(text.slice(cursor).toLowerCase(), "<parameter=");
 }
 
+const XMlish_FUNCTION_CLOSE_MARKER = "</function>";
+
+function couldStillBeXmlishFunctionClose(text: string, start: number): boolean {
+  let cursor = start;
+  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
+    cursor += 1;
+  }
+  if (cursor >= text.length) {
+    return true;
+  }
+  const remaining = text.slice(cursor).toLowerCase();
+  return (
+    XMlish_FUNCTION_CLOSE_MARKER.startsWith(remaining) ||
+    remaining.startsWith(XMlish_FUNCTION_CLOSE_MARKER)
+  );
+}
+
 function couldStillBeBracketedStandaloneToolCall(
   text: string,
   matcher: PlainTextToolCallNameMatcher,
@@ -193,7 +210,10 @@ function couldStillBeXmlishFunctionToolCall(
   if (!matcher.hasExactName(name)) {
     return false;
   }
-  return couldStillBeXmlishParameterPayload(text, cursor + 1);
+  return (
+    couldStillBeXmlishParameterPayload(text, cursor + 1) ||
+    couldStillBeXmlishFunctionClose(text, cursor + 1)
+  );
 }
 
 function couldStillBeHarmonyStandaloneToolCall(
