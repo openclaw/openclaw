@@ -1215,6 +1215,11 @@ describe("processGatewayAllowlist", () => {
       askFallback: "deny",
     });
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
     runExecProcessMock.mockResolvedValue({
       session: { id: "sess-1" },
       promise: Promise.resolve({
@@ -2098,7 +2103,16 @@ EOF`,
   });
 
   it("binds explicit allow-always persistence to its evaluated policy snapshot", async () => {
-    const { command, authorizationPlan, segments } = await planAllowlistedNodeVersion();
+    const command = "sh -c 'git status'";
+    const env = { PATH: "/usr/bin:/bin" };
+    const authorizationPlan = await planShellAuthorization({ command, env });
+    expect(authorizationPlan.ok).toBe(true);
+    if (!authorizationPlan.ok) {
+      throw new Error(authorizationPlan.reason);
+    }
+    const segments = authorizationPlan.groups.flatMap((group) =>
+      group.candidates.map((candidate) => candidate.sourceSegment),
+    );
     hasDurableExecApprovalMock.mockReturnValue(false);
     requiresExecApprovalMock.mockReturnValue(true);
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
@@ -2128,6 +2142,7 @@ EOF`,
       runGatewayAllowlist({
         command,
         ask: "on-miss",
+        env,
         turnSourceChannel: "webchat",
       }),
     ).rejects.toThrow("approval revoked");

@@ -1627,7 +1627,7 @@ describe("exec approvals", () => {
     expect(systemRun.command).toBe("system.run");
     const params = requireRecord(systemRun.params, "system.run params");
     expect(params.approved).toBeUndefined();
-    expect(params.approvalDecision).toBeNull();
+    expect(params.approvalDecision).toBeUndefined();
     expect(params.approvalSource).toBe("ask-fallback");
     expect(params.systemRunPlan).toStrictEqual(preparedPlan);
     expect(params.runId).toBeTypeOf("string");
