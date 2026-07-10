@@ -1,7 +1,11 @@
 // Slack plugin module owns WebClient-scoped message and file delivery primitives.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  extractErrorCode,
+  PlatformMessageNotDispatchedError,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -93,6 +97,24 @@ function resolveSlackUploadTimeoutLogUrl(url: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function buildSlackUploadFailureCause(error: unknown): Error {
+  const httpStatus =
+    error instanceof Error
+      ? /^Failed to upload file: HTTP (\d{3})$/u.exec(error.message)?.[1]
+      : undefined;
+  const cause = new Error(
+    httpStatus
+      ? `Slack external upload returned HTTP ${httpStatus}`
+      : "Slack external upload transfer failed",
+  );
+  cause.name = readErrorName(error) || cause.name;
+  const code = extractErrorCode(error) ?? (httpStatus ? `HTTP_${httpStatus}` : undefined);
+  if (code) {
+    (cause as NodeJS.ErrnoException).code = code;
+  }
+  return cause;
 }
 
 function parseSlackUploadHttpUrl(value: string, label: string): URL {
@@ -321,15 +343,15 @@ export async function uploadSlackFile(params: {
       await release();
     }
   } catch (error) {
-    if (uploadTimeoutSignal?.aborted) {
-      // Slack discards raw uploads that never reach completion. The durable
-      // queue can therefore retry this timeout without duplicating a message.
-      throw new PlatformMessageNotDispatchedError(
-        "Slack external upload timed out before completion dispatch",
-        { cause: error },
-      );
-    }
-    throw error;
+    // Slack discards raw uploads that never reach completion. Every failure in
+    // this transfer block is therefore safe to retry; finalization stays unmarked.
+    const outcome = uploadTimeoutSignal?.aborted ? "timed out" : "failed";
+    throw new PlatformMessageNotDispatchedError(
+      `Slack external upload ${outcome} before completion dispatch`,
+      // Upload capabilities live in the URL path. Preserve only safe transport
+      // metadata so flattened cause logging cannot disclose that path.
+      { cause: buildSlackUploadFailureCause(error) },
+    );
   } finally {
     cleanupUploadTimeout();
   }

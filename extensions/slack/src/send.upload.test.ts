@@ -1,6 +1,9 @@
 // Slack tests cover send.upload plugin behavior.
 import type { WebClient } from "@slack/web-api";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  formatErrorMessage,
+  PlatformMessageNotDispatchedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -675,49 +678,49 @@ describe("sendMessageSlack file upload with user IDs", () => {
       "public non-Slack",
       "https://slack.com/api/",
       "https://example.com/upload/v1/not-slack",
-      /not in allowlist/i,
+      "SsrFBlockedError",
     ],
     [
       "plaintext Slack",
       "https://slack.com/api/",
       "http://files.slack.com/upload/v1/plaintext",
-      /must use https/i,
+      "Error",
     ],
     [
       "commercial Slack to GovSlack",
       "https://slack.com/api/",
       "https://files.slack-gov.com/upload/v1/cross-plane",
-      /not in allowlist/i,
+      "SsrFBlockedError",
     ],
     [
       "GovSlack to commercial Slack",
       "https://slack-gov.com/api/",
       "https://files.slack.com/upload/v1/cross-plane",
-      /not in allowlist/i,
+      "SsrFBlockedError",
     ],
     [
       "trailing-dot commercial Slack to GovSlack",
       "https://slack.com./api/",
       "https://files.slack-gov.com/upload/v1/cross-plane",
-      /not in allowlist/i,
+      "SsrFBlockedError",
     ],
     [
       "trailing-dot GovSlack to commercial Slack",
       "https://slack-gov.com./api/",
       "https://files.slack.com/upload/v1/cross-plane",
-      /not in allowlist/i,
+      "SsrFBlockedError",
     ],
     [
       "undocumented commercial subdomain",
       "https://slack.com/api/",
       "https://future-upload.slack.com/upload/v1/capability",
-      /not in allowlist/i,
+      "SsrFBlockedError",
     ],
     [
       "undocumented GovSlack subdomain",
       "https://slack-gov.com/api/",
       "https://future-upload.slack-gov.com/upload/v1/capability",
-      /not in allowlist/i,
+      "SsrFBlockedError",
     ],
   ])(
     "rejects %s upload destinations before network access",
@@ -736,14 +739,17 @@ describe("sendMessageSlack file upload with user IDs", () => {
         actual.fetchWithSsrFGuard({ ...params, fetchImpl: networkFetch }),
       );
 
-      await expect(
-        sendMessageSlack("channel:C123CHAN", "caption", {
-          token: "xoxb-test",
-          cfg: SLACK_TEST_CFG,
-          client,
-          mediaUrl: "/tmp/rejected-upload.png",
-        }),
-      ).rejects.toThrow(error);
+      const rejection = await sendMessageSlack("channel:C123CHAN", "caption", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        mediaUrl: "/tmp/rejected-upload.png",
+      }).catch((cause: unknown) => cause);
+
+      expect(rejection).toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect(rejection).toMatchObject({
+        cause: expect.objectContaining({ name: error }),
+      });
 
       expect(networkFetch).not.toHaveBeenCalled();
       expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
@@ -834,20 +840,63 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
   });
 
-  it.each([201, 204])("rejects a non-200 byte-upload response (%s)", async (status) => {
+  it.each([201, 204, 500])("rejects a non-200 byte-upload response (%s)", async (status) => {
     const client = createUploadTestClient();
     const onPlatformSendDispatch = vi.fn();
     globalThis.fetch = vi.fn(async () => new Response(null, { status })) as unknown as typeof fetch;
 
-    await expect(
-      sendMessageSlack("channel:C123CHAN", "caption", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
-        mediaUrl: "/tmp/non-200.png",
-        onPlatformSendDispatch,
+    const error = await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/non-200.png",
+      onPlatformSendDispatch,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      message: "Slack external upload failed before completion dispatch",
+      cause: expect.objectContaining({
+        code: `HTTP_${status}`,
+        message: `Slack external upload returned HTTP ${status}`,
       }),
-    ).rejects.toThrow(`Failed to upload file: HTTP ${status}`);
+    });
+    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+    expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
+  });
+
+  it("marks a non-timeout byte-upload transport failure as not dispatched", async () => {
+    const client = createUploadTestClient();
+    const onPlatformSendDispatch = vi.fn();
+    const transportError = Object.assign(
+      new Error(
+        "socket closed at https://files.slack.com/upload/v1/CAPABILITY_SENTINEL?token=QUERY_SENTINEL",
+      ),
+      { code: "ECONNRESET" },
+    );
+    globalThis.fetch = vi.fn(async () => {
+      throw transportError;
+    }) as unknown as typeof fetch;
+
+    const error = await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/transport-failure.png",
+      onPlatformSendDispatch,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      message: "Slack external upload failed before completion dispatch",
+      cause: expect.objectContaining({
+        code: "ECONNRESET",
+        message: "Slack external upload transfer failed",
+      }),
+    });
+    expect(formatErrorMessage(error)).not.toContain("CAPABILITY_SENTINEL");
+    expect(formatErrorMessage(error)).not.toContain("QUERY_SENTINEL");
+    expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
     expect(onPlatformSendDispatch).not.toHaveBeenCalled();
     expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
   });
@@ -856,6 +905,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     const client = createUploadTestClient();
     const uploadResponse = new Response("ok", { status: 200 });
     const cancelUploadBody = vi.spyOn(uploadResponse.body!, "cancel");
+    cancelUploadBody.mockRejectedValueOnce(new Error("response body cleanup failed"));
     globalThis.fetch = vi.fn(async () => uploadResponse) as unknown as typeof fetch;
     let markCompletionStarted: () => void = () => {};
     const completionStarted = new Promise<void>((resolve) => {
@@ -909,6 +959,27 @@ describe("sendMessageSlack file upload with user IDs", () => {
     }).catch((cause: unknown) => cause);
 
     expect(error).toMatchObject({ message: "completion unavailable" });
+    expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+  });
+
+  it("keeps completion error responses unmarked because Slack may have finalized the upload", async () => {
+    const client = createUploadTestClient();
+    const onPlatformSendDispatch = vi.fn();
+    client.files.completeUploadExternal.mockResolvedValueOnce({
+      ok: false,
+      error: "completion_failed",
+    });
+
+    const error = await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/completion-error-response.png",
+      onPlatformSendDispatch,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toMatchObject({ message: "Failed to complete upload: completion_failed" });
     expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
   });
