@@ -289,7 +289,9 @@ async function processMessageWithPipeline(params: {
         const elapsedMs = Date.now() - lastMediaDownloadStartedAt;
         const waitMs = MEDIA_DOWNLOAD_START_INTERVAL_MS - elapsedMs;
         if (waitMs > 0) {
-          await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, waitMs);
+          });
         }
       }
       lastMediaDownloadStartedAt = Date.now();
