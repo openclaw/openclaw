@@ -684,7 +684,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: With Teams RSC only (app installed, no Graph API permissions)
   - H3: With Teams RSC + Microsoft Graph Application permissions
   - H3: RSC vs Graph API
-  - H2: Graph-enabled media + history (required for channels)
+  - H2: Graph-enabled media + history
+  - H3: Channel/group file recovery (graphMediaFallback)
   - H2: Known limitations
   - H3: Webhook timeouts
   - H3: Teams cloud and service URL support
@@ -3575,8 +3576,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /gateway/pairing
 - Headings:
-  - H2: Concepts
-  - H2: How pairing works
+  - H2: How capability approval works
   - H2: CLI workflow (headless friendly)
   - H2: API surface (gateway protocol)
   - H2: Node command gating (2026.3.31+)
@@ -4823,43 +4823,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /perplexity
 - Headings:
   - H2: Related
-
-## plan/codex-context-engine-harness.md
-
-- Route: /plan/codex-context-engine-harness
-- Headings:
-  - H2: Status
-  - H2: Goal
-  - H2: Non-goals
-  - H2: Current architecture
-  - H2: Current gap
-  - H2: Desired behavior
-  - H2: Design constraints
-  - H3: Codex app-server remains canonical for native thread state
-  - H3: Context engine assembly must be projected into Codex inputs
-  - H3: Prompt-cache stability matters
-  - H3: Runtime selection semantics do not change
-  - H2: Implementation plan
-  - H3: 1. Export or relocate reusable context-engine attempt helpers
-  - H3: 2. Add a Codex context projection helper
-  - H3: 3. Wire bootstrap before Codex thread startup
-  - H3: 4. Wire assemble before thread/start / thread/resume and turn/start
-  - H3: 5. Preserve prompt-cache stable formatting
-  - H3: 6. Wire post-turn after transcript mirroring
-  - H3: 7. Normalize usage and prompt-cache runtime context
-  - H3: 8. Compaction policy
-  - H4: /compact and explicit OpenClaw compaction
-  - H4: In-turn Codex native contextCompaction events
-  - H3: 9. Session reset and binding behavior
-  - H3: 10. Error handling
-  - H2: Test plan
-  - H3: Unit tests
-  - H3: Existing tests to update
-  - H3: Integration / live tests
-  - H2: Observability
-  - H2: Migration / compatibility
-  - H2: Open questions
-  - H2: Acceptance criteria
 
 ## plan/ui-channels.md
 
@@ -6379,6 +6342,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/meta.md
+
+- Route: /plugins/reference/meta
+- Headings:
+  - H1: Meta plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/microsoft-foundry.md
 
 - Route: /plugins/reference/microsoft-foundry
@@ -7689,6 +7661,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
+## providers/meta.md
+
+- Route: /providers/meta
+- Headings:
+  - H2: Getting started
+  - H2: Non-interactive setup
+  - H2: Built-in catalog
+  - H2: Manual config
+  - H2: Smoke test
+  - H2: Related
+
 ## providers/minimax.md
 
 - Route: /providers/minimax
@@ -7909,6 +7892,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Plan types and endpoints
   - H2: Built-in catalog
+  - H3: Token Plan catalog
   - H2: Thinking controls
   - H2: Multimodal add-ons
   - H2: Advanced configuration
@@ -8078,11 +8062,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Advanced configuration
   - H2: Related
 
-## refactor/access.md
-
-- Route: /refactor/access
-- Headings: none
-
 ## refactor/acp.md
 
 - Route: /refactor/acp
@@ -8153,23 +8132,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Static Bans
   - H2: Done Criteria
 
-## refactor/ingress-core.md
-
-- Route: /refactor/ingress-core
-- Headings:
-  - H1: Ingress core deletion plan
-  - H2: Budget
-  - H2: Diagnosis
-  - H2: Hotspots
-  - H2: Current Code Read
-  - H2: Boundary
-  - H2: Acceptance Rule
-  - H2: Work Packages
-  - H2: Deletion Waves
-  - H2: Do Not Move
-  - H2: Verification
-  - H2: Exit Criteria
-
 ## reference/AGENTS.default.md
 
 - Route: /reference/AGENTS.default
@@ -8228,21 +8190,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Talk (speech)
   - H3: Skills (third-party APIs)
   - H2: Related
-
-## reference/application-modernization-plan.md
-
-- Route: /reference/application-modernization-plan
-- Headings:
-  - H2: Goal
-  - H2: Principles
-  - H2: Phase 1: Baseline audit
-  - H2: Phase 2: Product and UX cleanup
-  - H2: Phase 3: Frontend architecture tightening
-  - H2: Phase 4: Performance and reliability
-  - H2: Phase 5: Type, contract, and test hardening
-  - H2: Phase 6: Documentation and release readiness
-  - H2: Recommended first slice
-  - H2: Frontend skill update
 
 ## reference/code-mode.md
 
@@ -10006,6 +9953,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tailscale access
   - H2: Security notes
   - H2: Building the UI
+
+## web/lobster.md
+
+- Route: /web/lobster
+- Headings:
+  - H2: What you are looking at
+  - H2: When it shows up
+  - H2: Things you can do
+  - H2: Turning visits off (or back on)
+  - H2: The Lobsterdex
+  - H2: Field notes
+  - H2: Privacy
 
 ## web/tui.md
 

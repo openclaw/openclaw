@@ -37,6 +37,10 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -44,6 +48,7 @@ import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { runCliAgent } from "../cli-runner.js";
+import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
@@ -680,11 +685,12 @@ export function runAgentAttempt(params: {
 
       return undefined;
     };
+    const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(params.sessionKey);
     const runCliWithSession = (
       nextCliSessionId: string | undefined,
       activeCliSessionBinding = cliSessionBinding,
-    ) =>
-      runCliAgent({
+    ) => {
+      return runCliAgent({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionEntry: params.sessionEntry,
@@ -707,7 +713,9 @@ export function runAgentAttempt(params: {
         extraSystemPrompt: params.opts.extraSystemPrompt,
         inputProvenance: params.opts.inputProvenance,
         sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
-        requireExplicitMessageTarget: isSubagentSessionKey(params.sessionKey),
+        requireExplicitMessageTarget:
+          params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+        cliSessionBindingFacts: params.opts.cliSessionBindingFacts,
         cliSessionId: nextCliSessionId,
         cliSessionBinding:
           nextCliSessionId === activeCliSessionBinding?.sessionId
@@ -735,7 +743,10 @@ export function runAgentAttempt(params: {
         agentAccountId: params.runContext.accountId,
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
-        toolsAllow: params.opts.toolsAllow,
+        toolsAllow: resolveCliRuntimeToolsAllow(
+          params.opts.toolsAllow,
+          params.opts.toolsAllowIsDefault,
+        ),
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
         oneShotCliRun: params.opts.oneShotCliRun,
@@ -744,7 +755,10 @@ export function runAgentAttempt(params: {
         ...(mutableCliSessionStore
           ? {
               onBeforeFreshCliSessionRetry: async (retry) => {
-                if (retry.sessionId !== activeCliSessionBinding?.sessionId) {
+                if (
+                  hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) ||
+                  retry.sessionId !== activeCliSessionBinding?.sessionId
+                ) {
                   return false;
                 }
 
@@ -762,6 +776,7 @@ export function runAgentAttempt(params: {
             }
           : {}),
       });
+    };
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
@@ -769,6 +784,7 @@ export function runAgentAttempt(params: {
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
           shouldClearReusedCliSessionAfterError(err) &&
+          !hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) &&
           activeCliSessionBinding?.sessionId &&
           mutableCliSessionStore
         ) {
