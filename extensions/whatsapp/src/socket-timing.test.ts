@@ -1,5 +1,5 @@
 // Whatsapp tests cover socket timing plugin behavior.
-import type { AnyMessageContent, WAMessage } from "baileys";
+import type { AnyMessageContent, USyncQuery, WAMessage } from "baileys";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -197,5 +197,35 @@ describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
     await expect(second).resolves.toMatchObject({ key: { id: "msg-2" } });
     expect(sendMessage).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("forwards optional query and diagnostic socket capabilities", async () => {
+    const usyncResult = { list: [], sideList: [] };
+    const authState = { keys: {} as never };
+    const reachoutTimelock = { isActive: false };
+    const newChatMessageCap = { total_quota: 10, used_quota: 1 };
+    const sock = {
+      sendMessage: vi.fn(async () => undefined),
+      sendPresenceUpdate: vi.fn(async () => undefined),
+      executeUSyncQuery: vi.fn(async () => usyncResult),
+      getAuthState: vi.fn(() => authState),
+      getLIDForPN: vi.fn(async () => "123@lid"),
+      fetchAccountReachoutTimelock: vi.fn(async () => reachoutTimelock),
+      fetchNewChatMessageCap: vi.fn(async () => newChatMessageCap),
+    };
+    const adapter = createWhatsAppSocketOperationTimeoutAdapter(sock, 30_000);
+    const query = {} as USyncQuery;
+
+    await expect(adapter.executeUSyncQuery?.(query)).resolves.toBe(usyncResult);
+    expect(adapter.getAuthState?.()).toBe(authState);
+    await expect(adapter.getLIDForPN?.("123@s.whatsapp.net")).resolves.toBe("123@lid");
+    await expect(adapter.fetchAccountReachoutTimelock?.()).resolves.toBe(reachoutTimelock);
+    await expect(adapter.fetchNewChatMessageCap?.()).resolves.toBe(newChatMessageCap);
+
+    expect(sock.executeUSyncQuery).toHaveBeenCalledWith(query);
+    expect(sock.getAuthState).toHaveBeenCalledTimes(1);
+    expect(sock.getLIDForPN).toHaveBeenCalledWith("123@s.whatsapp.net");
+    expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+    expect(sock.fetchNewChatMessageCap).toHaveBeenCalledTimes(1);
   });
 });

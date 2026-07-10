@@ -145,7 +145,7 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
   hooks?: WhatsAppSocketOperationTimeoutHooks,
 ): WhatsAppSocketOperationAdapter {
   const operationTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
-  return {
+  const adapter: WhatsAppSocketOperationAdapter = {
     sendMessage: (jid, content, options) => {
       return runSerializedSocketSendMessage(sock, () => {
         const send = options
@@ -169,4 +169,41 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
       return withWhatsAppSocketOperationTimeout("sendPresenceUpdate", send, operationTimeoutMs);
     },
   };
+  const executeUSyncQuery = sock.executeUSyncQuery;
+  if (executeUSyncQuery) {
+    adapter.executeUSyncQuery = (query) =>
+      withWhatsAppSocketOperationTimeout(
+        "executeUSyncQuery",
+        executeUSyncQuery(query),
+        operationTimeoutMs,
+      );
+  }
+  const getAuthState = sock.getAuthState;
+  if (getAuthState) {
+    adapter.getAuthState = () => getAuthState();
+  }
+  const getLIDForPN = sock.getLIDForPN;
+  if (getLIDForPN) {
+    adapter.getLIDForPN = (jid) =>
+      withWhatsAppSocketOperationTimeout("getLIDForPN", getLIDForPN(jid), operationTimeoutMs);
+  }
+  const fetchAccountReachoutTimelock = sock.fetchAccountReachoutTimelock;
+  if (fetchAccountReachoutTimelock) {
+    adapter.fetchAccountReachoutTimelock = () =>
+      withWhatsAppSocketOperationTimeout(
+        "fetchAccountReachoutTimelock",
+        fetchAccountReachoutTimelock(),
+        operationTimeoutMs,
+      );
+  }
+  const fetchNewChatMessageCap = sock.fetchNewChatMessageCap;
+  if (fetchNewChatMessageCap) {
+    adapter.fetchNewChatMessageCap = () =>
+      withWhatsAppSocketOperationTimeout(
+        "fetchNewChatMessageCap",
+        fetchNewChatMessageCap(),
+        operationTimeoutMs,
+      );
+  }
+  return adapter;
 }
