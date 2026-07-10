@@ -34,9 +34,9 @@ export {
 } from "./outbound-media-send.js";
 
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { qqbotNotConfiguredMessage } from "../config/setup-guidance.js";
 import type { GatewayAccount } from "../types.js";
 import type { EngineLogger } from "../types.js";
-import { qqbotNotConfiguredMessage } from "../config/setup-guidance.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
@@ -288,7 +288,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   }
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: qqbotNotConfiguredMessage() };
+    return { channel: "qqbot", error: qqbotNotConfiguredMessage(account.accountId) };
   }
 
   try {
@@ -325,7 +325,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: qqbotNotConfiguredMessage() };
+    return { channel: "qqbot", error: qqbotNotConfiguredMessage(account.accountId) };
   }
   if (!ctx.mediaUrl) {
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };

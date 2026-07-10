@@ -93,7 +93,7 @@ describe("QQBot token manager", () => {
     });
 
     await expect(new TokenManager().getAccessToken("app-id", "secret")).rejects.toThrow(
-      'Failed to get QQBot access_token. Set QQBOT_APP_ID and QQBOT_CLIENT_SECRET, then see https://docs.openclaw.ai/channels/qqbot. Open platform response: {"code":4001,"message":"invalid app secret"}',
+      'Failed to get QQBot access_token. Check the QQBot account appId and clientSecret (or clientSecretFile), then see https://docs.openclaw.ai/channels/qqbot. Open platform response: {"code":4001,"message":"invalid app secret"}',
     );
   });
 
