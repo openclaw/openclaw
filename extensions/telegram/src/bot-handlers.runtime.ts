@@ -1457,6 +1457,10 @@ export const registerTelegramHandlers = ({
               }
             : undefined;
         } catch (err) {
+          if (mediaRuntimeWithAbort.abortSignal?.aborted) {
+            recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
+            throw err;
+          }
           logger.warn(
             { chatId: ctx.message.chat.id, error: String(err) },
             "reply media fetch failed",

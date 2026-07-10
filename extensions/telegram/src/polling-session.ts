@@ -495,6 +495,9 @@ export class TelegramPollingSession {
   async #createPollingBot(): Promise<TelegramBot | undefined> {
     const fetchAbortController = new AbortController();
     this.#activeFetchAbort = fetchAbortController;
+    const fetchAbortSignal = this.opts.abortSignal
+      ? AbortSignal.any([this.opts.abortSignal, fetchAbortController.signal])
+      : fetchAbortController.signal;
     const telegramTransport = this.#transportState.acquireForNextCycle();
     const persistedLastUpdateId = this.opts.getLastUpdateId();
     const lastUpdateId = this.opts.isolatedIngress?.enabled ? null : persistedLastUpdateId;
@@ -511,7 +514,7 @@ export class TelegramPollingSession {
         config: this.opts.config,
         accountId: this.opts.accountId,
         botInfo: this.opts.botInfo,
-        fetchAbortSignal: fetchAbortController.signal,
+        fetchAbortSignal,
         minimumClientTimeoutSeconds: TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS,
         ...(updateOffset ? { updateOffset } : {}),
         telegramTransport,
@@ -1141,9 +1144,17 @@ export class TelegramPollingSession {
     if (!ingress?.enabled) {
       return this.#runPollingCycle(bot);
     }
+    const fetchAbortController = this.#activeFetchAbort;
+    const abortFetch = () => {
+      fetchAbortController?.abort();
+    };
     try {
       await bot.init();
     } catch (err) {
+      abortFetch();
+      if (this.#activeFetchAbort === fetchAbortController) {
+        this.#activeFetchAbort = undefined;
+      }
       const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
         err,
         "Telegram bot init failed",
@@ -1268,6 +1279,7 @@ export class TelegramPollingSession {
       }
     });
     const stopOnAbort = () => {
+      abortFetch();
       void stopWorker();
     };
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
@@ -1295,6 +1307,7 @@ export class TelegramPollingSession {
         return;
       }
       restartRequested = true;
+      abortFetch();
       void stopWorker();
       if (!forceCycleTimer) {
         forceCycleTimer = setTimeout(() => {
@@ -1410,10 +1423,12 @@ export class TelegramPollingSession {
       try {
         await Promise.race([worker.task(), forceCyclePromise]);
         clearForceCycleTimer();
+        abortFetch();
       } catch (err) {
         if (this.opts.abortSignal?.aborted) {
           return "exit";
         }
+        abortFetch();
         // The worker only issues getUpdates, so a 409 is always a duplicate
         // poller (or stale webhook) conflict. Mirror the classic polling
         // cycle: re-clear the webhook, rotate the transport (#69787), and
@@ -1469,12 +1484,17 @@ export class TelegramPollingSession {
       clearForceCycleTimer();
       unsubscribe();
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+      // End media work before waiting for durable handlers so every interrupted claim can retry.
+      abortFetch();
       await stopWorker();
       if (!restartRequested) {
         await drainOnce();
         await waitForGracefulStop(() => this.#waitForSpooledUpdateHandlers());
       }
       await waitForGracefulStop(stopBot);
+      if (this.#activeFetchAbort === fetchAbortController) {
+        this.#activeFetchAbort = undefined;
+      }
     }
   }
 

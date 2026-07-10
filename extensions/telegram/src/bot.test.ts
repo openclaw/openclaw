@@ -50,6 +50,8 @@ const {
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 const { recordOutboundMessageForPromptContext } = await import("./outbound-message-context.js");
+const { runWithTelegramUpdateProcessingFrame, withTelegramSpooledReplayUpdate } =
+  await import("./bot-processing-outcome.js");
 
 let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
 let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
@@ -3104,6 +3106,48 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
     expect(payload.Body).toContain("continue without the old image");
+  });
+
+  it("durably retries a spooled reply when shutdown aborts reply media", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+    const shutdown = new AbortController();
+    getFileSpy.mockImplementationOnce(async () => {
+      shutdown.abort();
+      throw new Error("Bad Request: file is too big");
+    });
+
+    createTelegramBot({ token: "tok", fetchAbortSignal: shutdown.signal });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const update = {
+      update_id: 98081,
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "keep the old image",
+        date: 1736380800,
+        reply_to_message: {
+          message_id: 9001,
+          photo: [{ file_id: "reply-photo-1" }],
+          from: { first_name: "Ada" },
+        },
+      },
+    };
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(() =>
+      withTelegramSpooledReplayUpdate(update, () =>
+        handler({
+          update,
+          message: update.message,
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        }),
+      ),
+    );
+
+    expect(result).toEqual({ kind: "failed-retryable", error: expect.any(Error) });
+    expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
+    expect(replySpy).not.toHaveBeenCalled();
   });
 
   it("hydrates reply chains from cached Telegram messages", async () => {
