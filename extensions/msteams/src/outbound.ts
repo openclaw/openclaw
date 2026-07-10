@@ -12,7 +12,6 @@ import {
   resolveTextChunksWithFallback,
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   chunkTextForOutbound,
   normalizeStringEntries,
@@ -77,7 +76,6 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: MSTEAMS_TEXT_CHUNK_LIMIT,
-  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   pollMaxOptions: 12,
   deliveryCapabilities: {
     durableFinal: {
