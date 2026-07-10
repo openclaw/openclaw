@@ -6,6 +6,7 @@ describe("ModelsConfigSchema", () => {
   it.each([
     "claude-cli",
     "azure-openai-responses",
+    "clawrouter",
     "gmi",
     "gmi-cloud",
     "gmicloud",
@@ -19,6 +20,7 @@ describe("ModelsConfigSchema", () => {
     "qwen-oauth",
     "qwen-portal",
     "qwen-token-plan",
+    "x-ai",
     "z.ai",
     "z-ai",
   ])("accepts bundled provider overlay for %s without baseUrl or models", (providerId) => {
