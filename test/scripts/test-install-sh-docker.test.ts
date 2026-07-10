@@ -149,6 +149,45 @@ function normalizeInstallE2eAgentOutput(output: string) {
   }
 }
 
+function extractInstallSmokeUpdateJsonParser(): string {
+  const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+  const match = script.match(
+    /UPDATE_JSON="\$UPDATE_JSON" \\\n[\s\S]*?node - <<'NODE'\n([\s\S]*?)\nNODE\n\n  echo "==> Verify updated version"/u,
+  );
+  if (!match) {
+    throw new Error("install smoke update JSON parser was not found");
+  }
+  return match[1];
+}
+
+function validateInstallSmokeUpdateJson(doctorStep?: Record<string, unknown>) {
+  const updateUrl = "http://candidate.invalid/openclaw.tgz";
+  const payload = {
+    status: "ok",
+    before: { version: "2026.7.0" },
+    after: { version: "2026.7.1" },
+    steps: [
+      {
+        name: "global update",
+        exitCode: 0,
+        command: `npm install ${updateUrl}`,
+      },
+      ...(doctorStep ? [doctorStep] : []),
+    ],
+  };
+  return spawnSync(process.execPath, ["-"], {
+    encoding: "utf8",
+    input: extractInstallSmokeUpdateJsonParser(),
+    env: {
+      ...process.env,
+      UPDATE_JSON: JSON.stringify(payload),
+      UPDATE_EXPECT_VERSION: payload.after.version,
+      UPDATE_BASELINE_VERSION: payload.before.version,
+      UPDATE_TAG_URL: updateUrl,
+    },
+  });
+}
+
 function expectInstallDockerfileContract(
   dockerfilePath: string,
   runnerPath: string,
@@ -1012,6 +1051,47 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain("unterminated update JSON object");
     expect(script).toContain("verify_candidate_ai_runtime");
     expect(script).toContain("openclaw infer image providers --json");
+  });
+
+  it.each([
+    ["successful", { name: "openclaw doctor", exitCode: 0 }],
+    [
+      "recoverable advisory",
+      {
+        name: "openclaw doctor",
+        exitCode: 86,
+        advisory: { kind: "package-post-install-doctor", message: "repair deferred" },
+      },
+    ],
+  ])("accepts a %s package post-install doctor result", (_label, doctorStep) => {
+    const result = validateInstallSmokeUpdateJson(doctorStep);
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each([
+    ["missing", undefined, "missing openclaw doctor step"],
+    ["fatal", { name: "openclaw doctor", exitCode: 1 }, "openclaw doctor step failed"],
+    ["untyped advisory", { name: "openclaw doctor", exitCode: 86 }, "openclaw doctor step failed"],
+    [
+      "wrong advisory kind",
+      { name: "openclaw doctor", exitCode: 86, advisory: { kind: "other" } },
+      "openclaw doctor step failed",
+    ],
+    [
+      "wrong advisory exit",
+      {
+        name: "openclaw doctor",
+        exitCode: 1,
+        advisory: { kind: "package-post-install-doctor" },
+      },
+      "openclaw doctor step failed",
+    ],
+  ])("rejects a %s package post-install doctor result", (_label, doctorStep, error) => {
+    const result = validateInstallSmokeUpdateJson(doctorStep);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(error);
   });
 
   it.each([
