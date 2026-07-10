@@ -121,14 +121,12 @@ gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_andro
 gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 ```
 
-The monthly npm-only extended-stable path is the exception: dispatch both `OpenClaw NPM
-Release` preflight and `Full Release Validation` from the exact
-`extended-stable/YYYY.M.33` branch, preserve their run IDs, and pass both IDs to the
-direct npm publish run. See [Monthly npm-only extended-stable
-publication](/reference/RELEASING#monthly-npm-only-extended-stable-publication) for
-the commands, exact identity requirements, registry readback, and selector
-repair procedure. This path does not dispatch plugin, macOS, Windows, GitHub
-Release, private dist-tag, or other platform publication.
+This throwaway branch has one exception: dispatch the SHA-only `OpenClaw NPM Release`
+preflight and `Full Release Validation` from
+`dev/throwaway-2026.0.33-v6.8`, targeting the same full commit SHA. See
+[Throwaway extended-stable rehearsal](/reference/RELEASING#throwaway-extended-stable-rehearsal)
+for the exact commands. Stop after validation: the rehearsal creates no tag and has no npm
+publish job, plugin publication, platform publication, GitHub Release, or registry mutation.
 
 ## Runners
 

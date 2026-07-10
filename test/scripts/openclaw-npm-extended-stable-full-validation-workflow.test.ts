@@ -80,7 +80,7 @@ describe("extended-stable Full Release Validation workflow", () => {
       '"$CHILD_WORKFLOW_REF" =~ ^extended-stable/[0-9]{4}\\.([1-9]|1[0-2])\\.33$',
     );
     expect(fullValidation).toContain(
-      "Dispatch Full Release Validation from a release-ci or extended-stable ref pinned to the target SHA",
+      "Dispatch Full Release Validation from a pinned release-ci, throwaway rehearsal, or extended-stable ref",
     );
   });
 

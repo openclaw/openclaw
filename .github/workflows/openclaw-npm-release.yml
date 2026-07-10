@@ -47,12 +47,11 @@ jobs:
   # PLEASE DON'T ADD LONG-RUNNING OR FLAKY CHECKS TO THE npm RELEASE PATH.
   # KEEP THIS WORKFLOW SHORT AND DETERMINISTIC OR IT CAN GET STUCK AND JEOPARDIZE THE RELEASE.
   # RELEASE-TIME LIVE OR END-TO-END VALIDATION BELONGS IN openclaw-release-checks.yml.
-  # SECURITY NOTE: TOKEN-BASED npm dist-tag mutation moved to
-  # openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml
-  # so this source workflow can stay focused on OIDC publish only.
+  # SECURITY NOTE: this throwaway workflow has no publish job, npm OIDC permission,
+  # or registry mutation step. It exists only to exercise release packaging.
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only }}
-    # Preflight builds the full release package before publish; ubuntu-latest can OOM in tsdown.
+    # Preflight builds the full release package; ubuntu-latest can OOM in tsdown.
     runs-on: blacksmith-16vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -146,7 +145,7 @@ jobs:
             exit 1
           fi
 
-          echo "Publishing openclaw@${PACKAGE_VERSION}"
+          echo "Validating openclaw@${PACKAGE_VERSION}"
 
       - name: Check
         env:
@@ -200,7 +199,7 @@ jobs:
 
       # KEEP THIS LANE LIMITED TO FAST, REPEATABLE RELEASE READINESS CHECKS.
       # IF A CHECK CAN TAKE A LONG TIME, NEEDS LIVE CREDENTIALS, OR IS KNOWN TO BE FLAKY,
-      # IT BELONGS IN openclaw-release-checks.yml INSTEAD OF BLOCKING npm PUBLISH.
+      # IT BELONGS IN openclaw-release-checks.yml INSTEAD OF BLOCKING THIS PREFLIGHT.
       - name: Verify release contents
         env:
           OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR: ${{ steps.ai_runtime_tarballs.outputs.dir }}
@@ -407,14 +406,14 @@ jobs:
           path: ${{ steps.dependency_evidence.outputs.dir }}
           if-no-files-found: error
 
-      - name: Upload prepared npm publish bundle
+      - name: Upload prepared npm package bundle
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}
           if-no-files-found: error
 
-      - name: Upload prepared npm publish bundle tag alias
+      - name: Upload prepared npm package bundle tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
         uses: actions/upload-artifact@v7
         with:

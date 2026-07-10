@@ -71,77 +71,40 @@ not by itself change CLI update-channel resolution.
 - Detailed release procedure, approvals, credentials, and recovery notes are
   maintainer-only
 
-## Monthly npm-only extended-stable publication
+## Throwaway extended-stable rehearsal
 
-This is a dedicated exception to the regular release procedure below. For a
-completed month `YYYY.M`, create `extended-stable/YYYY.M.33`; publish `vYYYY.M.33` and
-later maintenance patches from that same branch. The release tag, branch tip,
-checkout, package version, npm preflight, and Full Release Validation run must
-all identify the same commit. Protected `main` must already contain a strictly
-later calendar month's final version below patch `33`; maintenance patches stay
-eligible after `main` advances by more than one month.
+This branch contains a validation-only rehearsal for the June 2026 extended-stable
+line. It is based on `v2026.6.8`, uses internal package version `2026.6.33`, and must
+remain on `dev/throwaway-2026.0.33-v6.8`. Do not create a tag or dispatch any publish
+workflow. The rehearsal npm workflow contains no publish job or npm OIDC permission.
 
-Run the npm preflight and Full Release Validation from the exact extended-stable branch,
-then save both run IDs:
+Resolve the branch head once, then use that same full SHA for both approved dispatches:
 
 ```bash
+branch=dev/throwaway-2026.0.33-v6.8
+sha="$(gh api "repos/openclaw/openclaw/git/ref/heads/${branch}" --jq .object.sha)"
+
 gh workflow run openclaw-npm-release.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f tag=vYYYY.M.P \
+  --ref "$branch" \
+  -f tag="$sha" \
   -f preflight_only=true \
-  -f npm_dist_tag=extended-stable
+  -f npm_dist_tag=extended-stable \
+  -f bypass_extended_stable_guard=true
 
 gh workflow run full-release-validation.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f ref=extended-stable/YYYY.M.33 \
+  --ref "$branch" \
+  -f ref="$sha" \
   -f release_profile=stable
 ```
 
 `release_profile=stable` is the existing validation-depth profile; it is
-separate from the npm `extended-stable` dist-tag and is intentionally unchanged.
-
-After both runs succeed and the npm release environment is ready, promote the
-exact preflight tarball. Patch `P` must be `33` or greater:
-
-```bash
-gh workflow run openclaw-npm-release.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f tag=vYYYY.M.P \
-  -f preflight_only=false \
-  -f npm_dist_tag=extended-stable \
-  -f preflight_run_id=<npm-preflight-run-id> \
-  -f full_release_validation_run_id=<full-validation-run-id>
-```
-
-For a fork or non-production rehearsal that intentionally cannot satisfy the
-monthly `.33` or protected-`main` month policy, add
-`-f bypass_extended_stable_guard=true` to both npm preflight and publish dispatches. The
-default is `false`. The bypass is accepted only with `npm_dist_tag=extended-stable` and
-is recorded in the workflow summary. It does not bypass the canonical
-`extended-stable/YYYY.M.33` workflow ref, branch-tip/tag/checkout equality, final-tag
-syntax, package/tag version equality, referenced run and manifest identity,
-tarball provenance, environment approval, registry readback, or selector
-repair evidence.
-
-The publish workflow verifies the referenced run identities, the prepared
-tarball digest, and both npm registry selectors. Independently confirm the
-result after the workflow succeeds:
-
-```bash
-npm view openclaw@YYYY.M.P version --userconfig "$(mktemp)"
-npm view openclaw@extended-stable version --userconfig "$(mktemp)"
-```
-
-Both commands must return `YYYY.M.P`. If publish succeeds but selector
-readback fails, do not republish the immutable package version. Use the single
-`npm dist-tag add openclaw@YYYY.M.P extended-stable` repair command printed in
-the failed workflow's always-run summary, then repeat both independent
-readbacks. Rollback to the prior selector is a separate operator decision, not
-the readback repair path.
+separate from the npm `extended-stable` dist-tag. On this branch it also forces the
+release-soak lanes, and product-performance regression checks are blocking. Record both
+run URLs and conclusions. Stop after validation; there is no promotion step.
 
 The regular checklist below continues to own beta, `latest`, GitHub Release,
-plugins, macOS, Windows, and other platform publication. Do not run those steps
-for this npm-only extended-stable path.
+plugins, macOS, Windows, and other platform publication. Do not run those steps for this
+throwaway rehearsal.
 
 ## Regular release operator checklist
 
@@ -855,26 +818,18 @@ package cannot ship without every publishable official plugin, including
 `publish_openclaw_npm=false` with `plugin_publish_scope=selected` and
 `plugins=@openclaw/name`, or dispatch the child workflow directly.
 
-## NPM workflow inputs
+## NPM rehearsal workflow inputs
 
-`OpenClaw NPM Release` accepts these operator-controlled inputs:
+On this throwaway branch, `OpenClaw NPM Release` accepts only the rehearsal shape:
 
-- `tag`: required release tag such as `v2026.4.2`, `v2026.4.2-1`, or
-  `v2026.4.2-beta.1`; when `preflight_only=true`, it may also be the current
-  full 40-character workflow-branch commit SHA for validation-only preflight
-- `preflight_only`: `true` for validation/build/package only, `false` for the
-  real publish path
-- `preflight_run_id`: required on the real publish path so the workflow reuses
-  the prepared tarball from the successful preflight run
-- `full_release_validation_run_id`: required for real monthly extended-stable and regular
-  non-beta publication so the workflow authenticates the exact validation run
-- `npm_dist_tag`: npm target tag for the publish path; accepts `alpha`, `beta`,
-  `latest`, or `extended-stable` and defaults to `beta`. Final patch `33` and later must
-  use `extended-stable`; by default, `extended-stable` rejects earlier patches, and it always
-  rejects non-final tags.
-- `bypass_extended_stable_guard`: testing-only boolean, default `false`; with
-  `npm_dist_tag=extended-stable`, bypasses monthly extended-stable eligibility while preserving
-  release identity, artifact, approval, and readback checks.
+- `tag`: the branch head's full 40-character commit SHA
+- `preflight_only`: must be `true`; `false` reaches only an explicit rejection job
+- `npm_dist_tag`: must be `extended-stable`
+- `bypass_extended_stable_guard`: must be `true`, and is accepted only from
+  `dev/throwaway-2026.0.33-v6.8`
+
+There are no promotion inputs, publish environment, npm OIDC permission, or publish job in
+this branch's workflow.
 
 `OpenClaw Release Publish` accepts these operator-controlled inputs:
 
