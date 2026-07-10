@@ -309,6 +309,10 @@ describe("createChannelProgressDraftCompositor", () => {
       "Shelling\n\nRestarting the gateway.",
       expect.anything(),
     );
+
+    // Narration stopping (empty update) falls back to the raw tool lines.
+    await progress.pushNarrationProgress("");
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
   });
 
   it("ignores narration once the final reply started and resets it per turn", async () => {

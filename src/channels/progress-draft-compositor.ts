@@ -287,8 +287,14 @@ export function createChannelProgressDraftCompositor(params: {
         return false;
       }
       const normalized = text?.replace(/\s+/g, " ").trim() ?? "";
-      if (!normalized || normalized === narrationText) {
+      if (normalized === narrationText) {
         return false;
+      }
+      if (!normalized) {
+        // Narrator stopped (failures/cap): fall back to the raw tool lines
+        // instead of pinning stale narration for the rest of the turn.
+        narrationText = "";
+        return await render();
       }
       narrationText = normalized;
       await gate.startNow();

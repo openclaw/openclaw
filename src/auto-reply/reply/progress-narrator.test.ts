@@ -146,6 +146,25 @@ describe("createProgressNarrator", () => {
     expect(onUpdate).not.toHaveBeenCalled();
   });
 
+  it("clears rendered narration when it disables after failures", async () => {
+    let nowMs = 0;
+    const { narrator, onUpdate } = createNarratorHarness({
+      texts: ["Status one.", null, null],
+      now: () => nowMs,
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      narrator.noteToolStart({ name: "exec", phase: "start" });
+      await flushNarrations();
+      nowMs += 13_000;
+    }
+
+    // Success, then two failed generations: the disable path must clear the
+    // stale narration so the draft falls back to raw tool lines.
+    expect(onUpdate).toHaveBeenNthCalledWith(1, { text: "Status one." });
+    expect(onUpdate).toHaveBeenLastCalledWith({ text: "" });
+  });
+
   it("omits exec command text and failure titles when the channel hides command text", async () => {
     const { narrator, inputs } = createNarratorHarness({ hideCommandText: true });
 

@@ -183,6 +183,7 @@ export type GetReplyOptions = {
    * Called when the utility-model narration of the in-progress turn changes.
    * Providing this callback opts the channel into progress narration; core
    * only generates narration when an explicit utilityModel is configured.
+   * An empty text means narration stopped: fall back to raw tool progress.
    */
   onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
   /**

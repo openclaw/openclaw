@@ -230,6 +230,22 @@ export function createProgressNarrator(params: {
       });
     });
 
+  // Stopping mid-turn must clear any rendered narration so the channel draft
+  // falls back to raw tool lines instead of pinning stale status text.
+  const disableNarration = () => {
+    if (disabled) {
+      return;
+    }
+    disabled = true;
+    if (!lastText || params.abortSignal?.aborted) {
+      return;
+    }
+    lastText = "";
+    void Promise.resolve(params.onUpdate({ text: "" })).catch((err) => {
+      logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
+    });
+  };
+
   const addNote = (note: string, options?: { immediate?: boolean }) => {
     if (disabled || params.abortSignal?.aborted) {
       return;
@@ -267,7 +283,7 @@ export function createProgressNarrator(params: {
       return;
     }
     if (narrationCount >= MAX_NARRATIONS_PER_TURN) {
-      disabled = true;
+      disableNarration();
       return;
     }
     inFlight = true;
@@ -286,7 +302,7 @@ export function createProgressNarrator(params: {
         if (!text) {
           consecutiveFailures += 1;
           if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-            disabled = true;
+            disableNarration();
           }
           return;
         }
