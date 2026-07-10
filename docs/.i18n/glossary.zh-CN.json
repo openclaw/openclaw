@@ -44,6 +44,14 @@
     "target": "ClawHub"
   },
   {
+    "source": "ClawHub CLI",
+    "target": "ClawHub CLI"
+  },
+  {
+    "source": "Publishing on ClawHub",
+    "target": "ClawHub 发布"
+  },
+  {
     "source": "ClawRouter (managed multi-provider routing)",
     "target": "ClawRouter（托管式多提供商路由）"
   },
