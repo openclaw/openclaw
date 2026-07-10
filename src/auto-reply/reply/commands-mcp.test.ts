@@ -183,6 +183,7 @@ describe("handleCommands /mcp", () => {
       const secretKeyArg = "opaque-secret-key-value";
       const awsSecretAccessKeyArg = "opaque-aws-secret-access-key-value";
       const underscoreApiKeyArg = "opaque-underscore-api-key-value";
+      const pluralCredentialsArg = "opaque-plural-credentials-value";
       mcpServers.set("billing-server", {
         command: "uvx",
         args: [
@@ -196,6 +197,8 @@ describe("handleCommands /mcp", () => {
           `--aws-secret-access-key=${awsSecretAccessKeyArg}`,
           "--openai_api_key",
           underscoreApiKeyArg,
+          "--credentials",
+          pluralCredentialsArg,
           "--region",
           "us-east-1",
         ],
@@ -253,6 +256,7 @@ describe("handleCommands /mcp", () => {
       expect(namedText).not.toContain(secretKeyArg);
       expect(namedText).not.toContain(awsSecretAccessKeyArg);
       expect(namedText).not.toContain(underscoreApiKeyArg);
+      expect(namedText).not.toContain(pluralCredentialsArg);
       expect(namedText).not.toContain("sk-test-secret-value");
 
       const allParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
@@ -278,6 +282,7 @@ describe("handleCommands /mcp", () => {
       expect(allText).not.toContain(secretKeyArg);
       expect(allText).not.toContain(awsSecretAccessKeyArg);
       expect(allText).not.toContain(underscoreApiKeyArg);
+      expect(allText).not.toContain(pluralCredentialsArg);
       expect(allText).not.toContain("local-env-secret-value");
     });
   });
