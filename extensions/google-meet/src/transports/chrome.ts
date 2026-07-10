@@ -24,6 +24,7 @@ import {
   asBrowserTabs,
   callBrowserProxyOnNode,
   forceMeetEnglishUi,
+  isEnglishMeetTab,
   isSameMeetUrlForReuse,
   normalizeMeetUrlForReuse,
   readBrowserTab,
@@ -675,7 +676,10 @@ async function openMeetWithBrowserRequest(params: {
         timeoutMs: Math.min(timeoutMs, 5_000),
       }),
     );
-    tab = tabs.find((entry) => isSameMeetUrlForReuse(entry.url, params.url));
+    // Skip localized tabs; Meet automation scripts only match English UI labels.
+    tab = tabs.find(
+      (entry) => isSameMeetUrlForReuse(entry.url, params.url) && isEnglishMeetTab(entry.url),
+    );
     targetId = tab?.targetId;
     if (targetId) {
       await params.callBrowser({
