@@ -26,6 +26,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalString as normalizeSlackApiString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
@@ -36,10 +37,11 @@ import {
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
 import { createSlackTokenCacheKey, createSlackWebClient, getSlackWriteClient } from "./client.js";
-import { appendSlackDataVisualizationFallbackText } from "./data-visualization.js";
+import { hasSlackDataTableBlock } from "./data-table.js";
 import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { appendSlackNativeDataFallbackText } from "./native-data-blocks.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
@@ -110,6 +112,8 @@ type SlackSendOpts = {
   enterpriseEventScope?: SlackEnterpriseEventScope;
   /** Monitor-private delivery limits already resolved for the active listener. */
   textLimit?: number;
+  /** Slack-private marker for text that is already safe mrkdwn and must not be parsed again. */
+  textIsSlackMrkdwn?: boolean;
   mediaMaxBytes?: number;
   threadTs?: string;
   replyBroadcast?: boolean;
@@ -369,6 +373,7 @@ function resolveSlackTextChunks(params: {
   accountId?: string;
   text: string;
   textLimit?: number;
+  textIsSlackMrkdwn?: boolean;
 }): string[] {
   const text = params.text.trim();
   const configuredLimit =
@@ -377,6 +382,9 @@ function resolveSlackTextChunks(params: {
       fallbackLimit: SLACK_TEXT_LIMIT,
     });
   const chunkLimit = Math.min(configuredLimit, SLACK_TEXT_LIMIT);
+  if (params.textIsSlackMrkdwn) {
+    return chunkTextForOutbound(text, chunkLimit);
+  }
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
     channel: "slack",
@@ -1066,17 +1074,23 @@ async function sendMessageSlackQueuedInner(params: {
     await opts.onDeliveryResult?.(result);
     return result;
   };
-  if (blocks) {
-    if (opts.mediaUrl) {
-      throw new Error("Slack send does not support blocks with mediaUrl");
-    }
-    const fallbackText = truncateSlackText(
-      appendSlackDataVisualizationFallbackText(
+  const blockFallbackText = blocks
+    ? appendSlackNativeDataFallbackText(
         trimmedMessage || buildSlackBlocksFallbackText(blocks),
         blocks,
-      ),
-      SLACK_TEXT_LIMIT,
-    );
+      )
+    : undefined;
+  const requiresChunkedTableFallback = Boolean(
+    blocks &&
+    hasSlackDataTableBlock(blocks) &&
+    blockFallbackText &&
+    blockFallbackText.length > SLACK_TEXT_LIMIT,
+  );
+  if (blocks && opts.mediaUrl) {
+    throw new Error("Slack send does not support blocks with mediaUrl");
+  }
+  if (blocks && !requiresChunkedTableFallback) {
+    const fallbackText = truncateSlackText(blockFallbackText ?? "", SLACK_TEXT_LIMIT);
     await opts.onPlatformSendDispatch?.();
     const { response } = await postSlackMessageBestEffort({
       client,
@@ -1115,8 +1129,9 @@ async function sendMessageSlackQueuedInner(params: {
   const resolvedChunks = resolveSlackTextChunks({
     cfg,
     accountId: account.accountId,
-    text: trimmedMessage,
+    text: requiresChunkedTableFallback ? (blockFallbackText ?? trimmedMessage) : trimmedMessage,
     ...(opts.textLimit !== undefined ? { textLimit: opts.textLimit } : {}),
+    ...(opts.textIsSlackMrkdwn || requiresChunkedTableFallback ? { textIsSlackMrkdwn: true } : {}),
   });
   const mediaMaxBytes =
     opts.mediaMaxBytes ??

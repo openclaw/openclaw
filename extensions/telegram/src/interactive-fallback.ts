@@ -8,25 +8,30 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 
-/** Materialize unsupported charts before Telegram's local preview consumes the payload. */
-export function materializeTelegramChartFallback(payload: ReplyPayload): ReplyPayload {
+/** Materialize unsupported data blocks before Telegram's local preview consumes the payload. */
+export function materializeTelegramUnsupportedPresentationFallback(
+  payload: ReplyPayload,
+): ReplyPayload {
   const presentation = normalizeMessagePresentation(payload.presentation);
-  const charts = presentation?.blocks.filter((block) => block.type === "chart") ?? [];
-  if (!presentation || charts.length === 0) {
+  const unsupportedBlocks =
+    presentation?.blocks.filter((block) => block.type === "chart" || block.type === "table") ?? [];
+  if (!presentation || unsupportedBlocks.length === 0) {
     return payload;
   }
 
-  const chartText = renderMessagePresentationFallbackText({
-    presentation: { ...presentation, blocks: charts },
+  const fallbackText = renderMessagePresentationFallbackText({
+    presentation: { ...presentation, blocks: unsupportedBlocks },
   });
   const currentText = payload.text?.trim();
-  const text = currentText?.includes(chartText)
+  const text = currentText?.includes(fallbackText)
     ? currentText
-    : [currentText, chartText].filter(Boolean).join("\n\n");
-  const remainingBlocks = presentation.blocks.filter((block) => block.type !== "chart");
+    : [currentText, fallbackText].filter(Boolean).join("\n\n");
+  const remainingBlocks = presentation.blocks.filter(
+    (block) => block.type !== "chart" && block.type !== "table",
+  );
   const materialized: ReplyPayload = { ...payload, text };
   if (remainingBlocks.length > 0) {
-    // The title moved into text with the charts; retaining it on the remaining
+    // The title moved into text with the data blocks; retaining it on the remaining
     // presentation would render the same heading twice.
     const { title: _materializedTitle, ...remainingPresentation } = presentation;
     materialized.presentation = { ...remainingPresentation, blocks: remainingBlocks };

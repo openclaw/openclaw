@@ -1386,6 +1386,9 @@ describe("slackPlugin agentPrompt", () => {
       "- Slack plain text sends: write standard Markdown; OpenClaw converts it to Slack mrkdwn, including `**bold**`, headings, lists, and `[label](url)` links.",
     );
     expect(hints).toContain(
+      "- For row-and-column data, use an explicit `presentation` table block; Slack renders it as a native table and retains a linear text summary for accessibility. Markdown pipe tables are not auto-promoted.",
+    );
+    expect(hints).toContain(
       "- When mentioning Slack users, use the stable `<@USER_ID>` token from Slack context instead of plain `@name` text so Slack notifies and links the user.",
     );
     expect(hints).toContain(
@@ -1417,6 +1420,9 @@ describe("slackPlugin agentPrompt", () => {
     );
     expect(hints).toContain(
       "- Slack plain text sends: write standard Markdown; OpenClaw converts it to Slack mrkdwn, including `**bold**`, headings, lists, and `[label](url)` links.",
+    );
+    expect(hints).toContain(
+      "- For row-and-column data, use an explicit `presentation` table block; Slack renders it as a native table and retains a linear text summary for accessibility. Markdown pipe tables are not auto-promoted.",
     );
     expect(hints).toContain(
       "- When mentioning Slack users, use the stable `<@USER_ID>` token from Slack context instead of plain `@name` text so Slack notifies and links the user.",

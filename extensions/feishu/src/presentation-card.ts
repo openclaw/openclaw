@@ -3,6 +3,7 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
+  renderMessagePresentationTableFallbackText,
   type MessagePresentationBlock,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -126,6 +127,14 @@ function buildFeishuCardElementsForBlock(
       {
         tag: "markdown",
         content: escapeFeishuCardMarkdownText(renderMessagePresentationChartFallbackText(block)),
+      },
+    ];
+  }
+  if (block.type === "table") {
+    return [
+      {
+        tag: "markdown",
+        content: escapeFeishuCardMarkdownText(renderMessagePresentationTableFallbackText(block)),
       },
     ];
   }

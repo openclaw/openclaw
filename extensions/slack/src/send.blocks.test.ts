@@ -322,7 +322,128 @@ describe("sendMessageSlack blocks", () => {
     );
   });
 
-  it("does not retry invalid non-chart blocks", async () => {
+  it("keeps overlong chart retries within the Slack text limit", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const categories = Array.from({ length: 20 }, (_point, pointIndex) =>
+      `Category-${String(pointIndex)}`.padEnd(20, "x"),
+    );
+    const blocks = [
+      {
+        type: "data_visualization",
+        title: "Large revenue report",
+        chart: {
+          type: "bar",
+          series: Array.from({ length: 12 }, (_series, seriesIndex) => ({
+            name: `Series-${String(seriesIndex)}`.padEnd(20, "x"),
+            data: categories.map((label) => ({
+              label,
+              value: Number.MAX_VALUE,
+            })),
+          })),
+          axis_config: { categories },
+        },
+      },
+    ];
+
+    await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(postedMessage(client, 0).text).toHaveLength(SLACK_TEXT_LIMIT);
+    expect(postedMessage(client, 1).text).toBe(postedMessage(client, 0).text);
+    expect(postedMessage(client, 1).blocks).toBeUndefined();
+  });
+
+  it("retries rejected native tables once with complete accessible text", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
+      {
+        type: "data_table",
+        caption: "Pipeline report",
+        rows: [
+          [
+            { type: "raw_text", text: "Account" },
+            { type: "raw_text", text: "ARR" },
+          ],
+          [
+            { type: "raw_text", text: "<@U123>" },
+            { type: "raw_number", value: 125000, text: "$125k" },
+          ],
+          [
+            { type: "raw_text", text: "Globex" },
+            { type: "raw_number", value: 82000, text: "$82k" },
+          ],
+        ],
+        row_header_column_index: 0,
+      },
+    ] as never;
+    const fallback = [
+      "Overview",
+      "",
+      "Pipeline report (table)",
+      "- Account: &lt;@U123&gt;; ARR: $125k",
+      "- Account: Globex; ARR: $82k",
+    ].join("\n");
+
+    await sendMessageSlack("channel:C123", "Overview", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(postedMessage(client, 0).blocks).toEqual(blocks);
+    expect(postedMessage(client, 0).text).toBe(fallback);
+    expect(postedMessage(client, 1).blocks).toBeUndefined();
+    expect(postedMessage(client, 1).text).toBe(fallback);
+  });
+
+  it("chunks overlong table fallbacks without posting native blocks", async () => {
+    const client = createSlackSendTestClient();
+    const header = "Account".padEnd(80, "x");
+    const blocks = [
+      {
+        type: "data_table",
+        caption: "Large pipeline",
+        rows: [
+          [{ type: "raw_text", text: header }],
+          ...Array.from({ length: 100 }, (_entry, index) => [
+            {
+              type: "raw_text",
+              text: index === 0 ? "<@U123>" : `account-${String(index)}`,
+            },
+          ]),
+        ],
+      },
+    ] as never;
+
+    await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks,
+    });
+
+    expect(client.chat.postMessage.mock.calls.length).toBeGreaterThan(1);
+    const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
+      postedMessage(client, index),
+    );
+    expect(posts.every((post) => post.blocks === undefined)).toBe(true);
+    const deliveredText = posts.map((post) => post.text).join("\n");
+    expect(deliveredText).toContain(`- ${header}: &lt;@U123&gt;`);
+    expect(deliveredText).toContain(`- ${header}: account-99`);
+    expect(deliveredText).not.toContain("<@U123>");
+  });
+
+  it("does not retry invalid non-data blocks", async () => {
     const client = createSlackSendTestClient();
     client.chat.postMessage.mockRejectedValueOnce(
       Object.assign(new Error("An API error occurred: invalid_blocks"), {

@@ -2714,6 +2714,40 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
   });
 
+  it("materializes table-only finals into the active answer preview", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          presentation: {
+            title: "FY25 outlook",
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage", "ARR"],
+                rows: [
+                  ["Acme", "Won", 125000],
+                  ["Globex", "Review", 82000],
+                ],
+              },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "FY25 outlook\n\nPipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
+  });
+
   it("appends chart data to final text before active preview finalization", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {

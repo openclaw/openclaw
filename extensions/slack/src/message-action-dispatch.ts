@@ -7,7 +7,6 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import {
   normalizeInteractiveReply,
   normalizeMessagePresentation,
-  renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
@@ -18,8 +17,11 @@ import { resolveDefaultSlackAccountId } from "./accounts.js";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
+  canRenderSlackPresentationTables,
   resolveSlackBlockOffsets,
 } from "./blocks-render.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -31,9 +33,26 @@ function resolveSlackPresentationText(
   content: string | undefined,
   presentation: ReturnType<typeof normalizeMessagePresentation>,
 ): string {
-  return presentation?.blocks.some((block) => block.type === "chart")
-    ? renderMessagePresentationFallbackText({ text: content, presentation })
+  const hasStructuredData = presentation?.blocks.some(
+    (block) => block.type === "chart" || block.type === "table",
+  );
+  return hasStructuredData
+    ? renderSlackMessagePresentationFallbackText({ text: content, presentation })
     : (content ?? "");
+}
+
+function renderSlackActionPresentation(
+  presentation: ReturnType<typeof normalizeMessagePresentation>,
+): { blocks?: ReturnType<typeof buildSlackPresentationBlocks>; usesTableTextFallback: boolean } {
+  if (!presentation) {
+    return { usesTableTextFallback: false };
+  }
+  const usesTableTextFallback = !canRenderSlackPresentationTables(presentation);
+  const blocks = usesTableTextFallback ? undefined : buildSlackPresentationBlocks(presentation);
+  return {
+    ...(blocks?.length ? { blocks } : {}),
+    usesTableTextFallback,
+  };
 }
 
 /** Translate generic channel action requests into Slack-specific tool invocations and payload shapes. */
@@ -63,15 +82,17 @@ export async function handleSlackMessageAction(params: {
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
     const presentation = normalizeMessagePresentation(actionParams.presentation);
     const interactive = normalizeInteractiveReply(actionParams.interactive);
-    const presentationBlocks = presentation
-      ? buildSlackPresentationBlocks(presentation)
-      : undefined;
-    const interactiveBlocks = interactive
-      ? buildSlackInteractiveBlocks(interactive, resolveSlackBlockOffsets(presentationBlocks))
-      : undefined;
+    const renderedPresentation = renderSlackActionPresentation(presentation);
+    const accessibleContent = resolveSlackPresentationText(content, presentation);
+    const presentationBlocks = renderedPresentation.usesTableTextFallback
+      ? undefined
+      : renderedPresentation.blocks;
+    const interactiveBlocks =
+      interactive && !renderedPresentation.usesTableTextFallback
+        ? buildSlackInteractiveBlocks(interactive, resolveSlackBlockOffsets(presentationBlocks))
+        : undefined;
     const mergedBlocks = [...(presentationBlocks ?? []), ...(interactiveBlocks ?? [])];
     const blocks = mergedBlocks.length > 0 ? mergedBlocks : undefined;
-    const accessibleContent = resolveSlackPresentationText(content, presentation);
     if (!accessibleContent && !mediaUrl && !blocks) {
       throw new Error("Slack send requires message, blocks, or media.");
     }
@@ -94,6 +115,7 @@ export async function handleSlackMessageAction(params: {
         ...(topLevel ? { topLevel: true } : {}),
         ...(replyBroadcast ? { replyBroadcast } : {}),
         ...(blocks ? { blocks } : {}),
+        ...(renderedPresentation.usesTableTextFallback ? { textIsSlackMrkdwn: true } : {}),
       },
       cfg,
       ctx.toolContext,
@@ -172,8 +194,16 @@ export async function handleSlackMessageAction(params: {
     });
     const content = readStringParam(actionParams, "message", { allowEmpty: true });
     const presentation = normalizeMessagePresentation(actionParams.presentation);
-    const blocks = presentation ? buildSlackPresentationBlocks(presentation) : undefined;
+    const renderedPresentation = renderSlackActionPresentation(presentation);
+    const blocks = renderedPresentation.usesTableTextFallback
+      ? undefined
+      : renderedPresentation.blocks;
     const accessibleContent = resolveSlackPresentationText(content, presentation);
+    if (renderedPresentation.usesTableTextFallback && accessibleContent.length > SLACK_TEXT_LIMIT) {
+      throw new Error(
+        `Slack table fallback exceeds the ${String(SLACK_TEXT_LIMIT)}-character edit limit. Send a new message instead.`,
+      );
+    }
     if (!accessibleContent && !blocks) {
       throw new Error("Slack edit requires message or blocks.");
     }

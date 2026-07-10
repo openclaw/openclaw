@@ -56,6 +56,21 @@ function elementAt(block: Record<string, unknown>, index: number) {
   return element;
 }
 
+function largeTablePresentation() {
+  return {
+    blocks: [
+      {
+        type: "table",
+        caption: "Large pipeline",
+        headers: ["Account"],
+        rows: Array.from({ length: 100 }, (_entry, index) => [
+          index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(110)}`,
+        ]),
+      },
+    ],
+  };
+}
+
 describe("handleSlackMessageAction", () => {
   it("defaults reactions to the current inbound Slack message", async () => {
     const invoke = createInvokeSpy();
@@ -160,6 +175,160 @@ describe("handleSlackMessageAction", () => {
         ],
       },
     });
+  });
+
+  it("sends native tables with a complete accessible text representation", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Pipeline summary",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "ARR"],
+                rows: [
+                  ["Acme", 125000],
+                  ["Globex", 82000],
+                ],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke).content).toBe(
+      "Pipeline summary\n\nPipeline (table)\n- Account: Acme; ARR: 125000\n- Account: Globex; ARR: 82000",
+    );
+  });
+
+  it("edits native tables with a complete accessible text representation", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          message: "Updated pipeline",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage"],
+                rows: [["Acme", "Won"]],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke)).toMatchObject({
+      action: "editMessage",
+      channelId: "C1",
+      messageId: "171234.567",
+      content: "Updated pipeline\n\nPipeline (table)\n- Account: Acme; Stage: Won",
+    });
+  });
+
+  it("routes non-native tables through Slack-safe text-only sends", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          presentation: largeTablePresentation(),
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Refresh", value: "refresh" }],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.blocks).toBeUndefined();
+    expect(action.textIsSlackMrkdwn).toBe(true);
+    expect(action.content).toContain("- Account: &lt;@U123&gt;");
+    expect(action.content).toContain("- Account: account-99");
+    expect(String(action.content).length).toBeGreaterThan(8000);
+  });
+
+  it("uses text-only edits for non-native tables that fit one message", async () => {
+    const invoke = createInvokeSpy();
+    const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Wide pipeline",
+                headers,
+                rows: [headers.map((_header, index) => `Value ${String(index)}`)],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.blocks).toBeUndefined();
+    expect(action.content).toContain("Column 20: Value 20");
+  });
+
+  it("rejects non-native table edits whose complete fallback cannot fit", async () => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "edit",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            messageId: "171234.567",
+            presentation: largeTablePresentation(),
+          },
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow("Slack table fallback exceeds the 8000-character edit limit");
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("keeps generated Slack control ids unique when presentation and interactive controls are merged", async () => {

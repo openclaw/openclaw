@@ -825,4 +825,45 @@ describe("presentation capability limits", () => {
       }).blocks[0]?.type,
     ).toBe("text");
   });
+
+  it("keeps tables only for channels that explicitly advertise native support", () => {
+    const table = {
+      type: "table" as const,
+      caption: "Pipeline report",
+      headers: ["Account", "Stage", "ARR"],
+      rows: [
+        ["Acme", "Won", 125000],
+        ["Globex", "Review", 82000],
+      ],
+      rowHeaderColumnIndex: 0,
+    };
+
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [table] },
+        capabilities: { tables: true },
+      }).blocks,
+    ).toEqual([table]);
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [table] },
+        capabilities: { context: true },
+      }).blocks,
+    ).toEqual([
+      {
+        type: "context",
+        text: [
+          "Pipeline report (table)",
+          "- Account: Acme; Stage: Won; ARR: 125000",
+          "- Account: Globex; Stage: Review; ARR: 82000",
+        ].join("\n"),
+      },
+    ]);
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [table] },
+        capabilities: { context: false },
+      }).blocks[0]?.type,
+    ).toBe("text");
+  });
 });

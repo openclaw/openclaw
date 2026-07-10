@@ -3,6 +3,8 @@ import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it } from "vitest";
 import { createSlackOutboundPayloadHarness, slackOutbound } from "../test-api.js";
+import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { sendMessageSlack } from "./send.js";
 
 function createHarness(params: {
   payload: ReplyPayload;
@@ -119,6 +121,124 @@ describe("slackOutbound sendPayload", () => {
         },
       },
     ]);
+  });
+
+  it("renders native tables with complete top-level accessibility text", async () => {
+    const { run, sendMock } = createHarness({
+      payload: {
+        text: "Pipeline summary",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Open pipeline",
+              headers: ["Account", "ARR"],
+              rows: [
+                ["Acme", 125000],
+                ["Globex", 82000],
+              ],
+              rowHeaderColumnIndex: 0,
+            },
+          ],
+        },
+      },
+    });
+
+    await run();
+
+    const call = sendCall(sendMock, 0);
+    expect(call[1]).toBe(
+      [
+        "Pipeline summary",
+        "",
+        "Open pipeline (table)",
+        "- Account: Acme; ARR: 125000",
+        "- Account: Globex; ARR: 82000",
+      ].join("\n"),
+    );
+    expect(sendOptions(call).blocks).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "Pipeline summary" } },
+      {
+        type: "data_table",
+        caption: "Open pipeline",
+        row_header_column_index: 0,
+        rows: [
+          [
+            { type: "raw_text", text: "Account" },
+            { type: "raw_text", text: "ARR" },
+          ],
+          [
+            { type: "raw_text", text: "Acme" },
+            { type: "raw_number", value: 125000, text: "125000" },
+          ],
+          [
+            { type: "raw_text", text: "Globex" },
+            { type: "raw_number", value: 82000, text: "82000" },
+          ],
+        ],
+      },
+    ]);
+  });
+
+  it("posts Slack-safe text when a portable table cannot render natively", async () => {
+    const payload: ReplyPayload = {
+      channelData: { slack: { blocks: [{ type: "divider" }] } },
+      presentation: {
+        title: "Pipeline <!channel>",
+        blocks: [
+          {
+            type: "table",
+            caption: "Accounts",
+            headers: ["Owner"],
+            rows: Array.from({ length: 100 }, (_entry, index) => [
+              index === 0 ? "<@U123>" : `owner-${String(index)} ${"x".repeat(110)}`,
+            ]),
+          },
+        ],
+      },
+    };
+
+    const rendered = await slackOutbound.renderPresentation?.({
+      payload,
+      presentation: payload.presentation!,
+      ctx: { cfg: {}, to: "C12345", text: "", payload },
+    });
+    if (!rendered) {
+      throw new Error("Expected Slack to render a table fallback");
+    }
+    const { presentation: _presentation, ...payloadForSend } = rendered;
+    const client = createSlackSendTestClient();
+    const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
+    const sendSlack: typeof sendMessageSlack = async (to, text, opts) =>
+      await sendMessageSlack(to, text, {
+        ...opts,
+        cfg,
+        token: "xoxb-test",
+        client,
+      });
+
+    await slackOutbound.sendPayload?.({
+      cfg,
+      to: "channel:C123",
+      text: "",
+      payload: payloadForSend,
+      deps: { sendSlack },
+    });
+
+    const postedText = client.chat.postMessage.mock.calls
+      .map(([raw]) => (raw as { text?: string }).text ?? "")
+      .join("\n");
+    expect(client.chat.postMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(
+      client.chat.postMessage.mock.calls.every(
+        ([raw]) => (raw as { blocks?: unknown }).blocks === undefined,
+      ),
+    ).toBe(true);
+    expect(postedText).toContain("Pipeline &lt;!channel&gt;");
+    expect(postedText).toContain("- Owner: &lt;@U123&gt;");
+    expect(postedText).toContain("- Owner: owner-99");
+    expect(postedText).not.toContain("<!channel>");
+    expect(postedText).not.toContain("<@U123>");
   });
 
   it("keeps the full portable fallback when any control cannot render natively", async () => {

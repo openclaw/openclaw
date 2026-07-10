@@ -173,6 +173,85 @@ describe("editSlackMessage blocks", () => {
     });
   });
 
+  it("retries rejected native tables once with complete text and no blocks", async () => {
+    const client = createSlackEditTestClient();
+    client.chat.update.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
+      {
+        type: "data_table",
+        caption: "Pipeline report",
+        rows: [
+          [
+            { type: "raw_text", text: "Account" },
+            { type: "raw_text", text: "ARR" },
+          ],
+          [
+            { type: "raw_text", text: "Acme" },
+            { type: "raw_number", value: 125000, text: "$125k" },
+          ],
+          [
+            { type: "raw_text", text: "Globex" },
+            { type: "raw_number", value: 82000, text: "$82k" },
+          ],
+        ],
+        row_header_column_index: 0,
+      },
+    ] as never;
+    const fallback = [
+      "Overview",
+      "",
+      "Pipeline report (table)",
+      "- Account: Acme; ARR: $125k",
+      "- Account: Globex; ARR: $82k",
+    ].join("\n");
+
+    await editSlackMessage("C123", "171234.567", "Overview", {
+      token: "xoxb-test",
+      client,
+      blocks,
+    });
+
+    expect(client.chat.update).toHaveBeenCalledTimes(2);
+    expect(client.chat.update).toHaveBeenNthCalledWith(1, {
+      channel: "C123",
+      ts: "171234.567",
+      text: fallback,
+      blocks,
+    });
+    expect(client.chat.update).toHaveBeenNthCalledWith(2, {
+      channel: "C123",
+      ts: "171234.567",
+      text: fallback,
+    });
+  });
+
+  it("rejects table edits whose complete fallback cannot fit one message", async () => {
+    const client = createSlackEditTestClient();
+    const header = "Account".padEnd(80, "x");
+    const blocks = [
+      {
+        type: "data_table",
+        caption: "Large pipeline",
+        rows: [
+          [{ type: "raw_text", text: header }],
+          ...Array.from({ length: 100 }, (_entry, index) => [
+            { type: "raw_text", text: `account-${String(index)}` },
+          ]),
+        ],
+      },
+    ] as never;
+
+    await expect(
+      editSlackMessage("C123", "171234.567", "", {
+        token: "xoxb-test",
+        client,
+        blocks,
+      }),
+    ).rejects.toThrow("Slack table fallback exceeds the 8000-character edit limit");
+    expect(client.chat.update).not.toHaveBeenCalled();
+  });
+
   it("caps long block fallback text while preserving edit blocks", async () => {
     const client = createSlackEditTestClient();
     const longContextText = "a".repeat(3000);

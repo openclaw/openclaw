@@ -573,6 +573,7 @@ export async function handleSlackAction(
         const mediaUrl = readStringParam(params, "mediaUrl");
         const blocks = readSlackBlocksParam(params);
         const replyBroadcast = readBooleanParam(params, "replyBroadcast");
+        const textIsSlackMrkdwn = readBooleanParam(params, "textIsSlackMrkdwn");
         if (!content && !mediaUrl && !blocks) {
           throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
         }
@@ -595,6 +596,7 @@ export async function handleSlackAction(
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
           ...(replyBroadcast ? { replyBroadcast } : {}),
+          ...(textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
         };
         const result =
           mediaUrl && blocks

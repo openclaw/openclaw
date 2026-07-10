@@ -205,6 +205,29 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("root", cfg);
   });
 
+  it("forwards preformatted Slack fallback text without reparsing", async () => {
+    const cfg = slackConfig();
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "- Account: &lt;@U123&gt;",
+        mediaUrl: "https://example.com/report.csv",
+        textIsSlackMrkdwn: true,
+      },
+      cfg,
+    );
+
+    expectSlackSendCall(0, "channel:C123", "- Account: &lt;@U123&gt;", {
+      cfg,
+      mediaUrl: "https://example.com/report.csv",
+      textIsSlackMrkdwn: true,
+      blocks: undefined,
+    });
+    expect(sendSlackMessage).toHaveBeenCalledOnce();
+  });
+
   async function resolveReadToken(cfg: OpenClawConfig): Promise<string | undefined> {
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });

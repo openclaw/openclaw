@@ -6,6 +6,7 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   renderMessagePresentationChartFallbackText,
+  renderMessagePresentationTableFallbackText,
   resolveMessagePresentationActionValue,
 } from "../../../interactive/payload.js";
 import type {
@@ -489,6 +490,13 @@ export function adaptMessagePresentationForChannel(params: {
       blocks.push({
         type: fallbackBlockType,
         text: renderMessagePresentationChartFallbackText(block),
+      });
+      continue;
+    }
+    if (block.type === "table" && capabilities?.tables !== true) {
+      blocks.push({
+        type: fallbackBlockType,
+        text: renderMessagePresentationTableFallbackText(block),
       });
       continue;
     }

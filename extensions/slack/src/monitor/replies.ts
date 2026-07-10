@@ -17,15 +17,21 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import {
-  appendSlackDataVisualizationFallbackText,
-  hasSlackDataVisualizationBlock,
-  isSlackInvalidBlocksError,
-} from "../data-visualization.js";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { hasSlackDataTableBlock } from "../data-table.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
-import { resolveSlackReplyBlocks, resolveSlackReplyText } from "../reply-blocks.js";
+import {
+  appendSlackNativeDataFallbackText,
+  hasSlackNativeDataBlock,
+  isSlackInvalidBlocksError,
+} from "../native-data-blocks.js";
+import {
+  resolveSlackReplyBlockResolution,
+  resolveSlackReplyBlocks,
+  resolveSlackReplyText,
+} from "../reply-blocks.js";
 import { truncateSlackText } from "../truncate.js";
 import type { SlackEventScope } from "./event-scope.js";
 import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
@@ -89,6 +95,7 @@ export async function deliverReplies(params: {
     threadTs?: string | undefined;
     mediaUrl?: string | undefined;
     blocks?: (Block | KnownBlock)[] | undefined;
+    textIsSlackMrkdwn?: boolean;
   }): Promise<SlackSendResult> => {
     return await sendMessageSlack(params.target, input.text, {
       cfg: params.cfg,
@@ -97,6 +104,7 @@ export async function deliverReplies(params: {
       accountId: params.accountId,
       mediaUrl: input.mediaUrl,
       blocks: input.blocks,
+      ...(input.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
       ...(params.eventScope
         ? {
             client: params.eventScope.client,
@@ -119,8 +127,12 @@ export async function deliverReplies(params: {
       replyThreadTs: params.replyThreadTs,
     });
     const reply = resolveSendableOutboundReplyParts(payload);
-    const slackBlocks = readSlackReplyBlocks(payload);
-    if (!reply.hasContent && !slackBlocks?.length) {
+    const blockResolution = resolveSlackReplyBlockResolution(payload);
+    const slackBlocks = blockResolution.blocks;
+    const tableFallbackText = blockResolution.usesTableTextFallback
+      ? resolveSlackReplyText(payload, reply.trimmedText).trim()
+      : undefined;
+    if (!reply.hasContent && !slackBlocks?.length && !tableFallbackText) {
       continue;
     }
 
@@ -186,13 +198,15 @@ export async function deliverReplies(params: {
 
     const spokenText = resolveSlackMediaHookSpokenText(payload);
     const mediaHookContent = reply.hasText ? reply.text : spokenText || reply.text;
-    const hookContent = reply.hasMedia ? mediaHookContent : reply.trimmedText;
+    const deliveryText = tableFallbackText ?? reply.text;
+    const hookContent =
+      tableFallbackText ?? (reply.hasMedia ? mediaHookContent : reply.trimmedText);
     let lastResult: SlackSendResult | undefined;
     let delivered: Awaited<ReturnType<typeof deliverTextOrMediaReply>>;
     try {
       delivered = await deliverTextOrMediaReply({
         payload,
-        text: reply.text,
+        text: deliveryText,
         chunkText: !reply.hasMedia
           ? (value) => {
               const trimmed = value.trim();
@@ -206,6 +220,7 @@ export async function deliverReplies(params: {
           lastResult = await sendReply({
             text: trimmed,
             threadTs,
+            ...(blockResolution.usesTableTextFallback ? { textIsSlackMrkdwn: true } : {}),
           });
         },
         sendMedia: async ({ mediaUrl, caption }) => {
@@ -213,6 +228,7 @@ export async function deliverReplies(params: {
             text: caption ?? "",
             mediaUrl,
             threadTs,
+            ...(blockResolution.usesTableTextFallback ? { textIsSlackMrkdwn: true } : {}),
           });
         },
       });
@@ -345,21 +361,33 @@ export async function deliverSlackSlashReplies(params: {
       continue;
     }
     const reply = resolveSendableOutboundReplyParts(payload);
-    const slackBlocks = readSlackReplyBlocks(payload);
+    const blockResolution = resolveSlackReplyBlockResolution(payload);
+    const slackBlocks = blockResolution.blocks;
     const textRaw =
       reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
         ? reply.trimmedText
         : undefined;
-    const text = slackBlocks?.length
-      ? truncateSlackText(
-          appendSlackDataVisualizationFallbackText(
-            resolveSlackReplyText(payload, textRaw),
-            slackBlocks,
-          ),
-          SLACK_TEXT_LIMIT,
+    const tableFallbackText = blockResolution.usesTableTextFallback
+      ? resolveSlackReplyText(payload, textRaw).trim()
+      : undefined;
+    const nativeFallbackText = slackBlocks?.length
+      ? appendSlackNativeDataFallbackText(
+          resolveSlackReplyText(payload, textRaw),
+          slackBlocks,
         ).trim()
-      : textRaw;
-    if (slackBlocks?.length && !reply.hasMedia) {
+      : undefined;
+    const hasNativeTable = hasSlackDataTableBlock(slackBlocks);
+    const requiresChunkedTableFallback = Boolean(
+      hasNativeTable && nativeFallbackText && nativeFallbackText.length > chunkLimit,
+    );
+    const text = tableFallbackText
+      ? tableFallbackText
+      : nativeFallbackText
+        ? hasNativeTable
+          ? nativeFallbackText
+          : truncateSlackText(nativeFallbackText, SLACK_TEXT_LIMIT).trim()
+        : textRaw;
+    if (slackBlocks?.length && !reply.hasMedia && !requiresChunkedTableFallback) {
       deliveries.push({
         hookContent: text ?? "",
         messages: [{ text: text ?? "", blocks: slackBlocks }],
@@ -371,13 +399,15 @@ export async function deliverSlackSlashReplies(params: {
       continue;
     }
     const chunkMode = params.chunkMode ?? "length";
-    const markdownChunks =
-      chunkMode === "newline"
-        ? chunkMarkdownTextWithMode(combined, chunkLimit, chunkMode)
-        : [combined];
-    const chunks = markdownChunks.flatMap((markdown) =>
-      markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode: params.tableMode }),
-    );
+    const chunks =
+      blockResolution.usesTableTextFallback || hasNativeTable
+        ? chunkTextForOutbound(combined, chunkLimit)
+        : (chunkMode === "newline"
+            ? chunkMarkdownTextWithMode(combined, chunkLimit, chunkMode)
+            : [combined]
+          ).flatMap((markdown) =>
+            markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode: params.tableMode }),
+          );
     if (!chunks.length && combined) {
       chunks.push(combined);
     }
@@ -396,20 +426,20 @@ export async function deliverSlackSlashReplies(params: {
   for (const delivery of deliveries) {
     try {
       for (const message of delivery.messages) {
-        const hasNativeChart = hasSlackDataVisualizationBlock(message.blocks);
+        const hasNativeData = hasSlackNativeDataBlock(message.blocks);
         try {
           const response = await params.respond({ ...message, response_type: responseType });
-          if (!hasNativeChart || !isSlackInvalidBlocksError(response)) {
+          if (!hasNativeData || !isSlackInvalidBlocksError(response)) {
             continue;
           }
         } catch (error) {
-          if (!hasNativeChart || !isSlackInvalidBlocksError(error)) {
+          if (!hasNativeData || !isSlackInvalidBlocksError(error)) {
             throw error;
           }
         }
         await params.respond({
           text: truncateSlackText(
-            appendSlackDataVisualizationFallbackText(message.text, message.blocks),
+            appendSlackNativeDataFallbackText(message.text, message.blocks),
             SLACK_TEXT_LIMIT,
           ),
           response_type: responseType,

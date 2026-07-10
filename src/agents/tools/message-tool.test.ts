@@ -1940,6 +1940,11 @@ describe("message tool schema scoping", () => {
       expect(presentationSchemaJson).toContain('"command"');
       expect(presentationSchemaJson).toContain('"chartType"');
       expect(presentationSchemaJson).toContain('"pie"');
+      expect(presentationSchemaJson).toContain('"table"');
+      expect(presentationSchemaJson).toContain('"caption"');
+      expect(presentationSchemaJson).toContain('"headers"');
+      expect(presentationSchemaJson).toContain('"rows"');
+      expect(presentationSchemaJson).toContain('"rowHeaderColumnIndex"');
       expect(presentationSchemaJson).not.toContain('"maxItems"');
       expect(presentationSchemaJson).not.toContain('"maxLength"');
       expect(presentationSchemaJson).not.toContain('"exclusiveMinimum"');
@@ -2800,6 +2805,45 @@ describe("message tool reasoning tag sanitization", () => {
         {
           type: "select",
           options: [{ label: "Main", value: "main" }],
+        },
+      ],
+    });
+  });
+
+  it("sanitizes table captions, headers, and string cells while preserving numbers", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "  <think>caption rationale</think>Pipeline report  ",
+              headers: [" <think>header rationale</think>Account ", " ARR "],
+              rows: [
+                [" <think>cell rationale</think>Acme ", 125000],
+                [" Globex ", 82000],
+              ],
+              rowHeaderColumnIndex: 0,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "table",
+          caption: "Pipeline report",
+          headers: ["Account", "ARR"],
+          rows: [
+            ["Acme", 125000],
+            ["Globex", 82000],
+          ],
+          rowHeaderColumnIndex: 0,
         },
       ],
     });

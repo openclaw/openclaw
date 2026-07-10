@@ -1560,6 +1560,68 @@ Slackbot's automatic AI chart generation, which is separate from an app sending
 an already-structured Block Kit chart. Charts are message-only blocks, not App
 Home, modal, or Canvas content.
 
+## Native tables
+
+Slack's current [`data_table` Block Kit block](https://docs.slack.dev/reference/block-kit/blocks/data-table-block/)
+renders structured rows and columns in messages. OpenClaw maps an explicit
+portable `presentation` `table` block to `data_table`; it does not use Slack's
+legacy [`table` block](https://docs.slack.dev/reference/block-kit/blocks/table-block/).
+No additional OAuth scope or Slack configuration is required beyond normal
+`chat:write` message access.
+
+```json
+{
+  "blocks": [
+    {
+      "type": "table",
+      "caption": "Open pipeline",
+      "headers": ["Account", "Stage", "ARR"],
+      "rows": [
+        ["Acme", "Won", 125000],
+        ["Globex", "Review", 82000]
+      ],
+      "rowHeaderColumnIndex": 0
+    }
+  ]
+}
+```
+
+OpenClaw maps header and string cells to Slack `raw_text` cells. Numeric cells
+map to `raw_number`, with the finite numeric value preserved for native sorting
+and filtering. `rowHeaderColumnIndex`, when present, marks that zero-based
+column as Slack row headers.
+
+Slack's published `data_table` limits are enforced before native rendering:
+
+- 1-20 columns
+- 1-100 data rows, plus the header row
+- the same number of cells in every row
+- at most 10,000 aggregate characters across all table cells in one message
+
+Multiple valid table blocks can render natively while the message remains
+within the aggregate character limit. A table that cannot render within the
+native envelope becomes complete deterministic text instead of losing rows or
+cells. If that text exceeds one Slack message, sends and slash responses use
+ordered text chunks. Table edits fail with an explicit size error instead of
+silently truncating rows from an existing message.
+
+Every native table produced from portable presentation also carries a top-level
+text representation for screen readers, notifications, session mirroring, and
+clients that cannot render the block. Raw chart and table values stay literal
+in that mrkdwn fallback, so cell data such as `<@U123>` does not become a Slack
+mention. If Slack rejects native chart or table blocks with `invalid_blocks`,
+OpenClaw retries once as text-only output. Table sends preserve the complete
+representation through preflight chunking; chart retries stay within Slack's
+single-message text limit.
+
+Only explicit `presentation` table blocks are promoted to native tables.
+Markdown pipe tables remain authored text; OpenClaw does not guess at table
+structure or cell types. Existing trusted Slack-native producers can continue
+to pass raw blocks through `channelData.slack.blocks`; OpenClaw derives fallback
+text from valid raw `data_table` cells, while malformed custom blocks may
+degrade to their caption or general Block Kit fallback. Portable agent, CLI,
+and plugin output should use `presentation`.
+
 ## Interactive replies
 
 Slack can render agent-authored interactive reply controls, but this feature is disabled by default.
