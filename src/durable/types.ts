@@ -140,6 +140,13 @@ export type DurableDedupeScope = "wake" | "wake_delivery" | "result_mailbox" | "
 
 export type DurableDedupeLedgerStatus = "recorded" | "applied" | "conflict" | "superseded";
 
+export type DurableWakeDeliveryAttemptStatus =
+  | "pending"
+  | "attempted"
+  | "delivered"
+  | "failed"
+  | "unknown";
+
 export type DurableRuntimeRun = {
   runtimeRunId: string;
   operationKind: string;
@@ -341,6 +348,28 @@ export type DurableDedupeLedgerEntry = {
   firstSeenAt: number;
   lastSeenAt: number;
   hitCount: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type DurableWakeDeliveryAttempt = {
+  deliveryAttemptId: string;
+  wakeId: string;
+  dedupeKey: string;
+  replayPassId?: string;
+  targetKind?: DurableWakeTargetKind;
+  targetRef?: string;
+  routeKind?: DurableWakeTargetKind;
+  routeRef?: string;
+  status: DurableWakeDeliveryAttemptStatus;
+  evidence?: Record<string, unknown>;
+  error?: string;
+  scheduledAt: number;
+  attemptedAt?: number;
+  deliveredAt?: number;
+  failedAt?: number;
+  unknownAt?: number;
+  createdAt: number;
+  updatedAt: number;
   metadata?: Record<string, unknown>;
 };
 
@@ -608,6 +637,39 @@ export type RecordDurableDedupeLedgerInput = {
   now?: number;
 };
 
+export type RecordDurableWakeDeliveryAttemptInput = {
+  deliveryAttemptId?: string;
+  wakeId: string;
+  dedupeKey: string;
+  replayPassId?: string;
+  targetKind?: DurableWakeTargetKind;
+  targetRef?: string;
+  routeKind?: DurableWakeTargetKind;
+  routeRef?: string;
+  status?: DurableWakeDeliveryAttemptStatus;
+  evidence?: Record<string, unknown>;
+  error?: string;
+  attemptedAt?: number | null;
+  deliveredAt?: number | null;
+  failedAt?: number | null;
+  unknownAt?: number | null;
+  metadata?: Record<string, unknown>;
+  now?: number;
+};
+
+export type UpdateDurableWakeDeliveryAttemptInput = {
+  deliveryAttemptId: string;
+  status: DurableWakeDeliveryAttemptStatus;
+  evidence?: Record<string, unknown>;
+  error?: string | null;
+  attemptedAt?: number | null;
+  deliveredAt?: number | null;
+  failedAt?: number | null;
+  unknownAt?: number | null;
+  metadata?: Record<string, unknown>;
+  now?: number;
+};
+
 export type ClaimDurableRuntimeRunInput = {
   operationKind?: string;
   workerId: string;
@@ -738,6 +800,19 @@ export type DurableRuntimeStore = {
     status?: DurableDedupeLedgerStatus;
     limit?: number;
   }): DurableDedupeLedgerEntry[];
+  recordWakeDeliveryAttempt(
+    input: RecordDurableWakeDeliveryAttemptInput,
+  ): DurableWakeDeliveryAttempt;
+  updateWakeDeliveryAttempt(
+    input: UpdateDurableWakeDeliveryAttemptInput,
+  ): DurableWakeDeliveryAttempt | undefined;
+  getWakeDeliveryAttempt(deliveryAttemptId: string): DurableWakeDeliveryAttempt | undefined;
+  listWakeDeliveryAttempts(options?: {
+    wakeId?: string;
+    dedupeKey?: string;
+    status?: DurableWakeDeliveryAttemptStatus;
+    limit?: number;
+  }): DurableWakeDeliveryAttempt[];
   listUnresolvedObligations(options?: {
     now?: number;
     limit?: number;
