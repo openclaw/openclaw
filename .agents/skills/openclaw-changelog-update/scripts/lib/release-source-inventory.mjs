@@ -1074,6 +1074,101 @@ function candidateHunkAnchorEvidence(
   };
 }
 
+function candidateSubsetHunkEvidence(
+  cwd,
+  graph,
+  sourceCandidate,
+  targetCommit,
+  witnessCommit,
+  path,
+) {
+  const targetRecord = graph.get(targetCommit);
+  const witnessRecord = graph.get(witnessCommit);
+  if (
+    !targetRecord ||
+    targetRecord.parents.length !== 1 ||
+    !witnessRecord ||
+    witnessRecord.parents.length !== 1
+  ) {
+    return undefined;
+  }
+  const sourcePatch = zeroContextPatch(cwd, sourceCandidate.parent, sourceCandidate.commit, [path]);
+  const sourceHunks = parseTextPatchHunks(sourcePatch);
+  if (
+    sourcePatch === "" ||
+    !sourceHunks ||
+    sourceHunks.some((hunk) => hunk.preimageLines.length === 0 || hunk.postimageLines.length === 0)
+  ) {
+    return undefined;
+  }
+  const snapshots = {
+    sourceCommit: readTextPathLines(cwd, sourceCandidate.commit, path),
+    sourceParent: readTextPathLines(cwd, sourceCandidate.parent, path),
+    targetCommit: readTextPathLines(cwd, targetCommit, path),
+    targetParent: readTextPathLines(cwd, targetRecord.parents[0], path),
+    witnessCommit: readTextPathLines(cwd, witnessCommit, path),
+    witnessParent: readTextPathLines(cwd, witnessRecord.parents[0], path),
+  };
+  if (Object.values(snapshots).some((lines) => !lines)) {
+    return undefined;
+  }
+  const hunks = sourceHunks.map((hunk) => ({
+    newCount: hunk.newCount,
+    newStart: hunk.newStart,
+    oldCount: hunk.oldCount,
+    oldStart: hunk.oldStart,
+    postimageSha256: createHash("sha256")
+      .update(hunk.postimageLines.map((line) => `${line}\n`).join(""))
+      .digest("hex"),
+    preimageSha256: createHash("sha256")
+      .update(hunk.preimageLines.map((line) => `${line}\n`).join(""))
+      .digest("hex"),
+    sourceCommitPostimageOccurrences: countLineSequence(
+      snapshots.sourceCommit,
+      hunk.postimageLines,
+    ),
+    sourceParentPreimageOccurrences: countLineSequence(snapshots.sourceParent, hunk.preimageLines),
+    targetCommitPostimageOccurrences: countLineSequence(
+      snapshots.targetCommit,
+      hunk.postimageLines,
+    ),
+    targetParentPreimageOccurrences: countLineSequence(snapshots.targetParent, hunk.preimageLines),
+    witnessCommitPostimageOccurrences: countLineSequence(
+      snapshots.witnessCommit,
+      hunk.postimageLines,
+    ),
+    witnessParentPreimageOccurrences: countLineSequence(
+      snapshots.witnessParent,
+      hunk.preimageLines,
+    ),
+  }));
+  if (
+    hunks.some((hunk) =>
+      [
+        hunk.sourceCommitPostimageOccurrences,
+        hunk.sourceParentPreimageOccurrences,
+        hunk.targetCommitPostimageOccurrences,
+        hunk.targetParentPreimageOccurrences,
+        hunk.witnessCommitPostimageOccurrences,
+        hunk.witnessParentPreimageOccurrences,
+      ].some((count) => count !== 1),
+    )
+  ) {
+    return undefined;
+  }
+  return {
+    hunks: recordSummary(hunks),
+    path,
+    sourceCommit: sourceCandidate.commit,
+    sourceParent: sourceCandidate.parent,
+    sourcePatchSha256: createHash("sha256").update(sourcePatch).digest("hex"),
+    targetCommit,
+    targetParent: targetRecord.parents[0],
+    witnessCommit,
+    witnessParent: witnessRecord.parents[0],
+  };
+}
+
 function changedLineHashes(patch) {
   const hashes = [];
   let diffHeader;
@@ -1096,6 +1191,28 @@ function changedLineHashes(patch) {
     }
   }
   return [...new Set(hashes)].toSorted();
+}
+
+function firstParentStack(cwd, graph, tip, count, label) {
+  if (!Number.isSafeInteger(count) || count <= 0) {
+    fail(`${label} has an invalid commit count`);
+  }
+  const reversed = [];
+  let current = tip;
+  for (let index = 0; index < count; index += 1) {
+    extendGraphWithCommitsAndParents(cwd, graph, [current]);
+    const record = graph.get(current);
+    if (!record || record.parents.length !== 1) {
+      fail(`${label} is not a contiguous first-parent rebase stack`);
+    }
+    reversed.push(current);
+    current = record.parents[0];
+  }
+  extendGraphWithCommitsAndParents(cwd, graph, [current]);
+  return {
+    baseCommit: current,
+    commits: reversed.reverse(),
+  };
 }
 
 function candidatePatchAmbiguityProof(cwd, graph, targetCommit, candidate) {
@@ -1605,6 +1722,7 @@ export function buildReleaseSourceInventory(
     maxSourceTailCommits = 1,
     provenanceAdaptedPullRequests = [],
     comparisonPullRequestMemberOverlaps = [],
+    comparisonPullRequestMemberSubsetOverlaps = [],
     provenanceIntegratedPullRequests = [],
     provenancePartialPullRequests = [],
     provenanceRefs = [],
@@ -1715,6 +1833,75 @@ export function buildReleaseSourceInventory(
   }
   if (trustedComparisonPullRequestMemberOverlaps.length > 0 && !comparisonBaseBranch) {
     fail("trusted comparison pull request member overlap requires comparison evidence");
+  }
+  const trustedComparisonPullRequestMemberSubsetOverlaps = comparisonPullRequestMemberSubsetOverlaps
+    .map(({ number, sourceCommitRef, targetCommitRef, witnessCommitRef }) => {
+      if (
+        !Number.isInteger(number) ||
+        number <= 0 ||
+        typeof sourceCommitRef !== "string" ||
+        typeof targetCommitRef !== "string" ||
+        typeof witnessCommitRef !== "string"
+      ) {
+        fail("trusted comparison pull request member subset overlap is invalid");
+      }
+      return {
+        number,
+        sourceCommit: resolveCommit(cwd, sourceCommitRef),
+        sourceRef: sourceCommitRef,
+        targetCommit: resolveCommit(cwd, targetCommitRef),
+        targetRef: targetCommitRef,
+        witnessCommit: resolveCommit(cwd, witnessCommitRef),
+        witnessRef: witnessCommitRef,
+      };
+    })
+    .toSorted(
+      (left, right) =>
+        left.number - right.number ||
+        left.sourceCommit.localeCompare(right.sourceCommit) ||
+        left.targetCommit.localeCompare(right.targetCommit) ||
+        left.witnessCommit.localeCompare(right.witnessCommit),
+    );
+  const trustedComparisonPullRequestMemberSubsetOverlapKeys = new Set(
+    trustedComparisonPullRequestMemberSubsetOverlaps.map(
+      (entry) =>
+        `${entry.number}:${entry.sourceCommit}:${entry.targetCommit}:${entry.witnessCommit}`,
+    ),
+  );
+  if (
+    trustedComparisonPullRequestMemberSubsetOverlapKeys.size !==
+    trustedComparisonPullRequestMemberSubsetOverlaps.length
+  ) {
+    fail("trusted comparison pull request member subset overlap values must be unique");
+  }
+  const trustedComparisonPullRequestMemberSubsetOverlapCommits =
+    trustedComparisonPullRequestMemberSubsetOverlaps.flatMap((entry) => [
+      entry.sourceCommit,
+      entry.targetCommit,
+      entry.witnessCommit,
+    ]);
+  if (
+    new Set(trustedComparisonPullRequestMemberSubsetOverlapCommits).size !==
+    trustedComparisonPullRequestMemberSubsetOverlaps.length * 3
+  ) {
+    fail("trusted comparison pull request member subset overlap commit roles must be disjoint");
+  }
+  if (trustedComparisonPullRequestMemberSubsetOverlaps.length > 0 && !comparisonBaseBranch) {
+    fail("trusted comparison pull request member subset overlap requires comparison evidence");
+  }
+  const trustedComparisonOverlapNumbers = [
+    ...trustedComparisonPullRequestMemberOverlaps.map((entry) => entry.number),
+    ...trustedComparisonPullRequestMemberSubsetOverlaps.map((entry) => entry.number),
+  ];
+  if (new Set(trustedComparisonOverlapNumbers).size !== trustedComparisonOverlapNumbers.length) {
+    fail("trusted comparison overlap pull request numbers must be disjoint");
+  }
+  const trustedComparisonOverlapCommits = [
+    ...trustedComparisonPullRequestMemberOverlapCommits,
+    ...trustedComparisonPullRequestMemberSubsetOverlapCommits,
+  ];
+  if (new Set(trustedComparisonOverlapCommits).size !== trustedComparisonOverlapCommits.length) {
+    fail("trusted comparison overlap commit roles must be disjoint");
   }
   const trustedAdaptedPullRequestProvenance = provenanceAdaptedPullRequests.map(
     ({ number, originCommitRef, targetCommitRef }) => {
@@ -1851,7 +2038,10 @@ export function buildReleaseSourceInventory(
     fail("trusted adapted, integrated, and partial provenance target commits must be disjoint");
   }
   if (
-    trustedComparisonPullRequestMemberOverlaps.some((entry) =>
+    [
+      ...trustedComparisonPullRequestMemberOverlaps,
+      ...trustedComparisonPullRequestMemberSubsetOverlaps,
+    ].some((entry) =>
       [entry.sourceCommit, entry.targetCommit, entry.witnessCommit].some((commit) =>
         explicitProvenanceTargets.includes(commit),
       ),
@@ -1881,9 +2071,10 @@ export function buildReleaseSourceInventory(
     (left, right) => left - right,
   );
   if (
-    trustedComparisonPullRequestMemberOverlaps.some((entry) =>
-      ownershipPullRequestNumberSet.has(entry.number),
-    )
+    [
+      ...trustedComparisonPullRequestMemberOverlaps,
+      ...trustedComparisonPullRequestMemberSubsetOverlaps,
+    ].some((entry) => ownershipPullRequestNumberSet.has(entry.number))
   ) {
     fail("trusted comparison overlap and provenance pull request numbers must be disjoint");
   }
@@ -1902,16 +2093,13 @@ export function buildReleaseSourceInventory(
     ]),
     ...trustedPullRequestProvenance.map((entry) => entry.commit),
   ]);
-  if (
-    trustedComparisonPullRequestMemberOverlapCommits.some((commit) =>
-      ownershipProvenanceCommits.has(commit),
-    )
-  ) {
+  if (trustedComparisonOverlapCommits.some((commit) => ownershipProvenanceCommits.has(commit))) {
     fail("trusted comparison overlap commits and provenance commits must be disjoint");
   }
   const pullRequestCommitNumbers = [
     ...new Set([
       ...trustedComparisonPullRequestMemberOverlaps.map((entry) => entry.number),
+      ...trustedComparisonPullRequestMemberSubsetOverlaps.map((entry) => entry.number),
       ...trustedAdaptedPullRequestProvenance.map((entry) => entry.number),
       ...trustedIntegratedPullRequestProvenance.map((entry) => entry.number),
       ...trustedPartialPullRequestProvenance.map((entry) => entry.number),
@@ -1945,6 +2133,11 @@ export function buildReleaseSourceInventory(
     ...shipped.map((entry) => entry.commit),
     ...provenance.map((entry) => entry.commit),
     ...trustedComparisonPullRequestMemberOverlaps.flatMap((entry) => [
+      entry.sourceCommit,
+      entry.targetCommit,
+      entry.witnessCommit,
+    ]),
+    ...trustedComparisonPullRequestMemberSubsetOverlaps.flatMap((entry) => [
       entry.sourceCommit,
       entry.targetCommit,
       entry.witnessCommit,
@@ -2075,6 +2268,10 @@ export function buildReleaseSourceInventory(
       ...shippedHistoryByRef.flatMap((entry) => entry.commits),
       ...tailCommits,
       ...trustedComparisonPullRequestMemberOverlaps.flatMap((entry) => [
+        entry.sourceCommit,
+        entry.witnessCommit,
+      ]),
+      ...trustedComparisonPullRequestMemberSubsetOverlaps.flatMap((entry) => [
         entry.sourceCommit,
         entry.witnessCommit,
       ]),
@@ -3550,6 +3747,7 @@ export function buildReleaseSourceInventory(
     );
   }
   const comparisonPullRequestMemberOverlapEvidence = new Map();
+  const comparisonPullRequestMemberSubsetOverlapEvidence = new Map();
   let comparison;
   if (comparisonUniverse) {
     const canonical = new Set(partitions.pullRequests.included.members);
@@ -3635,6 +3833,13 @@ export function buildReleaseSourceInventory(
       if (!postForkNotBackportedSet.has(entry.number)) {
         fail(
           `trusted comparison member overlap #${entry.number}:${entry.sourceCommit}:${entry.targetCommit}:${entry.witnessCommit} is not a comparison-only post-fork pull request`,
+        );
+      }
+    }
+    for (const entry of trustedComparisonPullRequestMemberSubsetOverlaps) {
+      if (!postForkNotBackportedSet.has(entry.number)) {
+        fail(
+          `trusted comparison member subset overlap #${entry.number}:${entry.sourceCommit}:${entry.targetCommit}:${entry.witnessCommit} is not a comparison-only post-fork pull request`,
         );
       }
     }
@@ -4482,11 +4687,286 @@ export function buildReleaseSourceInventory(
       };
       comparisonPullRequestMemberOverlapEvidence.set(overlapEntry.number, evidence);
     }
+    for (const overlapEntry of trustedComparisonPullRequestMemberSubsetOverlaps) {
+      const label =
+        `trusted comparison member subset overlap #${overlapEntry.number}:` +
+        `${overlapEntry.sourceCommit}:${overlapEntry.targetCommit}:${overlapEntry.witnessCommit}`;
+      const metadata = searchMetadata.get(overlapEntry.number);
+      const pullRequestCommits = postForkCommitLists.get(overlapEntry.number);
+      const candidates = comparisonCandidatesByPullRequest.get(overlapEntry.number) ?? [];
+      const sourceCandidate = candidates.find(
+        (candidate) =>
+          candidate.kind === "pull-request" && candidate.commit === overlapEntry.sourceCommit,
+      );
+      const landedCandidate = candidates.find(
+        (candidate) => candidate.kind === "merge" && candidate.commit === metadata?.mergeCommit,
+      );
+      const targetCommit = commits.find((commit) => commit.commit === overlapEntry.targetCommit);
+      const sourceRecord = graph.get(overlapEntry.sourceCommit);
+      const targetRecord = graph.get(overlapEntry.targetCommit);
+      const witnessRecord = graph.get(overlapEntry.witnessCommit);
+      const mergeRecord = graph.get(metadata?.mergeCommit);
+      const sourceAssociations = allAssociations.get(overlapEntry.sourceCommit) ?? [];
+      const targetAssociations = allAssociations.get(overlapEntry.targetCommit) ?? [];
+      const witnessAssociations = allAssociations.get(overlapEntry.witnessCommit) ?? [];
+      const targetPatch = commitFirstParentPatch(cwd, graph, overlapEntry.targetCommit);
+      const witnessPatch = commitFirstParentPatch(cwd, graph, overlapEntry.witnessCommit);
+      const targetPaths =
+        targetRecord?.parents.length === 1
+          ? changedPaths(cwd, targetRecord.parents[0], overlapEntry.targetCommit)
+          : [];
+      const witnessPaths =
+        witnessRecord?.parents.length === 1
+          ? changedPaths(cwd, witnessRecord.parents[0], overlapEntry.witnessCommit)
+          : [];
+      if (
+        !metadata ||
+        !pullRequestCommits ||
+        pullRequestCommits.at(-1) !== overlapEntry.sourceCommit ||
+        metadata.headCommit !== overlapEntry.sourceCommit ||
+        !sourceCandidate ||
+        !landedCandidate ||
+        candidateIsBranchLocalCleanup(sourceCandidate) ||
+        sourceRecord?.parents.length !== 1 ||
+        targetRecord?.parents.length !== 1 ||
+        witnessRecord?.parents.length !== 1 ||
+        mergeRecord?.parents.length !== 1 ||
+        sourceAncestors.has(overlapEntry.sourceCommit) ||
+        sourceAncestors.has(metadata.mergeCommit) ||
+        !sourceAncestors.has(overlapEntry.targetCommit) ||
+        sourceAncestors.has(overlapEntry.witnessCommit) ||
+        Date.parse(metadata.mergedAt) > targetTimestamp ||
+        sourceRecord.author.timestamp <= targetRecord.author.timestamp ||
+        sourceRecord.author.timestamp <= witnessRecord.author.timestamp ||
+        JSON.stringify(sourceAssociations) !== JSON.stringify([overlapEntry.number]) ||
+        targetAssociations.length > 0 ||
+        witnessAssociations.length === 0 ||
+        witnessAssociations.includes(overlapEntry.number) ||
+        !targetPatch ||
+        !witnessPatch ||
+        targetPatch.diffSha256 !== witnessPatch.diffSha256 ||
+        targetPatch.patch !== witnessPatch.patch ||
+        targetPatch.patchId !== witnessPatch.patchId ||
+        JSON.stringify(targetPaths) !== JSON.stringify(witnessPaths) ||
+        JSON.stringify(targetRecord.author) !== JSON.stringify(witnessRecord.author) ||
+        targetRecord.message !== witnessRecord.message ||
+        witnessRecord.committer.timestamp >= targetRecord.committer.timestamp ||
+        targetRecord.committer.timestamp >= sourceRecord.committer.timestamp ||
+        targetCommit?.disposition !== "direct" ||
+        targetCommit.pullRequests.length > 0 ||
+        targetCommit.evidence.length > 0 ||
+        targetCommit.associatedPullRequests.length > 0 ||
+        targetCommit.explicitPullRequestReferences.length > 0 ||
+        targetCommit.references.length > 0 ||
+        targetCommit.cherryPickOrigins.length > 0 ||
+        targetCommit.adaptationOrigins.length > 0 ||
+        targetCommit.verifiedCherryPickOrigins.length > 0 ||
+        targetCommit.nonEquivalentCherryPickOrigins.length > 0 ||
+        sourceCandidate.paths.length === 0 ||
+        sourceCandidate.paths.length >= targetPaths.length ||
+        !sourceCandidate.paths.every((path) => targetPaths.includes(path))
+      ) {
+        fail(`${label} is not an isolated direct strict-member subset overlap`);
+      }
+      const sourceChangedLineHashes = changedLineHashes(
+        candidateZeroContextPatch(cwd, sourceCandidate),
+      );
+      const targetChangedLineHashes = changedLineHashes(
+        zeroContextPatch(cwd, targetRecord.parents[0], overlapEntry.targetCommit, targetPaths),
+      );
+      const witnessChangedLineHashes = changedLineHashes(
+        zeroContextPatch(cwd, witnessRecord.parents[0], overlapEntry.witnessCommit, witnessPaths),
+      );
+      if (
+        sourceChangedLineHashes.length === 0 ||
+        sourceChangedLineHashes.length >= targetChangedLineHashes.length ||
+        JSON.stringify(targetChangedLineHashes) !== JSON.stringify(witnessChangedLineHashes) ||
+        !sourceChangedLineHashes.every((hash) => targetChangedLineHashes.includes(hash))
+      ) {
+        fail(`${label} does not have an exact strict changed-line subset`);
+      }
+      const landedStack = firstParentStack(
+        cwd,
+        graph,
+        metadata.mergeCommit,
+        pullRequestCommits.length,
+        label,
+      );
+      const stackMappings = pullRequestCommits.map((sourceCommit, index) => {
+        const landedCommit = landedStack.commits[index];
+        const original = graph.get(sourceCommit);
+        const landed = graph.get(landedCommit);
+        if (
+          !original ||
+          !landed ||
+          sourceCommit === landedCommit ||
+          JSON.stringify(original.author) !== JSON.stringify(landed.author) ||
+          original.message !== landed.message
+        ) {
+          fail(`${label} does not match its immutable rebased landing stack`);
+        }
+        return {
+          author: original.author,
+          landedCommit,
+          landedTree: landed.tree,
+          messageSha256: createHash("sha256").update(original.message).digest("hex"),
+          sourceCommit,
+          sourceTree: original.tree,
+        };
+      });
+      if (
+        landedStack.commits.at(-1) !== metadata.mergeCommit ||
+        !isAncestor(cwd, overlapEntry.witnessCommit, landedStack.baseCommit) ||
+        !exactCandidatePatchEquivalent(cwd, graph, metadata.mergeCommit, sourceCandidate)
+      ) {
+        fail(`${label} does not bind the rebased member to an independent main stack`);
+      }
+      const stackBaseProof = candidateExactPathTreeProof(
+        cwd,
+        graph,
+        landedStack.baseCommit,
+        sourceCandidate,
+      );
+      const mergeCommitProof = candidateExactPathTreeProof(
+        cwd,
+        graph,
+        metadata.mergeCommit,
+        sourceCandidate,
+      );
+      const sourceTargetProof = candidateExactPathTreeProof(
+        cwd,
+        graph,
+        sourceTarget,
+        sourceCandidate,
+      );
+      const stackNetPatch = zeroContextPatch(
+        cwd,
+        landedStack.baseCommit,
+        metadata.mergeCommit,
+        sourceCandidate.paths,
+      );
+      const stackNetChangedLineHashes = changedLineHashes(stackNetPatch);
+      const stackAllocatedCandidateLines = sourceChangedLineHashes.filter((hash) =>
+        stackNetChangedLineHashes.includes(hash),
+      );
+      if (
+        !stackBaseProof ||
+        !mergeCommitProof ||
+        !sourceTargetProof ||
+        stackAllocatedCandidateLines.length > 0
+      ) {
+        fail(`${label} is allocated by the rebased pull request stack`);
+      }
+      const pathEvidence = sourceCandidate.paths.map((path) => {
+        const hunkEvidence = candidateSubsetHunkEvidence(
+          cwd,
+          graph,
+          sourceCandidate,
+          overlapEntry.targetCommit,
+          overlapEntry.witnessCommit,
+          path,
+        );
+        if (!hunkEvidence) {
+          fail(`${label} path ${path} lacks unique immutable subset hunk evidence`);
+        }
+        return {
+          ...hunkEvidence,
+          mergeStateSha256: pathStateSha256(cwd, metadata.mergeCommit, path),
+          stackBaseStateSha256: pathStateSha256(cwd, landedStack.baseCommit, path),
+          sourceTargetStateSha256: pathStateSha256(cwd, sourceTarget, path),
+          targetStateSha256: pathStateSha256(cwd, overlapEntry.targetCommit, path),
+          witnessStateSha256: pathStateSha256(cwd, overlapEntry.witnessCommit, path),
+        };
+      });
+      const patchMatches = patchMatchesByPullRequest.get(overlapEntry.number) ?? [];
+      const sourceFinalTreeMatches = patchMatches.filter(
+        (match) =>
+          match.candidateCommit === overlapEntry.sourceCommit &&
+          match.candidateKind === "pull-request-final-tree" &&
+          match.targetCommit === sourceTarget,
+      );
+      const landedFinalTreeMatches = patchMatches.filter(
+        (match) =>
+          match.candidateCommit === metadata.mergeCommit &&
+          match.candidateKind === "merge-final-tree" &&
+          match.targetCommit === sourceTarget,
+      );
+      if (sourceFinalTreeMatches.length !== 1 || landedFinalTreeMatches.length !== 1) {
+        fail(`${label} does not bind exactly two final-tree scanner matches`);
+      }
+      const explainedMatches = new Set([...sourceFinalTreeMatches, ...landedFinalTreeMatches]);
+      patchMatchesByPullRequest.set(
+        overlapEntry.number,
+        patchMatches.filter((match) => !explainedMatches.has(match)),
+      );
+      comparisonPullRequestMemberSubsetOverlapEvidence.set(overlapEntry.number, {
+        landedStack: {
+          baseCommit: landedStack.baseCommit,
+          baseTree: graph.get(landedStack.baseCommit).tree,
+          candidateChangedLineHashes: setSummary(sourceChangedLineHashes),
+          candidateLineOverlap: setSummary(stackAllocatedCandidateLines),
+          commits: recordSummary(stackMappings),
+          mergeCommit: metadata.mergeCommit,
+          mergeCommitProof,
+          netChangedLineHashes: setSummary(stackNetChangedLineHashes),
+          sourceTargetProof,
+          stackBaseProof,
+        },
+        method: "reviewed-nonownership-strict-member-subset-overlap",
+        ownershipAttributed: false,
+        paths: recordSummary(pathEvidence),
+        pullRequest: metadata,
+        pullRequestMembers: setSummary(pullRequestCommits),
+        scannerMatches: recordSummary([...sourceFinalTreeMatches, ...landedFinalTreeMatches]),
+        source: {
+          associations: setSummary(sourceAssociations, (left, right) => left - right),
+          author: sourceRecord.author,
+          commit: overlapEntry.sourceCommit,
+          committer: sourceRecord.committer,
+          diffSha256: sourceCandidate.diffSha256,
+          messageSha256: createHash("sha256").update(sourceRecord.message).digest("hex"),
+          parent: sourceCandidate.parent,
+          patchId: sourceCandidate.patchId,
+          paths: setSummary(sourceCandidate.paths),
+          tree: sourceCandidate.tree,
+        },
+        target: {
+          associations: setSummary(targetAssociations, (left, right) => left - right),
+          author: targetRecord.author,
+          commit: overlapEntry.targetCommit,
+          committer: targetRecord.committer,
+          diffSha256: targetPatch.diffSha256,
+          messageSha256: createHash("sha256").update(targetRecord.message).digest("hex"),
+          parent: targetRecord.parents[0],
+          patchId: targetPatch.patchId,
+          paths: setSummary(targetPaths),
+          tree: targetRecord.tree,
+        },
+        witness: {
+          associations: setSummary(witnessAssociations, (left, right) => left - right),
+          author: witnessRecord.author,
+          commit: overlapEntry.witnessCommit,
+          committer: witnessRecord.committer,
+          diffSha256: witnessPatch.diffSha256,
+          messageSha256: createHash("sha256").update(witnessRecord.message).digest("hex"),
+          parent: witnessRecord.parents[0],
+          patchId: witnessPatch.patchId,
+          paths: setSummary(witnessPaths),
+          tree: witnessRecord.tree,
+        },
+      });
+    }
     if (
       comparisonPullRequestMemberOverlapEvidence.size !==
       trustedComparisonPullRequestMemberOverlaps.length
     ) {
       fail("trusted comparison member overlap evidence is incomplete");
+    }
+    if (
+      comparisonPullRequestMemberSubsetOverlapEvidence.size !==
+      trustedComparisonPullRequestMemberSubsetOverlaps.length
+    ) {
+      fail("trusted comparison member subset overlap evidence is incomplete");
     }
     const postForkEvidence = postForkNotBackported.map((number) => {
       const metadata = searchMetadata.get(number);
@@ -4542,6 +5022,8 @@ export function buildReleaseSourceInventory(
       );
       const context = pullRequestCleanupContexts.get(number);
       const reviewedMemberOverlap = comparisonPullRequestMemberOverlapEvidence.get(number);
+      const reviewedMemberSubsetOverlap =
+        comparisonPullRequestMemberSubsetOverlapEvidence.get(number);
       if (
         canonicalCommits.length > 0 ||
         cherryPickCommits.length > 0 ||
@@ -4567,6 +5049,7 @@ export function buildReleaseSourceInventory(
         pullRequest: number,
         pullRequestCommits,
         ...(reviewedMemberOverlap ? { reviewedMemberOverlap } : {}),
+        ...(reviewedMemberSubsetOverlap ? { reviewedMemberSubsetOverlap } : {}),
         ...(suppressedAmbiguousPatchMatches.length > 0 ? { suppressedAmbiguousPatchMatches } : {}),
         ...(suppressedCommonAncestryPatchMatches.length > 0
           ? { suppressedCommonAncestryPatchMatches }
@@ -4733,6 +5216,21 @@ export function buildReleaseSourceInventory(
                 witnessRef: entry.witnessRef,
               }),
             ),
+          }
+        : {}),
+      ...(trustedComparisonPullRequestMemberSubsetOverlaps.length > 0
+        ? {
+            comparisonPullRequestMemberSubsetOverlaps:
+              trustedComparisonPullRequestMemberSubsetOverlaps.map((entry) => ({
+                details: comparisonPullRequestMemberSubsetOverlapEvidence.get(entry.number),
+                number: entry.number,
+                sourceCommit: entry.sourceCommit,
+                sourceRef: entry.sourceRef,
+                targetCommit: entry.targetCommit,
+                targetRef: entry.targetRef,
+                witnessCommit: entry.witnessCommit,
+                witnessRef: entry.witnessRef,
+              })),
           }
         : {}),
       provenanceAdaptedPullRequests: trustedAdaptedPullRequestProvenance.map((entry) => ({

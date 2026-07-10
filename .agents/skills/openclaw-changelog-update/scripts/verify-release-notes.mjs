@@ -380,6 +380,9 @@ Options:
                         Review one exact PR-member/direct-commit overlap against the sole
                         independent match in the merge parent's full ancestry; the selected
                         witness must lie on its first-parent path, without attributing the PR.
+  --comparison-pr-member-subset-overlap <PR>:<member-SHA>:<target-SHA>:<main-witness-SHA>
+                        Review one strict PR-member subset already supplied by an independent
+                        broader main/release commit pair, without attributing the PR.
   --provenance-pr-adapted <PR>:<origin-SHA>:<target-SHA>
                         Trust one reviewed same-path member or squash-aggregate adaptation.
   --provenance-pr-integrated <PR>:<source-SHA>:<target-SHA>
@@ -404,6 +407,7 @@ function parseArgs(argv) {
     maxSourceTailCommits: 1,
     provenanceAdaptedPullRequests: [],
     comparisonPullRequestMemberOverlaps: [],
+    comparisonPullRequestMemberSubsetOverlaps: [],
     provenanceIntegratedPullRequests: [],
     provenancePartialPullRequests: [],
     provenancePullRequests: [],
@@ -439,6 +443,7 @@ function parseArgs(argv) {
       arg === "--provenance-ref" ||
       arg === "--provenance-pr" ||
       arg === "--comparison-pr-member-overlap" ||
+      arg === "--comparison-pr-member-subset-overlap" ||
       arg === "--provenance-pr-adapted" ||
       arg === "--provenance-pr-integrated" ||
       arg === "--provenance-pr-partial" ||
@@ -489,6 +494,19 @@ function parseArgs(argv) {
           fail(`invalid --comparison-pr-member-overlap value: ${value}`);
         }
         options.comparisonPullRequestMemberOverlaps.push({
+          number: Number(match.groups.number),
+          sourceCommitRef: match.groups.source.toLowerCase(),
+          targetCommitRef: match.groups.target.toLowerCase(),
+          witnessCommitRef: match.groups.witness.toLowerCase(),
+        });
+      } else if (arg === "--comparison-pr-member-subset-overlap") {
+        const match = value.match(
+          /^#?(?<number>\d+):(?<source>[0-9a-f]{40}):(?<target>[0-9a-f]{40}):(?<witness>[0-9a-f]{40})$/i,
+        );
+        if (!match?.groups || Number(match.groups.number) <= 0) {
+          fail(`invalid --comparison-pr-member-subset-overlap value: ${value}`);
+        }
+        options.comparisonPullRequestMemberSubsetOverlaps.push({
           number: Number(match.groups.number),
           sourceCommitRef: match.groups.source.toLowerCase(),
           targetCommitRef: match.groups.target.toLowerCase(),
@@ -645,6 +663,64 @@ function parseArgs(argv) {
   if (options.comparisonPullRequestMemberOverlaps.length > 0 && !options.comparisonBaseBranch) {
     fail("--comparison-pr-member-overlap requires --comparison-base main");
   }
+  const comparisonMemberSubsetOverlapKeys = new Set(
+    options.comparisonPullRequestMemberSubsetOverlaps.map(
+      (entry) =>
+        `${entry.number}:${entry.sourceCommitRef}:${entry.targetCommitRef}:${entry.witnessCommitRef}`,
+    ),
+  );
+  if (
+    comparisonMemberSubsetOverlapKeys.size !==
+    options.comparisonPullRequestMemberSubsetOverlaps.length
+  ) {
+    fail("--comparison-pr-member-subset-overlap values must be unique");
+  }
+  if (
+    new Set(options.comparisonPullRequestMemberSubsetOverlaps.map((entry) => entry.number)).size !==
+    options.comparisonPullRequestMemberSubsetOverlaps.length
+  ) {
+    fail("--comparison-pr-member-subset-overlap PR numbers must be unique");
+  }
+  const comparisonMemberSubsetOverlapCommits =
+    options.comparisonPullRequestMemberSubsetOverlaps.flatMap((entry) => [
+      entry.sourceCommitRef,
+      entry.targetCommitRef,
+      entry.witnessCommitRef,
+    ]);
+  if (
+    new Set(comparisonMemberSubsetOverlapCommits).size !==
+    options.comparisonPullRequestMemberSubsetOverlaps.length * 3
+  ) {
+    fail("--comparison-pr-member-subset-overlap source, target, and witness SHAs must be disjoint");
+  }
+  options.comparisonPullRequestMemberSubsetOverlaps =
+    options.comparisonPullRequestMemberSubsetOverlaps.toSorted(
+      (left, right) =>
+        left.number - right.number ||
+        left.sourceCommitRef.localeCompare(right.sourceCommitRef) ||
+        left.targetCommitRef.localeCompare(right.targetCommitRef) ||
+        left.witnessCommitRef.localeCompare(right.witnessCommitRef),
+    );
+  if (
+    options.comparisonPullRequestMemberSubsetOverlaps.length > 0 &&
+    !options.comparisonBaseBranch
+  ) {
+    fail("--comparison-pr-member-subset-overlap requires --comparison-base main");
+  }
+  const comparisonOverlapNumbers = [
+    ...options.comparisonPullRequestMemberOverlaps.map((entry) => entry.number),
+    ...options.comparisonPullRequestMemberSubsetOverlaps.map((entry) => entry.number),
+  ];
+  if (new Set(comparisonOverlapNumbers).size !== comparisonOverlapNumbers.length) {
+    fail("comparison-overlap PR numbers must be disjoint");
+  }
+  const comparisonOverlapCommits = [
+    ...comparisonMemberOverlapCommits,
+    ...comparisonMemberSubsetOverlapCommits,
+  ];
+  if (new Set(comparisonOverlapCommits).size !== comparisonOverlapCommits.length) {
+    fail("comparison-overlap commit roles must be disjoint");
+  }
   const adaptedKeys = new Set(
     options.provenanceAdaptedPullRequests.map(
       (entry) => `${entry.number}:${entry.originCommitRef}:${entry.targetCommitRef}`,
@@ -715,7 +791,7 @@ function parseArgs(argv) {
   if (new Set(explicitTargetCommits).size !== explicitTargetCommits.length) {
     fail("adapted, integrated, and partial provenance target SHAs must be disjoint");
   }
-  if (comparisonMemberOverlapCommits.some((commit) => explicitTargetCommits.includes(commit))) {
+  if (comparisonOverlapCommits.some((commit) => explicitTargetCommits.includes(commit))) {
     fail("comparison-overlap commits and provenance target SHAs must be disjoint");
   }
   const ownershipPullRequestNumbers = new Set([
@@ -726,6 +802,9 @@ function parseArgs(argv) {
   ]);
   if (
     options.comparisonPullRequestMemberOverlaps.some((entry) =>
+      ownershipPullRequestNumbers.has(entry.number),
+    ) ||
+    options.comparisonPullRequestMemberSubsetOverlaps.some((entry) =>
       ownershipPullRequestNumbers.has(entry.number),
     )
   ) {
@@ -746,7 +825,7 @@ function parseArgs(argv) {
       entry.targetCommitRef,
     ]),
   ]);
-  if (comparisonMemberOverlapCommits.some((commit) => ownershipProvenanceCommits.has(commit))) {
+  if (comparisonOverlapCommits.some((commit) => ownershipProvenanceCommits.has(commit))) {
     fail("comparison-overlap commits and provenance commits must be disjoint");
   }
   if (options.writeLedger && !options.manifestPath) {
@@ -844,6 +923,7 @@ function normalizedInvocation(options) {
     maxChangelogTail: options.maxSourceTailCommits,
     provenanceAdaptedPullRequests: options.provenanceAdaptedPullRequests,
     comparisonPullRequestMemberOverlaps: options.comparisonPullRequestMemberOverlaps,
+    comparisonPullRequestMemberSubsetOverlaps: options.comparisonPullRequestMemberSubsetOverlaps,
     provenanceIntegratedPullRequests: options.provenanceIntegratedPullRequests,
     provenancePartialPullRequests: options.provenancePartialPullRequests,
     provenancePullRequests: options.provenancePullRequests,
@@ -1483,6 +1563,7 @@ function sourceCommits(options) {
     ...new Set([
       ...options.provenanceAdaptedPullRequests.map((entry) => entry.number),
       ...options.comparisonPullRequestMemberOverlaps.map((entry) => entry.number),
+      ...options.comparisonPullRequestMemberSubsetOverlaps.map((entry) => entry.number),
       ...options.provenanceIntegratedPullRequests.map((entry) => entry.number),
       ...options.provenancePartialPullRequests.map((entry) => entry.number),
       ...options.provenancePullRequests.map((entry) => entry.number),
@@ -1497,6 +1578,11 @@ function sourceCommits(options) {
       entry.targetCommitRef,
     ]),
     ...options.comparisonPullRequestMemberOverlaps.flatMap((entry) => [
+      entry.sourceCommitRef,
+      entry.targetCommitRef,
+      entry.witnessCommitRef,
+    ]),
+    ...options.comparisonPullRequestMemberSubsetOverlaps.flatMap((entry) => [
       entry.sourceCommitRef,
       entry.targetCommitRef,
       entry.witnessCommitRef,
@@ -1553,6 +1639,8 @@ function sourceCommits(options) {
         maxSourceTailCommits: options.maxSourceTailCommits,
         provenanceAdaptedPullRequests: options.provenanceAdaptedPullRequests,
         comparisonPullRequestMemberOverlaps: options.comparisonPullRequestMemberOverlaps,
+        comparisonPullRequestMemberSubsetOverlaps:
+          options.comparisonPullRequestMemberSubsetOverlaps,
         provenanceIntegratedPullRequests: options.provenanceIntegratedPullRequests,
         provenancePartialPullRequests: options.provenancePartialPullRequests,
         provenancePullRequests: options.provenancePullRequests,

@@ -86,6 +86,7 @@ describe("release ledger producer workflow", () => {
     ).toEqual({
       adaptedPullRequests: [],
       comparisonPullRequestMemberOverlaps: [],
+      comparisonPullRequestMemberSubsetOverlaps: [],
       integratedPullRequests: [],
       partialPullRequests: [],
       pullRequests: [],
@@ -200,6 +201,7 @@ describe("release ledger producer workflow", () => {
     for (const flag of [
       '"--comparison-base"',
       '"--comparison-pr-member-overlap"',
+      '"--comparison-pr-member-subset-overlap"',
       '"--manifest"',
       '"--max-changelog-tail"',
       '"--provenance-pr"',

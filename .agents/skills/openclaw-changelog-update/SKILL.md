@@ -193,6 +193,22 @@ every human `Thanks @...` attribution.
      ancestry-separated and disjoint from every ownership provenance mode. Any
      extra member, scanner match, aggregate presence, shifted hunk, missing
      witness, or unused directive fails closed.
+   - when the PR member is a strict changed-line subset of the independently
+     authored main/release commit pair, use
+     `--comparison-pr-member-subset-overlap <PR>:<member-SHA>:<target-SHA>:<main-witness-SHA>`.
+     This narrower non-ownership contract requires the supplied member to be the
+     immutable PR head and the final commit of a contiguous rebased landing
+     stack. Every source member must map in order to one distinct landed commit
+     by exact author and message identity, the selected member must map by exact
+     patch, and the witness must already be ancestral to the stack base. The
+     member's unique text hunks must be a strict subset of identical broader
+     target/witness changed-line hashes, survive at the stack base, merge
+     result, and source target, and be absent from the stack's net changed-line
+     allocation. The target remains association/reference/trailer-free direct
+     release work; the witness must have an independent PR association. Exactly
+     the source-head and landed-head final-tree scanner matches are acknowledged.
+     Any extra scanner match, ownership evidence, non-rebased mapping, shifted
+     or ambiguous hunk, or unused directive fails closed.
    - resolve commit-author pages completely so verified non-noreply co-authors
      retain contributor credit
    - the manifest records canonical/current/generated/missing/stale PR members
@@ -347,6 +363,7 @@ every human `Thanks @...` attribution.
     --shipped-ref v2026.6.11 \
     --provenance-pr 103073:417b9163cacd48aeec5a1ab2d2554cdbc14f9796 \
     --comparison-pr-member-overlap 99242:67f76f2c14bfe010bb244a808e6137c4c44b02b2:00259d07efe08a218e6d561153e730fe2c746e1c:d3ff48c51f4ff4cf3594c04e127c8e3ae83ba021 \
+    --comparison-pr-member-subset-overlap 102160:c04278466edd8ca7af25001bad22b9c31e576392:366258dee6e4a3ea0bb04b1316e5a0c419c60188:8a5ad170c03682bf40d6fd552d954ed0db37a41f \
     --version 2026.7.1 \
     --manifest /tmp/openclaw-release-2026.7.1.json \
     --write-ledger

@@ -4086,6 +4086,210 @@ describe("release source inventory", () => {
       ).toThrow("overlap path shifted.txt lacks a unique immutable hunk anchor");
     }));
 
+  it("accepts an explicit strict member subset already owned by a broader main commit", () =>
+    withRepository((cwd) => {
+      const oldOverlap = [
+        "alpha=0.142.0",
+        "beta=0.142.0",
+        "candidate-a=0.142.0",
+        "candidate-b=0.142.0",
+        "candidate-c=0.142.0",
+        "",
+      ].join("\n");
+      const broadOverlap = oldOverlap.replaceAll("0.142.0", "0.143.0");
+      const landedIntermediateOverlap = broadOverlap
+        .replace("candidate-a=0.143.0", "candidate-a=0.142.0")
+        .replace("candidate-b=0.143.0", "candidate-b=0.142.0")
+        .replace("candidate-c=0.143.0", "candidate-c=0.142.0");
+      const rootFiles = {
+        "CHANGELOG.md": "# Changelog\n",
+        "feature.txt": "base\n",
+        "overlap.txt": oldOverlap,
+        "release.txt": "base\n",
+        "version.txt": "0.142.0\n",
+      };
+      const broadFiles = {
+        ...rootFiles,
+        "overlap.txt": broadOverlap,
+        "version.txt": "0.143.0\n",
+      };
+      const root = createCommit(cwd, {
+        files: rootFiles,
+        subject: "chore: root",
+        timestamp: 10,
+      });
+      const witness = createCommit(cwd, {
+        authorTimestamp: 20,
+        files: broadFiles,
+        parents: [root],
+        subject: "chore: bump runtime to 0.143.0",
+        timestamp: 25,
+      });
+      const target = createCommit(cwd, {
+        authorTimestamp: 20,
+        files: broadFiles,
+        parents: [root],
+        subject: "chore: bump runtime to 0.143.0",
+        timestamp: 30,
+      });
+      const sourceFeature = createCommit(cwd, {
+        authorTimestamp: 32,
+        files: {
+          ...broadFiles,
+          "feature.txt": "head\n",
+          "overlap.txt": landedIntermediateOverlap,
+        },
+        parents: [root],
+        subject: "feat: add shared runtime behavior",
+        timestamp: 33,
+      });
+      const sourceMember = createCommit(cwd, {
+        authorTimestamp: 35,
+        files: { ...broadFiles, "feature.txt": "head\n" },
+        parents: [sourceFeature],
+        subject: "test: align version fixtures",
+        timestamp: 35,
+      });
+      const landedFeature = createCommit(cwd, {
+        authorTimestamp: 32,
+        files: {
+          ...broadFiles,
+          "feature.txt": "head\n",
+          "overlap.txt": landedIntermediateOverlap,
+        },
+        parents: [witness],
+        subject: "feat: add shared runtime behavior",
+        timestamp: 40,
+      });
+      const landedMember = createCommit(cwd, {
+        authorTimestamp: 35,
+        files: { ...broadFiles, "feature.txt": "head\n" },
+        parents: [landedFeature],
+        subject: "test: align version fixtures",
+        timestamp: 41,
+      });
+      const sourceTarget = createCommit(cwd, {
+        files: { ...broadFiles, "release.txt": "released\n" },
+        parents: [target],
+        subject: "fix: release-only work",
+        timestamp: 50,
+      });
+      const record = {
+        baseBranch: "main",
+        baseCommit: root,
+        headCommit: sourceMember,
+        mergeCommit: landedMember,
+        mergedAt: "1970-01-01T00:00:41.000Z",
+        number: 205,
+      };
+      const members = summarizeTeamUniverseMembers([205]);
+      const recordEvidence = summarizeTeamUniverseRecords([record]);
+      const query = teamUniverseWindowQuery({
+        base: "main",
+        end: "1970-01-01T00:00:50Z",
+        repository: "openclaw/openclaw",
+        start: "1970-01-01T00:00:10Z",
+      });
+      const comparison = {
+        baseBranch: "main",
+        count: members.count,
+        pullRequests: members.members,
+        query,
+        records: recordEvidence.records,
+        recordsSha256: recordEvidence.sha256,
+        repository: "openclaw/openclaw",
+        segments: [
+          {
+            count: members.count,
+            pullRequests: members.members,
+            query,
+            recordsSha256: recordEvidence.sha256,
+            sha256: members.sha256,
+            window: { endTimestamp: 50_000, startTimestamp: 10_000 },
+          },
+        ],
+        sha256: members.sha256,
+        window: { endTimestamp: 50_000, startTimestamp: 10_000 },
+      };
+      const referenceNodes = new Map([
+        [
+          999,
+          {
+            __typename: "PullRequest" as const,
+            mergedAt: "1970-01-01T00:00:25.000Z",
+            number: 999,
+          },
+        ],
+      ]);
+      const inventory = buildReleaseSourceInventory(
+        {
+          baseRef: root,
+          comparisonBaseBranch: "main",
+          comparisonPullRequestMemberSubsetOverlaps: [
+            {
+              number: 205,
+              sourceCommitRef: sourceMember,
+              targetCommitRef: target,
+              witnessCommitRef: witness,
+            },
+          ],
+          cwd,
+          finalTargetRef: sourceTarget,
+          sourceTargetRef: sourceTarget,
+        },
+        completeEvidence(
+          new Map([
+            [sourceMember, [205]],
+            [witness, [999]],
+          ]),
+          referenceNodes,
+          {
+            comparison,
+            pullRequestCommits: new Map([[205, [sourceFeature, sourceMember]]]),
+          },
+        ),
+      );
+
+      expect(inventory.range.comparisonPullRequestMemberSubsetOverlaps).toEqual([
+        expect.objectContaining({
+          details: expect.objectContaining({
+            landedStack: expect.objectContaining({
+              baseCommit: witness,
+              candidateLineOverlap: expect.objectContaining({ count: 0 }),
+              commits: expect.objectContaining({ count: 2 }),
+              mergeCommit: landedMember,
+            }),
+            method: "reviewed-nonownership-strict-member-subset-overlap",
+            ownershipAttributed: false,
+            scannerMatches: expect.objectContaining({ count: 2 }),
+            source: expect.objectContaining({ commit: sourceMember }),
+            target: expect.objectContaining({ commit: target }),
+            witness: expect.objectContaining({
+              associations: expect.objectContaining({ members: [999] }),
+              commit: witness,
+            }),
+          }),
+          number: 205,
+          sourceCommit: sourceMember,
+          targetCommit: target,
+          witnessCommit: witness,
+        }),
+      ]);
+      const postForkRecord = inventory.comparison?.partitionEvidence.postFork.records.find(
+        (entry) => entry.pullRequest === 205,
+      );
+      expect(postForkRecord).toMatchObject({
+        patchEquivalentCommits: [],
+        reviewedMemberSubsetOverlap: expect.objectContaining({
+          ownershipAttributed: false,
+          target: expect.objectContaining({ commit: target }),
+          witness: expect.objectContaining({ commit: witness }),
+        }),
+      });
+      expect(sourceContributionsFromInventory(inventory).pullRequests.has(205)).toBe(false);
+      expect(assertCompleteReleaseSourceInventory(inventory)).toBe(inventory);
+    }));
+
   it("does not infer provenance from a shifted duplicate zero-context hunk", () =>
     withRepository((cwd) => {
       const rootFiles = {

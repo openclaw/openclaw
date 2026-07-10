@@ -498,6 +498,49 @@ describe("release-note verification", () => {
       "--comparison-pr-member-overlap source, target, and witness SHAs must be disjoint",
     );
 
+    const subsetAccepted = spawnSync(
+      process.execPath,
+      [
+        verifier,
+        "--help",
+        "--comparison-base",
+        "main",
+        "--tooling-commit",
+        "d".repeat(40),
+        "--tooling-tree",
+        "e".repeat(40),
+        "--comparison-pr-member-subset-overlap",
+        valid,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(subsetAccepted.status, subsetAccepted.stderr).toBe(0);
+    expect(subsetAccepted.stdout).toContain("--comparison-pr-member-subset-overlap");
+    expect(subsetAccepted.stdout).toContain("strict");
+
+    const sharedOverlapPullRequest = spawnSync(
+      process.execPath,
+      [
+        verifier,
+        "--help",
+        "--comparison-base",
+        "main",
+        "--tooling-commit",
+        "d".repeat(40),
+        "--tooling-tree",
+        "e".repeat(40),
+        "--comparison-pr-member-overlap",
+        valid,
+        "--comparison-pr-member-subset-overlap",
+        `501:${"f".repeat(40)}:${"1".repeat(40)}:${"2".repeat(40)}`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(sharedOverlapPullRequest.status).not.toBe(0);
+    expect(sharedOverlapPullRequest.stderr).toContain(
+      "comparison-overlap PR numbers must be disjoint",
+    );
+
     const sharedProvenanceTarget = "9".repeat(40);
     const ownershipTargetCollision = spawnSync(
       process.execPath,

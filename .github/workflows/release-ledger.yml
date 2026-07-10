@@ -31,7 +31,7 @@ on:
       provenance_json:
         description: Immutable provenance arrays for exact, adapted, integrated, partial, comparison-overlap, and ref evidence
         required: true
-        default: '{"pullRequests":[],"adaptedPullRequests":[],"comparisonPullRequestMemberOverlaps":[],"integratedPullRequests":[],"partialPullRequests":[],"refs":[]}'
+        default: '{"pullRequests":[],"adaptedPullRequests":[],"comparisonPullRequestMemberOverlaps":[],"comparisonPullRequestMemberSubsetOverlaps":[],"integratedPullRequests":[],"partialPullRequests":[],"refs":[]}'
         type: string
 
 permissions:
@@ -255,6 +255,7 @@ jobs:
           const keys = [
             "adaptedPullRequests",
             "comparisonPullRequestMemberOverlaps",
+            "comparisonPullRequestMemberSubsetOverlaps",
             "integratedPullRequests",
             "partialPullRequests",
             "pullRequests",
@@ -298,6 +299,7 @@ jobs:
           for (const key of [
             "adaptedPullRequests",
             "comparisonPullRequestMemberOverlaps",
+            "comparisonPullRequestMemberSubsetOverlaps",
             "integratedPullRequests",
             "partialPullRequests",
             "pullRequests",
@@ -428,6 +430,7 @@ jobs:
           const provenanceKeys = [
             "adaptedPullRequests",
             "comparisonPullRequestMemberOverlaps",
+            "comparisonPullRequestMemberSubsetOverlaps",
             "integratedPullRequests",
             "partialPullRequests",
             "pullRequests",
@@ -511,6 +514,25 @@ jobs:
                   left.targetCommitRef.localeCompare(right.targetCommitRef) ||
                   left.witnessCommitRef.localeCompare(right.witnessCommitRef),
               );
+          const comparisonPullRequestMemberSubsetOverlaps =
+            provenance.comparisonPullRequestMemberSubsetOverlaps
+              .map((entry) => {
+                const match = entry.match(overlapPattern);
+                assert(match?.groups, `invalid comparison-subset-overlap provenance entry: ${entry}`);
+                return {
+                  number: Number(match.groups.number),
+                  sourceCommitRef: match.groups.source,
+                  targetCommitRef: match.groups.target,
+                  witnessCommitRef: match.groups.witness,
+                };
+              })
+              .sort(
+                (left, right) =>
+                  left.number - right.number ||
+                  left.sourceCommitRef.localeCompare(right.sourceCommitRef) ||
+                  left.targetCommitRef.localeCompare(right.targetCommitRef) ||
+                  left.witnessCommitRef.localeCompare(right.witnessCommitRef),
+              );
           const provenanceIntegratedPullRequests = provenance.integratedPullRequests
             .map((entry) => {
               const parsed = parsePair(entry, "integrated");
@@ -579,6 +601,9 @@ jobs:
           for (const entry of provenance.comparisonPullRequestMemberOverlaps) {
             args.push("--comparison-pr-member-overlap", entry);
           }
+          for (const entry of provenance.comparisonPullRequestMemberSubsetOverlaps) {
+            args.push("--comparison-pr-member-subset-overlap", entry);
+          }
           for (const entry of provenance.integratedPullRequests) args.push("--provenance-pr-integrated", entry);
           for (const entry of provenance.partialPullRequests) args.push("--provenance-pr-partial", entry);
           for (const ref of provenanceRefs) args.push("--provenance-ref", ref);
@@ -644,6 +669,7 @@ jobs:
             maxChangelogTail,
             provenanceAdaptedPullRequests,
             comparisonPullRequestMemberOverlaps,
+            comparisonPullRequestMemberSubsetOverlaps,
             provenanceIntegratedPullRequests,
             provenancePartialPullRequests,
             provenancePullRequests,
