@@ -312,9 +312,9 @@ struct MacNodeRuntimeTests {
             let params = OpenClawSystemRunParams(
                 command: ["/bin/sh", "-lc", "printf ok"],
                 rawCommand: "printf ok",
-                approvalDecision: ExecApprovalDecision.deny.rawValue,
                 sessionKey: "agent:main:main",
-                runId: "gateway-run-1")
+                runId: "gateway-run-1",
+                approvalDecision: ExecApprovalDecision.deny.rawValue)
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
             let response = await runtime.handleInvoke(
                 BridgeInvokeRequest(

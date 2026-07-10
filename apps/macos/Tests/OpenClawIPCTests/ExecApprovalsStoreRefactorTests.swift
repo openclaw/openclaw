@@ -1194,7 +1194,8 @@ struct ExecApprovalsStoreRefactorTests {
                 Issue.record("expected revoked approval checkpoint to fail")
                 return
             }
-            #expect((ExecApprovalsStore.loadFile().agents?["main"]?.allowlist ?? []).isEmpty)
+            let allowlist = ExecApprovalsStore.loadFile().agents?["main"]?.allowlist
+            #expect(allowlist?.isEmpty ?? true)
         }
     }
 

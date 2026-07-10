@@ -101,7 +101,8 @@ struct ExecApprovalsSocketPathGuardTests {
                 Issue.record("Unexpected error: \(error)")
                 return
             }
-            #expect(path == try Self.canonicalPath(unsafe))
+            let expectedPath = try Self.canonicalPath(unsafe)
+            #expect(path == expectedPath)
         }
     }
 
@@ -129,7 +130,8 @@ struct ExecApprovalsSocketPathGuardTests {
                 Issue.record("Unexpected error: \(error)")
                 return
             }
-            #expect(path == try Self.canonicalPath(parent))
+            let expectedPath = try Self.canonicalPath(parent)
+            #expect(path == expectedPath)
         }
     }
 
@@ -223,7 +225,8 @@ struct ExecApprovalsSocketPathGuardTests {
                 Issue.record("Unexpected error: \(error)")
                 return
             }
-            #expect(path == try Self.canonicalPath(root))
+            let expectedPath = try Self.canonicalPath(root)
+            #expect(path == expectedPath)
         }
     }
 
