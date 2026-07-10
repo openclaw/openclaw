@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync, gzipSync } from "node:zlib";
+import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sha256Hex } from "../infra/crypto-digest.js";
@@ -929,7 +930,7 @@ export function persistEventPayload(
   // fast CLI listings and query output.
   const blob = store.persistPayload(buffer, params.contentType);
   return {
-    dataText: buffer.subarray(0, previewLimit).toString("utf8"),
+    dataText: decodeTextPrefix(buffer.subarray(0, previewLimit), { truncated: true }),
     dataBlobId: blob.blobId,
     dataSha256: blob.sha256,
   };
