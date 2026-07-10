@@ -132,6 +132,42 @@ describe("recordOutboundMessageForPromptContext", () => {
     });
   });
 
+  it("preserves the sending bot identity for Telegram Business messages", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: 42,
+      message: {
+        chat: { id: 42, type: "private" },
+        date: 1_736_380_700,
+        from: {
+          id: 777,
+          is_bot: false,
+          first_name: "Business Account",
+          username: "business_account",
+        },
+        sender_business_bot: {
+          id: 999,
+          is_bot: true,
+          first_name: "Telegram Bot Name",
+          username: "openclaw_bot",
+        },
+        message_id: 702,
+        text: "Business reply",
+      },
+      messageId: 702,
+      text: "Business reply",
+    });
+
+    expect(cached).toMatchObject({
+      sender: "Configured Agent (you)",
+      senderId: "777",
+      senderUsername: "business_account",
+      sourceMessage: {
+        sender_business_bot: { id: 999, is_bot: true, username: "openclaw_bot" },
+      },
+    });
+  });
+
   it("uses the synthetic sender identity for a finalized streamed message without from", async () => {
     const initial = await recordAndRead({
       account: { accountId: "default", name: "StreamBot" },

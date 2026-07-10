@@ -284,7 +284,12 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext,
   ): string | undefined => {
     const botInfo = ctx.me ?? opts.botInfo;
-    if (botInfo?.id != null && node.senderId === String(botInfo.id)) {
+    // Business replies keep the account user in `from`; Telegram authenticates the bot separately.
+    const isAuthenticatedSelf =
+      botInfo?.id != null &&
+      (node.senderId === String(botInfo.id) ||
+        node.sourceMessage.sender_business_bot?.id === botInfo.id);
+    if (isAuthenticatedSelf) {
       return buildTelegramSelfSenderName(telegramCfg.name, botInfo);
     }
     if (node.senderId === "0" && node.sourceMessage.from?.is_bot === true) {

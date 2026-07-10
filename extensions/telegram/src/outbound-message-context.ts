@@ -11,18 +11,21 @@ type TelegramPromptContextChannelData = {
   promptContextTimestampMs?: unknown;
 };
 
+type TelegramOutboundPromptContextUser = {
+  id?: number;
+  is_bot?: boolean;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+};
+
 type TelegramOutboundPromptContextMessage = {
   message_id?: number;
   chat?: { id?: string | number; type?: string; title?: string; username?: string };
   date?: number;
-  from?: {
-    id?: number;
-    is_bot?: boolean;
-    first_name?: string;
-    last_name?: string;
-    username?: string;
-  };
+  from?: TelegramOutboundPromptContextUser;
   sender_chat?: { id?: number; title?: string; username?: string };
+  sender_business_bot?: TelegramOutboundPromptContextUser;
   openclaw_prompt_context_timestamp_ms?: number;
   text?: string;
   caption?: string;

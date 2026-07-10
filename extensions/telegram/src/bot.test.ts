@@ -411,6 +411,7 @@ describe("createTelegramBot", () => {
       },
       expectedSender: "Configured Agent (you)",
       omitMe: false,
+      senderBusinessBot: undefined,
     },
     {
       caseName: "does not trust a user-controlled self suffix",
@@ -422,6 +423,24 @@ describe("createTelegramBot", () => {
       },
       expectedSender: "Alex (you) (Telegram sender)",
       omitMe: false,
+      senderBusinessBot: undefined,
+    },
+    {
+      caseName: "authenticates the sender bot for a Telegram Business reply",
+      replyFrom: {
+        id: 777,
+        is_bot: false,
+        first_name: "Business Account",
+        username: "business_account",
+      },
+      expectedSender: "Configured Agent (you)",
+      omitMe: false,
+      senderBusinessBot: {
+        id: 999,
+        is_bot: true,
+        first_name: "Telegram Bot Name",
+        username: "openclaw_bot",
+      },
     },
     {
       caseName: "falls back to startup bot metadata when context metadata is missing",
@@ -434,8 +453,9 @@ describe("createTelegramBot", () => {
       },
       expectedSender: "Configured Agent (you)",
       omitMe: true,
+      senderBusinessBot: undefined,
     },
-  ])("$caseName", async ({ replyFrom, expectedSender, omitMe }) => {
+  ])("$caseName", async ({ replyFrom, expectedSender, omitMe, senderBusinessBot }) => {
     onSpy.mockClear();
     replySpy.mockClear();
     const storePath = `/tmp/openclaw-telegram-self-projection-${process.pid}-${Date.now()}.json`;
@@ -494,6 +514,7 @@ describe("createTelegramBot", () => {
             chat: { id: 42, type: "private", first_name: "Pat" },
             date: 1_736_380_700,
             from: replyFrom,
+            ...(senderBusinessBot ? { sender_business_bot: senderBusinessBot } : {}),
             message_id: 800,
             text: "Earlier reply",
           },
@@ -533,7 +554,7 @@ describe("createTelegramBot", () => {
         sender_id: String(replyFrom.id),
         sender_username: replyFrom.username,
       });
-      if (replyFrom.id === 999) {
+      if (replyFrom.id === 999 || senderBusinessBot?.id === 999) {
         const promptJson = JSON.stringify({ replyChain: payload.ReplyChain, messages });
         expect(promptJson).not.toContain("Provisioning");
         expect(promptJson).not.toContain("Placeholder");
