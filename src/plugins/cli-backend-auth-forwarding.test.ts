@@ -160,4 +160,63 @@ describe("CLI backend auth forwarding contract", () => {
       }),
     ).rejects.toThrow("returned kind token");
   });
+
+  it("validates resolver output against the pre-callback identity snapshot", async () => {
+    await expect(
+      resolveCliBackendAuthForwarding({
+        policy,
+        context,
+        resolver: (resolverContext) => {
+          resolverContext.provider = "other-provider";
+          return {
+            kind: "oauth",
+            providerId: resolverContext.provider,
+            profileId: resolverContext.profileId,
+          };
+        },
+      }),
+    ).rejects.toThrow("returned provider other-provider");
+
+    await expect(
+      resolveCliBackendAuthForwarding({
+        policy,
+        context,
+        resolver: (resolverContext) => {
+          resolverContext.profileId = "other-profile";
+          return {
+            kind: "oauth",
+            providerId: resolverContext.provider,
+            profileId: resolverContext.profileId,
+          };
+        },
+      }),
+    ).rejects.toThrow("returned profile other-profile");
+
+    await expect(
+      resolveCliBackendAuthForwarding({
+        policy,
+        context,
+        resolver: (resolverContext) => {
+          resolverContext.credential.type = "token";
+          return {
+            kind: resolverContext.credential.type,
+            providerId: resolverContext.provider,
+            profileId: resolverContext.profileId,
+          };
+        },
+      }),
+    ).rejects.toThrow("returned kind token");
+
+    expect(context).toEqual({
+      backendId: "example-cli",
+      provider: "example-provider",
+      modelId: "example-model",
+      profileId: "example-provider:user@example.com",
+      credential: {
+        type: "oauth",
+        provider: "example-provider",
+        profileId: "example-provider:user@example.com",
+      },
+    });
+  });
 });
