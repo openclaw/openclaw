@@ -296,7 +296,7 @@ export async function withPairedDeviceRecords<T>(
     const state = await loadState(baseDir);
     const outcome = await operate(state.pairedByDeviceId);
     if (outcome.persist) {
-      await persistState(state, baseDir, "paired");
+      persistState(state, baseDir, "paired");
     }
     return outcome.value;
   });
@@ -767,7 +767,7 @@ type PendingPairingRequestResult<TPending> = {
 };
 
 /** Refresh one compatible pending request or replace a superseded request set atomically. */
-async function reconcilePendingPairingRequests<
+function reconcilePendingPairingRequests<
   TPending extends { requestId: string },
   TIncoming,
 >(params: {
@@ -777,15 +777,15 @@ async function reconcilePendingPairingRequests<
   canRefreshSingle: (existing: TPending, incoming: TIncoming) => boolean;
   refreshSingle: (existing: TPending, incoming: TIncoming) => TPending;
   buildReplacement: (params: { existing: readonly TPending[]; incoming: TIncoming }) => TPending;
-  persist: () => Promise<void>;
-}): Promise<PendingPairingRequestResult<TPending>> {
+  persist: () => void;
+}): PendingPairingRequestResult<TPending> {
   if (
     params.existing.length === 1 &&
     params.canRefreshSingle(params.existing[0], params.incoming)
   ) {
     const refreshed = params.refreshSingle(params.existing[0], params.incoming);
     params.pendingById[refreshed.requestId] = refreshed;
-    await params.persist();
+    params.persist();
     return { status: "pending", request: refreshed, created: false };
   }
 
@@ -798,7 +798,7 @@ async function reconcilePendingPairingRequests<
     incoming: params.incoming,
   });
   params.pendingById[request.requestId] = request;
-  await params.persist();
+  params.persist();
   return { status: "pending", request, created: true };
 }
 
@@ -817,7 +817,7 @@ export async function requestDevicePairing(
     const pendingForDevice = Object.values(state.pendingById)
       .filter((pending) => pending.deviceId === deviceId)
       .toSorted((left, right) => right.ts - left.ts);
-    const result = await reconcilePendingPairingRequests({
+    const result = reconcilePendingPairingRequests({
       pendingById: state.pendingById,
       existing: pendingForDevice,
       incoming: req,
@@ -854,7 +854,7 @@ export async function requestDevicePairing(
           },
         });
       },
-      persist: async () => await persistState(state, baseDir, "pending"),
+      persist: () => persistState(state, baseDir, "pending"),
     });
     // Surface superseded requestIds so callers can broadcast their resolution;
     // clients otherwise keep prompting for requests that can no longer be approved.
@@ -987,7 +987,7 @@ export async function approveDevicePairing(
     });
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, baseDir, "both");
+    persistState(state, baseDir, "both");
     return { status: "approved", requestId, device };
   });
 }
@@ -1087,7 +1087,7 @@ export async function approveBootstrapDevicePairing(
     });
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, baseDir, "both");
+    persistState(state, baseDir, "both");
     return { status: "approved", requestId, device };
   });
 }
@@ -1104,7 +1104,7 @@ export async function rejectDevicePairing(
       return null;
     }
     delete state.pendingById[requestId];
-    await persistState(state, baseDir, "pending");
+    persistState(state, baseDir, "pending");
     await revokeDeviceBootstrapTokensForDevice({
       deviceId: pending.deviceId,
       publicKey: pending.publicKey,
@@ -1131,7 +1131,7 @@ export async function removePairedDevice(
         delete state.pendingById[requestId];
       }
     }
-    await persistState(state, baseDir, "both");
+    persistState(state, baseDir, "both");
     return { deviceId: normalized };
   });
 }
@@ -1220,7 +1220,7 @@ export async function pruneSupersededSilentPairedDevices(params: {
     if (removed.length === 0) {
       return [];
     }
-    await persistState(state, params.baseDir, "both");
+    persistState(state, params.baseDir, "both");
     return removed;
   });
 }
@@ -1250,7 +1250,7 @@ export async function removePairedDeviceRole(params: {
         }
       }
       delete state.pairedByDeviceId[normalizedDeviceId];
-      await persistState(state, params.baseDir, "both");
+      persistState(state, params.baseDir, "both");
       return { deviceId: normalizedDeviceId, role, removedDevice: true };
     }
 
@@ -1304,7 +1304,7 @@ export async function removePairedDeviceRole(params: {
       delete next.pendingNodeSurface;
     }
     state.pairedByDeviceId[normalizedDeviceId] = next;
-    await persistState(state, params.baseDir, "both");
+    persistState(state, params.baseDir, "both");
     return { deviceId: normalizedDeviceId, role, removedDevice: false };
   });
 }
@@ -1345,7 +1345,7 @@ export async function updatePairedDeviceMetadata(
       next.lastSeenReason = patch.lastSeenReason;
     }
     state.pairedByDeviceId[normalizedDeviceId] = next;
-    await persistState(state, baseDir, "paired");
+    persistState(state, baseDir, "paired");
     return true;
   });
 }
@@ -1433,7 +1433,7 @@ export async function verifyDeviceToken(params: {
     device.lastSeenAtMs = now;
     device.lastSeenReason = "device-token-auth";
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir, "paired");
+    persistState(state, params.baseDir, "paired");
     return entry.issuer ? { ok: true, issuer: entry.issuer } : { ok: true };
   });
 }
@@ -1495,7 +1495,7 @@ export async function ensureDeviceToken(params: {
     tokens[role] = next;
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir, "paired");
+    persistState(state, params.baseDir, "paired");
     return next;
   });
 }
@@ -1585,7 +1585,7 @@ export async function rotateDeviceToken(params: {
     tokens[role] = next;
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir, "paired");
+    persistState(state, params.baseDir, "paired");
     return { ok: true, entry: next };
   });
 }
@@ -1625,7 +1625,7 @@ export async function revokeDeviceToken(params: {
     tokens[role] = entry;
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir, "paired");
+    persistState(state, params.baseDir, "paired");
     return { ok: true, entry };
   });
 }

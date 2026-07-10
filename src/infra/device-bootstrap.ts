@@ -228,7 +228,7 @@ export async function issueDeviceBootstrapToken(
       redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
       issuedAtMs,
     };
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return { token, expiresAtMs };
   });
 }
@@ -242,7 +242,7 @@ export async function clearDeviceBootstrapTokens(
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const removed = Object.keys(state).length;
-    await persistState({}, params.baseDir);
+    persistState({}, params.baseDir);
     return { removed };
   });
 }
@@ -266,7 +266,7 @@ export async function revokeDeviceBootstrapToken(params: {
     }
     const [tokenKey, record] = found;
     delete state[tokenKey];
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return { removed: true, record };
   });
 }
@@ -296,7 +296,7 @@ export async function revokeDeviceBootstrapTokensForDevice(params: {
       }
     }
     if (removed > 0) {
-      await persistState(state, params.baseDir);
+      persistState(state, params.baseDir);
     }
     return { removed };
   });
@@ -310,7 +310,7 @@ export async function restoreDeviceBootstrapToken(params: {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     state[params.record.token] = params.record;
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
   });
 }
 
@@ -381,7 +381,7 @@ export async function redeemDeviceBootstrapTokenProfile(params: {
       delete nextRecord.pendingProfile;
     }
     state[tokenKey] = nextRecord;
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return {
       recorded: true,
       fullyRedeemed: bootstrapProfileSatisfiesProfile({
@@ -460,7 +460,7 @@ export async function verifyDeviceBootstrapToken(params: {
         publicKey,
         lastUsedAtMs: Date.now(),
       };
-      await persistState(state, params.baseDir);
+      persistState(state, params.baseDir);
       return { ok: true };
     }
 
@@ -472,7 +472,7 @@ export async function verifyDeviceBootstrapToken(params: {
       publicKey,
       lastUsedAtMs: Date.now(),
     };
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return { ok: true };
   });
 }

@@ -50,6 +50,7 @@ function toJsonColumn(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
 function fromJsonColumn<T>(value: string | null): T | undefined {
   return value === null ? undefined : (JSON.parse(value) as T);
 }
