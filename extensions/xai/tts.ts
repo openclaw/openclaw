@@ -166,9 +166,6 @@ export function decodeWebSocketTextMessage(data: RawData): string {
   if (data instanceof ArrayBuffer) {
     return Buffer.from(data).toString("utf8");
   }
-  if (ArrayBuffer.isView(data)) {
-    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
-  }
   throw new Error("xAI TTS stream received unsupported WebSocket message payload");
 }
 
