@@ -6,6 +6,7 @@ import type { WebSocketServer } from "ws";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -840,6 +841,15 @@ export function createGatewayCloseHandler(
       if (params.tailscaleCleanup) {
         await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
+      await shutdownStep(
+        "session-suspension-timers",
+        () => {
+          // Lane auto-resume timers mutate command-lane concurrency; they must not fire
+          // after shutdown has started tearing down queues, channels, and runtimes.
+          clearSessionSuspensionTimers();
+        },
+        warnings,
+      );
       if (params.postReadySidecars?.length) {
         await measureCloseStep("post-ready-sidecars", async () => {
           for (const [index, sidecar] of params.postReadySidecars!.entries()) {

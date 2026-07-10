@@ -121,6 +121,22 @@ describe("session suspension", () => {
     expect(patch.quotaSuspension?.expectedResumeBy).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
   });
 
+  it("clears pending lane auto-resume timers without resuming after cleanup", async () => {
+    vi.useFakeTimers();
+    const { clearSessionSuspensionTimers } = await import("./session-suspension.js");
+
+    await suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Main, 0);
+    expect(clearSessionSuspensionTimers()).toBe(1);
+
+    commandQueueMocks.setCommandLaneConcurrency.mockClear();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+    expect(clearSessionSuspensionTimers()).toBe(0);
+  });
+
   it("defers session suspension only for the outer fallback candidate run", async () => {
     const { resolveSessionSuspensionTarget, runWithDeferredSessionSuspension } =
       await import("./session-suspension.js");
