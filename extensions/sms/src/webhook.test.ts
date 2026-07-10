@@ -50,15 +50,22 @@ function createRequest(
   return req;
 }
 
-function createResponse(): ServerResponse & { body?: string } {
+type TestResponse = ServerResponse & {
+  body?: string;
+  setHeaderMock: ReturnType<typeof vi.fn>;
+};
+
+function createResponse(): TestResponse {
+  const setHeaderMock = vi.fn();
   return {
     statusCode: 200,
-    setHeader: vi.fn(),
+    setHeader: setHeaderMock,
+    setHeaderMock,
     end: vi.fn(function (this: ServerResponse & { body?: string }, body?: string) {
       this.body = body;
       return this;
     }),
-  } as unknown as ServerResponse & { body?: string };
+  } as unknown as TestResponse;
 }
 
 function createSignedSmsPayload(messageSid: string): { body: string; signature: string } {
@@ -163,7 +170,7 @@ describe("createSmsWebhookHandler", () => {
 
     expect(overflowRes.statusCode).toBe(429);
     expect(repeatedOverflowRes.statusCode).toBe(429);
-    expect(overflowRes.setHeader).toHaveBeenCalledWith("Retry-After", "10");
+    expect(overflowRes.setHeaderMock).toHaveBeenCalledWith("Retry-After", "10");
     expect(firstReplayRes.statusCode).toBe(200);
     expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(2);
 
