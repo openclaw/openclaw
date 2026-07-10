@@ -90,4 +90,21 @@ describe("OpenClaw Lit elements", () => {
     expect(element.textContent).toContain("Refresh");
     expect(element.renderCount).toBe(disconnectedRenderCount + 1);
   });
+
+  it("re-renders a light-DOM element when the active locale changes without disconnect", async () => {
+    // Regression for #103270: components extending OpenClawLightDomElement
+    // must refresh translated labels after a locale change while still mounted.
+    const element = document.createElement(LIGHT_ELEMENT_NAME) as TestLightDomElement;
+    document.body.append(element);
+    await element.updateComplete;
+
+    const renderCountBefore = element.renderCount;
+    expect(element.textContent).toContain("Refresh");
+
+    await i18n.setLocale("zh-CN");
+    await element.updateComplete;
+
+    expect(element.renderCount).toBeGreaterThan(renderCountBefore);
+    expect(element.textContent).toContain("刷新");
+  });
 });
