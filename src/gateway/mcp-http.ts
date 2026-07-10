@@ -269,6 +269,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           nodeExecAllowed: requestContext.nodeExecAllowed,
           execSession: requestContext.execSession,
           execOverrides: requestContext.execOverrides,
+          bashElevated: requestContext.bashElevated,
           trigger: requestContext.trigger,
           approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
           channelContext: requestContext.channelContext,

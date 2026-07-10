@@ -77,6 +77,13 @@ type ScopedToolsCall = {
     ask?: string;
     node?: string;
   };
+  bashElevated?: {
+    enabled: boolean;
+    allowed: boolean;
+    defaultLevel: "on" | "off" | "ask" | "full";
+    fullAccessAvailable?: boolean;
+    fullAccessBlockedReason?: string;
+  };
   trigger?: string;
   approvalReviewerDeviceId?: string;
   channelContext?: { sender?: { id?: string }; chat?: { id?: string } };
@@ -989,6 +996,13 @@ describe("mcp loopback server", () => {
           ask: "always",
           node: "mac-b",
         },
+        bashElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "runtime",
+        },
         approvalReviewerDeviceId: "bound-reviewer",
         senderName: "Bound Name",
         senderUsername: "bound-user",
@@ -1062,6 +1076,13 @@ describe("mcp loopback server", () => {
         security: "allowlist",
         ask: "always",
         node: "mac-b",
+      },
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
       },
       approvalReviewerDeviceId: "bound-reviewer",
       senderName: "Bound Name",
@@ -1507,6 +1528,56 @@ describe("mcp loopback server", () => {
     cache.resolve(baseParams);
 
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(11);
+  });
+
+  it("keeps every elevated-exec authority field cache-bound", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      cfg: {} as never,
+      sessionKey: "agent:main:direct:test",
+      messageProvider: "discord",
+      currentChannelId: undefined,
+      currentThreadTs: undefined,
+      currentMessageId: undefined,
+      currentInboundAudio: undefined,
+      accountId: undefined,
+      inboundEventKind: undefined,
+      sourceReplyDeliveryMode: undefined,
+      senderIsOwner: true,
+      nodeExecAllowed: true,
+    } satisfies Parameters<McpLoopbackToolCache["resolve"]>[0];
+
+    cache.resolve(baseParams);
+    cache.resolve({
+      ...baseParams,
+      bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
+    });
+    cache.resolve({
+      ...baseParams,
+      bashElevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+    cache.resolve({
+      ...baseParams,
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+        fullAccessAvailable: true,
+      },
+    });
+    cache.resolve({
+      ...baseParams,
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      },
+    });
+    cache.resolve(baseParams);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(5);
   });
 
   it("caps loopback tool cache cardinality by evicting oldest contexts", () => {

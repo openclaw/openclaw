@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type {
   SourceReplyDeliveryMode,
@@ -31,6 +32,7 @@ export type McpLoopbackRequestContext = {
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides;
+  bashElevated?: ExecElevatedDefaults;
   trigger?: string;
   approvalReviewerDeviceId?: string;
   channelContext?: PluginHookChannelContext;

@@ -186,6 +186,25 @@ function buildCliMcpExecOverrides(
   return Object.keys(scopedOverrides).length > 0 ? scopedOverrides : undefined;
 }
 
+function buildCliMcpBashElevated(
+  bashElevated: RunCliAgentParams["bashElevated"],
+): McpLoopbackRequestContext["bashElevated"] {
+  if (!bashElevated) {
+    return undefined;
+  }
+  return {
+    enabled: bashElevated.enabled,
+    allowed: bashElevated.allowed,
+    defaultLevel: bashElevated.defaultLevel,
+    ...(bashElevated.fullAccessAvailable !== undefined
+      ? { fullAccessAvailable: bashElevated.fullAccessAvailable }
+      : {}),
+    ...(bashElevated.fullAccessBlockedReason !== undefined
+      ? { fullAccessBlockedReason: bashElevated.fullAccessBlockedReason }
+      : {}),
+  };
+}
+
 function buildCliMcpChannelContext(
   channelContext: RunCliAgentParams["channelContext"],
   senderId?: string | null,
@@ -235,6 +254,7 @@ function buildCliMcpGrantContext(params: {
   );
   const execSession = buildCliMcpExecSession(params.run.sessionEntry);
   const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
+  const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
   const senderName = normalizeOptionalMcpContextValue(params.run.senderName ?? undefined);
   const senderUsername = normalizeOptionalMcpContextValue(params.run.senderUsername ?? undefined);
@@ -269,6 +289,7 @@ function buildCliMcpGrantContext(params: {
     nodeExecAllowed: true,
     ...(execSession ? { execSession } : {}),
     ...(execOverrides ? { execOverrides } : {}),
+    ...(bashElevated ? { bashElevated } : {}),
     ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
     ...(normalizeOptionalMcpContextValue(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
@@ -921,6 +942,7 @@ export async function prepareCliRunContext(
             modelId,
             execSession: buildCliMcpExecSession(params.sessionEntry),
             execOverrides: buildCliMcpExecOverrides(params.execOverrides),
+            bashElevated: buildCliMcpBashElevated(params.bashElevated),
             trigger: params.trigger,
             approvalReviewerDeviceId: normalizeOptionalMcpContextValue(
               params.approvalReviewerDeviceId,

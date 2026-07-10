@@ -1262,6 +1262,7 @@ export function createFollowupRunner(params: {
                     modelProvider: provider,
                     provider: cliExecutionProvider,
                     execOverrides: run.execOverrides,
+                    bashElevated: run.bashElevated,
                     model,
                     ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                       config: runtimeConfig,

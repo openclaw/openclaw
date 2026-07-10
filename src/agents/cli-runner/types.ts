@@ -24,6 +24,7 @@ import type {
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
@@ -150,6 +151,8 @@ export type RunCliAgentParams = {
   spawnedBy?: string | null;
   /** Effective turn-local exec policy resolved before entering the CLI runtime. */
   execOverrides?: ExecPolicyOverrides;
+  /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
+  bashElevated?: ExecElevatedDefaults;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */

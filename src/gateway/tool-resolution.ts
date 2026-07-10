@@ -7,6 +7,7 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../agents/agent-tools.policy.js";
+import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import {
   resolveExecDefaults,
@@ -92,6 +93,7 @@ export function resolveGatewayScopedTools(params: {
   includeNodeExecTool?: boolean;
   execSession?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides;
+  bashElevated?: ExecElevatedDefaults;
   trigger?: string;
   approvalReviewerDeviceId?: string;
   channelContext?: PluginHookChannelContext;
@@ -339,6 +341,7 @@ export function resolveGatewayScopedTools(params: {
             reviewer: execConfig?.reviewer,
             config: params.cfg,
             agentId,
+            elevated: params.bashElevated,
             cwd: workspaceDir,
             allowBackground: false,
             scopeKey: params.sessionKey,

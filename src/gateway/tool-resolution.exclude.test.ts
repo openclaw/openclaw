@@ -18,6 +18,13 @@ type LazyExecToolDefaults = {
   host?: string;
   allowBackground?: boolean;
   node?: string;
+  elevated?: {
+    enabled: boolean;
+    allowed: boolean;
+    defaultLevel: "on" | "off" | "ask" | "full";
+    fullAccessAvailable?: boolean;
+    fullAccessBlockedReason?: string;
+  };
 };
 
 type LazyExecToolPresentation = {
@@ -174,6 +181,13 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       surface: "loopback",
       senderIsOwner: true,
       includeNodeExecTool: true,
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "ask",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      },
     });
 
     expect(result.tools.map((tool) => tool.name).filter((name) => name === "exec")).toEqual([
@@ -183,6 +197,13 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(hoisted.createLazyExecToolMock.mock.calls[0]?.[0]).toMatchObject({
       host: "node",
       allowBackground: false,
+      elevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "ask",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      },
     });
     const presentation = hoisted.createLazyExecToolMock.mock.calls[0]?.[1];
     expect(presentation?.description).toContain("node-only");

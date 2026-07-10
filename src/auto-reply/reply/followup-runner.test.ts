@@ -1340,6 +1340,7 @@ describe("createFollowupRunner runtime config", () => {
           senderE164: "+15550003333",
           senderIsOwner: true,
           execOverrides: { host: "node", node: "mac-b" },
+          bashElevated: { enabled: true, allowed: true, defaultLevel: "ask" },
           groupId: "group-42",
           groupChannel: "ops",
           groupSpace: "workspace-42",
@@ -1374,6 +1375,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.senderE164).toBe("+15550003333");
     expect(call.senderIsOwner).toBe(true);
     expect(call.execOverrides).toEqual({ host: "node", node: "mac-b" });
+    expect(call.bashElevated).toEqual({ enabled: true, allowed: true, defaultLevel: "ask" });
     expect(call.groupId).toBe("group-42");
     expect(call.groupChannel).toBe("ops");
     expect(call.groupSpace).toBe("workspace-42");

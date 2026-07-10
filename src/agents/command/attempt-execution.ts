@@ -781,6 +781,7 @@ export function runAgentAttempt(params: {
         agentAccountId: params.runContext.accountId,
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
+        bashElevated: params.opts.bashElevated,
         groupId: params.runContext.groupId,
         groupChannel: params.runContext.groupChannel,
         groupSpace: params.runContext.groupSpace,

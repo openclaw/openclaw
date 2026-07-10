@@ -2134,7 +2134,16 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-configured-claude-auth-order",
-      opts: { messageProvider: "discord" } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {
+        messageProvider: "discord",
+        bashElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "ask",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "runtime",
+        },
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {
         groupId: "group-a",
         groupChannel: "ops",
@@ -2162,6 +2171,13 @@ describe("CLI attempt execution", () => {
       groupChannel: "ops",
       groupSpace: "guild-a",
       spawnedBy: "agent:main:discord:channel:parent",
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "ask",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      },
     });
     expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
   });

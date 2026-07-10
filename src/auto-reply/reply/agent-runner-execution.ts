@@ -2176,6 +2176,7 @@ async function runAgentTurnWithFallbackInternal(
                     modelProvider: provider,
                     provider: cliExecutionProvider,
                     execOverrides: params.followupRun.run.execOverrides,
+                    bashElevated: params.followupRun.run.bashElevated,
                     model,
                     thinkLevel: candidateThinkLevel,
                     fastMode: candidateFastMode.fastMode,

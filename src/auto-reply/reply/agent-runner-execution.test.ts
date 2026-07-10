@@ -2631,6 +2631,11 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.run.senderUsername = "sender-static-user";
     followupRun.run.senderE164 = "+15550002222";
     followupRun.run.execOverrides = { host: "node", node: "mac-a" };
+    followupRun.run.bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "full",
+    };
     followupRun.run.groupId = "group-static";
     followupRun.run.groupChannel = "ops";
     followupRun.run.groupSpace = "workspace-static";
@@ -2674,6 +2679,7 @@ describe("runAgentTurnWithFallback", () => {
       senderUsername: "sender-static-user",
       senderE164: "+15550002222",
       execOverrides: { host: "node", node: "mac-a" },
+      bashElevated: { enabled: true, allowed: true, defaultLevel: "full" },
       groupId: "group-static",
       groupChannel: "ops",
       groupSpace: "workspace-static",

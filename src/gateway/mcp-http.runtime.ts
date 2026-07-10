@@ -1,6 +1,7 @@
-import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
+import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
+import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -55,6 +56,7 @@ type McpLoopbackScopeParams = {
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides;
+  bashElevated?: ExecElevatedDefaults;
   trigger?: string;
   approvalReviewerDeviceId?: string;
   channelContext?: PluginHookChannelContext;
@@ -123,6 +125,16 @@ export class McpLoopbackToolCache {
       params.execOverrides?.security ?? "",
       params.execOverrides?.ask ?? "",
       params.execOverrides?.node ?? "",
+      params.bashElevated ? "elevated-present" : "elevated-absent",
+      params.bashElevated?.enabled === true ? "elevated-enabled" : "elevated-disabled",
+      params.bashElevated?.allowed === true ? "elevated-allowed" : "elevated-blocked",
+      params.bashElevated?.defaultLevel ?? "",
+      params.bashElevated?.fullAccessAvailable === true
+        ? "full-access-available"
+        : params.bashElevated?.fullAccessAvailable === false
+          ? "full-access-unavailable"
+          : "",
+      params.bashElevated?.fullAccessBlockedReason ?? "",
       params.trigger ?? "",
       params.approvalReviewerDeviceId ?? "",
       params.channelContext?.sender?.id ?? "",
