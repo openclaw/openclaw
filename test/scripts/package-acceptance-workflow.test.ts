@@ -60,6 +60,7 @@ type WorkflowMatrixEntry = {
   advisory?: boolean;
   command?: string;
   profiles?: string;
+  suite_group?: string;
   suite_id?: string;
 };
 
@@ -715,7 +716,7 @@ describe("package acceptance workflow", () => {
 
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const retryCalls = workflow.split("\n").filter((line) => line.includes("gh_with_retry "));
-    expect(retryCalls).toHaveLength(28);
+    expect(retryCalls).toHaveLength(30);
     for (const call of retryCalls) {
       expect(call).toMatch(/gh_with_retry (api|run view)/u);
     }
@@ -1079,8 +1080,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_group: native-live-extensions-media-video");
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax");
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai");
-    expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-opencode-go");
-    expect(workflow).toContain("opencode-go/mimo-v2-omni");
     expect(workflow).toContain(
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic'",
     );
@@ -1123,6 +1122,24 @@ describe("package artifact reuse", () => {
     expect(openCodeGo.command).toContain(
       "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro",
     );
+  });
+
+  it("pins OpenCode Go MiMo live profiles to both current V2.5 model refs", () => {
+    const mimo = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-mimo",
+    );
+
+    expect(mimo).toMatchObject({
+      advisory: true,
+      command:
+        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+      profiles: "full",
+      suite_group: "native-live-src-gateway-profiles-opencode-go",
+    });
+    expect(mimo.command).not.toContain("opencode-go/mimo-v2-omni");
+    expect(mimo.command).not.toContain("opencode-go/mimo-v2-pro");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {
@@ -1937,7 +1954,7 @@ describe("package artifact reuse", () => {
       'args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")',
       'case "$RERUN_GROUP" in',
       "release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)",
-      "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}",
+      "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') }}",
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
@@ -2192,9 +2209,9 @@ describe("package artifact reuse", () => {
     expect(fullReleaseWorkflow).toContain('OPENCLAW_EXTENSIONS="diagnostics-otel,codex"');
     expect(fullReleaseWorkflow).not.toContain("/app/src/agents/templates/HEARTBEAT.md");
     expect(fullReleaseWorkflow).toContain("inputs.rerun_group == 'all'");
-    expect(fullReleaseWorkflow).toContain(
-      "needs.docker_runtime_assets_preflight.result == 'success'",
-    );
+    // The preflight no longer gates lane dispatch; the umbrella verifier
+    // enforces its result instead.
+    expect(fullReleaseWorkflow).toContain('"$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success"');
     expect(npmWorkflow).toContain("full_release_validation_run_id");
     expect(npmWorkflow).toContain("release_publish_run_id");
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");

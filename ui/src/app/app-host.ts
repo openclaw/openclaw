@@ -14,7 +14,11 @@ import "../components/resizable-divider.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import { isSettingsNavigationRoute, type SidebarNavRoute } from "../app-navigation.ts";
+import {
+  isSettingsNavigationRoute,
+  orderedControlUiPluginTabs,
+  type SidebarNavRoute,
+} from "../app-navigation.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
@@ -786,6 +790,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     // The settings sidebar has a fixed width, so the collapse state pauses too.
     const navCollapsed = navigationSnapshot.navCollapsed && !navDrawerOpen && !settingsTakeover;
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
+    // One storage read per render; theme.refresh() re-renders on pref changes.
+    const uiSettings = loadSettings();
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
@@ -816,8 +822,27 @@ class OpenClawShell extends OpenClawLightDomElement {
           .searchDisabled=${false}
           .navDrawerOpen=${navDrawerOpen}
           .onboarding=${this.onboarding}
+          .activeRouteId=${activeRoute}
+          .activePluginTabId=${activePluginTabId}
+          .enabledRouteIds=${this.enabledRouteIds()}
+          .pinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
+          .pluginTabs=${orderedControlUiPluginTabs(gatewaySnapshot.hello?.controlUiTabs ?? [])}
+          .sessionKey=${this.activeSessionKey}
+          .connected=${gatewaySnapshot.connected}
+          .canPairDevice=${gatewaySnapshot.connected &&
+          hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
+          .themeMode=${context.theme.mode}
+          .navCollapsed=${navCollapsed}
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
+          .onToggleSidebar=${() => this.toggleNavigationSurface()}
+          .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
+          .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
+            this.navigate(routeId, options)}
+          .onPreloadRoute=${(routeId: string) =>
+            isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
+          .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
+            context.navigation.update({ sidebarPinnedRoutes: routes })}
         ></openclaw-app-topbar>
         <div class="shell-nav">
           ${settingsTakeover
@@ -843,17 +868,19 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .activeRouteId=${activeRoute}
                 .activePluginTabId=${activePluginTabId}
                 .enabledRouteIds=${this.enabledRouteIds()}
+                .variant=${isMobileNavLayout() ? "drawer" : "panel"}
                 .sessionKey=${this.activeSessionKey}
-                .collapsed=${navCollapsed}
                 .connected=${gatewaySnapshot.connected}
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
                 .sidebarMoreExpanded=${navigationSnapshot.sidebarMoreExpanded}
                 .themeMode=${context.theme.mode}
-                .lobsterPetVisits=${loadSettings().lobsterPetVisits !== false}
-                .onOpenPalette=${this.openPalette}
-                .onToggleSidebar=${() => this.toggleNavigationSurface()}
+                .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
+                .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}
+                .gatewayVersion=${context.config.current.serverVersion ??
+                gatewaySnapshot.hello?.server?.version ??
+                null}
                 .onToggleMore=${() =>
                   context.navigation.update({
                     sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,

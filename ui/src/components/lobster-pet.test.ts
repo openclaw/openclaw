@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getLobsterdex } from "./lobster-dex.ts";
+import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import {
   LOBSTER_PET_ACT_DURATION_MS,
   LOBSTER_PET_MODE_ACTS,
@@ -11,7 +11,10 @@ import {
   isLobsterTwinLoad,
   lobsterPetName,
   lobsterPetSeed,
+  planLobsterPasser,
+  strangerLookFor,
   resolveLobsterPetMode,
+  resolveLobsterRunOutcome,
   type LobsterPet,
   type LobsterPetMode,
   type LobsterPetPaletteId,
@@ -42,6 +45,12 @@ function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterPetEleme
   element.mode = mode;
   document.body.append(element);
   return element;
+}
+
+function poke(element: LobsterPetElement): void {
+  const sprite = element.querySelector(".lobster-pet");
+  sprite?.dispatchEvent(new Event("pointerdown"));
+  sprite?.dispatchEvent(new Event("pointerup"));
 }
 
 function spriteClasses(element: LobsterPetElement): string {
@@ -222,6 +231,35 @@ describe("resolveLobsterPetMode", () => {
   });
 });
 
+describe("resolveLobsterRunOutcome", () => {
+  it("uses the most recently active terminal session", () => {
+    expect(resolveLobsterRunOutcome(null)).toBe("ok");
+    expect(
+      resolveLobsterRunOutcome([
+        { status: "done", lastActivityAt: 10 },
+        { status: "failed", lastActivityAt: 20 },
+      ]),
+    ).toBe("error");
+    expect(
+      resolveLobsterRunOutcome([
+        { status: "failed", lastActivityAt: 10 },
+        { status: "done", lastActivityAt: 20 },
+      ]),
+    ).toBe("ok");
+    expect(resolveLobsterRunOutcome([{ status: "running", lastActivityAt: 99 }])).toBe("ok");
+    expect(resolveLobsterRunOutcome([{ status: "timeout", updatedAt: 5 }])).toBe("error");
+    // A user abort is neither success nor failure.
+    expect(resolveLobsterRunOutcome([{ status: "killed", endedAt: 50 }])).toBe("aborted");
+    // endedAt outranks activity stamps that unrelated events keep touching.
+    expect(
+      resolveLobsterRunOutcome([
+        { status: "failed", endedAt: 30, lastActivityAt: 10 },
+        { status: "done", endedAt: 20, lastActivityAt: 40 },
+      ]),
+    ).toBe("error");
+  });
+});
+
 describe("lobster pet element", () => {
   it("starts hidden and arrives on its seeded visit schedule", async () => {
     vi.useFakeTimers();
@@ -314,7 +352,7 @@ describe("lobster pet element", () => {
     const element = createPet(42);
     await arrive(element);
 
-    element.querySelector(".lobster-pet")?.dispatchEvent(new Event("pointerdown"));
+    poke(element);
     await element.updateComplete;
     expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
   });
@@ -383,7 +421,7 @@ describe("lobster pet element", () => {
     await arrive(element);
 
     for (let i = 0; i < 3; i++) {
-      element.querySelector(".lobster-pet")?.dispatchEvent(new Event("pointerdown"));
+      poke(element);
       await element.updateComplete;
     }
     expect(spriteClasses(element)).toContain("lobster-pet--grumpy");
@@ -400,7 +438,7 @@ describe("lobster pet element", () => {
     await arrive(element);
 
     for (let i = 0; i < 10; i++) {
-      element.querySelector(".lobster-pet")?.dispatchEvent(new Event("pointerdown"));
+      poke(element);
       await element.updateComplete;
     }
     const gone = await advanceUntil(element, () => !spritePresent(element), 5_000);
@@ -529,8 +567,246 @@ describe("lobster pet element", () => {
     expect(getLobsterdex().size).toBe(0);
 
     await arrive(element);
-    const paletteId = createLobsterPetLook(42, new Date("2026-07-09T12:00:00")).palette.id;
-    expect(getLobsterdex().has(paletteId)).toBe(true);
+    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
+    expect(getLobsterdex().has(look.palette.id)).toBe(true);
+    // Memories: the first visitor's name and date stick to the entry.
+    const entry = getLobsterdexEntries().get(look.palette.id);
+    expect(entry?.name).toBe(lobsterPetName(look, 42));
+    expect(entry?.firstSeenAt).not.toBeNull();
+  });
+
+  it("old friends wave hello on their first arrival of the load", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem(
+      "openclaw.control.lobsterpet.familiarity.v1",
+      JSON.stringify({ visits: 30, shoos: 0 }),
+    );
+    const element = createPet(42);
+    await arrive(element);
+
+    // The greeting fires right after the entrance settles.
+    await vi.advanceTimersByTimeAsync(600);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-wave");
+  });
+
+  it("shooing is remembered in the familiarity counters", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const element = createPet(42);
+    await arrive(element);
+
+    element
+      .querySelector(".lobster-pet:not(.lobster-pet--shell)")
+      ?.dispatchEvent(new Event("contextmenu", { cancelable: true }));
+    await element.updateComplete;
+    const raw = JSON.parse(
+      localStorage.getItem("openclaw.control.lobsterpet.familiarity.v1") ?? "{}",
+    );
+    expect(raw.shoos).toBe(1);
+  });
+
+  it("pets on press-and-hold instead of poking", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42);
+    await arrive(element);
+
+    const sprite = element.querySelector(".lobster-pet");
+    sprite?.dispatchEvent(new Event("pointerdown"));
+    await vi.advanceTimersByTimeAsync(700);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-pet");
+
+    // Releasing after a completed pet must not fire a poke startle.
+    sprite?.dispatchEvent(new Event("pointerup"));
+    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.pet + 100);
+    await element.updateComplete;
+    expect(spriteClasses(element)).not.toContain("lobster-pet--act-startle");
+  });
+
+  it("droops instead of cheering when the finished run failed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42, "busy");
+    element.runOutcome = "error";
+    await arrive(element);
+
+    element.mode = "idle";
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-droop");
+    expect(spriteClasses(element)).not.toContain("lobster-pet--act-cheer");
+  });
+
+  it("keeps vigil during long runs and settles until the run ends", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42, "busy");
+    await arrive(element);
+
+    await vi.advanceTimersByTimeAsync(600_500);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--vigil");
+
+    // No fidgeting while keeping vigil.
+    const act = await advanceUntilAct(element, 30_000);
+    expect(act).toBeNull();
+
+    element.mode = "idle";
+    await element.updateComplete;
+    expect(spriteClasses(element)).not.toContain("lobster-pet--vigil");
+  });
+
+  it("watches the pointer between acts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42);
+    await arrive(element);
+
+    // jsdom rects are zero, so any positive clientX is to the sprite's right
+    // and any negative clientX is to its left.
+    await vi.advanceTimersByTimeAsync(200);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 400 }));
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:1");
+
+    await vi.advanceTimersByTimeAsync(200);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: -400 }));
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:-1");
+  });
+
+  it("a stranger crosses once and is never recorded", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    // Seed 9 plans a stranger crossing at ~98s (probed via the pure planner).
+    const plan = planLobsterPasser(9);
+    expect(plan?.kind).toBe("stranger");
+    const element = createPet(9);
+    await element.updateComplete;
+
+    await vi.advanceTimersByTimeAsync((plan?.atMs ?? 0) + 500);
+    await element.updateComplete;
+    const passer = element.querySelector(".lobster-pet--passer");
+    expect(passer).not.toBeNull();
+    expect(passer?.getAttribute("title")).toBe("a stranger");
+    expect(passer?.className).not.toContain("lobster-pet--crab");
+
+    // Strangers wear someone else's palette and never enter the dex; the
+    // resident pet may have logged itself during the advance, so assert the
+    // stranger's palette specifically stays out.
+    const own = createLobsterPetLook(9, new Date("2026-07-09T12:00:00"));
+    const strangerPalette = strangerLookFor(9, own.palette.id).palette.id;
+    expect(strangerPalette).not.toBe(own.palette.id);
+    expect(getLobsterdex().has(strangerPalette)).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--passer")).toBeNull();
+  });
+
+  it("the crab is definitely a lobster and also not recorded", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const plan = planLobsterPasser(119);
+    expect(plan?.kind).toBe("crab");
+    const element = createPet(119);
+    await element.updateComplete;
+
+    await vi.advanceTimersByTimeAsync((plan?.atMs ?? 0) + 500);
+    await element.updateComplete;
+    const crab = element.querySelector(".lobster-pet--crab");
+    expect(crab).not.toBeNull();
+    expect(crab?.getAttribute("title")).toBe("definitely a lobster");
+    // The resident pet may have visited during the advance; whatever is in
+    // the dex must be its own palette. Crabs are not acknowledged.
+    const own = createLobsterPetLook(119, new Date("2026-07-09T12:00:00")).palette.id;
+    expect([...getLobsterdex()].every((id) => id === own)).toBe(true);
+  });
+
+  it("most loads see no passer at all", async () => {
+    expect(planLobsterPasser(0)).toBeNull();
+    let passers = 0;
+    for (let seed = 0; seed < 2000; seed++) {
+      if (planLobsterPasser(seed)) {
+        passers++;
+      }
+    }
+    // ~9.5% of loads get one visitor; crabs are a rare slice of that.
+    expect(passers).toBeGreaterThan(60);
+    expect(passers).toBeLessThan(2000 * 0.2);
+  });
+
+  it("carries a bindle on the first load after a gateway upgrade", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem("openclaw.control.lobsterpet.gatewayVersion.v1", "2026.6.1");
+    const element = createPet(42);
+    element.gatewayVersion = "2026.7.1";
+    await arrive(element);
+
+    expect(element.querySelector(".lob-bindle")).not.toBeNull();
+    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toContain("just moved in");
+    expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe("2026.7.1");
+  });
+
+  it("travels light on first sighting and on same-version reloads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    // First version ever seen: record a baseline, no bindle.
+    const first = createPet(42);
+    first.gatewayVersion = "2026.7.1";
+    await arrive(first);
+    expect(first.querySelector(".lob-bindle")).toBeNull();
+    expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe("2026.7.1");
+    first.remove();
+
+    // Same version on the next load: still no bindle.
+    const second = createPet(42);
+    second.gatewayVersion = "2026.7.1";
+    await arrive(second);
+    expect(second.querySelector(".lob-bindle")).toBeNull();
+  });
+
+  it("stays silent by default and chirps only when sounds are enabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const audioContextCtor = vi.fn(() => {
+      const param = () => ({ setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() });
+      return {
+        state: "running",
+        currentTime: 0,
+        destination: {},
+        resume: vi.fn(),
+        close: vi.fn(() => Promise.resolve()),
+        createOscillator: vi.fn(() => ({
+          type: "sine",
+          frequency: param(),
+          connect: (node: unknown) => node,
+          start: vi.fn(),
+          stop: vi.fn(),
+        })),
+        createGain: vi.fn(() => ({ gain: param(), connect: vi.fn() })),
+      };
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+    const element = createPet(42);
+    await arrive(element);
+
+    poke(element);
+    expect(audioContextCtor).not.toHaveBeenCalled();
+
+    element.soundsEnabled = true;
+    await element.updateComplete;
+    poke(element);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
   });
 
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {

@@ -552,13 +552,6 @@ extension SettingsProTab {
         Group {
             self.notificationsSection
 
-            self.detailStatusCard(
-                icon: "hand.raised",
-                title: "Privacy",
-                detail: "Control what device context OpenClaw can expose to the gateway.",
-                value: self.privacyDetail,
-                color: .secondary)
-
             self.toggleCard(
                 title: "Camera Access",
                 isOn: self.$cameraEnabled)
@@ -778,44 +771,69 @@ extension SettingsProTab {
     var locationModeCard: some View {
         Section {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    SettingsIcon(
-                        systemName: "location",
-                        color: self.locationModeRaw == OpenClawLocationMode.off.rawValue ? .secondary : OpenClawBrand
-                            .accent)
-                    VStack(alignment: .leading, spacing: 3) {
+                Button {
+                    self.handleLocationSharingTap()
+                } label: {
+                    HStack {
                         Text("Location")
-                            .font(OpenClawType.subheadSemiBold)
-                        Text("Controls whether location can be shared with gateway tools.")
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .font(OpenClawType.body)
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: 8)
+                        ZStack {
+                            OpenClawToggleIndicator(isOn: self.locationSettingsPresentation.sharingControlIsOn)
+                                .opacity(self.isChangingLocationMode ? 0 : 1)
+                            if self.isChangingLocationMode {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
                     }
-                    Spacer(minLength: 8)
-                    if self.isChangingLocationMode {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
+                    .contentShape(Rectangle())
                 }
-
-                Picker("Location", selection: self.$locationModeRaw) {
-                    Text("Off")
-                        .font(OpenClawType.captionSemiBold)
-                        .tag(OpenClawLocationMode.off.rawValue)
-                    Text("While Using")
-                        .font(OpenClawType.captionSemiBold)
-                        .tag(OpenClawLocationMode.whileUsing.rawValue)
-                    Text("Always")
-                        .font(OpenClawType.captionSemiBold)
-                        .tag(OpenClawLocationMode.always.rawValue)
-                }
-                .pickerStyle(.segmented)
+                .buttonStyle(.plain)
                 .disabled(self.isChangingLocationMode)
+                .accessibilityIdentifier("settings-location-sharing-toggle")
+                .accessibilityLabel("Location Sharing")
+                .accessibilityValue(self.locationSettingsPresentation.sharingControlIsOn ? "On" : "Off")
 
-                Text(self.locationPermissionDetailText)
-                    .font(OpenClawType.caption2)
-                    .foregroundStyle(
-                        self.locationPermissionSummary.needsAttention ? OpenClawBrand.warn : .secondary)
+                if self.locationSettingsPresentation.showsAccessLevel,
+                   let accessLevelText = self.locationSettingsPresentation.accessLevelText
+                {
+                    Divider()
+                    Button {
+                        self.showLocationAccessDialog = true
+                    } label: {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Access Level")
+                                .font(OpenClawType.body)
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                            Text(accessLevelText)
+                                .font(OpenClawType.subhead)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(self.isChangingLocationMode)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("settings-location-access-level")
+                    .accessibilityLabel("Access Level")
+                    .accessibilityValue(accessLevelText)
+                    .accessibilityHint("Chooses While Using the App or Always")
+                }
+
+                if let locationPermissionDetailText {
+                    Text(locationPermissionDetailText)
+                        .font(OpenClawType.caption2)
+                        .foregroundStyle(OpenClawBrand.warn)
+                }
 
                 if let locationPermissionWarningText {
                     Text(locationPermissionWarningText)
