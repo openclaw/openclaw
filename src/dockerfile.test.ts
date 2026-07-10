@@ -151,14 +151,17 @@ describe("Dockerfile", () => {
     expect(packageManifestIndex).toBeGreaterThan(-1);
     expect(extensionManifestIndex).toBeGreaterThan(-1);
     expect(dockerfile).toContain("for manifest in /tmp/packages/*/package.json");
-    expect(dockerfile).toContain(`ext_dir="/tmp/\${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"`);
     expect(dockerfile).toContain(
-      `if [ ! -f "$ext_dir/openclaw.plugin.json" ] && [ ! -f "$ext_dir/package.json" ]; then`,
+      "--mount=type=bind,source=scripts/lib/docker-plugin-selection.mjs,target=/tmp/docker-plugin-selection.mjs,readonly",
     );
+    expect(dockerfile).toContain(
+      'node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS"',
+    );
+    expect(dockerfile).toContain("done < /out/openclaw-selected-plugin-dirs");
     expect(dockerfile).toContain(`if [ -f "$ext_dir/package.json" ]; then`);
-    expect(dockerfile).toContain("LC_ALL=C sort -u");
-    expect(dockerfile).toContain("invalid OPENCLAW_EXTENSIONS plugin id: $ext");
-    expect(dockerfile).toContain("unknown OPENCLAW_EXTENSIONS plugin id: $ext");
+    expect(dockerfile).toContain(
+      "COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs ./.openclaw-selected-plugin-dirs",
+    );
     expect(postinstallIndex).toBeLessThan(installIndex);
     expect(prepareIndex).toBeLessThan(installIndex);
     expect(distImportHelperIndex).toBeLessThan(installIndex);
@@ -204,7 +207,7 @@ describe("Dockerfile", () => {
       "export OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1",
     );
     const buildDockerIndex = collapsed.indexOf(
-      'OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS="$OPENCLAW_EXTENSIONS" OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker',
+      'OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS="$selected_plugin_dirs" OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker',
     );
     const qaLabBuildIndex = collapsed.indexOf(
       "pnpm_config_verify_deps_before_run=false pnpm qa:lab:build",
@@ -297,14 +300,14 @@ describe("Dockerfile", () => {
       "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
     );
     expect(dockerfile).toContain(
-      'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
+      'OPENCLAW_EXTENSIONS="$(cat /app/.openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
     );
     expect(dockerfile).toContain("readlink -f /app/node_modules/@openclaw/ai");
     expect(dockerfile).toContain('mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai');
     expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
     expect(dockerfile.indexOf("CI=true pnpm prune --prod \\")).toBeLessThan(
       dockerfile.indexOf(
-        'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
+        'OPENCLAW_EXTENSIONS="$(cat /app/.openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
       ),
     );
     expect(dockerfile).toContain("--config.offline=true");

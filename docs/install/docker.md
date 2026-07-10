@@ -185,15 +185,17 @@ OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DOCKER_BUI
 
 ### Source-built images with selected plugins
 
-`OPENCLAW_EXTENSIONS` selects plugin ids from the source checkout. The Docker
-build installs their production dependencies and, when a selected plugin is
-published separately with `openclaw.build.bundledDist: false`, compiles its
-runtime into `/app/dist/extensions/<id>`. This Docker-only packaging does not
-change the plugin's npm or ClawHub artifact contract. Unknown or invalid ids
-fail the image build. Known dependency/source-only ids keep their
-existing source and dependency staging without gaining a compiled root dist
-entry. A selected plugin with unified build entries must compile successfully;
-unselected external plugin source and runtime output are pruned.
+`OPENCLAW_EXTENSIONS` selects plugin manifest ids from the source checkout;
+existing source-directory names are also accepted when they differ. The Docker
+build resolves the selection to source directories once, installs production
+dependencies, and, when a selected plugin is published separately with
+`openclaw.build.bundledDist: false`, compiles its runtime into the root bundled
+dist. This Docker-only packaging does not change the plugin's npm or ClawHub
+artifact contract. Unknown, invalid, or ambiguous ids fail the image build.
+Known dependency/source-only ids keep their existing source and dependency
+staging without gaining a compiled root dist entry. A selected plugin with
+unified build entries must compile successfully; unselected external plugin
+source and runtime output are pruned.
 
 For example, these commands build separate, multi-architecture standalone
 FakeCo gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is
