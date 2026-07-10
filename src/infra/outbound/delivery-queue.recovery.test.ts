@@ -1246,6 +1246,41 @@ describe("delivery-queue recovery", () => {
     });
   });
 
+  it("keeps Telegram direct replies flat when replaying queued deliveries", async () => {
+    await enqueueDelivery(
+      {
+        channel: "telegram",
+        to: "telegram:123456789",
+        payloads: [{ text: "done" }],
+        replyToId: "456",
+      },
+      tmpDir(),
+    );
+
+    const queuedEntries = await loadPendingDeliveries(tmpDir());
+    expect(queuedEntries).toHaveLength(1);
+    expect(queuedEntries[0]).toMatchObject({
+      channel: "telegram",
+      to: "telegram:123456789",
+      replyToId: "456",
+    });
+    expect(queuedEntries[0]?.threadId).toBeUndefined();
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    await runRecovery({ deliver });
+
+    const deliverInput = mockCallArg(deliver) as {
+      channel?: string;
+      to?: string;
+      replyToId?: string;
+      threadId?: string;
+    };
+    expect(deliverInput.channel).toBe("telegram");
+    expect(deliverInput.to).toBe("telegram:123456789");
+    expect(deliverInput.replyToId).toBe("456");
+    expect(deliverInput.threadId).toBeUndefined();
+  });
+
   it("respects maxRecoveryMs time budget without bumping deferred retries", async () => {
     await enqueueCrashRecoveryEntries();
     await enqueueDelivery(

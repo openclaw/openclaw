@@ -439,6 +439,13 @@ export type ChannelThreadingAdapter = {
     to: string;
     threadId?: string | number | null;
   }) => string | undefined;
+  /**
+   * Opt in when resolveReplyTransport({ threadId: null, replyToId }) means the
+   * reply target is also the canonical destination thread/root for tool-send
+   * evidence. Keep this off for flat reply transports like Telegram DMs where
+   * replyToId must stay a reply reference.
+   */
+  replyToPromotesThreadIdWhenTransportThreadMissing?: boolean;
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;

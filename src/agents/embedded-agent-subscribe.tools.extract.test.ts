@@ -89,6 +89,7 @@ describe("extractMessagingToolSend", () => {
               },
             },
             threading: {
+              replyToPromotesThreadIdWhenTransportThreadMissing: true,
               resolveAutoThreadId: ({
                 to,
                 toolContext,
@@ -116,6 +117,20 @@ describe("extractMessagingToolSend", () => {
                 }
                 return toolContext.currentThreadTs;
               },
+              resolveReplyTransport: ({ replyToId }: { replyToId?: string | null }) => ({
+                replyToId,
+                threadId: null,
+              }),
+            },
+          },
+          source: "test",
+        },
+        {
+          pluginId: "flat-reply",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "flat-reply" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            threading: {
               resolveReplyTransport: ({ replyToId }: { replyToId?: string | null }) => ({
                 replyToId,
                 threadId: null,
@@ -227,6 +242,22 @@ describe("extractMessagingToolSend", () => {
     expect(result?.tool).toBe("message");
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("telegram:123");
+  });
+
+  it("keeps Telegram DM replies flat without synthesizing a destination thread", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "telegram",
+      to: "123",
+      replyTo: "456",
+      content: "done",
+    });
+
+    expect(result).toMatchObject({
+      provider: "telegram",
+      to: "telegram:123",
+    });
+    expect(result?.threadId).toBeUndefined();
   });
 
   it("prefers provider when both provider and channel are set", () => {
@@ -549,6 +580,19 @@ describe("extractMessagingToolSend", () => {
 
     expect(result?.threadImplicit).toBeUndefined();
     expect(result?.threadId).toBe("999.000");
+  });
+
+  it("does not promote flat reply transports into destination threads", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "flat-reply",
+      to: "channel:dm-1",
+      replyTo: "reply-1",
+      content: "done",
+    });
+
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBeUndefined();
   });
 
   it("uses Slack transport precedence when threadId and replyTo are both present", () => {

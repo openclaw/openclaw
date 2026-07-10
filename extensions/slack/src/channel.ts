@@ -918,6 +918,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       resolveReplyToMode: (account, chatType) => resolveSlackReplyToMode(account, chatType),
     },
     allowExplicitReplyTagsWhenOff: false,
+    replyToPromotesThreadIdWhenTransportThreadMissing: true,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext, replyToId }) =>
       normalizeSlackThreadTsCandidate(replyToId)

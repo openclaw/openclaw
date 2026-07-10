@@ -930,6 +930,7 @@ function resolveMessagingToolThreadEvidence(params: {
     : undefined;
   const transportThreadId = normalizeOptionalStringifiedId(replyTransport?.threadId);
   const replyToThreadId =
+    threading?.replyToPromotesThreadIdWhenTransportThreadMissing === true &&
     replyTransport?.threadId === null
       ? normalizeOptionalString(replyTransport.replyToId)
       : undefined;
