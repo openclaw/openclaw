@@ -5,6 +5,7 @@ import {
   createChannelProgressDraftCompositor,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingProgressNarration,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -79,6 +80,10 @@ export function createDiscordDraftPreviewController(params: {
   let progressDraftStartedBeforeFinal = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
+  const narrationProgressEnabled =
+    Boolean(draftStream) &&
+    discordStreamMode === "progress" &&
+    resolveChannelStreamingProgressNarration(params.discordConfig);
   const suppressDefaultToolProgressMessages =
     Boolean(draftStream) &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.discordConfig, {
@@ -135,6 +140,7 @@ export function createDiscordDraftPreviewController(params: {
   return {
     draftStream,
     previewToolProgressEnabled,
+    narrationProgressEnabled,
     commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
     suppressDefaultToolProgressMessages,
     get isProgressMode() {
@@ -166,6 +172,9 @@ export function createDiscordDraftPreviewController(params: {
     },
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       await progressDraft.pushReasoningProgress(text, options);
+    },
+    async pushNarrationProgress(text?: string) {
+      await progressDraft.pushNarrationProgress(text);
     },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
       await progressDraft.pushCommentaryProgress(text, options);

@@ -179,6 +179,12 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /**
+   * Called when the utility-model narration of the in-progress turn changes.
+   * Providing this callback opts the channel into progress narration; core
+   * only generates narration when an explicit utilityModel is configured.
+   */
+  onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */

@@ -123,6 +123,9 @@ export const DEFAULT_PROGRESS_DRAFT_LABELS = [
 
 export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5_000;
 const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 120;
+// Narration is a short paragraph, not a compact tool line; it gets its own
+// budget so the utility-model text is not mid-word truncated at line width.
+const PROGRESS_DRAFT_NARRATION_MAX_CHARS = 280;
 const MIN_TRUNCATED_FINAL_PREFIX_CHARS = 48;
 const MIN_TRUNCATED_FINAL_CONTINUATION_CHARS = 24;
 
@@ -826,6 +829,18 @@ export function resolveChannelStreamingProgressCommentary(
   return asBoolean(progress?.commentary) ?? defaultValue;
 }
 
+export function resolveChannelStreamingProgressNarration(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = true,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
+    return false;
+  }
+  const progress = asObjectRecord(config?.progress);
+  return asBoolean(progress?.narration) ?? defaultValue;
+}
+
 export function resolveChannelStreamingPreviewCommandText(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue: ChannelStreamingCommandTextMode = "raw",
@@ -1002,6 +1017,14 @@ function repairCompactedProgressMarkdown(value: string): string {
     withoutDanglingBackticks.length - trimmedStart.length,
   );
   return `${leadingWhitespace}${trimmedStart.slice(1)}`;
+}
+
+function compactChannelProgressDraftNarration(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (Array.from(normalized).length <= PROGRESS_DRAFT_NARRATION_MAX_CHARS) {
+    return normalized;
+  }
+  return compactPlainProgressLine(normalized, PROGRESS_DRAFT_NARRATION_MAX_CHARS);
 }
 
 function compactPlainProgressLine(line: string, maxChars: number): string {
@@ -1205,6 +1228,8 @@ export function formatChannelProgressDraftText(params: {
   formatLine?: (line: string) => string;
   /** Prefix used for plain progress lines that lack their own icon. */
   bullet?: string;
+  /** Short narration paragraph; when present it replaces the tool lines. */
+  narration?: string;
 }): string {
   const rawLabel = resolveChannelProgressDraftLabel({
     entry: params.entry,
@@ -1212,6 +1237,11 @@ export function formatChannelProgressDraftText(params: {
     random: params.random,
   });
   const resolvedLabel = rawLabel;
+  const narration = params.narration ? compactChannelProgressDraftNarration(params.narration) : "";
+  if (narration) {
+    const formatted = (params.formatLine ?? ((line: string) => line))(narration);
+    return resolvedLabel ? `${resolvedLabel}\n\n${formatted}` : formatted;
+  }
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
