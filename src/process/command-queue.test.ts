@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { tryBeginGatewaySuspendAdmission } from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
@@ -850,6 +851,22 @@ describe("command queue", () => {
     markGatewayDraining();
     release();
     await expect(task).resolves.toBe("ok");
+  });
+
+  it("reversibly fences new enqueues without disturbing an active task", async () => {
+    const { task, release } = enqueueBlockedMainTask(async () => "active-finished");
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    await expect(
+      enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
+    ).rejects.toBeInstanceOf(GatewayDrainingError);
+
+    release();
+    await expect(task).resolves.toBe("active-finished");
+    expect(suspension?.release()).toBe(true);
+    await expect(enqueueCommandInLane(CommandLane.Main, async () => "resumed")).resolves.toBe(
+      "resumed",
+    );
   });
 
   it("resetAllLanes clears gateway draining flag and re-allows enqueue", async () => {

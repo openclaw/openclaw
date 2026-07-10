@@ -357,6 +357,35 @@ describe("createCronExitWatchers", () => {
     expect(fireOnExit).not.toHaveBeenCalled();
   });
 
+  it("retains a blocker and suppresses stale fire when removed during terminal persistence", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    let releasePersist = () => {};
+    const persistCompletion = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releasePersist = resolve;
+        }),
+    );
+    const fireOnExit = vi.fn(async () => {});
+    const w = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion,
+      fireOnExit,
+      logger: noopLogger,
+    });
+    w.reconcile([onExitJob("job-a")]);
+    await flush();
+
+    runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
+    await vi.waitFor(() => expect(persistCompletion).toHaveBeenCalledOnce());
+    w.reconcile([]);
+    expect(w.activeJobIds()).toEqual(["job-a"]);
+
+    releasePersist();
+    await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
+    expect(fireOnExit).not.toHaveBeenCalled();
+  });
+
   it("is one-shot: a fired job is not re-armed on a later reconcile", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const w = createCronExitWatchers({

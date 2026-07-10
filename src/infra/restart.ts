@@ -9,6 +9,12 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  beginGatewayRestartSignalAdmission,
+  isGatewayRestartDraining,
+  runWithGatewayIndependentRootWorkAdmission,
+  type GatewayRestartSignalAdmissionLease,
+} from "../process/gateway-work-admission.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -58,6 +64,7 @@ let pendingRestartEmitHooks: RestartEmitHooks | undefined;
 let pendingRestartSessionKey: string | undefined;
 let pendingRestartSkipDeferral = false;
 let pendingRestartPreparing = false;
+let pendingRestartSignalAdmission: GatewayRestartSignalAdmissionLease | null = null;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
 function shouldPreferRestartReason(next?: string, current?: string): boolean {
@@ -80,6 +87,17 @@ function clearPendingScheduledRestart(): void {
   pendingRestartSessionKey = undefined;
   pendingRestartSkipDeferral = false;
   pendingRestartPreparing = false;
+}
+
+function clearPendingRestartSignalAdmission(): boolean {
+  const rolledBack = pendingRestartSignalAdmission?.rollback() ?? false;
+  pendingRestartSignalAdmission = null;
+  return rolledBack;
+}
+
+/** Releases a signal fence when the run loop rejects or fails to handle the signal. */
+export function rollbackGatewayRestartSignalAdmission(): boolean {
+  return clearPendingRestartSignalAdmission();
 }
 
 function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
@@ -122,6 +140,7 @@ function clearActiveDeferralPolls(): void {
 export function resetGatewayRestartStateForInProcessRestart(): void {
   clearActiveDeferralPolls();
   clearPendingScheduledRestart();
+  clearPendingRestartSignalAdmission();
   // Cancel any in-progress deferred channel reload so it doesn't race with
   // the restart to start the same channel (e.g. telegram double-spawn).
   void import("../gateway/server-reload-handlers.js")
@@ -358,8 +377,8 @@ export function setPreRestartDeferralCheck(fn: () => number): void {
 /**
  * Emit an authorized SIGUSR1 gateway restart, guarded against duplicate emissions.
  * Returns true if SIGUSR1 was emitted, false if a restart was already emitted.
- * Both scheduleGatewaySigusr1Restart and the config watcher should use this
- * to ensure only one restart fires.
+ * Runtime callers use emitGatewayRestartWithSignalAdmission so the signal-to-drain
+ * handoff stays fenced; this lower-level primitive remains available to tests.
  */
 export function emitGatewayRestart(
   reasonOverride?: string,
@@ -405,6 +424,26 @@ export function emitGatewayRestart(
   }
   lastRestartEmittedAt = Date.now();
   return true;
+}
+
+/**
+ * Emits while holding the signal-to-drain admission fence.
+ *
+ * The caller must already own root-work admission. Scheduled restarts use the
+ * independent-root wrapper below; config reloads run inside their reload root.
+ */
+export function emitGatewayRestartWithSignalAdmission(
+  reasonOverride?: string,
+  intent?: GatewayRestartIntent,
+): boolean {
+  const signalAdmission = pendingRestartSignalAdmission ?? beginGatewayRestartSignalAdmission();
+  pendingRestartSignalAdmission = signalAdmission;
+  const hadUnconsumedRestartSignal = hasUnconsumedRestartSignal();
+  const emitted = emitGatewayRestart(reasonOverride, intent);
+  if (!emitted && !hadUnconsumedRestartSignal) {
+    clearPendingRestartSignalAdmission();
+  }
+  return emitted;
 }
 
 function resetSigusr1AuthorizationIfExpired(now = Date.now()) {
@@ -475,6 +514,10 @@ export function markGatewaySigusr1RestartHandled(): void {
     emittedRestartReason = undefined;
     emittedRestartIntent = undefined;
   }
+  // Accepted handlers first promote the fence to one-way restart drain, so
+  // this rollback becomes a no-op there. Rejected or test-only handlers must
+  // reopen admission or the next restart/root would wait forever.
+  clearPendingRestartSignalAdmission();
 }
 
 function rollBackGatewayRestartEmission(): void {
@@ -537,7 +580,7 @@ function updatePendingRestartEmitHooks(
   return true;
 }
 
-async function emitPreparedGatewayRestart(
+async function emitPreparedGatewayRestartUnderAdmission(
   hooks?: RestartEmitHooks,
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
@@ -579,12 +622,31 @@ async function emitPreparedGatewayRestart(
   const preferredReason = shouldPreferRestartReason(pendingRestartReason, reasonOverride)
     ? pendingRestartReason
     : undefined;
-  const emitted = emitGatewayRestart(
+  const emitted = emitGatewayRestartWithSignalAdmission(
     preferredReason ?? reasonOverride,
     preferredReason && intent ? { ...intent, reason: preferredReason } : intent,
   );
   if (!emitted) {
     await preparedHooks?.afterEmitRejected?.().catch(() => undefined);
+  }
+}
+
+async function emitPreparedGatewayRestart(
+  hooks?: RestartEmitHooks,
+  reasonOverride?: string,
+  intent?: GatewayRestartIntent,
+): Promise<void> {
+  try {
+    // A delayed restart can become due after host suspension prepared. Independent
+    // root admission makes the transition atomic: due restarts block preparation,
+    // while a prepared suspension defers emission until it resumes.
+    await runWithGatewayIndependentRootWorkAdmission(async () =>
+      emitPreparedGatewayRestartUnderAdmission(hooks, reasonOverride, intent),
+    );
+  } catch (err) {
+    if (!isGatewayRestartDraining()) {
+      throw err;
+    }
   }
 }
 
@@ -1019,6 +1081,7 @@ export const testing = {
     lastRestartEmittedAt = 0;
     clearActiveDeferralPolls();
     clearPendingScheduledRestart();
+    clearPendingRestartSignalAdmission();
   },
 };
 export { testing as __testing };

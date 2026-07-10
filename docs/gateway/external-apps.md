@@ -50,6 +50,102 @@ terminal result. For durable conversation state, use the `sessions.*` methods.
 For UI integrations, subscribe to Gateway events and render only the event
 families your app understands.
 
+## Cooperative host suspension
+
+Hosting controllers that freeze or snapshot a running process can use the
+host-neutral suspension handshake:
+
+1. Stop admitting external ingress controlled by the host.
+2. Call `gateway.suspend.prepare` with a stable, unique `requestId`.
+3. If the response is `busy`, keep the process running and retry later.
+4. If it is `ready`, save the returned `suspensionId`, then freeze or snapshot
+   the process before `expiresAtMs`.
+5. After thaw, or if suspension is abandoned, call `gateway.suspend.resume`
+   with that `suspensionId` over the existing WebSocket or Admin HTTP control
+   path.
+
+A prepared Gateway rejects new WebSocket handshakes. A WebSocket controller
+must keep its authenticated connection open across the host operation. If that
+cannot be guaranteed, enable and use the
+[Admin HTTP RPC plugin](/plugins/admin-http-rpc) before preparing. If the
+control path is lost, wait for the two-minute lease to expire before
+reconnecting; expiry reopens admission automatically.
+
+The RPC contract is:
+
+- `gateway.suspend.prepare` — `operator.admin`; params
+  `{ "requestId": "stable-host-operation-id" }`
+- `gateway.suspend.status` — `operator.read`; params
+  `{ "suspensionId": "id-from-prepare" }`
+- `gateway.suspend.resume` — `operator.admin`; params
+  `{ "suspensionId": "id-from-prepare" }`
+
+IDs are trimmed, must contain a non-whitespace character, and are limited to
+128 characters. A busy prepare result has `status: "busy"`, `reason`,
+`retryAfterMs`, `counts`, and `blockers`. A ready result has this shape:
+
+```json
+{
+  "status": "ready",
+  "suspensionId": "2c3f...",
+  "expiresAtMs": 1770000000000,
+  "counts": {
+    "queueSize": 0,
+    "pendingReplies": 0,
+    "embeddedRuns": 0,
+    "cronRuns": 0,
+    "activeTasks": 0,
+    "rootRequests": 0,
+    "sessionAdmissions": 0,
+    "sessionMutations": 0,
+    "chatRuns": 0,
+    "queuedTurns": 0,
+    "terminalPersistence": 0,
+    "terminalSessions": 0,
+    "totalActive": 0
+  },
+  "blockers": []
+}
+```
+
+Status returns `{"status":"running"}` or a ready result with `expiresAtMs`.
+Resume returns `{"ok":true,"status":"running","resumed":true}`; repeating it
+after a successful resume returns `resumed: false`.
+
+A competing request ID or transient scheduler-resume failure returns retryable
+`UNAVAILABLE` with `retryAfterMs`. A mismatched resume ID returns
+`INVALID_REQUEST`. Prepare shares the Gateway's control-plane write budget of
+three attempts per minute; honor the returned retry delay. WebSocket clients
+are bucketed by device and IP. Admin HTTP controllers are bucketed by resolved
+client IP, so controllers behind one proxy can share a budget.
+
+Preparation is refuse-only: OpenClaw closes new root/session/command admission,
+pauses automatic cron ticks, and inspects work synchronously. If anything is
+active, it reopens admission before returning `busy`; it does not interrupt or
+drain that work. A ready lease lasts two minutes. Repeating `prepare` with the
+same `requestId` renews it; expiry resumes the scheduler automatically.
+Restart emission that becomes due during a ready lease waits until the lease
+resumes; an in-flight restart makes preparation return `busy`.
+
+While ready, `/healthz` remains live and `/readyz` returns `503`. Local or
+authenticated readiness responses include `gateway-draining`; unauthenticated
+remote probes receive only `{ "ready": false }`. The HTTP health probe,
+suspension methods on existing WebSocket connections, and an already-enabled
+Admin HTTP RPC route remain available. Other RPCs return retryable
+`UNAVAILABLE`. Built-in HTTP user-work routes, including OpenAI-compatible
+APIs, tool/session operations, node watches, and configured hooks, return
+`503` with `error.code: "gateway_unavailable"`.
+
+This handshake does not persist incoming messages, stop third-party channel
+transports, or control the hosting platform. The host must fence its ingress
+before preparation and remains responsible for wake, snapshot/freeze, and
+stop. It covers the tracked user-work categories returned in `counts`; it is
+not a general process-quiescence barrier. Channel health, maintenance, cache
+refresh, plugin-owned HTTP routes, and plugin-owned background work can remain
+active. The hosting platform must freeze or snapshot the full process tree and
+its filesystem consistently; unregistered work cannot be proven idle by this
+first contract.
+
 ## App code vs plugin code
 
 Use Gateway RPC when code lives outside OpenClaw:

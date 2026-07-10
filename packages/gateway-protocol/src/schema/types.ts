@@ -23,6 +23,15 @@ export type Snapshot = SchemaType<"Snapshot">;
 export type PresenceEntry = SchemaType<"PresenceEntry">;
 export type ErrorShape = SchemaType<"ErrorShape">;
 export type StateVersion = SchemaType<"StateVersion">;
+export type GatewaySuspendCounts = SchemaType<"GatewaySuspendCounts">;
+export type GatewaySuspendTaskBlocker = SchemaType<"GatewaySuspendTaskBlocker">;
+export type GatewaySuspendBlocker = SchemaType<"GatewaySuspendBlocker">;
+export type GatewaySuspendPrepareParams = SchemaType<"GatewaySuspendPrepareParams">;
+export type GatewaySuspendPrepareResult = SchemaType<"GatewaySuspendPrepareResult">;
+export type GatewaySuspendStatusParams = SchemaType<"GatewaySuspendStatusParams">;
+export type GatewaySuspendStatusResult = SchemaType<"GatewaySuspendStatusResult">;
+export type GatewaySuspendResumeParams = SchemaType<"GatewaySuspendResumeParams">;
+export type GatewaySuspendResumeResult = SchemaType<"GatewaySuspendResumeResult">;
 
 /** Environment status RPC payloads used by CLI and Control UI surfaces. */
 export type EnvironmentStatus = SchemaType<"EnvironmentStatus">;

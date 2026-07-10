@@ -7,6 +7,11 @@ import {
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewaySuspendAdmissionPhase,
+  isGatewayRestartDraining,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import {
@@ -190,6 +195,10 @@ const loadRestartHandlers = lazyHandlerModule(
   () => import("./server-methods/restart.js"),
   (module) => module.restartHandlers,
 );
+const loadSuspendHandlers = lazyHandlerModule(
+  () => import("./server-methods/suspend.js"),
+  (module) => module.suspendHandlers,
+);
 const loadSendHandlers = lazyHandlerModule(
   () => import("./server-methods/send.js"),
   (module) => module.sendHandlers,
@@ -304,6 +313,16 @@ function authorizeGatewayMethod(
     return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
   }
   return null;
+}
+
+const SUSPEND_CONTROL_METHODS = new Set([
+  "gateway.suspend.prepare",
+  "gateway.suspend.status",
+  "gateway.suspend.resume",
+]);
+
+function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
+  return SUSPEND_CONTROL_METHODS.has(method);
 }
 
 export const coreGatewayHandlers: GatewayRequestHandlers = {
@@ -666,6 +685,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadRestartHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.resume"],
+    loadHandlers: loadSuspendHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["message.action", "send", "poll"],
     loadHandlers: loadSendHandlers,
   }),
@@ -818,6 +841,44 @@ export async function handleGatewayRequest(
     );
     return;
   }
+  const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
+  if (
+    req.method === "gateway.suspend.prepare" &&
+    rootWorkAdmission &&
+    !rootWorkAdmission.ownsRoot
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { method: req.method, reason: "nested-gateway-request" },
+      }),
+    );
+    return;
+  }
+  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(req.method)) {
+    const restartDraining = isGatewayRestartDraining();
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${req.method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
+        {
+          retryable: true,
+          retryAfterMs: 1_000,
+          details: {
+            method: req.method,
+            reason: restartDraining ? "gateway-restarting" : "gateway-suspending",
+            phase: getGatewaySuspendAdmissionPhase(),
+          },
+        },
+      ),
+    );
+    return;
+  }
   const invokeHandler = () =>
     handler({
       req,
@@ -831,5 +892,18 @@ export async function handleGatewayRequest(
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
   // The scope also carries caller identity into plugin-owned gateway methods.
-  await withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler);
+  const invokeWithRequestScope = async () =>
+    await withPluginRuntimeGatewayRequestScope(
+      { context, client, isWebchatConnect },
+      invokeHandler,
+    );
+  if (!rootWorkAdmission) {
+    await invokeWithRequestScope();
+    return;
+  }
+  try {
+    await rootWorkAdmission.run(invokeWithRequestScope);
+  } finally {
+    rootWorkAdmission.release();
+  }
 }

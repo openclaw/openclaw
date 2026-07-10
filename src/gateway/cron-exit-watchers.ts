@@ -79,6 +79,8 @@ export function createCronExitWatchers(params: {
     job: OnExitCronJob;
     run: ManagedRun | undefined;
     fired: boolean;
+    terminalPersisting: boolean;
+    cancelled: boolean;
     command: string;
     cwd: string | undefined;
   };
@@ -89,7 +91,12 @@ export function createCronExitWatchers(params: {
     if (!slot) {
       return;
     }
-    active.delete(jobId);
+    slot.cancelled = true;
+    // Terminal persistence is user-visible state. Keep the slot as a suspend
+    // blocker until that write settles even when hot reload cancels the watcher.
+    if (!slot.terminalPersisting) {
+      active.delete(jobId);
+    }
     // Cancel an already-spawned child; an in-flight spawn (run undefined) is
     // killed by the arm() ownership check once it resolves.
     slot.run?.cancel("manual-cancel");
@@ -106,7 +113,16 @@ export function createCronExitWatchers(params: {
     const armToken: object = {};
     // Reserve the slot synchronously so a concurrent cancel/replace can observe
     // and act on this arm before the child is spawned.
-    const slot: WatcherSlot = { armToken, job, run: undefined, fired: false, command, cwd };
+    const slot: WatcherSlot = {
+      armToken,
+      job,
+      run: undefined,
+      fired: false,
+      terminalPersisting: false,
+      cancelled: false,
+      command,
+      cwd,
+    };
     active.set(job.id, slot);
     const owns = () => active.get(job.id) === slot && slot.armToken === armToken;
     void (async () => {
@@ -165,6 +181,7 @@ export function createCronExitWatchers(params: {
         { jobId: job.id, exitCode: exit.exitCode, reason: exit.reason },
         "cron-exit: watched command exited; firing job",
       );
+      slot.terminalPersisting = true;
       // Persist the terminal one-shot state BEFORE firing. FAIL CLOSED: if the
       // store write fails we do NOT wake — waking without a persisted terminal
       // state would let a gateway restart re-arm and re-run the command.
@@ -178,6 +195,13 @@ export function createCronExitWatchers(params: {
           { err: String(err), jobId: job.id },
           "cron-exit: persistCompletion failed; NOT firing (fail closed to avoid replay)",
         );
+        return;
+      }
+      slot.terminalPersisting = false;
+      if (!owns() || slot.cancelled) {
+        if (active.get(job.id) === slot) {
+          active.delete(job.id);
+        }
         return;
       }
       slot.fired = true;
@@ -236,6 +260,9 @@ export function createCronExitWatchers(params: {
     reconcile,
     cancel,
     cancelAll,
-    activeJobIds: () => Array.from(active.keys()),
+    activeJobIds: () =>
+      Array.from(active.entries())
+        .filter(([, slot]) => !slot.fired)
+        .map(([jobId]) => jobId),
   };
 }

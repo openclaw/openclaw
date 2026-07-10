@@ -1,5 +1,9 @@
 // Every-job firing tests cover repeated schedule execution semantics.
 import { describe, expect, it, vi } from "vitest";
+import {
+  beginGatewayRestartSignalAdmission,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { CronService } from "./service.js";
 import {
   createStartedCronServiceWithFinishedBarrier,
@@ -99,6 +103,71 @@ describe("CronService interval/cron jobs fire on time", () => {
 
     cron.stop();
     await store.cleanup();
+  });
+
+  it("keeps a due timer frozen while scheduling is paused and fires it after resume", async () => {
+    const store = await makeStorePath();
+    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      storePath: store.storePath,
+      logger: noopLogger,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "suspension pause check",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 10_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "resumed-tick" },
+    });
+
+    cron.pauseScheduling();
+    await vi.advanceTimersByTimeAsync(10_005);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    const finishedRun = finished.waitForOk(job.id);
+    cron.resumeScheduling();
+    await vi.runOnlyPendingTimersAsync();
+    await finishedRun;
+    expectMainSystemEvent(enqueueSystemEvent, "resumed-tick", job.id);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("keeps a due timer pending when restart signal admission rolls back", async () => {
+    const store = await makeStorePath();
+    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      storePath: store.storePath,
+      logger: noopLogger,
+    });
+    resetGatewayWorkAdmission();
+
+    try {
+      await cron.start();
+      const job = await cron.add({
+        name: "restart signal rollback check",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 10_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "rollback-tick" },
+      });
+
+      const pendingSignal = beginGatewayRestartSignalAdmission();
+      const finishedRun = finished.waitForOk(job.id);
+      await vi.advanceTimersByTimeAsync(10_005);
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+      expect(pendingSignal.rollback()).toBe(true);
+      await finishedRun;
+      expectMainSystemEvent(enqueueSystemEvent, "rollback-tick", job.id);
+    } finally {
+      cron.stop();
+      resetGatewayWorkAdmission();
+      await store.cleanup();
+    }
   });
 
   it("fires a cron-expression job when the timer fires a few ms late", async () => {

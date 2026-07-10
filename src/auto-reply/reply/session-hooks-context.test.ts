@@ -5,6 +5,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { initSessionState } from "./session.js";
 
@@ -176,10 +180,12 @@ describe("session hook context wiring", () => {
   });
 
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runSessionStart.mockReset();
     hookRunnerMocks.runSessionEnd.mockReset();
     sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockClear();
+    sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     sessionCleanupMocks.resetRegisteredAgentHarnessSessions.mockClear();
     sessionCleanupMocks.retireSessionMcpRuntime.mockClear();
     hookRunnerMocks.runSessionStart.mockResolvedValue(undefined);
@@ -190,6 +196,7 @@ describe("session hook context wiring", () => {
   });
 
   afterEach(() => {
+    resetGatewayWorkAdmission();
     vi.restoreAllMocks();
   });
 
@@ -244,6 +251,41 @@ describe("session hook context wiring", () => {
     expectFields(startEvent, { resumedFrom: "old-session" });
     expect(event?.nextSessionId).toBe(startEvent?.sessionId);
     expectFields(startContext, { sessionId: startEvent?.sessionId });
+  });
+
+  it("keeps rollover hooks and browser cleanup root-admitted until they settle", async () => {
+    const releases: Array<() => void> = [];
+    const held = () =>
+      new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
+    hookRunnerMocks.runSessionEnd.mockImplementationOnce(held);
+    hookRunnerMocks.runSessionStart.mockImplementationOnce(held);
+    sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockImplementationOnce(
+      () =>
+        new Promise<number>((resolve) => {
+          releases.push(() => resolve(0));
+        }),
+    );
+    const sessionKey = "agent:main:telegram:direct:held-rollover";
+    const { storePath } = await createStoredSession({
+      prefix: "openclaw-session-hook-held-rollover",
+      sessionKey,
+      sessionId: "old-held-session",
+    });
+
+    await initSessionState({
+      ctx: { Body: "/new", SessionKey: sessionKey },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(3));
+    await vi.waitFor(() => expect(releases).toHaveLength(3));
+    for (const release of releases) {
+      release();
+    }
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("marks explicit /reset rollovers with reason reset", async () => {

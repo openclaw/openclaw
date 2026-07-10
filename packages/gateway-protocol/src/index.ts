@@ -185,6 +185,28 @@ import {
   UpdateStatusParamsSchema,
   type ConnectParams,
   ConnectParamsSchema,
+  type GatewaySuspendBlocker,
+  GatewaySuspendBlockerSchema,
+  type GatewaySuspendCounts,
+  GatewaySuspendCountsSchema,
+  type GatewaySuspendPrepareParams,
+  GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareReadyResultSchema,
+  type GatewaySuspendPrepareResult,
+  GatewaySuspendPrepareResultSchema,
+  type GatewaySuspendResumeParams,
+  GatewaySuspendResumeParamsSchema,
+  type GatewaySuspendResumeResult,
+  GatewaySuspendResumeResultSchema,
+  type GatewaySuspendStatusParams,
+  GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusReadyResultSchema,
+  type GatewaySuspendStatusResult,
+  GatewaySuspendStatusResultSchema,
+  GatewaySuspendStatusRunningResultSchema,
+  type GatewaySuspendTaskBlocker,
+  GatewaySuspendTaskBlockerSchema,
   type CronAddParams,
   CronAddParamsSchema,
   type CronAddResult,
@@ -728,6 +750,24 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
 // constants so call sites can pair validation with the wire contract directly.
 export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile<ConnectParams>(ConnectParamsSchema);
+export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
+  GatewaySuspendPrepareParamsSchema,
+);
+export const validateGatewaySuspendPrepareResult = lazyCompile<GatewaySuspendPrepareResult>(
+  GatewaySuspendPrepareResultSchema,
+);
+export const validateGatewaySuspendStatusParams = lazyCompile<GatewaySuspendStatusParams>(
+  GatewaySuspendStatusParamsSchema,
+);
+export const validateGatewaySuspendStatusResult = lazyCompile<GatewaySuspendStatusResult>(
+  GatewaySuspendStatusResultSchema,
+);
+export const validateGatewaySuspendResumeParams = lazyCompile<GatewaySuspendResumeParams>(
+  GatewaySuspendResumeParamsSchema,
+);
+export const validateGatewaySuspendResumeResult = lazyCompile<GatewaySuspendResumeResult>(
+  GatewaySuspendResumeResultSchema,
+);
 export const validateRequestFrame = lazyCompile<RequestFrame>(RequestFrameSchema);
 export const validateResponseFrame = lazyCompile<ResponseFrame>(ResponseFrameSchema);
 export const validateEventFrame = lazyCompile<EventFrame>(EventFrameSchema);
@@ -1270,6 +1310,19 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
 // protocol surface changes.
 export {
   ConnectParamsSchema,
+  GatewaySuspendCountsSchema,
+  GatewaySuspendTaskBlockerSchema,
+  GatewaySuspendBlockerSchema,
+  GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareReadyResultSchema,
+  GatewaySuspendPrepareResultSchema,
+  GatewaySuspendStatusReadyResultSchema,
+  GatewaySuspendStatusRunningResultSchema,
+  GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusResultSchema,
+  GatewaySuspendResumeParamsSchema,
+  GatewaySuspendResumeResultSchema,
   GATEWAY_SERVER_CAPS,
   HelloOkSchema,
   RequestFrameSchema,
@@ -1577,6 +1630,15 @@ export {
 export type {
   GatewayFrame,
   ConnectParams,
+  GatewaySuspendCounts,
+  GatewaySuspendTaskBlocker,
+  GatewaySuspendBlocker,
+  GatewaySuspendPrepareParams,
+  GatewaySuspendPrepareResult,
+  GatewaySuspendStatusParams,
+  GatewaySuspendStatusResult,
+  GatewaySuspendResumeParams,
+  GatewaySuspendResumeResult,
   HelloOk,
   RequestFrame,
   ResponseFrame,

@@ -222,6 +222,21 @@ import {
   TickEventSchema,
 } from "./frames.js";
 import {
+  GatewaySuspendBlockerSchema,
+  GatewaySuspendCountsSchema,
+  GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareReadyResultSchema,
+  GatewaySuspendPrepareResultSchema,
+  GatewaySuspendResumeParamsSchema,
+  GatewaySuspendResumeResultSchema,
+  GatewaySuspendStatusReadyResultSchema,
+  GatewaySuspendStatusRunningResultSchema,
+  GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusResultSchema,
+  GatewaySuspendTaskBlockerSchema,
+} from "./gateway-suspend.js";
+import {
   ChatAbortedEventSchema,
   ChatAbortParamsSchema,
   ChatDeltaEventSchema,
@@ -420,6 +435,19 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  GatewaySuspendCounts: GatewaySuspendCountsSchema,
+  GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
+  GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
+  GatewaySuspendPrepareParams: GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareBusyResult: GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareReadyResult: GatewaySuspendPrepareReadyResultSchema,
+  GatewaySuspendPrepareResult: GatewaySuspendPrepareResultSchema,
+  GatewaySuspendStatusParams: GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusRunningResult: GatewaySuspendStatusRunningResultSchema,
+  GatewaySuspendStatusReadyResult: GatewaySuspendStatusReadyResultSchema,
+  GatewaySuspendStatusResult: GatewaySuspendStatusResultSchema,
+  GatewaySuspendResumeParams: GatewaySuspendResumeParamsSchema,
+  GatewaySuspendResumeResult: GatewaySuspendResumeResultSchema,
 
   // Environment and agent-facing control RPC payloads.
   EnvironmentStatus: EnvironmentStatusSchema,
