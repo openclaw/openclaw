@@ -1,7 +1,5 @@
 // Gateway session listing and projection helpers.
 // Normalizes persisted session stores into UI/RPC rows without mutating state.
-import fs from "node:fs";
-import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -26,6 +24,8 @@ import {
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
+import { resolveAgentAvatarFromSource } from "../agents/identity-avatar.js";
+import { resolveAgentAvatarUrl } from "../agents/identity-avatar-projection.js";
 import {
   findModelCatalogEntry,
   modelSupportsInput,
@@ -77,7 +77,6 @@ import {
 } from "../config/sessions.js";
 import { listSessionEntries as listAccessorSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
@@ -87,16 +86,8 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import {
-  AVATAR_MAX_BYTES,
-  isAvatarDataUrl,
-  isAvatarHttpUrl,
-  isPathWithinRoot,
-  isWorkspaceRelativeAvatarPath,
-  resolveAvatarMime,
-} from "../shared/avatar-policy.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
-import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -164,105 +155,6 @@ export {
 } from "../agents/session-model-ref.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
-
-function tryResolveExistingPath(value: string): string | null {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return null;
-  }
-}
-
-const AVATAR_MIME_BY_EXT: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  svg: "image/svg+xml",
-};
-
-/**
- * Read a validated workspace-local avatar file into a data URI. Shared by every
- * Gateway avatar projection (agent.identity.get, Control UI bootstrap config) so
- * `<img>` tags render workspace avatars without hitting the auth-gated
- * `/avatar/<agentId>` route. Gateway-internal — NOT re-exported on the Plugin
- * SDK surface. Returns null on any failure so callers fall back to the route URL.
- */
-export function readLocalAvatarDataUrl(filePath: string, workspaceDir: string): string | null {
-  try {
-    // Canonicalise the workspace root (resolveSymlinks) so the containment
-    // check matches the realpath'd filePath from resolveAgentAvatar.
-    const workspaceRoot = fs.realpathSync(resolveUserPath(workspaceDir));
-    if (!isPathWithinRoot(workspaceRoot, filePath)) {
-      return null;
-    }
-    const realPath = fs.realpathSync(filePath);
-    if (!isPathWithinRoot(workspaceRoot, realPath)) {
-      return null;
-    }
-    const stat = fs.statSync(realPath);
-    if (!stat.isFile() || stat.size > AVATAR_MAX_BYTES) {
-      return null;
-    }
-    const buf = fs.readFileSync(realPath);
-    const ext = path.extname(realPath).toLowerCase().replace(".", "");
-    const mime = AVATAR_MIME_BY_EXT[ext] ?? "application/octet-stream";
-    return `data:${mime};base64,${buf.toString("base64")}`;
-  } catch {
-    return null;
-  }
-}
-
-function resolveIdentityAvatarUrl(
-  cfg: OpenClawConfig,
-  agentId: string,
-  avatar: string | undefined,
-): string | undefined {
-  if (!avatar) {
-    return undefined;
-  }
-  const trimmed = normalizeOptionalString(avatar) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  if (isAvatarDataUrl(trimmed) || isAvatarHttpUrl(trimmed)) {
-    return trimmed;
-  }
-  if (!isWorkspaceRelativeAvatarPath(trimmed)) {
-    return undefined;
-  }
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const workspaceRoot = tryResolveExistingPath(workspaceDir) ?? path.resolve(workspaceDir);
-  const resolvedCandidate = path.resolve(workspaceRoot, trimmed);
-  if (!isPathWithinRoot(workspaceRoot, resolvedCandidate)) {
-    return undefined;
-  }
-  try {
-    // Avatars can be workspace-relative, but projection must keep the file
-    // read inside the agent workspace and cap bytes before encoding.
-    const opened = openRootFileSync({
-      absolutePath: resolvedCandidate,
-      rootPath: workspaceRoot,
-      rootRealPath: workspaceRoot,
-      boundaryLabel: "workspace root",
-      maxBytes: AVATAR_MAX_BYTES,
-      skipLexicalRootCheck: true,
-    });
-    if (!opened.ok) {
-      return undefined;
-    }
-    try {
-      const buffer = fs.readFileSync(opened.fd);
-      const mime = resolveAvatarMime(resolvedCandidate);
-      return `data:${mime};base64,${buffer.toString("base64")}`;
-    } finally {
-      fs.closeSync(opened.fd);
-    }
-  } catch {
-    return undefined;
-  }
-}
 
 function formatSessionIdPrefix(sessionId: string, updatedAt?: number | null): string {
   const prefix = sessionId.slice(0, 8);
@@ -1304,21 +1196,20 @@ export function listAgentsForGateway(
     if (!entry?.id) {
       continue;
     }
+    const agentId = normalizeAgentId(entry.id);
     const configuredName = normalizeOptionalString(entry.name);
+    const avatar = normalizeOptionalString(entry.identity?.avatar);
+    const avatarUrl = resolveAgentAvatarUrl(resolveAgentAvatarFromSource(cfg, agentId, avatar));
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),
           theme: normalizeOptionalString(entry.identity.theme),
           emoji: normalizeOptionalString(entry.identity.emoji),
-          avatar: normalizeOptionalString(entry.identity.avatar),
-          avatarUrl: resolveIdentityAvatarUrl(
-            cfg,
-            normalizeAgentId(entry.id),
-            normalizeOptionalString(entry.identity.avatar),
-          ),
+          avatar,
+          avatarUrl,
         }
       : undefined;
-    configuredById.set(normalizeAgentId(entry.id), {
+    configuredById.set(agentId, {
       name: configuredName ?? identity?.name,
       identity,
     });

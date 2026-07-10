@@ -9,8 +9,7 @@ import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
+import { resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import {
@@ -32,7 +31,10 @@ import { extractOriginalFilename } from "../media/store.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  DEFAULT_ASSISTANT_IDENTITY,
+  resolvePublicAssistantIdentity,
+} from "./assistant-identity.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -56,7 +58,6 @@ import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
   normalizeControlUiBasePath,
-  resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
 import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
@@ -67,7 +68,6 @@ import {
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
-import { readLocalAvatarDataUrl } from "./session-utils.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -1013,30 +1013,13 @@ export async function handleControlUiHttpRequest(
     }
     const config = opts?.config;
     const identity = config
-      ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
-      : DEFAULT_ASSISTANT_IDENTITY;
-    const avatarResolution = config
-      ? resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true })
-      : null;
-    // Read workspace-relative avatars as inline data URIs so the Personal card
-    // <img> renders them without unauthenticated /avatar/<agentId> requests.
-    // Mirrors agent.identity.get so both projections stay consistent (#97602).
-    let bootstrapAvatar = identity.avatar;
-    if (config && avatarResolution?.kind === "local") {
-      const dataUrl = readLocalAvatarDataUrl(
-        avatarResolution.filePath,
-        resolveAgentWorkspaceDir(config, identity.agentId),
-      );
-      if (dataUrl) {
-        bootstrapAvatar = dataUrl;
-      }
-    }
-    const avatarValue = resolveAssistantAvatarUrl({
-      avatar: bootstrapAvatar,
-      agentId: identity.agentId,
-      basePath,
-    });
-    const avatarMeta = controlUiAvatarResolutionMeta(avatarResolution);
+      ? resolvePublicAssistantIdentity({ cfg: config, agentId: opts?.agentId, basePath })
+      : {
+          ...DEFAULT_ASSISTANT_IDENTITY,
+          avatarSource: undefined,
+          avatarStatus: undefined,
+          avatarReason: undefined,
+        };
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -1047,10 +1030,10 @@ export async function handleControlUiHttpRequest(
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
-      assistantAvatar: avatarValue ?? identity.avatar,
-      assistantAvatarSource: avatarMeta.avatarSource,
-      assistantAvatarStatus: avatarMeta.avatarStatus,
-      assistantAvatarReason: avatarMeta.avatarReason,
+      assistantAvatar: identity.avatar,
+      assistantAvatarSource: identity.avatarSource,
+      assistantAvatarStatus: identity.avatarStatus,
+      assistantAvatarReason: identity.avatarReason,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
