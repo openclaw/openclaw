@@ -2328,4 +2328,153 @@ describe("deferred channel reload abort generation", () => {
       hoisted.activeTaskBlockers.length = 0;
     }
   });
+
+  describe("hot reload publication ordering (two-move fix)", () => {
+    it("does not stop the old cron until after the channel-restart deferral drains", async () => {
+      const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+      const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+      delete process.env.OPENCLAW_SKIP_CHANNELS;
+      delete process.env.OPENCLAW_SKIP_PROVIDERS;
+
+      const oldCron = { stop: vi.fn(), start: vi.fn(async () => {}) };
+      const setState = vi.fn();
+      hoisted.buildGatewayCronService.mockReturnValueOnce({
+        cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+        storePath: "/tmp/new-cron.json",
+        cronEnabled: true,
+        reconcileExitWatchers: vi.fn(async () => {}),
+        stopExitWatchers: vi.fn(),
+      });
+      const { applyHotReload } = createGatewayReloadHandlers({
+        deps: {} as never,
+        broadcast: vi.fn(),
+        getState: () => ({
+          hooksConfig: {},
+          hookClientIpConfig: {},
+          heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
+          cronState: { cron: oldCron, storePath: "/tmp/cron.json", cronEnabled: false },
+          channelHealthMonitor: null,
+        }),
+        setState,
+        startChannel: vi.fn(async () => {}),
+        stopChannel: vi.fn(async () => {}),
+        reloadPlugins: vi.fn(
+          async (): Promise<GatewayPluginReloadResult> => ({
+            restartChannels: new Set(),
+            activeChannels: new Set(),
+          }),
+        ),
+        logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        logChannels: { info: vi.fn(), error: vi.fn() },
+        logCron: { error: vi.fn() },
+        logReload: { info: vi.fn(), warn: vi.fn() },
+        createHealthMonitor: () => null,
+      });
+
+      hoisted.activeEmbeddedRunCount.value = 1;
+      vi.useFakeTimers();
+
+      const reloadPromise = applyHotReload(
+        {
+          changedPaths: ["cron", "channels.discord.token"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["cron", "channels.discord.token"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: true,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: false,
+          restartChannels: new Set(["discord"]),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        {} as OpenClawConfig,
+      );
+
+      try {
+        await vi.advanceTimersByTimeAsync(500);
+        expect(oldCron.stop).toHaveBeenCalledTimes(0);
+
+        hoisted.activeEmbeddedRunCount.value = 0;
+        await vi.advanceTimersByTimeAsync(500);
+        await reloadPromise;
+
+        expect(oldCron.stop).toHaveBeenCalledTimes(1);
+        expect(setState).toHaveBeenCalledTimes(1);
+      } finally {
+        hoisted.activeEmbeddedRunCount.value = 0;
+        await vi.advanceTimersByTimeAsync(500).catch(() => {});
+        vi.useRealTimers();
+        await reloadPromise.catch(() => {});
+        if (previousSkipChannels === undefined) {
+          delete process.env.OPENCLAW_SKIP_CHANNELS;
+        } else {
+          process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+        }
+        if (previousSkipProviders === undefined) {
+          delete process.env.OPENCLAW_SKIP_PROVIDERS;
+        } else {
+          process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+        }
+      }
+    });
+
+    it("defers runtime snapshot commit until after subsystem state is published", async () => {
+      const events: string[] = [];
+      const setState = vi.fn(() => events.push("setState"));
+      const logReload = { info: vi.fn(), warn: vi.fn() };
+      const { applyHotReload } = createGatewayReloadHandlers({
+        deps: {} as never,
+        broadcast: vi.fn(),
+        getState: () => ({
+          hooksConfig: { path: "/old-hook" },
+          hookClientIpConfig: {},
+          heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
+          cronState: {
+            cron: { stop: vi.fn(), start: vi.fn(async () => {}) },
+            storePath: "/tmp/cron.json",
+            cronEnabled: false,
+          },
+          channelHealthMonitor: null,
+        }),
+        setState,
+        startChannel: vi.fn(async () => {}),
+        stopChannel: vi.fn(async () => {}),
+        reloadPlugins: vi.fn(
+          async (): Promise<GatewayPluginReloadResult> => ({
+            restartChannels: new Set(),
+            activeChannels: new Set(),
+          }),
+        ),
+        logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        logChannels: { info: vi.fn(), error: vi.fn() },
+        logCron: { error: vi.fn() },
+        logReload,
+        createHealthMonitor: () => null,
+      });
+
+      await applyHotReload(
+        {
+          changedPaths: ["hooks"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["hooks"],
+          reloadHooks: true,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: false,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        {} as OpenClawConfig,
+      );
+
+      expect(setState).toHaveBeenCalledTimes(1);
+    });
+  });
 });

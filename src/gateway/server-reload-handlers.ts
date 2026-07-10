@@ -466,22 +466,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
       }
     }
-    if (plan.restartCron) {
-      params.onCronRestart?.();
-      state.cronState.cron.stop();
-      state.cronState.stopExitWatchers?.();
-      nextState.cronState = buildGatewayCronService({
-        cfg: nextConfig,
-        deps: params.deps,
-        broadcast: params.broadcast,
-      });
-      startGatewayCronWithLogging({
-        cron: nextState.cronState.cron,
-        afterStart: nextState.cronState.reconcileExitWatchers,
-        logCron: params.logCron,
-      });
-    }
-
     if (plan.restartHealthMonitor) {
       state.channelHealthMonitor?.stop();
       nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
@@ -629,6 +613,25 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
     } else if (plan.noopPaths.length > 0) {
       params.logReload.info(`config change applied (dynamic reads: ${plan.noopPaths.join(", ")})`);
+    }
+
+    // Restart cron immediately before setState so the old service stays live
+    // through any channel-restart deferral and deps.cron never targets a
+    // stopped instance.
+    if (plan.restartCron) {
+      params.onCronRestart?.();
+      state.cronState.cron.stop();
+      state.cronState.stopExitWatchers?.();
+      nextState.cronState = buildGatewayCronService({
+        cfg: nextConfig,
+        deps: params.deps,
+        broadcast: params.broadcast,
+      });
+      startGatewayCronWithLogging({
+        cron: nextState.cronState.cron,
+        afterStart: nextState.cronState.reconcileExitWatchers,
+        logCron: params.logCron,
+      });
     }
 
     params.setState(nextState);
@@ -795,21 +798,28 @@ export function startManagedGatewayConfigReloader(
       const previousSnapshot = getActiveSecretsRuntimeSnapshot();
       const prepared = await params.activateRuntimeSecrets(nextConfig, {
         reason: "reload",
-        activate: true,
+        activate: false, // Prepare only; commit after subsystem state is published.
       });
       const nextSharedGatewaySessionGeneration =
         params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
-      params.sharedGatewaySessionGenerationState.current = nextSharedGatewaySessionGeneration;
       const sharedGatewaySessionGenerationChanged =
         previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration;
-      if (sharedGatewaySessionGenerationChanged) {
-        disconnectStaleSharedGatewayAuthClients({
-          clients: params.clients,
-          expectedGeneration: nextSharedGatewaySessionGeneration,
-        });
-      }
       try {
         await applyHotReload(plan, prepared.config);
+        // Commit runtime config and advance auth generation atomically
+        // with subsystem state, so getRuntimeConfig(), hooks, cron, and
+        // session generation never diverge during a deferred reload.
+        await params.activateRuntimeSecrets.activatePreparedSnapshot!(prepared, {
+          reason: "reload",
+          activate: true,
+        });
+        params.sharedGatewaySessionGenerationState.current = nextSharedGatewaySessionGeneration;
+        if (sharedGatewaySessionGenerationChanged) {
+          disconnectStaleSharedGatewayAuthClients({
+            clients: params.clients,
+            expectedGeneration: nextSharedGatewaySessionGeneration,
+          });
+        }
       } catch (err) {
         if (previousSnapshot) {
           await activateSecretsRuntimeSnapshot(previousSnapshot);
