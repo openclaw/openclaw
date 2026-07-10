@@ -11,6 +11,7 @@ on:
       - ui/src/i18n/lib/types.ts
       - ui/src/i18n/lib/registry.ts
       - scripts/control-ui-i18n.ts
+      - .github/actions/publish-generated-pr/action.yml
       - .github/workflows/control-ui-locale-refresh.yml
   release:
     types:
@@ -24,7 +25,9 @@ permissions:
 
 concurrency:
   group: control-ui-locale-refresh
-  cancel-in-progress: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(ui): refresh control ui locales') }}"
+  # Finish the active full refresh; GitHub retains only the newest pending run for this group.
+  # Publisher overlap checks defer stale generated paths to that queued reconciliation run.
+  cancel-in-progress: false
 
 jobs:
   resolve-base:
@@ -237,11 +240,22 @@ jobs:
         with:
           primary-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           fallback-private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           base-branch: ${{ github.event.repository.default_branch }}
           head-branch: automation/control-ui-locale-refresh
           commit-message: "chore(ui): refresh control ui locales"
           pr-title: "chore(ui): refresh control ui locales"
           generated-paths: ui/src/i18n
+          invalidation-paths: |
+            ui/src/i18n/locales/en.ts
+            ui/src/i18n/.i18n/glossary.*.json
+            ui/src/i18n/.i18n/raw-copy-baseline.json
+            ui/src/i18n/lib/types.ts
+            ui/src/i18n/lib/registry.ts
+            scripts/control-ui-i18n.ts
+            .github/actions/publish-generated-pr/action.yml
+            .github/workflows/control-ui-locale-refresh.yml
           pr-body: |
             ## What Problem This Solves
 

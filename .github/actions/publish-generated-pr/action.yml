@@ -8,6 +8,12 @@ inputs:
   fallback-private-key:
     description: Fallback OpenClaw GitHub App private key.
     required: true
+  pull-request-app-id:
+    description: GitHub App id with pull-request write access.
+    required: true
+  pull-request-private-key:
+    description: GitHub App private key with pull-request write access.
+    required: true
   base-branch:
     description: Target branch for the generated pull request.
     required: true
@@ -26,40 +32,53 @@ inputs:
   generated-paths:
     description: Newline-delimited generated paths to commit.
     required: true
+  invalidation-paths:
+    description: Newline-delimited generator input paths that make an older run stale.
+    required: true
 
 runs:
   using: composite
   steps:
-    - name: Create generated PR app token
-      id: app-token
+    - name: Create generated branch app token
+      id: contents-token
       continue-on-error: true
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
       with:
         app-id: "2729701"
         private-key: ${{ inputs.primary-private-key }}
         permission-contents: write
-        permission-pull-requests: write
 
-    - name: Create generated PR fallback app token
-      id: app-token-fallback
-      if: steps.app-token.outcome == 'failure'
+    - name: Create generated branch fallback app token
+      id: contents-token-fallback
+      if: steps.contents-token.outcome == 'failure'
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
       with:
         app-id: "2971289"
         private-key: ${{ inputs.fallback-private-key }}
         permission-contents: write
+
+    - name: Create generated PR app token
+      id: pull-request-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      with:
+        app-id: ${{ inputs.pull-request-app-id }}
+        private-key: ${{ inputs.pull-request-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
         permission-pull-requests: write
 
     - name: Publish generated pull request
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+        CONTENTS_TOKEN: ${{ steps.contents-token.outputs.token || steps.contents-token-fallback.outputs.token }}
+        GH_TOKEN: ${{ steps.pull-request-token.outputs.token }}
         BASE_BRANCH: ${{ inputs.base-branch }}
         HEAD_BRANCH: ${{ inputs.head-branch }}
         COMMIT_MESSAGE: ${{ inputs.commit-message }}
         PR_TITLE: ${{ inputs.pr-title }}
         PR_BODY: ${{ inputs.pr-body }}
         GENERATED_PATHS: ${{ inputs.generated-paths }}
+        INVALIDATION_PATHS: ${{ inputs.invalidation-paths }}
       run: |
         set -euo pipefail
         export GH_PROMPT_DISABLED=1
@@ -68,8 +87,12 @@ runs:
         export GIT_SEQUENCE_EDITOR=true
         export GIT_TERMINAL_PROMPT=0
 
+        if [[ -z "${CONTENTS_TOKEN:-}" ]]; then
+          echo "Generated branch publication requires an OpenClaw contents-write App token." >&2
+          exit 1
+        fi
         if [[ -z "${GH_TOKEN:-}" ]]; then
-          echo "Generated PR publication requires an OpenClaw GitHub App token." >&2
+          echo "Generated PR publication requires a pull-request-write App token." >&2
           exit 1
         fi
 
@@ -81,6 +104,16 @@ runs:
         done <<< "${GENERATED_PATHS}"
         if [[ "${#generated_paths[@]}" -eq 0 ]]; then
           echo "Generated PR publication requires at least one generated path." >&2
+          exit 1
+        fi
+        invalidation_paths=()
+        while IFS= read -r invalidation_path; do
+          if [[ -n "${invalidation_path}" ]]; then
+            invalidation_paths+=("${invalidation_path}")
+          fi
+        done <<< "${INVALIDATION_PATHS}"
+        if [[ "${#invalidation_paths[@]}" -eq 0 ]]; then
+          echo "Generated PR publication requires at least one invalidation path." >&2
           exit 1
         fi
 
@@ -104,12 +137,6 @@ runs:
             echo "::error::Resolved workflow source is not an ancestor of latest ${BASE_BRANCH}."
             return 1
           fi
-          if ! git diff --quiet "${source_commit}" "${base_ref}" -- "${generated_paths[@]}"; then
-            echo "A newer main-triggered full locale refresh will retire the stale pull request." \
-              >> "${GITHUB_STEP_SUMMARY}"
-            return 0
-          fi
-
           current_head="$(read_remote_head)"
           if [[ -z "${current_head}" ]]; then
             echo "Stale generated pull request is already unmergeable because its branch is absent." \
@@ -175,6 +202,14 @@ runs:
           if ! git merge-base --is-ancestor "${source_commit}" "${base_ref}"; then
             echo "::error::Resolved workflow source is not an ancestor of latest ${BASE_BRANCH}."
             return 1
+          fi
+
+          # A completed older run must never publish output after a newer base changed generator
+          # inputs. Retire any existing deterministic-branch PR and let the newest queued run own it.
+          if ! git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"; then
+            echo "::notice::Deferring stale generated output because generator inputs changed on ${BASE_BRANCH}."
+            prepare_outcome=stale-input
+            return 0
           fi
 
           # Never overwrite a generated path that changed on main after this workflow's source SHA.
@@ -265,7 +300,16 @@ runs:
         source_commit="$(git rev-parse HEAD)"
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        timeout --signal=TERM --kill-after=10s 30s gh auth setup-git
+        # Keep branch transport and PR mutations on separate least-privilege App identities.
+        # App-authored branch pushes preserve pull_request synchronize workflow events.
+        git_auth="$(printf 'x-access-token:%s' "${CONTENTS_TOKEN}" | base64 | tr -d '\n')"
+        printf '::add-mask::%s\n' "${git_auth}"
+        git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${git_auth}"
+        unset git_auth
+        cleanup_git_auth() {
+          git config --local --unset-all http.https://github.com/.extraheader || true
+        }
+        trap cleanup_git_auth EXIT
         git add -A -- "${generated_paths[@]}"
         if git diff --cached --quiet -- "${generated_paths[@]}"; then
           echo "No generated changes."
@@ -281,9 +325,16 @@ runs:
           > "${changed_paths_file}"
 
         prepare_branch
+        if [[ "${prepare_outcome}" = "stale-input" ]]; then
+          echo "A newer main-triggered full locale refresh will reconcile changed generator inputs." \
+            >> "${GITHUB_STEP_SUMMARY}"
+          neutralize_stale_pr
+          exit 0
+        fi
         if [[ "${prepare_outcome}" = "deferred" ]]; then
           echo "A newer main-triggered full locale refresh will reconcile the generated output." \
             >> "${GITHUB_STEP_SUMMARY}"
+          neutralize_stale_pr
           exit 0
         fi
         if [[ "${prepare_outcome}" = "merged" ]]; then
@@ -306,9 +357,16 @@ runs:
           # A merge can consume and delete the branch after observation. Rebuild from latest base;
           # overlap detection defers to the guaranteed main-triggered full refresh.
           prepare_branch
+          if [[ "${prepare_outcome}" = "stale-input" ]]; then
+            echo "A newer main-triggered full locale refresh will reconcile changed generator inputs." \
+              >> "${GITHUB_STEP_SUMMARY}"
+            neutralize_stale_pr
+            exit 0
+          fi
           if [[ "${prepare_outcome}" = "deferred" ]]; then
             echo "A newer main-triggered full locale refresh will reconcile the generated output." \
               >> "${GITHUB_STEP_SUMMARY}"
+            neutralize_stale_pr
             exit 0
           fi
           if [[ "${prepare_outcome}" = "merged" ]]; then
