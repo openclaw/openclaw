@@ -56,6 +56,13 @@ type WorkflowStep = {
   with?: Record<string, string>;
 };
 
+type WorkflowMatrixEntry = {
+  advisory?: boolean;
+  command?: string;
+  profiles?: string;
+  suite_id?: string;
+};
+
 type WorkflowJob = {
   concurrency?: {
     group?: string;
@@ -67,6 +74,11 @@ type WorkflowJob = {
   needs?: string | string[];
   permissions?: Record<string, string>;
   "runs-on"?: string;
+  strategy?: {
+    matrix?: {
+      include?: WorkflowMatrixEntry[];
+    };
+  };
   "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
 };
@@ -104,6 +116,16 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
     throw new Error(`Expected workflow step ${stepName}`);
   }
   return step;
+}
+
+function workflowMatrixEntry(path: string, jobName: string, suiteId: string): WorkflowMatrixEntry {
+  const entry = workflowJob(path, jobName).strategy?.matrix?.include?.find(
+    (candidate) => candidate.suite_id === suiteId,
+  );
+  if (!entry) {
+    throw new Error(`Expected workflow matrix entry ${suiteId} in ${jobName}`);
+  }
+  return entry;
 }
 
 function expectTextToIncludeAll(text: string | undefined, snippets: string[]): void {
@@ -1078,6 +1100,29 @@ describe("package artifact reuse", () => {
     expect(
       workflow.match(/moonshot\) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;/gu),
     ).toHaveLength(2);
+  });
+
+  it("pins DeepSeek live profiles to both current V4 model refs", () => {
+    const deepSeek = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-deepseek",
+    );
+    const openCodeGo = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-deepseek-glm",
+    );
+
+    expect(deepSeek).toMatchObject({
+      advisory: true,
+      command:
+        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek OPENCLAW_LIVE_GATEWAY_MODELS=deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+      profiles: "full",
+    });
+    expect(openCodeGo.command).toContain(
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro",
+    );
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {
