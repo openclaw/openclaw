@@ -1,4 +1,4 @@
-title: Docker Crestodian first-run onboarding
+title: Docker inference-first Crestodian onboarding
 
 scenario:
   id: docker-crestodian-first-run
@@ -9,10 +9,11 @@ scenario:
       - docker.first-run-onboarding
     secondary:
       - raspberry-pi.first-run-verification
-  objective: Verify a fresh package-installed Docker state routes through modern first-run onboarding and Crestodian setup without leaking secrets.
+  objective: Verify a fresh package-installed Docker state fails closed before inference, live-activates a fake inference backend, and only then runs Crestodian setup without leaking secrets.
   successCriteria:
-    - A bare invocation routes to onboarding and modern onboard routes to Crestodian.
-    - Crestodian reports missing config, writes the default workspace/model, and creates the configured agent.
+    - A bare invocation routes to onboarding, and the packaged Crestodian CLI exits with onboarding guidance while inference is unavailable.
+    - A fake Claude inference backend answers the real activation probe before its model is persisted, while workspace and Gateway setup remain untouched for Crestodian.
+    - Packaged Crestodian CLI commands run only after activation, write the default workspace/model, and create the configured agent.
     - Discord setup is written through a SecretRef without persisting the raw token.
     - Config validation and expected Crestodian audit entries succeed.
   docsRefs:
@@ -26,7 +27,7 @@ scenario:
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
-    summary: Runs the existing Crestodian first-run Docker E2E lane and records primary Docker first-run onboarding evidence; the Raspberry Pi link is secondary because this is generic Linux/container first-run proof, not Pi hardware proof.
+    summary: Runs the packaged-CLI Docker lane that proves fail-closed pre-inference behavior, live fake-provider activation, and post-activation Crestodian setup; the Raspberry Pi link is secondary because this is generic Linux/container first-run proof, not Pi hardware proof.
     args:
       - --lane
       - crestodian-first-run

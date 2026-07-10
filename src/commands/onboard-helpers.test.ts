@@ -412,6 +412,40 @@ describe("probeGatewayReachable", () => {
       detail: "connect failed: timeout",
     });
   });
+
+  it("requires a configured default-agent model when requested", async () => {
+    mocks.probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          valid: true,
+          config: { agents: { list: [{ id: "work", default: true, model: "openai/gpt-5.5" }] } },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: { valid: true, config: { gateway: { mode: "local" } } },
+      });
+
+    await expect(
+      probeGatewayReachable({
+        url: "ws://127.0.0.1:18789",
+        requireConfiguredModel: true,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      probeGatewayReachable({
+        url: "ws://127.0.0.1:18789",
+        requireConfiguredModel: true,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      detail: "Gateway default agent has no configured model",
+    });
+    expect(mocks.probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ detailLevel: "full" }),
+    );
+  });
 });
 
 describe("waitForGatewayReachable", () => {

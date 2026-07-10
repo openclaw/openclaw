@@ -13,6 +13,7 @@ import {
   supportsDecorativeEmoji,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
@@ -339,6 +340,7 @@ export async function probeGatewayReachable(params: {
   token?: string;
   password?: string;
   timeoutMs?: number;
+  requireConfiguredModel?: boolean;
 }): Promise<{ ok: boolean; detail?: string }> {
   const url = params.url.trim();
   const timeoutMs = params.timeoutMs ?? 1500;
@@ -350,9 +352,26 @@ export async function probeGatewayReachable(params: {
         token: params.token,
         password: params.password,
       },
-      detailLevel: "none",
+      detailLevel: params.requireConfiguredModel ? "full" : "none",
     });
-    return probe.ok ? { ok: true } : { ok: false, detail: probe.error ?? undefined };
+    if (!probe.ok) {
+      return { ok: false, detail: probe.error ?? undefined };
+    }
+    if (params.requireConfiguredModel) {
+      const snapshot = probe.configSnapshot as {
+        valid?: unknown;
+        runtimeConfig?: OpenClawConfig;
+        config?: OpenClawConfig;
+      } | null;
+      const config = snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
+      const model = config
+        ? resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config))
+        : undefined;
+      if (!model) {
+        return { ok: false, detail: "Gateway default agent has no configured model" };
+      }
+    }
+    return { ok: true };
   } catch (err) {
     return { ok: false, detail: summarizeError(err) };
   }

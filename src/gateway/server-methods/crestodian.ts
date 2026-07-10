@@ -1,5 +1,8 @@
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 // Crestodian gateway methods host the setup/repair conversation for clients.
 import {
+  ErrorCodes,
+  errorShape,
   validateCrestodianChatParams,
   validateCrestodianSetupActivateParams,
   validateCrestodianSetupDetectParams,
@@ -15,9 +18,9 @@ import { assertValidParams } from "./validation.js";
 
 /**
  * `crestodian.chat` lets clients (macOS app onboarding, future UIs) run the
- * same conversational setup as `openclaw crestodian`. It is configless-safe:
- * the engine answers deterministically before any model is configured, so the
- * app can onboard a fresh machine entirely through this one method.
+ * same conversational setup as `openclaw crestodian`. Structured setup owns
+ * the pre-inference phase; a new chat session starts only after a live model
+ * turn succeeds.
  *
  * Sessions are process-local by design — Crestodian state is an in-flight
  * conversation, not persisted data. The map is bounded; the oldest session is
@@ -30,6 +33,16 @@ export type CrestodianChatSession = {
 };
 
 const MAX_CRESTODIAN_SESSIONS = 8;
+const crestodianSessionQueues = new WeakMap<Map<string, CrestodianChatSession>, KeyedAsyncQueue>();
+
+function getCrestodianSessionQueue(sessions: Map<string, CrestodianChatSession>): KeyedAsyncQueue {
+  let queue = crestodianSessionQueues.get(sessions);
+  if (!queue) {
+    queue = new KeyedAsyncQueue();
+    crestodianSessionQueues.set(sessions, queue);
+  }
+  return queue;
+}
 
 async function runCrestodianGatewayTask(task: () => Promise<void>): Promise<void> {
   // Track every accepted RPC as active, never queued: restart draining snapshots
@@ -118,58 +131,77 @@ export const crestodianHandlers: GatewayRequestHandlers = {
     await runCrestodianGatewayTask(async () => {
       const sessions = context.crestodianSessions;
       const sessionId = params.sessionId;
-      if (params.reset) {
-        await sessions.get(sessionId)?.engine.dispose();
-        sessions.delete(sessionId);
-      }
-      let session = sessions.get(sessionId);
-      if (!session) {
-        // The gateway surface must never install/restart its own daemon; the
-        // engine's setup path honors this via surface: "gateway".
-        const engine = new CrestodianChatEngine({ surface: "gateway" });
-        let welcome: string;
-        if (params.welcomeVariant === "onboarding") {
-          welcome = await buildOnboardingWelcome({ engine });
-        } else {
-          welcome = formatCrestodianStartupMessage(await engine.loadOverview());
-          engine.noteAssistantMessage(welcome);
+      // Initialization, resets, and turns share one per-session queue. Without
+      // it, concurrent first messages can create competing engines and lose
+      // conversation state when the later initializer replaces the first.
+      await getCrestodianSessionQueue(sessions).enqueue(sessionId, async () => {
+        if (params.reset) {
+          const existing = sessions.get(sessionId);
+          sessions.delete(sessionId);
+          await existing?.engine.dispose();
         }
-        await evictOldestSession(sessions);
-        session = { engine, welcome, lastUsedAt: Date.now() };
-        sessions.set(sessionId, session);
+        let session = sessions.get(sessionId);
+        if (!session) {
+          const { verifySetupInference } = await import("../../crestodian/setup-inference.js");
+          const inference = await verifySetupInference({ runtime: defaultRuntime });
+          if (!inference.ok) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.UNAVAILABLE,
+                `Crestodian requires working inference: ${inference.error}`,
+              ),
+            );
+            return;
+          }
+          // The gateway surface must never install/restart its own daemon; the
+          // engine's setup path honors this via surface: "gateway".
+          const engine = new CrestodianChatEngine({ surface: "gateway" });
+          let welcome: string;
+          if (params.welcomeVariant === "onboarding") {
+            welcome = await buildOnboardingWelcome({ engine });
+          } else {
+            welcome = formatCrestodianStartupMessage(await engine.loadOverview());
+            engine.noteAssistantMessage(welcome);
+          }
+          await evictOldestSession(sessions);
+          session = { engine, welcome, lastUsedAt: Date.now() };
+          sessions.set(sessionId, session);
+          if (params.message === undefined || !params.message.trim()) {
+            respond(true, { sessionId, reply: session.welcome, action: "none" }, undefined);
+            return;
+          }
+        }
+        session.lastUsedAt = Date.now();
         if (params.message === undefined || !params.message.trim()) {
           respond(true, { sessionId, reply: session.welcome, action: "none" }, undefined);
           return;
         }
-      }
-      session.lastUsedAt = Date.now();
-      if (params.message === undefined || !params.message.trim()) {
-        respond(true, { sessionId, reply: session.welcome, action: "none" }, undefined);
-        return;
-      }
-      const reply = await session.engine.handle(params.message);
-      // The TUI-only "open-tui" handoff becomes a client-visible "open-agent"
-      // signal: the app should move the user to their normal agent chat.
-      const action =
-        reply.action === "open-tui"
-          ? "open-agent"
-          : reply.action === "open-setup"
-            ? "none"
-            : reply.action;
-      respond(
-        true,
-        {
-          sessionId,
-          reply:
-            reply.text ||
-            (action === "open-agent"
-              ? "Setup here is done — continue with your agent."
-              : "Nothing to change."),
-          action,
-          ...(reply.sensitive === true ? { sensitive: true } : {}),
-        },
-        undefined,
-      );
+        const reply = await session.engine.handle(params.message);
+        // The TUI-only "open-tui" handoff becomes a client-visible "open-agent"
+        // signal: the app should move the user to their normal agent chat.
+        const action =
+          reply.action === "open-tui"
+            ? "open-agent"
+            : reply.action === "open-setup"
+              ? "none"
+              : reply.action;
+        respond(
+          true,
+          {
+            sessionId,
+            reply:
+              reply.text ||
+              (action === "open-agent"
+                ? "Setup here is done — continue with your agent."
+                : "Nothing to change."),
+            action,
+            ...(reply.sensitive === true ? { sensitive: true } : {}),
+          },
+          undefined,
+        );
+      });
     });
   },
 };

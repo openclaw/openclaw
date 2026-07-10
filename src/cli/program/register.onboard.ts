@@ -171,7 +171,7 @@ export function registerOnboardCommand(program: Command): void {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
-    .option("--modern", "Open the Crestodian setup chat (kept for compatibility)", false)
+    .option("--modern", "Open inference-gated Crestodian (kept for compatibility)", false)
     .option("--classic", "Use the classic multi-step setup wizard", false)
     .option(
       "--accept-risk",
@@ -219,15 +219,21 @@ export function registerOnboardCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
-        // Deprecated alias for `openclaw crestodian`: skip bootstrap prompts and
-        // open the conversation directly (same as the pre-Commander fast path).
-        const { runCrestodian } = await import("../../crestodian/crestodian.js");
-        await runCrestodian({
-          message: opts.nonInteractive ? "overview" : undefined,
-          yes: false,
-          json: Boolean(opts.json),
-          interactive: !opts.nonInteractive,
-        });
+        const { runCrestodianWithInference } =
+          await import("../../commands/crestodian-with-inference.js");
+        await runCrestodianWithInference(
+          {
+            message: opts.nonInteractive ? "overview" : undefined,
+            yes: false,
+            json: Boolean(opts.json),
+            interactive: !opts.nonInteractive,
+          },
+          defaultRuntime,
+          {
+            ...(opts.workspace ? { workspace: opts.workspace as string } : {}),
+            ...(opts.acceptRisk ? { acceptRisk: true } : {}),
+          },
+        );
         return;
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {

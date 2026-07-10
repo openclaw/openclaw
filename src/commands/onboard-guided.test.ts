@@ -9,9 +9,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "../wizard/prompts.js";
 import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
 
-vi.mock("../../packages/terminal-core/src/restore.js", () => ({
-  restoreTerminalState: vi.fn(),
-}));
+const restoreTerminalState = vi.hoisted(() => vi.fn());
+
+vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {
   const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
@@ -66,10 +66,10 @@ function setupDeps(params: {
   prompter: WizardPrompter;
   detect?: GuidedOnboardingDeps["detect"];
   activate?: GuidedOnboardingDeps["activate"];
-  applySetup?: GuidedOnboardingDeps["applySetup"];
   runClassicSetup?: GuidedOnboardingDeps["runClassicSetup"];
   runCrestodianChat?: GuidedOnboardingDeps["runCrestodianChat"];
 }) {
+  const runCrestodianChat = params.runCrestodianChat ?? vi.fn(async () => {});
   return {
     createPrompter: () => params.prompter,
     detect: params.detect ?? vi.fn(async () => detection()),
@@ -81,10 +81,8 @@ function setupDeps(params: {
         latencyMs: 1250,
         lines: ["Workspace: /tmp/work", "Gateway: running"],
       })),
-    applySetup: params.applySetup,
     runClassicSetup: params.runClassicSetup,
-    runCrestodianChat: params.runCrestodianChat,
-    launchTui: vi.fn(async () => {}),
+    runCrestodianChat,
   } satisfies GuidedOnboardingDeps;
 }
 
@@ -94,6 +92,7 @@ describe("runGuidedOnboarding", () => {
   });
 
   beforeEach(() => {
+    restoreTerminalState.mockClear();
     readConfigFileSnapshot.mockReset();
     readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: true, config: {} });
   });
@@ -122,7 +121,10 @@ describe("runGuidedOnboarding", () => {
       expect.objectContaining({ kind: "claude-cli", workspace: "/tmp/work", surface: "cli" }),
     );
     expect(select).not.toHaveBeenCalled();
-    expect(prompter.outro).toHaveBeenCalledWith("OpenClaw is ready.");
+    expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
+    expect(restoreTerminalState.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.runCrestodianChat.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("live-tests an unverified CLI before automatic setup", async () => {
@@ -201,7 +203,7 @@ describe("runGuidedOnboarding", () => {
       recommended: true,
       credentials: true,
     } as const;
-    const select = vi.fn(async () => "action:skip") as unknown as WizardPrompter["select"];
+    const select = vi.fn(async () => "action:classic") as unknown as WizardPrompter["select"];
     const prompter = createWizardPrompter({
       text: vi.fn(async () => "/tmp/work"),
       select,
@@ -212,10 +214,7 @@ describe("runGuidedOnboarding", () => {
       status: "unavailable" as const,
       error: "provider not loaded",
     })) as GuidedOnboardingDeps["activate"];
-    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async () => ({
-      configPath: "/tmp/config",
-      lines: ["Workspace"],
-    }));
+    const runClassicSetup = vi.fn(async () => {});
     const deps = setupDeps({
       prompter,
       detect: vi.fn(async () =>
@@ -224,7 +223,7 @@ describe("runGuidedOnboarding", () => {
         }),
       ),
       activate,
-      applySetup,
+      runClassicSetup,
     });
 
     await runGuidedOnboarding({ acceptRisk: true }, makeRuntime(), deps);
@@ -236,6 +235,7 @@ describe("runGuidedOnboarding", () => {
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("kept unchanged");
     expect(select).toHaveBeenCalled();
+    expect(runClassicSetup).toHaveBeenCalledOnce();
   });
 
   it("falls through after an auth failure and surfaces both outcomes", async () => {
@@ -308,7 +308,7 @@ describe("runGuidedOnboarding", () => {
 
     expect(activate).toHaveBeenCalledTimes(2);
     expect(select).toHaveBeenCalledOnce();
-    expect(prompter.outro).toHaveBeenCalledWith("OpenClaw is ready.");
+    expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
   });
 
   it("accepts and verifies a manual provider key without displaying it", async () => {
@@ -356,21 +356,25 @@ describe("runGuidedOnboarding", () => {
     expect(JSON.stringify([runtime.log, runtime.error])).not.toContain(enteredValue);
   });
 
-  it("can skip AI after a manual key fails", async () => {
+  it("keeps Crestodian unavailable after a manual key fails", async () => {
     const text = vi.fn().mockResolvedValueOnce("/tmp/work").mockResolvedValueOnce("bad-key");
     const select = vi
       .fn()
       .mockResolvedValueOnce("manual:openai-api-key")
-      .mockResolvedValueOnce("action:skip") as unknown as WizardPrompter["select"];
+      .mockImplementationOnce(async (params: WizardSelectParams) => {
+        expect(params.options.map((option) => option.value)).toEqual([
+          "manual:openai-api-key",
+          "action:classic",
+        ]);
+        return "action:classic";
+      }) as unknown as WizardPrompter["select"];
     const prompter = createWizardPrompter({
       text: text as WizardPrompter["text"],
       select,
       confirm: vi.fn(async () => false),
     });
-    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async () => ({
-      configPath: "/tmp/config",
-      lines: ["Workspace"],
-    }));
+    const runClassicSetup = vi.fn(async () => {});
+    const runCrestodianChat = vi.fn(async () => {});
     const deps = setupDeps({
       prompter,
       detect: vi.fn(async () =>
@@ -384,18 +388,15 @@ describe("runGuidedOnboarding", () => {
         status: "auth" as const,
         error: "bad key",
       })),
-      applySetup,
+      runClassicSetup,
+      runCrestodianChat,
     });
     const runtime = makeRuntime();
 
     await runGuidedOnboarding({ acceptRisk: true }, runtime, deps);
 
-    expect(applySetup).toHaveBeenCalledWith({
-      workspace: "/tmp/work",
-      surface: "cli",
-      runtime,
-    });
-    expect(applySetup.mock.calls[0]?.[0]).not.toHaveProperty("model");
+    expect(runClassicSetup).toHaveBeenCalledOnce();
+    expect(runCrestodianChat).not.toHaveBeenCalled();
   });
 
   it("hands options to the classic escape with the collected risk acknowledgement", async () => {
@@ -423,13 +424,11 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it("opens Crestodian chat with the selected workspace", async () => {
-    const select = vi.fn(async () => "action:crestodian") as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ text: vi.fn(async () => "/tmp/work"), select });
+  it("opens Crestodian chat with the selected workspace after activation", async () => {
+    const prompter = createWizardPrompter({ text: vi.fn(async () => "/tmp/work") });
     const runCrestodianChat = vi.fn(async () => {});
     const deps = setupDeps({
       prompter,
-      detect: vi.fn(async () => detection({ candidates: [] })),
       runCrestodianChat,
     });
     const runtime = makeRuntime();
@@ -451,20 +450,25 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).not.toHaveBeenCalled();
   });
 
-  it("opens Crestodian without writing when existing config is invalid", async () => {
+  it("routes invalid config to the classic doctor path without opening Crestodian", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: false,
       config: {},
     });
     const prompter = createWizardPrompter();
+    const runClassicSetup = vi.fn(async () => {});
     const runCrestodianChat = vi.fn(async () => {});
-    const deps = setupDeps({ prompter, runCrestodianChat });
+    const deps = setupDeps({ prompter, runClassicSetup, runCrestodianChat });
     const runtime = makeRuntime();
 
     await runGuidedOnboarding({ workspace: "/tmp/repair" }, runtime, deps);
 
-    expect(runCrestodianChat).toHaveBeenCalledWith("/tmp/repair", runtime, false);
+    expect(runClassicSetup).toHaveBeenCalledWith(
+      { workspace: "/tmp/repair", classic: true },
+      runtime,
+    );
+    expect(runCrestodianChat).not.toHaveBeenCalled();
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
   });

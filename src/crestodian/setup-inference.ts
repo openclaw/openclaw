@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+  resolveAgentEffectiveModelPrimary,
+} from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
@@ -46,7 +50,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { buildCliPlannerConfig, buildCodexAppServerPlannerConfig } from "./assistant-backends.js";
 import { loadAuthoredSetupConfig } from "./onboarding-welcome.js";
-import { applyCrestodianSetup, createQuickstartNotePrompter } from "./setup-apply.js";
+import {
+  type applyCrestodianSetup,
+  createCrestodianModelSelectionUpdater,
+  createQuickstartNotePrompter,
+} from "./setup-apply.js";
 
 /**
  * Inference is the one required onboarding step (docs/cli/crestodian.md
@@ -219,6 +227,7 @@ type SetupInferenceTestPlan = {
   model: string;
   modelRef: string;
   config: OpenClawConfig;
+  agentId?: string;
   agentHarnessId?: string;
   agentDir?: string;
   authProfileId?: string;
@@ -295,6 +304,7 @@ async function buildTestPlan(params: {
         model: ref.model,
         modelRef,
         config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
       };
     }
     case "claude-cli": {
@@ -692,14 +702,33 @@ export async function activateSetupInference(
       await updateConfig((current) => applyManualAuthConfig(current, manualAuth));
     }
 
-    const applySetup = deps.applySetup ?? applyCrestodianSetup;
-    const applied = await applySetup({
-      workspace,
-      ...(plan.persistModelRef ? { model: plan.persistModelRef } : {}),
-      surface: params.surface,
-      runtime: params.runtime,
-    });
-    return { ok: true, modelRef: plan.modelRef, latencyMs: test.latencyMs, lines: applied.lines };
+    if (deps.applySetup) {
+      const applied = await deps.applySetup({
+        workspace,
+        ...(plan.persistModelRef ? { model: plan.persistModelRef } : {}),
+        surface: params.surface,
+        runtime: params.runtime,
+      });
+      return { ok: true, modelRef: plan.modelRef, latencyMs: test.latencyMs, lines: applied.lines };
+    }
+    if (plan.persistModelRef) {
+      // Inference is the only bootstrap write. Workspace, Gateway, channels,
+      // and agent setup belong to Crestodian after this verified boundary.
+      const updateConfig =
+        deps.updateConfig ?? (await import("../commands/models/shared.js")).updateConfig;
+      const model = plan.persistModelRef;
+      const selectModel = await createCrestodianModelSelectionUpdater({
+        model,
+        ...(plan.agentHarnessId ? { agentRuntimeId: plan.agentHarnessId } : {}),
+      });
+      await updateConfig((current) => selectModel(current));
+    }
+    return {
+      ok: true,
+      modelRef: plan.modelRef,
+      latencyMs: test.latencyMs,
+      lines: [`Inference verified: ${plan.modelRef}`],
+    };
   } finally {
     await (deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true })))(
       tempDir,
@@ -721,8 +750,29 @@ export async function verifySetupInference(params: {
   const readSnapshot =
     deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
   const snapshot = await readSnapshot();
-  const cfg: OpenClawConfig =
-    snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  if (!snapshot.exists) {
+    return {
+      ok: false,
+      status: "unavailable",
+      error: "No OpenClaw config exists. Run `openclaw onboard` first.",
+    };
+  }
+  if (!snapshot.valid) {
+    return {
+      ok: false,
+      status: "unavailable",
+      error: "OpenClaw config is invalid. Run `openclaw doctor --fix` before continuing.",
+    };
+  }
+  const cfg: OpenClawConfig = snapshot.runtimeConfig ?? snapshot.config;
+  const configuredModel = resolveAgentEffectiveModelPrimary(cfg, resolveDefaultAgentId(cfg));
+  if (!configuredModel) {
+    return {
+      ok: false,
+      status: "unavailable",
+      error: "No default-agent model is configured. Run `openclaw onboard` first.",
+    };
+  }
   const tempDir = await (
     deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
   )();
@@ -802,7 +852,7 @@ async function runSetupInferenceTest(params: {
       result = (await runCli({
         sessionId,
         sessionKey: `temp:setup-inference:${runId}`,
-        agentId: "crestodian",
+        agentId: plan.agentId ?? "crestodian",
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
@@ -823,7 +873,7 @@ async function runSetupInferenceTest(params: {
       result = (await runEmbedded({
         sessionId,
         sessionKey: `temp:setup-inference:${runId}`,
-        agentId: "crestodian",
+        agentId: plan.agentId ?? "crestodian",
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,

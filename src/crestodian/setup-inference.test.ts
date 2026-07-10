@@ -211,6 +211,89 @@ describe("activateSetupInference", () => {
     });
   });
 
+  it("persists only the verified model before Crestodian configures the rest", async () => {
+    let persistedConfig: OpenClawConfig = {};
+    const updateConfig = vi.fn(
+      async (mutator: (cfg: OpenClawConfig) => OpenClawConfig): Promise<OpenClawConfig> => {
+        persistedConfig = mutator(persistedConfig);
+        return persistedConfig;
+      },
+    );
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      workspace: "/tmp/not-persisted-yet",
+      surface: "cli",
+      runtime,
+      deps: {
+        runCliAgent: vi.fn(async () => ({
+          meta: { finalAssistantVisibleText: "OK" },
+        })) as never,
+        updateConfig: updateConfig as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      modelRef: "claude-cli/claude-opus-4-8",
+      lines: ["Inference verified: claude-cli/claude-opus-4-8"],
+    });
+    expect(persistedConfig.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
+    expect(persistedConfig.agents?.defaults?.workspace).toBeUndefined();
+    expect(persistedConfig.gateway).toBeUndefined();
+  });
+
+  it("rebases model persistence on concurrent default-agent edits", async () => {
+    const probedConfig: OpenClawConfig = {
+      agents: { list: [{ id: "work", default: true, model: "openai/broken" }] },
+    };
+    let persistedConfig: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "work", default: true, model: "openai/broken", name: "edited during probe" },
+          { id: "new-agent", model: "anthropic/claude-opus-4-8" },
+        ],
+      },
+    };
+    const updateConfig = vi.fn(
+      async (mutator: (cfg: OpenClawConfig) => OpenClawConfig): Promise<OpenClawConfig> => {
+        persistedConfig = mutator(persistedConfig);
+        return persistedConfig;
+      },
+    );
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "cli",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          config: probedConfig,
+        })) as never,
+        runCliAgent: vi.fn(async () => ({
+          meta: { finalAssistantVisibleText: "OK" },
+        })) as never,
+        updateConfig: updateConfig as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(persistedConfig.agents?.list).toEqual([
+      {
+        id: "work",
+        default: true,
+        model: "claude-cli/claude-opus-4-8",
+        name: "edited during probe",
+        models: { "claude-cli/claude-opus-4-8": {} },
+      },
+      { id: "new-agent", model: "anthropic/claude-opus-4-8" },
+    ]);
+  });
+
   it("does not touch config when the live test fails", async () => {
     const applySetup = vi.fn(async () => ({ configPath: "/tmp/openclaw.json", lines: [] }));
     const runCliAgent = vi.fn(async () => {
@@ -903,6 +986,28 @@ describe("verifySetupInference", () => {
     };
   }
 
+  it.each([
+    ["missing config", { exists: false, valid: true, config: {} }],
+    ["invalid config", { exists: true, valid: false, config: {} }],
+    ["missing default-agent model", { exists: true, valid: true, config: {} }],
+  ])("rejects %s before starting a model", async (_label, snapshot) => {
+    const runEmbeddedAgent = vi.fn();
+    const createTempDir = vi.fn(makeTempDir);
+
+    const result = await verifySetupInference({
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => snapshot) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        createTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: "unavailable" });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(createTempDir).not.toHaveBeenCalled();
+  });
+
   it("returns a passing live check without persisting setup", async () => {
     const applySetup = vi.fn();
     const updateConfig = vi.fn();
@@ -922,6 +1027,38 @@ describe("verifySetupInference", () => {
     expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
     expect(applySetup).not.toHaveBeenCalled();
     expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("probes the authored model on the configured default agent", async () => {
+    const runEmbeddedAgent = vi.fn(async () => ({
+      meta: { finalAssistantVisibleText: "OK" },
+    }));
+
+    const result = await verifySetupInference({
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          config: {
+            agents: {
+              list: [{ id: "work", default: true, model: "anthropic/claude-opus-4-8" }],
+            },
+          },
+        })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "anthropic/claude-opus-4-8" });
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "work",
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+      }),
+    );
   });
 
   it("maps live-check failures without writing config or auth", async () => {

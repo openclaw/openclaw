@@ -82,10 +82,9 @@ Gateway's active text-inference provider plugins instead of using a fixed app
 list. The selected provider supplies its starter model and config; OpenClaw
 verifies the credential with the same live test before storing its auth profile. Next
 remains locked until one backend has passed, so the first agent chat cannot
-start without working inference. The Crestodian chat stays available from this
-page (and later under Settings → Crestodian) for help in plain language.
-
-Configure Later skips this step.
+start without working inference. After that live check passes, Crestodian becomes
+available to help configure the remaining workspace, Gateway, channels, and
+other optional features; it is also available later under Settings → Crestodian.
 </Step>
 <Step title="Permissions">
 
@@ -97,10 +96,10 @@ Onboarding requests TCC permissions for: Automation (AppleScript), Notifications
 
 </Step>
 <Step title="Onboarding Chat (dedicated session)">
-  After setup, the app opens a separate agent onboarding chat so the agent can
+  After inference and the remaining setup complete, the app opens a separate agent onboarding chat so the agent can
   introduce itself and guide next steps without mixing that exchange into the
-  normal conversation history. This follows the Crestodian setup conversation;
-  it does not replace it. See [Bootstrapping](/start/bootstrapping) for what
+  normal conversation history. Crestodian can help finish setup after inference;
+  the agent onboarding chat does not replace it. See [Bootstrapping](/start/bootstrapping) for what
   happens on the gateway host during the agent's first real turn.
 </Step>
 </Steps>

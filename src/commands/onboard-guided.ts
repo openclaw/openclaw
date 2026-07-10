@@ -1,9 +1,5 @@
 // Guided onboarding: detect AI access, live-test it, then persist only a working route.
 import type {
-  CrestodianSetupApplyParams,
-  CrestodianSetupApplyResult,
-} from "../crestodian/setup-apply.js";
-import type {
   ActivateSetupInferenceResult,
   SetupInferenceCandidate,
   SetupInferenceDetection,
@@ -11,7 +7,7 @@ import type {
 } from "../crestodian/setup-inference.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
@@ -34,20 +30,31 @@ export type GuidedOnboardingDeps = {
     runtime: RuntimeEnv,
     acceptRisk: boolean,
   ) => Promise<void>;
-  applySetup?: (params: CrestodianSetupApplyParams) => Promise<CrestodianSetupApplyResult>;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
-  launchTui?: () => Promise<void>;
 };
 
 type GuidedSetupResult = { kind: "complete"; lines: string[] } | { kind: "delegated" };
+type GuidedOnboardingHandoff = { workspace: string };
 
 type CandidateAttempt =
   | { kind: "success"; result: Extract<ActivateSetupInferenceResult, { ok: true }> }
   | { kind: "failure" };
 
 const MANUAL_CLASSIC = "action:classic";
-const MANUAL_CRESTODIAN = "action:crestodian";
-const MANUAL_SKIP = "action:skip";
+
+async function openClassicSetup(
+  deps: GuidedOnboardingDeps,
+  opts: OnboardOptions,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  const runClassic =
+    deps.runClassicSetup ??
+    (async (classicOpts: OnboardOptions, classicRuntime: RuntimeEnv) => {
+      const { runInteractiveSetup } = await import("./onboard-interactive.js");
+      await runInteractiveSetup(classicOpts, classicRuntime);
+    });
+  await runClassic(opts, runtime);
+}
 
 async function openCrestodianChat(
   deps: GuidedOnboardingDeps,
@@ -165,48 +172,18 @@ async function runManualStage(params: {
           ...(provider.hint ? { hint: provider.hint } : {}),
         })),
         {
-          value: MANUAL_CRESTODIAN,
-          label: t("wizard.guided.openCrestodian"),
-        },
-        {
           value: MANUAL_CLASSIC,
           label: t("wizard.guided.useClassic"),
-        },
-        {
-          value: MANUAL_SKIP,
-          label: t("wizard.guided.skipAi"),
         },
       ],
     });
 
-    if (choice === MANUAL_CRESTODIAN) {
-      await openCrestodianChat(params.deps, params.workspace, params.runtime, true);
-      return { kind: "delegated" };
-    }
     if (choice === MANUAL_CLASSIC) {
-      const runClassic =
-        params.deps.runClassicSetup ??
-        (async (opts: OnboardOptions, runtime: RuntimeEnv) => {
-          const { runInteractiveSetup } = await import("./onboard-interactive.js");
-          await runInteractiveSetup(opts, runtime);
-        });
       // The classic escape owns its workspace/default handling. The risk
       // acknowledgement was already collected by the guided flow, so pass it
       // through — re-prompting the same session twice reads as a bug.
-      await runClassic({ ...params.opts, acceptRisk: true }, params.runtime);
+      await openClassicSetup(params.deps, { ...params.opts, acceptRisk: true }, params.runtime);
       return { kind: "delegated" };
-    }
-    if (choice === MANUAL_SKIP) {
-      const applySetup =
-        params.deps.applySetup ??
-        (await import("../crestodian/setup-apply.js")).applyCrestodianSetup;
-      const applied = await applySetup({
-        workspace: params.workspace,
-        surface: "cli",
-        runtime: params.runtime,
-      });
-      await params.prompter.note(t("wizard.guided.skipAiLater"), t("wizard.guided.aiAccessTitle"));
-      return { kind: "complete", lines: applied.lines };
     }
     if (choice.startsWith("candidate:")) {
       const kind = choice.slice("candidate:".length);
@@ -269,29 +246,23 @@ async function runGuidedOnboardingFlow(
   opts: OnboardOptions,
   runtime: RuntimeEnv,
   deps: GuidedOnboardingDeps,
-): Promise<void> {
+): Promise<GuidedOnboardingHandoff | null> {
   const onboardHelpers = await import("./onboard-helpers.js");
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  if (snapshot.exists && !snapshot.valid) {
+    // Crestodian needs inference, so malformed config must stay on the classic
+    // doctor's fail-closed path instead of starting an intelligence-free chat.
+    await openClassicSetup(deps, { ...opts, classic: true }, runtime);
+    return null;
+  }
+
   const prompter = await (deps.createPrompter?.() ??
     import("../wizard/clack-prompter.js").then(({ createClackPrompter }) => createClackPrompter()));
   onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.guided.intro"));
   await prompter.note(t("wizard.guided.escapeHatches"), t("wizard.guided.welcomeTitle"));
 
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (snapshot.exists && !snapshot.valid) {
-    await prompter.note(
-      t("wizard.guided.invalidConfigCrestodian"),
-      t("wizard.setup.invalidConfigTitle"),
-    );
-    await openCrestodianChat(
-      deps,
-      opts.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
-      runtime,
-      false,
-    );
-    return;
-  }
   const existingConfig =
     snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
   await requireRiskAcknowledgement({ opts, prompter, config: existingConfig });
@@ -361,38 +332,11 @@ async function runGuidedOnboardingFlow(
     activate,
   });
   if (result.kind === "delegated") {
-    return;
+    return null;
   }
 
   await prompter.note(result.lines.join("\n"), t("wizard.guided.appliedTitle"));
-  await prompter.note(
-    t("wizard.guided.nextSteps", { workspace: shortenHomePath(workspace) }),
-    t("wizard.guided.nextStepsTitle"),
-  );
-  const openChat = await prompter.confirm({
-    message: t("wizard.guided.openChatNow"),
-    initialValue: true,
-  });
-  if (openChat) {
-    const launchTui =
-      deps.launchTui ??
-      (async () => {
-        const { launchTuiCli } = await import("../tui/tui-launch.js");
-        const { restoreTerminalState } =
-          await import("../../packages/terminal-core/src/restore.js");
-        // Mirror the classic finalize handoff (setup.finalize.ts): the TUI must
-        // not inherit the wizard prompter's raw/paused terminal state.
-        restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
-        try {
-          await launchTuiCli({ deliver: false });
-        } finally {
-          restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
-        }
-      });
-    await launchTui();
-    return;
-  }
-  await prompter.outro(t("wizard.guided.complete"));
+  return { workspace };
 }
 
 export async function runGuidedOnboarding(
@@ -405,8 +349,14 @@ export async function runGuidedOnboarding(
     runtime.exit(1);
     return;
   }
-  await runInteractiveOnboarding(
-    async () => await runGuidedOnboardingFlow(opts, runtime, deps),
-    runtime,
-  );
+  const state: { handoff: GuidedOnboardingHandoff | null } = { handoff: null };
+  await runInteractiveOnboarding(async () => {
+    state.handoff = await runGuidedOnboardingFlow(opts, runtime, deps);
+  }, runtime);
+  const handoff = state.handoff;
+  if (handoff) {
+    // The live completion makes conversational setup safe. Start only after
+    // the wizard lifecycle restores stdin so Crestodian receives a clean TTY.
+    await openCrestodianChat(deps, handoff.workspace, runtime, true);
+  }
 }

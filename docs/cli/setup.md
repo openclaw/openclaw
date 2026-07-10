@@ -9,8 +9,9 @@ title: "Setup"
 
 # `openclaw setup`
 
-`openclaw setup` runs the same guided onboarding flow as `openclaw onboard`
-(auth, workspace, Gateway, channels, skills, health). Use `--baseline` when you
+`openclaw setup` runs the same guided onboarding flow as `openclaw onboard`:
+it verifies and persists inference first, then starts Crestodian to configure
+the workspace, Gateway, channels, skills, and health. Use `--baseline` when you
 only need to initialize config/workspace folders without the wizard.
 
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
@@ -21,8 +22,8 @@ Tailscale (`--tailscale`), reset (`--reset`, `--reset-scope`), flow
 (`--skip-channels`, `--skip-skills`, `--skip-bootstrap`, `--skip-search`,
 `--skip-health`, `--skip-ui`, `--skip-hooks`). See [Onboard](/cli/onboard) and
 [CLI automation](/start/wizard-cli-automation) for the full flag reference and
-non-interactive examples; `openclaw onboard --modern` (the Crestodian
-conversational assistant) has no `setup` equivalent.
+non-interactive examples. `openclaw onboard --modern` is the compatibility
+alias for the inference-gated Crestodian assistant and has no `setup` equivalent.
 
 <Note>
 `openclaw setup` is for mutable config installs. In Nix mode (`OPENCLAW_NIX_MODE=1`) OpenClaw refuses setup writes because the config file is managed by Nix. Use the first-party [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) or the equivalent source config for another Nix package.

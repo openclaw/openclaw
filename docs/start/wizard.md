@@ -1,5 +1,5 @@
 ---
-summary: "CLI onboarding: guided setup for gateway, workspace, channels, and skills"
+summary: "CLI onboarding: verify inference, then hand remaining setup to Crestodian"
 read_when:
   - Running or configuring CLI onboarding
   - Setting up a new machine
@@ -13,20 +13,22 @@ openclaw onboard
 
 CLI onboarding is the recommended terminal setup path on macOS, Linux, and
 Windows (native or WSL2). By default it detects AI access already available on
-the machine, verifies it with a real completion, and configures a workspace and
-local Gateway. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
+the machine, verifies it with a real completion, and starts Crestodian to
+configure the workspace, Gateway, and optional features. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
 the `--baseline` config-only variant). Windows desktop users can also start
 from [Windows Hub](/platforms/windows).
 
-The guided flow offers the classic wizard for provider sign-in, remote Gateway
-setup, channel pairing, daemon controls, skills, and imports. You can also open
-Crestodian chat or skip AI setup and return later.
+Guided onboarding establishes inference first. It detects available AI access,
+requires a real completion, and only then starts [Crestodian](/cli/crestodian)
+to configure the rest of OpenClaw. There is no pre-inference Crestodian or
+skip-AI path in the guided flow.
 
-Guided setup, the classic wizard, and Crestodian chat are interchangeable. The
-guided flow offers chat and classic choices; inside Crestodian, use `open setup
-wizard`, `open classic wizard`, or `open channel wizard for <channel>` to switch
-back. Channel setup that needs secrets always continues in a masked terminal
-wizard.
+The classic wizard remains available for provider sign-in, remote Gateway
+setup, channel pairing, daemon controls, skills, and imports. You can switch to
+it while choosing an inference candidate. After inference passes and
+Crestodian starts, use `open setup wizard`, `open classic wizard`, or `open
+channel wizard for <channel>` to switch flows. Channel setup that needs secrets
+always continues in a masked terminal wizard.
 
 <Info>
 Fastest first chat: finish guided setup, run `openclaw dashboard`, and chat in
@@ -74,12 +76,13 @@ Plain `openclaw onboard` follows this path:
    AI CLIs.
 3. Test the recommended candidate with a real completion. On failure, show the
    reason and continue to the next usable candidate.
-4. If detection is exhausted, try another detected candidate, enter a provider
-   API key in a masked prompt, open Crestodian chat, use the classic wizard, or
-   skip AI setup.
-5. Persist the model, credential, workspace, and QuickStart Gateway settings
-   only after a passing test. Then install/start the Gateway service and probe
-   it for reachability.
+4. If detection is exhausted, retry a detected candidate, enter a provider API
+   key in a masked prompt, or switch to the classic wizard. Guided onboarding
+   does not offer Crestodian or a skip-AI exit before inference works.
+5. Persist only the verified model route and any credential/plugin state it
+   requires. Workspace and Gateway settings remain untouched.
+6. Start Crestodian with the verified model so it can configure the workspace,
+   Gateway, channels, agents, plugins, and the remaining optional setup.
 
 Re-running the command on a configured installation tests the current default
 model first, making the guided flow a verification and repair pass. A failing
@@ -133,7 +136,9 @@ Local mode (default) walks through these steps:
    point at an environment variable or a configured provider ref (`file` or
    `exec`), with a fast preflight check before saving. After model/auth setup,
    the wizard offers an optional live completion test; a failure can return to
-   model/auth setup once or be ignored without blocking the rest of onboarding.
+   model/auth setup once or be ignored without blocking the rest of the
+   classic wizard. Ignoring it does not unlock Crestodian; conversational setup
+   still requires a passing inference check.
 2. **Workspace** - directory for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** - port, bind address, auth mode, Tailscale exposure. In
    interactive token mode, choose plaintext token storage (default) or opt
@@ -163,9 +168,10 @@ config is invalid or contains legacy keys, onboarding asks you to run
 
 `--flow import` runs a detected migration flow (for example Hermes) in the
 classic wizard instead of fresh setup; see [Migrate](/cli/migrate) and the migration guides under
-[Install](/install/migrating-hermes). `openclaw onboard --modern` starts
-[Crestodian](/cli/crestodian), a conversational setup/repair assistant.
-`openclaw crestodian` opens the same assistant directly.
+[Install](/install/migrating-hermes). `openclaw onboard --modern` is a
+compatibility alias for [Crestodian](/cli/crestodian). It uses the same
+inference gate as `openclaw crestodian`: verified inference starts the
+assistant, while an interactive failure returns to guided inference setup.
 
 ## Add another agent
 

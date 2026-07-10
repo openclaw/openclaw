@@ -5,7 +5,7 @@
   "dockerDefaultWorkspace": "/tmp/openclaw-first-run",
   "dockerAgentWorkspace": "/tmp/openclaw-reef",
   "agentId": "reef",
-  "model": "openai/gpt-5.2",
+  "model": "claude-cli/claude-opus-4-8",
   "discordEnv": "DISCORD_BOT_TOKEN",
   "discordToken": "openclaw-crestodian-discord-e2e-token",
   "commands": [

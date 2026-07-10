@@ -1,38 +1,42 @@
 ---
-summary: "CLI reference and security model for Crestodian, the configless-safe setup and repair helper"
+summary: "CLI reference and security model for the inference-backed Crestodian setup and repair helper"
 read_when:
-  - You run openclaw with no command after setup and want to understand Crestodian
-  - You need a configless-safe way to inspect or repair OpenClaw
+  - You finished inference setup and want Crestodian to configure the rest
+  - You need to inspect or repair OpenClaw with the local setup agent
   - You are designing or enabling message-channel rescue mode
 title: "Crestodian"
 ---
 
 # `openclaw crestodian`
 
-Crestodian is OpenClaw's local setup, repair, and configuration helper. It stays reachable when the normal agent path is broken: it can run when `openclaw.json` is missing or invalid, the Gateway is down, plugin command registration is unavailable, or no agent is configured yet.
+Conversational Crestodian is OpenClaw's local setup, repair, and configuration
+agent. It starts only after the effective default model completes a real turn.
+Fresh installs establish inference first; malformed config stays on the
+classic doctor path.
 
 ## When it starts
 
 Running `openclaw` with no subcommand routes based on config state:
 
 - Config missing, or exists with no authored settings (empty, or only `$schema`/`meta` keys): starts guided onboarding with live AI verification.
-- Config exists but fails validation: starts Crestodian.
-- Config exists and is valid: opens the normal agent TUI (against a reachable configured Gateway, or locally if none is reachable). Use `/crestodian` inside the TUI, or run `openclaw crestodian` directly, to reach Crestodian.
+- Config exists but fails validation: starts classic onboarding, which reports the issues and directs you to `openclaw doctor`.
+- Config exists and is valid: opens the normal agent TUI. A reachable
+  configured Gateway whose default agent has a model goes directly to that UI
+  without onboarding or Crestodian. Use `/crestodian` inside the TUI, or run
+  `openclaw crestodian` directly, to reach Crestodian later.
 
-Running `openclaw crestodian` always starts Crestodian explicitly, regardless of config state. `openclaw --help` and `openclaw --version` keep their normal fast paths.
+Running `openclaw crestodian` first live-tests the configured default model. A passing turn starts Crestodian. An interactive failure opens guided inference setup and hands off to Crestodian after a candidate passes. One-shot, JSON, and other noninteractive requests fail with instructions to run `openclaw onboard` when inference is unavailable. `openclaw --help` and `openclaw --version` keep their normal fast paths.
 
-Noninteractive bare `openclaw` (no TTY) exits with a short message instead of printing root help: it points to non-interactive onboarding on a fresh install, to `openclaw crestodian --message "status"` when config is invalid, or to `openclaw agent --local ...` when config is valid.
+Noninteractive bare `openclaw` (no TTY) exits with a short message instead of printing root help: it points to non-interactive onboarding on a fresh or invalid install, or to `openclaw agent --local ...` when config is valid.
 
-`openclaw onboard --modern` starts Crestodian directly. Plain `openclaw onboard`
-starts guided onboarding; `openclaw onboard --classic` opens the full
-step-by-step wizard.
+`openclaw onboard --modern` remains a compatibility alias for Crestodian, but uses the same inference gate: working inference opens the chat, interactive failures start guided inference setup, and noninteractive failures exit with onboarding guidance. `openclaw onboard --classic` opens the full step-by-step wizard.
 
 ## What Crestodian shows
 
 Interactive Crestodian opens the same TUI shell as `openclaw tui`, with a Crestodian chat backend. The startup greeting covers:
 
 - config validity and the default agent
-- the model or deterministic planner path Crestodian is using
+- the verified model Crestodian is using
 - Gateway reachability from the first startup probe
 - the next recommended debug action
 
@@ -100,7 +104,7 @@ Starting guided channel setup (`connect telegram`) or model-provider setup (`con
 
 Persistent, require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, install or uninstall plugins, run doctor repairs that rewrite config or state.
 
-Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list, and anything else is judged by a separate host-run model call that sees only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Ambiguous replies keep the proposal pending and the conversation asks again. When no model is usable, only the closed deterministic list applies.
+Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list, and anything else is judged by a separate host-run model call that sees only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Ambiguous replies keep the proposal pending and the conversation asks again.
 
 Applied writes are recorded in `~/.openclaw/audit/crestodian.jsonl`. Discovery is not audited; only applied operations and writes are.
 
@@ -133,7 +137,7 @@ gateway/app chat that supports sensitive replies hosts the same steps inline.
 
 ## Setup bootstrap
 
-`setup` is the chat-first onboarding bootstrap. It writes only through typed config operations and asks for approval first.
+`setup` configures the remaining workspace and Gateway state after guided onboarding has already established inference. It writes only through typed config operations and asks for approval first.
 
 ```text
 setup
@@ -141,30 +145,23 @@ setup workspace ~/Projects/work
 setup workspace ~/Projects/work model openai/gpt-5.5
 ```
 
-When no model is configured, setup picks the first verified usable backend in this order and tells you what it chose:
+If inference is missing or its live check fails, leave Crestodian and run `openclaw onboard`. Guided onboarding detects configured models, API keys, and authenticated local CLIs, asks each candidate for a real reply, and persists only a passing route. Crestodian starts immediately after that boundary and can then configure channels, agents, plugins, and other optional features.
 
-1. Existing explicit model, if already configured.
-2. `OPENAI_API_KEY` -> `openai/gpt-5.5`
-3. `ANTHROPIC_API_KEY` -> `anthropic/claude-opus-4-8`
-4. Claude Code CLI -> `claude-cli/claude-opus-4-8`
-5. Codex -> `openai/gpt-5.5` through the Codex app-server harness
-6. Gemini CLI -> `google-gemini-cli/gemini-3.1-pro-preview`
-
-Credential detection only ranks candidates and skips known logouts. Before setup saves an implicit model, it asks the candidate for a real reply; failures leave no model configuration behind and setup tries the next candidate. An installed CLI with uncertain login state can therefore be tested automatically, but it is never persisted unless the completion succeeds.
-
-If none are available, setup still writes the workspace and Gateway configuration, then asks whether to configure a model provider. Accepting opens the normal onboarding provider/auth and default-model steps. Declining leaves Crestodian in deterministic mode; exact setup and repair commands still work, but the normal agent cannot answer until a provider and default model are configured. Run `configure model provider` later to reopen the provider flow.
-
-The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every candidate backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never changes config; the app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
+The macOS app skips this ladder entirely when it reaches a configured Gateway
+whose default agent already has a working model; it opens the normal agent UI.
+For a fresh or incomplete Gateway, the app drives the inference ladder through
+the `crestodian.setup.detect` and `crestodian.setup.activate` Gateway methods:
+detect lists every candidate backend it finds, activate live-tests one
+candidate (a real "reply with OK" completion), and only persists the model,
+credential, and provider/runtime state needed for that route after the test passes. Workspace and Gateway defaults remain for Crestodian. A failing candidate
+never changes config; the app automatically walks down the ladder and finally
+offers a manual key/token step populated from the Gateway's active
+text-inference provider plugins. The selected provider owns its starter model
+and config, and the credential is verified the same way before it is saved.
 
 ## AI conversation
 
-Interactive Crestodian is AI-only: every message — including ones that look like typed commands — runs through the same embedded agent loop as regular OpenClaw agents, restricted to one ring-zero `crestodian` tool that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so the custodian has real multi-turn memory. It first uses the configured OpenClaw model; with no usable model it falls back to a local runtime already present on the machine, in setup-ladder order:
-
-- Claude Code CLI: `claude-cli/claude-opus-4-8` (agent loop; the ring-zero tool is served over MCP, see the trust model below)
-- Codex app-server harness: `openai/gpt-5.5` (agent loop with an enforced single-tool allow-list)
-- Gemini CLI: `google-gemini-cli/gemini-3.1-pro-preview` (agent loop; ring-zero tool over MCP)
-
-When the agent loop is unavailable, Crestodian degrades to a bounded single-turn planner, and only without any usable model at all to deterministic typed commands. The planner cannot mutate config directly; it must translate the request into one of Crestodian's typed commands, and normal approval/audit rules apply. Crestodian prints the model it used and the interpreted command before running anything. Fallback planner turns are temporary, tool-disabled where the runtime supports it, and use a temporary workspace/session.
+Interactive Crestodian is AI-only: every message — including ones that look like typed commands — runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero `crestodian` tool that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so Crestodian has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
 
 The typed command grammar is anchored: a message either matches a command exactly or it is conversation. Questions and natural phrasing ("why did my gateway stop?") never trigger operations — they are answered by the AI.
 
@@ -223,6 +220,10 @@ switch to main agent
 
 Message rescue mode is the message-channel entrypoint for Crestodian: use it when your normal agent is dead but a trusted channel (for example WhatsApp) still receives commands.
 
+This is a deterministic emergency command handler, not the conversational
+Crestodian agent. It does not bootstrap a fresh setup or relax the inference
+gate for Crestodian chat.
+
 Supported command: `/crestodian <request>`. Rescue accepts the exact typed command grammar only — natural language is rejected with a hint, never guessed into an operation, and no model is ever consulted.
 
 ```text
@@ -280,25 +281,24 @@ Remote rescue is covered by the Docker lane:
 pnpm test:docker:crestodian-rescue
 ```
 
-Configless local planner fallback is covered by:
-
-```bash
-pnpm test:docker:crestodian-planner
-```
-
 An opt-in live channel command-surface smoke checks `/crestodian status` plus a persistent approval roundtrip through the rescue handler:
 
 ```bash
 pnpm test:live:crestodian-rescue-channel
 ```
 
-Configless setup through explicit Crestodian commands is covered by:
+Inference-first setup through explicit Crestodian commands is covered by:
 
 ```bash
 pnpm test:docker:crestodian-first-run
 ```
 
-That lane starts with an empty state dir, verifies the modern onboard Crestodian entrypoint, sets the default model, creates an additional agent, configures Discord through a plugin enablement plus token SecretRef, validates config, and checks the audit log. QA Lab has a repo-backed scenario for the same Ring 0 flow:
+That packaged-CLI lane starts with an empty state dir and proves Crestodian
+fails closed without inference. It then live-activates a fake Claude inference
+backend, verifies the probe, and only afterward runs Crestodian commands to set
+the workspace and model, create an additional agent, configure Discord through
+a plugin enablement plus token SecretRef, validate config, and check the audit
+log. The QA Lab scenario below redirects to the same Docker lane:
 
 ```bash
 pnpm openclaw qa suite --scenario crestodian-ring-zero-setup

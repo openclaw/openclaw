@@ -1,5 +1,5 @@
 // crestodian.chat handler tests: session reuse, reset, and action mapping.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
 import {
   getCommandLaneSnapshot,
@@ -13,11 +13,13 @@ import type { GatewayRequestContext } from "./types.js";
 const setupInferenceMocks = vi.hoisted(() => ({
   activateSetupInference: vi.fn(),
   detectSetupInference: vi.fn(),
+  verifySetupInference: vi.fn(),
 }));
 
 vi.mock("../../crestodian/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
   detectSetupInference: setupInferenceMocks.detectSetupInference,
+  verifySetupInference: setupInferenceMocks.verifySetupInference,
 }));
 
 type RespondCall = {
@@ -47,9 +49,18 @@ function seededSession(overrides?: Partial<CrestodianChatSession>): CrestodianCh
   };
 }
 
+beforeEach(() => {
+  setupInferenceMocks.verifySetupInference.mockResolvedValue({
+    ok: true,
+    modelRef: "openai/gpt-5.5",
+    latencyMs: 10,
+  });
+});
+
 afterEach(() => {
   setupInferenceMocks.activateSetupInference.mockReset();
   setupInferenceMocks.detectSetupInference.mockReset();
+  setupInferenceMocks.verifySetupInference.mockReset();
   resetCommandQueueStateForTest();
 });
 
@@ -71,6 +82,54 @@ async function callChat(
 }
 
 describe("crestodian.chat", () => {
+  it("refuses to create a session before inference is available", async () => {
+    setupInferenceMocks.verifySetupInference.mockResolvedValueOnce({
+      ok: false,
+      status: "unavailable",
+      error: "no configured model",
+    });
+    const sessions = new Map<string, CrestodianChatSession>();
+
+    const call = await callChat(makeContext(sessions), { sessionId: "s1" });
+
+    expect(call).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Crestodian requires working inference: no configured model",
+      },
+    });
+    expect(sessions.size).toBe(0);
+  });
+
+  it("coalesces concurrent initialization for the same session", async () => {
+    const started = createDeferred();
+    const release = createDeferred();
+    setupInferenceMocks.verifySetupInference.mockImplementation(async () => {
+      started.resolve();
+      await release.promise;
+      return {
+        ok: true,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 10,
+      };
+    });
+    const sessions = new Map<string, CrestodianChatSession>();
+    const context = makeContext(sessions);
+
+    const first = callChat(context, { sessionId: "shared" });
+    await started.promise;
+    const second = callChat(context, { sessionId: "shared" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release.resolve();
+    const [firstCall, secondCall] = await Promise.all([first, second]);
+
+    expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
+    expect(sessions.size).toBe(1);
+    expect(firstCall.ok).toBe(true);
+    expect(secondCall.ok).toBe(true);
+  });
+
   it("tracks setup detection until its RPC response is sent", async () => {
     const started = createDeferred();
     const release = createDeferred();

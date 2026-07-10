@@ -237,7 +237,6 @@ export const en = {
       aiAccessTitle: "AI access",
       apiKeyPrompt: "API key or token for {label}",
       appliedTitle: "Setup applied",
-      complete: "OpenClaw is ready.",
       detected: "AI detection complete.",
       detectedCandidate: "{label} — {detail}{recommended}",
       detectedTitle: "AI found",
@@ -245,8 +244,7 @@ export const en = {
       enterApiKey: "Enter API key — {label}",
       existingModelKept:
         "Your configured default model was kept unchanged. Choose how to continue below — retry it, connect another provider, or exit. The check runs outside your workspace, so a workspace-plugin model can fail here while still working in the agent.",
-      escapeHatches:
-        "For the full step-by-step wizard, run `openclaw onboard --classic`. You can open plain-language setup help anytime with `openclaw crestodian`.",
+      escapeHatches: "For the full step-by-step wizard, run `openclaw onboard --classic`.",
       failureAuth: "Authentication failed. Sign in again or check the key.",
       failureBilling: "Billing is not active for this model or account.",
       failureFormat: "The model did not return a usable reply.",
@@ -256,20 +254,10 @@ export const en = {
       failureUnknown: "The completion failed for an unknown reason.",
       foundNothing: "No existing AI access was detected on this machine.",
       intro: "Connect your AI",
-      invalidConfigCrestodian:
-        "OpenClaw config is invalid. Opening Crestodian to inspect and repair it before onboarding writes anything.",
       manualChoice: "How would you like to connect AI?",
-      nextSteps:
-        "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw crestodian` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
-      nextStepsTitle: "Next steps",
-      openChatNow: "Open the chat now?",
-      openCrestodian: "Open Crestodian chat (help in plain language)",
       recommendedSuffix: " — recommended",
       repliedIn: "AI check: replied in {seconds}s",
       retryCandidate: "Retry {label} ({detail})",
-      skipAi: "Skip AI setup for now",
-      skipAiLater:
-        "To add AI later, set OPENAI_API_KEY or ANTHROPIC_API_KEY, or install and log into codex, claude, or gemini. Then re-run `openclaw onboard`.",
       testFailed: "AI check failed.",
       testFailure: "✗ {label}: {reason}\n{detail}",
       testPassed: "AI check passed.",

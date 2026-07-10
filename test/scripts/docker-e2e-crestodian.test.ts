@@ -12,15 +12,16 @@ describe("Crestodian Docker E2E scripts", () => {
     const spec = readScript("scripts/e2e/crestodian-first-run-spec.json");
 
     expect(source).toContain("../../../../dist/cli/run-main.js");
-    expect(source).toContain("../../../../dist/crestodian/crestodian.js");
+    expect(source).toContain("../../../../dist/crestodian/setup-inference.js");
     expect(source).toContain("shouldStartOnboardingForFreshInstall");
-    expect(source).toContain("shouldStartCrestodianForModernOnboard");
-    expect(source).toContain('runCli(["node", "openclaw", "onboard"');
-    expect(source).toContain("runCrestodian(");
-    expect(source).toContain("Config: missing");
+    expect(source).toContain("Crestodian did not fail closed without inference");
+    expect(source).toContain("activateSetupInference({");
+    expect(source).toContain('runPackagedCli(["crestodian", "--message", "overview"])');
+    expect(source).toContain("inference activation did not send the live model probe");
     expect(source).toContain("Crestodian first-run Docker E2E passed");
     expect(spec).toContain('"auditOperations"');
     expect(spec).toContain('"crestodian.setup"');
+    expect(spec).toContain('"model": "claude-cli/claude-opus-4-8"');
   });
 
   it("keeps planner fallback checks wired to packaged Crestodian assistant flow", () => {
