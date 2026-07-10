@@ -2835,19 +2835,37 @@ async function maybeRestartService(params: {
   }
 
   if (!params.opts.json) {
+    const versionChanged =
+      params.result.before?.version &&
+      params.result.after?.version &&
+      params.result.before.version !== params.result.after.version;
     defaultRuntime.log("");
-    defaultRuntime.log(theme.muted("Gateway: restart skipped (--no-restart)."));
+    defaultRuntime.log(
+      versionChanged
+        ? theme.warn(
+            "Gateway: --no-restart set, but the installed version changed. Restart required to avoid stale module imports (issue #92241).",
+          )
+        : theme.muted("Gateway: restart skipped (--no-restart)."),
+    );
     if (params.result.mode === "npm" || params.result.mode === "pnpm") {
       defaultRuntime.log(
-        theme.muted(
-          `Tip: Run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\`, then \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\` to apply updates to a running gateway.`,
-        ),
+        versionChanged
+          ? theme.warn(
+              `Run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\`, then \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\` to apply the updated modules to the running gateway.`,
+            )
+          : theme.muted(
+              `Tip: Run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\`, then \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\` to apply updates to a running gateway.`,
+            ),
       );
     } else {
       defaultRuntime.log(
-        theme.muted(
-          `Tip: Run \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\` to apply updates to a running gateway.`,
-        ),
+        versionChanged
+          ? theme.warn(
+              `Run \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\` to apply the updated modules to the running gateway.`,
+            )
+          : theme.muted(
+              `Tip: Run \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\` to apply updates to a running gateway.`,
+            ),
       );
     }
   }

@@ -6647,6 +6647,31 @@ describe("update-cli", () => {
       },
     },
     {
+      name: "warns about stale gateway when --no-restart and version changed",
+      run: async () => {
+        vi.mocked(runGatewayUpdate).mockResolvedValue(
+          makeOkUpdateResult({
+            mode: "npm",
+            before: { version: "1.0.0" },
+            after: { version: "2.0.0" },
+          }),
+        );
+        serviceLoaded.mockResolvedValue(true);
+
+        await updateCommand({ restart: false });
+      },
+      assert: () => {
+        const logOutput = vi
+          .mocked(defaultRuntime.log)
+          .mock.calls.map((call) => String(call[0]))
+          .join("\n");
+        expect(logOutput).toContain("--no-restart set, but the installed version changed");
+        expect(logOutput).toContain("stale module imports (issue #92241)");
+        expect(logOutput).toContain("openclaw doctor");
+        expect(logOutput).toContain("openclaw gateway restart");
+      },
+    },
+    {
       name: "skips success message when restart does not run",
       run: async () => {
         vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
