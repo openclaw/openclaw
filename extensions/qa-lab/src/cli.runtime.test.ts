@@ -123,6 +123,8 @@ import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js"
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import type { QaProviderModeInput } from "./run-config.js";
 
+const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
+
 function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const [arg] = calls[0] ?? [];
@@ -2500,8 +2502,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: DEFAULT_LIVE_FRONTIER_MODEL,
+      alternateModel: DEFAULT_LIVE_FRONTIER_MODEL,
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
