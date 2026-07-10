@@ -11,6 +11,7 @@ import {
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  isSessionToolsVisibilityConfigured,
   resolveEffectiveSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
 import { readQmdSessionArtifactIdentity } from "./qmd-session-artifacts.js";
@@ -55,6 +56,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     cfg: params.cfg,
     sandboxed: params.sandboxed,
   });
+  const visibilityDefaulted = !isSessionToolsVisibilityConfigured(params.cfg);
   const a2aPolicy = createAgentToAgentPolicy(params.cfg);
   const requesterAgentId = params.requesterSessionKey
     ? resolveSessionAgentId({
@@ -115,6 +117,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
           guard,
           sandboxed: params.sandboxed,
           visibility,
+          visibilityDefaulted,
           authoritative: true,
         })
       ) {
@@ -182,6 +185,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
         guard,
         sandboxed: params.sandboxed,
         visibility,
+        visibilityDefaulted,
         authoritative,
       })
     ) {
@@ -203,12 +207,19 @@ function isMemoryRecallAllowed(params: {
   guard: { check: (key: string) => { allowed: boolean } };
   sandboxed: boolean;
   visibility: string;
+  visibilityDefaulted: boolean;
   authoritative: boolean;
 }): boolean {
-  // The bypass exists only for the default "tree" subtree semantics, which
-  // made corpus=sessions recall return nothing (#103732). An operator's
-  // explicit stricter mode (e.g. "self") and sandboxed clamps keep the guard.
-  if (!params.sandboxed && params.visibility === "tree" && params.authoritative) {
+  // The bypass exists only for the *defaulted* "tree" subtree semantics,
+  // which made corpus=sessions recall return nothing (#103732). Any explicit
+  // operator choice — including "tree" itself — keeps the documented
+  // session-tree boundary, as do sandboxed clamps.
+  if (
+    !params.sandboxed &&
+    params.visibilityDefaulted &&
+    params.visibility === "tree" &&
+    params.authoritative
+  ) {
     return params.keys.length > 0;
   }
   return params.keys.some((key) => params.guard.check(key).allowed);

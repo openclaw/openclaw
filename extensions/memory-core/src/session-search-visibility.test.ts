@@ -232,6 +232,35 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toEqual([hit]);
   });
 
+  it("keeps the documented session-tree boundary when tree visibility is explicitly configured", async () => {
+    // An operator who explicitly sets tools.sessions.visibility: "tree" chose
+    // the documented current-session-tree boundary; the recall bypass only
+    // covers the unset default (#103732 review follow-up).
+    combinedSessionStore = {
+      "agent:main:historic": {
+        sessionId: "w1",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/w1.jsonl",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/w1.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "tree" } } });
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+    expect(filtered).toStrictEqual([]);
+  });
+
   it("honors an explicit self visibility over the tree-default recall bypass", async () => {
     combinedSessionStore = {
       "agent:main:historic": {

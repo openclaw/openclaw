@@ -84,6 +84,16 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
   return "tree";
 }
 
+// Distinguishes an operator's explicit visibility choice from the "tree"
+// fallback so default-only relaxations (e.g. memory recall over own-agent
+// transcripts) never widen an explicitly configured boundary.
+export function isSessionToolsVisibilityConfigured(cfg: OpenClawConfig): boolean {
+  const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
+    ?.visibility;
+  const value = normalizeLowercaseStringOrEmpty(raw);
+  return value === "self" || value === "tree" || value === "agent" || value === "all";
+}
+
 /** Resolve visibility after applying sandbox clamps for spawned-session-only agents. */
 export function resolveEffectiveSessionToolsVisibility(params: {
   cfg: OpenClawConfig;
