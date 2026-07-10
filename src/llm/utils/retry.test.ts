@@ -54,4 +54,32 @@ describe("isRetryableAssistantError", () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    "model gpt-5.5-preview-0429 not found",
+    "Image dimensions 1504x1504 exceed the maximum allowed size",
+    "invalid api key sk-proj-abc502xyz",
+  ])(
+    "does not retry permanent errors whose text merely embeds a status-code substring: %s",
+    (text) => {
+      expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+    },
+  );
+
+  it.each([
+    "429 You exceeded your daily request limit. Please try again in 24 hours.",
+    "rate limit reached for requests. Retry after 6h.",
+    "You have hit your allotted requests per day.",
+  ])("does not retry long-window rate limits a sub-15s backoff cannot clear: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
+
+  it.each([
+    "429 Too Many Requests",
+    "HTTP 503 Service Unavailable",
+    "500 Internal Server Error",
+    "Error 502 Bad Gateway",
+  ])("still retries standalone HTTP status codes: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
+  });
 });
