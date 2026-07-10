@@ -186,6 +186,12 @@ describe("ensureConfigReady", () => {
     }
   });
 
+  it("keeps status config guard reads non-observing", async () => {
+    await runEnsureConfigReady(["status"]);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
+  });
+
   it("runs doctor flow when lightweight startup detection finds legacy state", async () => {
     const root = useTempOpenClawHome();
     writeLegacyTaskSidecarMarker(root);
@@ -196,6 +202,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      observe: false,
     });
   });
 
@@ -209,6 +216,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      observe: false,
     });
   });
 
