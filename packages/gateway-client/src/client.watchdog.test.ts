@@ -1,6 +1,7 @@
 // Gateway Client tests cover client.watchdog behavior.
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
+import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient, resolveGatewayClientConnectChallengeTimeoutMs } from "./client.js";
@@ -149,6 +150,38 @@ describe("GatewayClient", () => {
     client.start();
 
     await expect(receivedOrigin).resolves.toBe(`http://127.0.0.1:${port}`);
+    client.stop();
+  });
+
+  test("advertises response replay support while preserving configured capabilities", async () => {
+    const port = await getFreePort();
+    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+    const receivedCaps = new Promise<string[]>((resolve) => {
+      wss?.once("connection", (socket) => {
+        socket.send(
+          JSON.stringify({
+            type: "event",
+            event: "connect.challenge",
+            payload: { nonce: "response-replay-capability-test" },
+          }),
+        );
+        socket.once("message", (data) => {
+          const frame = JSON.parse(rawDataToString(data)) as { params?: { caps?: string[] } };
+          resolve(frame.params?.caps ?? []);
+        });
+      });
+    });
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      connectChallengeTimeoutMs: 0,
+      caps: ["tool-events", GATEWAY_CLIENT_CAPS.RESPONSE_REPLAY],
+    });
+    client.start();
+
+    await expect(receivedCaps).resolves.toEqual([
+      "tool-events",
+      GATEWAY_CLIENT_CAPS.RESPONSE_REPLAY,
+    ]);
     client.stop();
   });
 
@@ -620,6 +653,32 @@ describe("GatewayClient", () => {
 
     await expect(requestPromise).resolves.toEqual({ status: "ok" });
     expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  });
+
+  test("surfaces replayed response metadata on request errors", async () => {
+    const { client, send } = createOpenGatewayClient(25);
+    const requestPromise = client.request("chat.send", { idempotencyKey: "same-key" });
+    const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
+
+    (
+      client as unknown as {
+        handleMessage: (raw: string) => void;
+      }
+    ).handleMessage(
+      JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "cached failure", retryable: true },
+        meta: { replayed: true },
+      }),
+    );
+
+    await expect(requestPromise).rejects.toMatchObject({
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      replayed: true,
+    });
   });
 
   test("aborts in-flight requests from caller AbortSignal", async () => {

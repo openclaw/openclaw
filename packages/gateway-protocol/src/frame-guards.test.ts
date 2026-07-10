@@ -28,6 +28,7 @@ describe("gateway frame guards", () => {
           retryable: true,
           retryAfterMs: 10,
         },
+        meta: { replayed: true },
         futureEnvelopeField: true,
       }),
     ).toBe(true);
@@ -45,6 +46,24 @@ describe("gateway frame guards", () => {
         id: "request-1",
         ok: false,
         error: { code: "UNAVAILABLE", message: "try later", retryAfterMs: -1 },
+      }),
+    ).toBe(false);
+    expect(
+      isGatewayResponseFrame({
+        type: "res",
+        id: "request-1",
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "try later" },
+        meta: { replayed: false },
+      }),
+    ).toBe(false);
+    expect(
+      isGatewayResponseFrame({
+        type: "res",
+        id: "request-1",
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "try later" },
+        meta: { replayed: true, runId: "private-log-field" },
       }),
     ).toBe(false);
   });

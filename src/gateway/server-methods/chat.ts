@@ -345,6 +345,7 @@ function shouldIncludeChatSendAckServerTiming(client?: {
 }
 
 const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
+const REPLAYED_RESPONSE_META = { replayed: true } as const;
 
 function resolveControlUiReconnectResumeParams(
   params: unknown,
@@ -4101,9 +4102,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const cached = context.dedupe.get(`chat:${clientRunId}`);
     if (cached) {
-      respond(cached.ok, cached.payload, cached.error, {
-        cached: true,
-      });
+      respond(cached.ok, cached.payload, cached.error, { cached: true }, REPLAYED_RESPONSE_META);
       return;
     }
 
@@ -4123,10 +4122,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           payload,
         },
       });
-      respond(true, payload, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
+      respond(
+        true,
+        payload,
+        undefined,
+        { cached: true, runId: clientRunId },
+        REPLAYED_RESPONSE_META,
+      );
       return;
     }
 
@@ -4136,26 +4138,35 @@ export const chatHandlers: GatewayRequestHandlers = {
       keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
     if (pendingChatSend) {
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
+      respond(
+        true,
+        { runId: clientRunId, status: "in_flight" as const },
+        undefined,
+        { cached: true, runId: clientRunId },
+        REPLAYED_RESPONSE_META,
+      );
       return;
     }
 
     const activeExisting = context.chatAbortControllers.get(clientRunId);
     if (activeExisting) {
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
+      respond(
+        true,
+        { runId: clientRunId, status: "in_flight" as const },
+        undefined,
+        { cached: true, runId: clientRunId },
+        REPLAYED_RESPONSE_META,
+      );
       return;
     }
     if (context.chatQueuedTurns?.has(clientRunId)) {
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
+      respond(
+        true,
+        { runId: clientRunId, status: "in_flight" as const },
+        undefined,
+        { cached: true, runId: clientRunId },
+        REPLAYED_RESPONSE_META,
+      );
       return;
     }
     // Cached/in-flight retries are already bound to their original target and
@@ -4355,16 +4366,22 @@ export const chatHandlers: GatewayRequestHandlers = {
       gatewayWorkAdmission.release();
       const supersedingCached = supersedingResult ?? context.dedupe.get(`chat:${clientRunId}`);
       if (supersedingCached) {
-        respond(supersedingCached.ok, supersedingCached.payload, supersedingCached.error, {
-          cached: true,
-          runId: clientRunId,
-        });
+        respond(
+          supersedingCached.ok,
+          supersedingCached.payload,
+          supersedingCached.error,
+          { cached: true, runId: clientRunId },
+          REPLAYED_RESPONSE_META,
+        );
         return;
       }
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
+      respond(
+        true,
+        { runId: clientRunId, status: "in_flight" as const },
+        undefined,
+        { cached: true, runId: clientRunId },
+        REPLAYED_RESPONSE_META,
+      );
       return;
     }
     if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
@@ -4385,20 +4402,26 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
       }
       const aborted = context.dedupe.get(`chat:${clientRunId}`);
-      respond(aborted?.ok ?? true, aborted?.payload, aborted?.error, {
-        cached: true,
-        runId: clientRunId,
-      });
+      respond(
+        aborted?.ok ?? true,
+        aborted?.payload,
+        aborted?.error,
+        { cached: true, runId: clientRunId },
+        REPLAYED_RESPONSE_META,
+      );
       return;
     }
     if (!activeRunAbort) {
       gatewayWorkAdmission.release();
       const aborted = context.dedupe.get(`chat:${clientRunId}`);
       if (aborted) {
-        respond(aborted.ok, aborted.payload, aborted.error, {
-          cached: true,
-          runId: clientRunId,
-        });
+        respond(
+          aborted.ok,
+          aborted.payload,
+          aborted.error,
+          { cached: true, runId: clientRunId },
+          REPLAYED_RESPONSE_META,
+        );
         return;
       }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "chat run admission failed"));
@@ -4406,10 +4429,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     if (!activeRunAbort.registered) {
       gatewayWorkAdmission.release();
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
+      respond(
+        true,
+        { runId: clientRunId, status: "in_flight" as const },
+        undefined,
+        { cached: true, runId: clientRunId },
+        REPLAYED_RESPONSE_META,
+      );
       return;
     }
     let releaseGatewayRootContinuation: (() => void) | undefined;

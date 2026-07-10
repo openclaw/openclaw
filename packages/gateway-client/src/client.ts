@@ -1,6 +1,7 @@
 // Gateway Client module implements client behavior.
 import { randomUUID } from "node:crypto";
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
@@ -312,14 +313,16 @@ export class GatewayClientRequestError extends Error {
   readonly details?: unknown;
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
+  readonly replayed: boolean;
 
-  constructor(error: Partial<ErrorShape>) {
+  constructor(error: Partial<ErrorShape>, options?: { replayed?: boolean }) {
     super(formatConnectErrorMessage({ message: error.message, details: error.details }));
     this.name = "GatewayClientRequestError";
     this.gatewayCode = error.code ?? "UNAVAILABLE";
     this.details = error.details;
     this.retryable = error.retryable === true;
     this.retryAfterMs = error.retryAfterMs;
+    this.replayed = options?.replayed === true;
   }
 }
 
@@ -1027,7 +1030,12 @@ export class GatewayClient {
           mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
           instanceId: this.opts.instanceId,
         },
-        caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
+        caps: Array.from(
+          new Set([
+            ...(Array.isArray(this.opts.caps) ? this.opts.caps : []),
+            GATEWAY_CLIENT_CAPS.RESPONSE_REPLAY,
+          ]),
+        ),
         commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
         permissions:
           this.opts.permissions && typeof this.opts.permissions === "object"
@@ -1434,13 +1442,16 @@ export class GatewayClient {
         pending.resolve(parsed.payload);
       } else {
         pending.reject(
-          new GatewayClientRequestError({
-            code: parsed.error?.code,
-            message: parsed.error?.message ?? "unknown error",
-            details: parsed.error?.details,
-            retryable: parsed.error?.retryable,
-            retryAfterMs: parsed.error?.retryAfterMs,
-          }),
+          new GatewayClientRequestError(
+            {
+              code: parsed.error?.code,
+              message: parsed.error?.message ?? "unknown error",
+              details: parsed.error?.details,
+              retryable: parsed.error?.retryable,
+              retryAfterMs: parsed.error?.retryAfterMs,
+            },
+            { replayed: parsed.meta?.replayed === true },
+          ),
         );
       }
     }

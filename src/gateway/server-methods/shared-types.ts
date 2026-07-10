@@ -5,9 +5,9 @@ import type {
   ConnectParams,
   ErrorShape,
   RequestFrame,
+  ResponseFrameMeta,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
-import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { HealthSummary } from "../../commands/health.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -68,7 +68,16 @@ export type RespondFn = (
   ok: boolean,
   payload?: unknown,
   error?: ErrorShape,
-  meta?: Record<string, unknown>,
+  logMeta?: Record<string, unknown>,
+  wireMeta?: ResponseFrameMeta,
+) => void;
+
+/** Plugin responders cannot attach core-owned wire metadata. */
+export type PluginRespondFn = (
+  ok: boolean,
+  payload?: unknown,
+  error?: ErrorShape,
+  logMeta?: Record<string, unknown>,
 ) => void;
 
 /** Minimal hosted Crestodian contract retained by the gateway request router. */
@@ -230,3 +239,16 @@ export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Prom
 
 /** Registry fragment keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;
+
+/** Public plugin handler options with the core-only wire metadata channel removed. */
+export type PluginGatewayRequestHandlerOptions = Omit<GatewayRequestHandlerOptions, "respond"> & {
+  respond: PluginRespondFn;
+};
+
+/** Gateway method implementation exposed to plugins. */
+export type PluginGatewayRequestHandler = (
+  opts: PluginGatewayRequestHandlerOptions,
+) => Promise<void> | void;
+
+/** Public plugin registry fragment keyed by gateway protocol method name. */
+export type PluginGatewayRequestHandlers = Record<string, PluginGatewayRequestHandler>;

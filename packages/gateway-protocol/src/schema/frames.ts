@@ -184,6 +184,14 @@ export const RequestFrameSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Opt-in response metadata safe to expose across the gateway wire boundary. */
+export const ResponseFrameMetaSchema = Type.Object(
+  {
+    replayed: Type.Literal(true),
+  },
+  { additionalProperties: false },
+);
+
 /** Server response frame envelope paired with a prior request id. */
 export const ResponseFrameSchema = Type.Object(
   {
@@ -192,6 +200,7 @@ export const ResponseFrameSchema = Type.Object(
     ok: Type.Boolean(),
     payload: Type.Optional(Type.Unknown()),
     error: Type.Optional(ErrorShapeSchema),
+    meta: Type.Optional(ResponseFrameMetaSchema),
   },
   { additionalProperties: false },
 );
@@ -222,6 +231,7 @@ export type ConnectParams = Static<typeof ConnectParamsSchema>;
 export type HelloOk = Static<typeof HelloOkSchema>;
 export type ErrorShape = Static<typeof ErrorShapeSchema>;
 export type RequestFrame = Static<typeof RequestFrameSchema>;
+export type ResponseFrameMeta = Static<typeof ResponseFrameMetaSchema>;
 export type ResponseFrame = Static<typeof ResponseFrameSchema>;
 export type EventFrame = Static<typeof EventFrameSchema>;
 export type GatewayFrame = Static<typeof GatewayFrameSchema>;

@@ -26,7 +26,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { PluginGatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type {
@@ -2027,7 +2027,7 @@ export type MusicGenerationProviderPlugin = MusicGenerationProvider;
 
 export type OpenClawPluginGatewayMethod = {
   method: string;
-  handler: GatewayRequestHandler;
+  handler: PluginGatewayRequestHandler;
 };
 
 // =============================================================================
@@ -2797,7 +2797,7 @@ export type OpenClawPluginApi = {
    */
   registerGatewayMethod: (
     method: string,
-    handler: GatewayRequestHandler,
+    handler: PluginGatewayRequestHandler,
     opts?: { scope?: OperatorScope },
   ) => void;
   /** Register a read-only external-session catalog with optional native adoption actions. */

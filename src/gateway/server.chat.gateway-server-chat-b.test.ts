@@ -221,8 +221,13 @@ test("chat.send replays a cached result after the session is archived", async ()
       ok: true,
       payload: cachedPayload,
     });
-    const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown; meta?: unknown }> =
-      [];
+    const responses: Array<{
+      ok: boolean;
+      payload?: unknown;
+      error?: unknown;
+      logMeta?: unknown;
+      wireMeta?: unknown;
+    }> = [];
     const { chatHandlers } = await import("./server-methods/chat.js");
 
     await expectDefined(
@@ -237,8 +242,8 @@ test("chat.send replays a cached result after the session is archived", async ()
       },
       client: null,
       isWebchatConnect: () => false,
-      respond: ((ok, payload, error, meta) => {
-        responses.push({ ok, payload, error, meta });
+      respond: ((ok, payload, error, logMeta, wireMeta) => {
+        responses.push({ ok, payload, error, logMeta, wireMeta });
       }) as RespondFn,
       context,
     });
@@ -248,7 +253,8 @@ test("chat.send replays a cached result after the session is archived", async ()
         ok: true,
         payload: cachedPayload,
         error: undefined,
-        meta: { cached: true },
+        logMeta: { cached: true },
+        wireMeta: { replayed: true },
       },
     ]);
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
@@ -2969,6 +2975,7 @@ describe("gateway server chat", () => {
         { runId: "idem-queued-followup", status: "in_flight" },
         undefined,
         { cached: true, runId: "idem-queued-followup" },
+        { replayed: true },
       );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 

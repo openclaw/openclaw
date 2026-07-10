@@ -77,6 +77,7 @@ export type GatewayClientInfo = {
 /** Capability flags a client may advertise during the gateway handshake. */
 export const GATEWAY_CLIENT_CAPS = {
   INLINE_WIDGETS: "inline-widgets",
+  RESPONSE_REPLAY: "response-replay",
   TASK_SUGGESTIONS: "task-suggestions",
   TOOL_EVENTS: "tool-events",
 } as const;

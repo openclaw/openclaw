@@ -21,6 +21,7 @@ import {
   validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
+  validateResponseFrame,
   validateTalkCatalogResult,
   validateTalkConfigResult,
   validateTalkEvent,
@@ -171,6 +172,22 @@ describe("lazy protocol validators", () => {
           content: "content",
         })),
       }),
+    ).toBe(false);
+  });
+
+  it("accepts only the typed response replay metadata contract", () => {
+    const response = {
+      type: "res",
+      id: "request-1",
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "try later", retryable: true },
+    };
+
+    expect(validateResponseFrame({ ...response, meta: { replayed: true } })).toBe(true);
+    expect(validateResponseFrame({ ...response, meta: { replayed: false } })).toBe(false);
+    expect(validateResponseFrame({ ...response, meta: { cached: true } })).toBe(false);
+    expect(
+      validateResponseFrame({ ...response, meta: { replayed: true, runId: "private-log-field" } }),
     ).toBe(false);
   });
 

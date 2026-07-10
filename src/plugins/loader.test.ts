@@ -2069,6 +2069,43 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
+      label: "keeps gateway wire metadata owned by core responders",
+      run: async () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "wire-meta-gateway-method",
+          filename: "wire-meta-gateway-method.cjs",
+          body: `module.exports = {
+  id: "wire-meta-gateway-method",
+  register(api) {
+    api.registerGatewayMethod("wire-meta-gateway-method.status", ({ respond }) => {
+      respond(true, { status: "ready" }, undefined, { audit: "kept" }, { replayed: true });
+    });
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["wire-meta-gateway-method"],
+            },
+          },
+        });
+
+        const responses: unknown[][] = [];
+        await registry.gatewayHandlers["wire-meta-gateway-method.status"]?.({
+          params: {},
+          respond: (...args: unknown[]) => responses.push(args),
+        } as never);
+
+        expect(responses).toEqual([[true, { status: "ready" }, undefined, { audit: "kept" }]]);
+      },
+    },
+    {
       label: "coerces reserved gateway method namespaces to operator.admin",
       run: () => {
         useNoBundledPlugins();

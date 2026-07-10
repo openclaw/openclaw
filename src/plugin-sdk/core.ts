@@ -175,7 +175,7 @@ export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 export type { PollInput } from "../polls.js";
 export { isSecretRef } from "../config/types.secrets.js";
-export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+export type { PluginGatewayRequestHandlerOptions as GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 export type {
   ChannelOutboundSessionRoute,
   ChannelMessagingAdapter,

@@ -31,7 +31,11 @@ import {
 } from "../context-engine/registry.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
+import type {
+  GatewayRequestHandler,
+  PluginGatewayRequestHandler,
+  PluginRespondFn,
+} from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -429,12 +433,14 @@ function resolvePluginRegistrationCapabilities(
   };
 }
 
-function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
+function adaptPluginGatewayMethodHandler(
+  handler: PluginGatewayRequestHandler,
+): GatewayRequestHandler {
   return async (opts) => {
     let responded = false;
-    const respond: RespondFn = (ok, payload, error, meta) => {
+    const respond: PluginRespondFn = (ok, payload, error, logMeta) => {
       responded = true;
-      opts.respond(ok, payload, error, meta);
+      opts.respond(ok, payload, error, logMeta);
     };
     const result = (await handler({ ...opts, respond })) as unknown;
     if (!responded && result !== undefined) {
@@ -812,7 +818,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerGatewayMethod = (
     record: PluginRecord,
     method: string,
-    handler: GatewayRequestHandler,
+    handler: PluginGatewayRequestHandler,
     opts?: { scope?: OperatorScope },
   ) => {
     const trimmed = method.trim();
