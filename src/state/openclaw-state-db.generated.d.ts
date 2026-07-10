@@ -450,6 +450,7 @@ export interface DeviceIdentities {
 export interface DevicePairingPaired {
   approved_at_ms: number;
   approved_scopes_json: string | null;
+  approved_via: string | null;
   client_id: string | null;
   client_mode: string | null;
   created_at_ms: number;
@@ -458,6 +459,8 @@ export interface DevicePairingPaired {
   display_name: string | null;
   last_seen_at_ms: number | null;
   last_seen_reason: string | null;
+  node_surface_json: string | null;
+  pending_node_surface_json: string | null;
   platform: string | null;
   public_key: string;
   remote_ip: string | null;
@@ -476,6 +479,7 @@ export interface DevicePairingPending {
   is_repair: number | null;
   platform: string | null;
   public_key: string;
+  refreshed_at_ms: number | null;
   remote_ip: string | null;
   request_id: string;
   role: string | null;
@@ -709,50 +713,6 @@ export interface NodeHostConfig {
   version: number;
 }
 
-export interface NodePairingPaired {
-  approved_at_ms: number;
-  bins_json: string | null;
-  caps_json: string | null;
-  client_id: string | null;
-  client_mode: string | null;
-  commands_json: string | null;
-  core_version: string | null;
-  created_at_ms: number;
-  device_family: string | null;
-  display_name: string | null;
-  last_connected_at_ms: number | null;
-  last_seen_at_ms: number | null;
-  last_seen_reason: string | null;
-  model_identifier: string | null;
-  node_id: string;
-  permissions_json: string | null;
-  platform: string | null;
-  remote_ip: string | null;
-  token: string;
-  ui_version: string | null;
-  version: string | null;
-}
-
-export interface NodePairingPending {
-  caps_json: string | null;
-  client_id: string | null;
-  client_mode: string | null;
-  commands_json: string | null;
-  core_version: string | null;
-  device_family: string | null;
-  display_name: string | null;
-  model_identifier: string | null;
-  node_id: string;
-  permissions_json: string | null;
-  platform: string | null;
-  remote_ip: string | null;
-  request_id: string;
-  silent: number | null;
-  ts: number;
-  ui_version: string | null;
-  version: string | null;
-}
-
 export interface OfficialExternalPluginCatalogSnapshots {
   body: string;
   checksum: string;
@@ -761,6 +721,11 @@ export interface OfficialExternalPluginCatalogSnapshots {
   last_modified: string | null;
   saved_at: string;
   status: number;
+  trust_key_id: string | null;
+  trust_mode: string | null;
+  trust_signature_count: number | null;
+  trust_threshold: number | null;
+  trust_verified_at: string | null;
   updated_at_ms: number;
 }
 
@@ -1102,8 +1067,6 @@ export interface DB {
   model_capability_cache: ModelCapabilityCache;
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
-  node_pairing_paired: NodePairingPaired;
-  node_pairing_pending: NodePairingPending;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
