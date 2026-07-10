@@ -1421,7 +1421,7 @@ describe("gateway server chat", () => {
 
   test("chat.send does not recreate a session deleted while admission waits", async () => {
     const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
-    const releaseMutation = createDeferred();
+    const performDeletion = createDeferred();
     let mutation: Promise<void> | undefined;
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
@@ -1433,7 +1433,10 @@ describe("gateway server chat", () => {
           },
         },
       });
-      const { loadSessionEntry } = await import("./session-utils.js");
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry }] = await Promise.all([
+        import("../config/sessions/session-accessor.js"),
+        import("./session-utils.js"),
+      ]);
       const seededSession = loadSessionEntry("main");
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
@@ -1443,7 +1446,22 @@ describe("gateway server chat", () => {
         identities: [seededSession.canonicalKey, seededSessionId],
         run: async () => {
           mutationStarted.resolve();
-          await releaseMutation.promise;
+          await performDeletion.promise;
+          // Use the resolved store target: writeSessionStore also rewrites the
+          // suite config, adding an unrelated config-watcher race to this test.
+          const deletion = await deleteSessionEntryLifecycle({
+            agentId: "main",
+            archiveTranscript: false,
+            expectedEntry: seededSession.entry,
+            expectedSessionId: seededSessionId,
+            requireWriteSuccess: true,
+            storePath: seededSession.storePath,
+            target: {
+              canonicalKey: seededSession.canonicalKey,
+              storeKeys: seededSession.storeKeys,
+            },
+          });
+          expect(deletion.deleted).toBe(true);
         },
       });
       await mutationStarted.promise;
@@ -1478,8 +1496,7 @@ describe("gateway server chat", () => {
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
       }, FAST_WAIT_OPTS);
 
-      await writeSessionStore({ entries: {}, storePath: seededSession.storePath });
-      releaseMutation.resolve();
+      performDeletion.resolve();
       await mutation;
       await send;
 
@@ -1496,7 +1513,7 @@ describe("gateway server chat", () => {
       expect(context.chatAbortControllers.has(runId)).toBe(false);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
-      releaseMutation.resolve();
+      performDeletion.resolve();
       await Promise.allSettled(mutation ? [mutation] : []);
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
