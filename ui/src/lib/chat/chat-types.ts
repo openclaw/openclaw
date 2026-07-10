@@ -141,7 +141,7 @@ export type ToolCard = {
   isError?: boolean;
   /** True when the card comes from the live tool stream of the current run. */
   live?: boolean;
-  /** For live cards: true once the final result event landed (partial output does not complete a call). */
+  /** True once a result landed, including historical results with empty output. */
   completed?: boolean;
   messageId?: string;
   preview?: {
@@ -157,3 +157,5 @@ export type ToolCard = {
     sandbox?: "strict" | "scripts";
   };
 };
+
+export type ToolCardOutcome = "running" | "succeeded" | "failed" | "unknown";
