@@ -14,6 +14,25 @@ vi.mock("./client.js", () => ({
 
 let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
 
+type RegisteredChatTool = {
+  name: string;
+  parameters: { properties: { page_size?: unknown } };
+  execute: (
+    toolCallId: string,
+    params: Record<string, unknown>,
+  ) => Promise<{ details: Record<string, unknown> }>;
+};
+
+function resolveRegisteredChatTool(
+  registerTool: ReturnType<typeof vi.fn>,
+  agentAccountId?: string,
+) {
+  const registration = registerTool.mock.calls[0]?.[0] as
+    | RegisteredChatTool
+    | ((ctx: { agentAccountId?: string }) => RegisteredChatTool);
+  return typeof registration === "function" ? registration({ agentAccountId }) : registration;
+}
+
 function createFeishuToolRuntime(): PluginRuntime {
   return {} as PluginRuntime;
 }
@@ -75,8 +94,8 @@ describe("registerFeishuChatTools", () => {
     );
 
     expect(registerTool).toHaveBeenCalledTimes(1);
-    const tool = registerTool.mock.calls[0]?.[0];
-    expect(tool?.name).toBe("feishu_chat");
+    const tool = resolveRegisteredChatTool(registerTool);
+    expect(tool.name).toBe("feishu_chat");
 
     chatGetMock.mockResolvedValueOnce({
       code: 0,
@@ -186,8 +205,8 @@ describe("registerFeishuChatTools", () => {
       }),
     );
 
-    const tool = registerTool.mock.calls[0]?.[0];
-    expect(tool?.parameters.properties.page_size).toMatchObject({
+    const tool = resolveRegisteredChatTool(registerTool);
+    expect(tool.parameters.properties.page_size).toMatchObject({
       type: "integer",
       minimum: 1,
       maximum: 100,
@@ -260,7 +279,7 @@ describe("registerFeishuChatTools", () => {
       }),
     );
 
-    const tool = registerTool.mock.calls[0]?.[0];
+    const tool = resolveRegisteredChatTool(registerTool);
     contactUserGetMock.mockRejectedValueOnce(
       Object.assign(new Error("Request failed with status code 400"), {
         response: {
@@ -290,6 +309,43 @@ describe("registerFeishuChatTools", () => {
     expect(result.details.error).toContain('"feishu_log_id":"20260429124800CHAT"');
     expect(result.details.error).toContain(
       '"feishu_troubleshooter":"https://open.feishu.cn/search?log_id=20260429124800CHAT"',
+    );
+  });
+
+  it("registers for an enabled non-default account and uses the contextual account", async () => {
+    const registerTool = vi.fn();
+    registerFeishuChatTools(
+      createChatToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              accounts: {
+                a: {
+                  appId: "app-a",
+                  appSecret: "secret-a", // pragma: allowlist secret
+                  tools: { chat: false },
+                },
+                b: {
+                  appId: "app-b",
+                  appSecret: "secret-b", // pragma: allowlist secret
+                  tools: { chat: true },
+                },
+              },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const tool = resolveRegisteredChatTool(registerTool, "b");
+    chatGetMock.mockResolvedValueOnce({ code: 0, data: {} });
+
+    await tool.execute("tc_account", { action: "info", chat_id: "oc_1" });
+
+    expect(createFeishuClientMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ accountId: "b", appId: "app-b" }),
     );
   });
 });
