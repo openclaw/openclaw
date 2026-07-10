@@ -1,10 +1,11 @@
 /**
- * Proposed public contract for explicitly forwarding selected auth-profile
- * material from a provider to a CLI backend.
+ * Internal proposal for explicitly forwarding a provider-owned, minimized auth
+ * envelope to a CLI backend.
  *
- * This module contains no runtime wiring. It defines and validates the boundary
- * so maintainers can review the API independently before integrating it into the
- * CLI runner.
+ * Canonical auth-profile material does not cross this boundary. The resolver
+ * receives only validated selection metadata and returns a closed execution
+ * envelope. This module remains internal until a complete runtime consumer,
+ * documentation, and Plugin SDK compatibility baseline are reviewed together.
  */
 
 export type CliBackendForwardedCredentialKind = "api_key" | "oauth" | "token";
@@ -12,7 +13,8 @@ export type CliBackendForwardedCredentialKind = "api_key" | "oauth" | "token";
 export type CliBackendAuthProfileCredential = {
   type: CliBackendForwardedCredentialKind;
   provider: string;
-} & Record<string, unknown>;
+  profileId: string;
+};
 
 export type CliBackendAuthProfileForwardingPolicy = {
   supported: true;
@@ -24,7 +26,9 @@ export type CliBackendForwardedCredential = {
   kind: CliBackendForwardedCredentialKind;
   providerId: string;
   profileId: string;
-} & Record<string, unknown>;
+  env?: Readonly<Record<string, string>>;
+  clearEnv?: readonly string[];
+};
 
 export type CliBackendResolveForwardedCredentialContext = {
   backendId: string;
@@ -45,13 +49,27 @@ export type CliBackendForwardedCredentialResolver = (
 export type CliBackendAuthForwardingDecision =
   | { status: "not-supported" }
   | { status: "provider-denied"; provider: string }
+  | {
+      status: "credential-provider-mismatch";
+      selectedProvider: string;
+      credentialProvider: string;
+    }
+  | {
+      status: "credential-profile-mismatch";
+      selectedProfileId: string;
+      credentialProfileId: string;
+    }
   | { status: "credential-kind-denied"; kind: CliBackendForwardedCredentialKind }
   | { status: "resolver-missing" }
   | { status: "resolver-declined" }
   | { status: "forward"; credential: CliBackendForwardedCredential };
 
+function normalizeId(value: string): string {
+  return value.trim();
+}
+
 function normalizeIds(values: readonly string[]): Set<string> {
-  return new Set(values.map((value) => value.trim()).filter(Boolean));
+  return new Set(values.map(normalizeId).filter(Boolean));
 }
 
 function assertResolvedCredentialMatchesSelection(params: {
@@ -84,9 +102,29 @@ export async function resolveCliBackendAuthForwarding(params: {
     return { status: "not-supported" };
   }
 
+  const selectedProvider = normalizeId(params.context.provider);
+  const credentialProvider = normalizeId(params.context.credential.provider);
+  if (credentialProvider !== selectedProvider) {
+    return {
+      status: "credential-provider-mismatch",
+      selectedProvider,
+      credentialProvider,
+    };
+  }
+
+  const selectedProfileId = normalizeId(params.context.profileId);
+  const credentialProfileId = normalizeId(params.context.credential.profileId);
+  if (credentialProfileId !== selectedProfileId) {
+    return {
+      status: "credential-profile-mismatch",
+      selectedProfileId,
+      credentialProfileId,
+    };
+  }
+
   const providers = normalizeIds(params.policy.providers);
-  if (!providers.has(params.context.provider)) {
-    return { status: "provider-denied", provider: params.context.provider };
+  if (!providers.has(selectedProvider)) {
+    return { status: "provider-denied", provider: selectedProvider };
   }
 
   if (!params.policy.credentialKinds.includes(params.context.credential.type)) {
