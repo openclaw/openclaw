@@ -322,16 +322,12 @@ describe("googlechat monitor attachments", () => {
     });
   });
 
-  it("quota-paces the first 20 attachments and marks overflow unavailable", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+  it("attempts the first 20 attachments and marks overflow unavailable", async () => {
     const harness = createHarness();
     const attachments = Array.from({ length: 21 }, (_, index) =>
       uploadedAttachment(`file-${index + 1}`),
     );
-    const downloadStartedAt: number[] = [];
     apiMocks.downloadGoogleChatMedia.mockImplementation(async ({ resourceName }) => {
-      downloadStartedAt.push(Date.now());
       return {
         buffer: Buffer.from(resourceName),
         contentType: "image/png",
@@ -350,13 +346,11 @@ describe("googlechat monitor attachments", () => {
       }),
     );
 
-    const processing = processAttachments({
+    await processAttachments({
       event: attachmentEvent({ text: "batch", attachments }),
       harness,
       mediaMaxMb: 3,
     });
-    await vi.runAllTimersAsync();
-    await processing;
 
     expect(apiMocks.downloadGoogleChatMedia).toHaveBeenCalledTimes(20);
     expect(harness.saveMediaBuffer).toHaveBeenCalledTimes(20);
@@ -369,16 +363,6 @@ describe("googlechat monitor attachments", () => {
         [expect.objectContaining({ resourceName: "media/file-20", maxBytes: 3 * 1024 * 1024 })],
       ]),
     );
-    expect(downloadStartedAt).toHaveLength(20);
-    for (let index = 1; index < downloadStartedAt.length; index += 1) {
-      expect(downloadStartedAt[index] - downloadStartedAt[index - 1]).toBeGreaterThanOrEqual(75);
-    }
-    for (const windowStart of downloadStartedAt) {
-      const startsInWindow = downloadStartedAt.filter(
-        (startedAt) => startedAt >= windowStart && startedAt < windowStart + 1_000,
-      );
-      expect(startsInWindow.length).toBeLessThanOrEqual(15);
-    }
     expect(builtContext(harness)).toMatchObject({
       Body: "batch\n\n[googlechat attachment unavailable]",
       BodyForAgent: "batch\n\n[googlechat attachment unavailable]",

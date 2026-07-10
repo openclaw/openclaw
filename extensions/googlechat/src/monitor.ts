@@ -36,9 +36,6 @@ import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 // Google Chat accepts at most 20 images or videos in one message. Apply the
 // same bound to every inbound attachment type so one event cannot fan out work.
 const MAX_INBOUND_ATTACHMENTS = 20;
-// media.download shares Google's official 15 reads/s per-space quota. A 75 ms
-// interval caps this message at 14 starts per rolling second, leaving headroom.
-const MEDIA_DOWNLOAD_START_INTERVAL_MS = 75;
 const INBOUND_MEDIA_PLACEHOLDER = "<media:attachment>";
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
@@ -277,7 +274,6 @@ async function processMessageWithPipeline(params: {
   const media: Array<{ path: string; url: string; contentType?: string }> = [];
   const attachmentBatch = attachments.slice(0, MAX_INBOUND_ATTACHMENTS);
   let unavailableAttachmentCount = attachments.length - attachmentBatch.length;
-  let lastMediaDownloadStartedAt: number | undefined;
   for (const attachment of attachmentBatch) {
     const resourceName = attachment.attachmentDataRef?.resourceName;
     if (!resourceName) {
@@ -285,16 +281,6 @@ async function processMessageWithPipeline(params: {
       continue;
     }
     try {
-      if (lastMediaDownloadStartedAt !== undefined) {
-        const elapsedMs = Date.now() - lastMediaDownloadStartedAt;
-        const waitMs = MEDIA_DOWNLOAD_START_INTERVAL_MS - elapsedMs;
-        if (waitMs > 0) {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, waitMs);
-          });
-        }
-      }
-      lastMediaDownloadStartedAt = Date.now();
       const attachmentData = await downloadAttachment(
         attachment,
         resourceName,
