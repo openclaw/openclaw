@@ -417,6 +417,7 @@ const invokeToolsRpc = async (
   params: Record<string, unknown>,
   scopes = ["operator.write"],
   clientInfo?: { id: string; mode: string },
+  caps?: string[],
 ) => {
   const respond = vi.fn();
   await toolsInvokeHandlers["tools.invoke"]({
@@ -428,6 +429,7 @@ const invokeToolsRpc = async (
         role: "operator",
         scopes,
         ...(clientInfo ? { client: clientInfo } : {}),
+        ...(caps ? { caps } : {}),
       },
     } as never,
     req: { type: "req", id: "req-rpc-1", method: "tools.invoke" },
@@ -1102,8 +1104,10 @@ describe("tools.invoke Gateway RPC", () => {
         id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         mode: GATEWAY_CLIENT_MODES.BACKEND,
       },
+      ["tool-events", "inline-widgets"],
     );
     expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("direct-operator");
+    expect(lastCreateOpenClawToolsContext?.clientCaps).toEqual(["tool-events", "inline-widgets"]);
 
     await invokeToolsRpc(
       {

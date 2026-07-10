@@ -267,8 +267,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const conversationType = conversation?.conversationType ?? "personal";
     const teamId = activity.channelData?.team?.id;
     const graphChannelId = activity.channelData?.channel?.id?.trim() || conversationId;
-    const graphTeamId = activity.channelData?.team?.aadGroupId?.trim();
-    const graphChannelId = activity.channelData?.channel?.id?.trim() || conversationId;
     // For channel thread messages, resolve the thread root message ID so outbound
     // replies land in the correct thread. The root ID comes from the `messageid=`
     // portion of conversation.id (preferred) or from activity.replyToId.
@@ -702,11 +700,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
                 channelGroupId,
                 conversationId,
                 threadParentId,
-                (token, groupId, graphChannelId, messageId) =>
+                (token, groupId, requestedChannelId, messageId) =>
                   fetchChannelMessage(
                     token,
                     groupId,
-                    graphChannelId,
+                    requestedChannelId,
                     messageId,
                     preprocessingDeadline,
                   ),

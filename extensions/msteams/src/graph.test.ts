@@ -7,7 +7,6 @@ const {
   fetchWithSsrFGuardMock,
   readAccessTokenMock,
   resolveMSTeamsCredentialsMock,
-  fetchWithSsrFGuardMock,
 } = vi.hoisted(() => {
   return {
     loadMSTeamsSdkWithAuthMock: vi.fn(),
@@ -21,11 +20,6 @@ const {
     ),
     readAccessTokenMock: vi.fn(),
     resolveMSTeamsCredentialsMock: vi.fn(),
-    fetchWithSsrFGuardMock: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
-      response: await globalThis.fetch(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => undefined,
-    })),
   };
 });
 

@@ -274,23 +274,32 @@ describe("Codex app-server dynamic tool build", () => {
     expect(webSearchAllowed).toBe(true);
   });
 
-  it("forwards the originating client caps into coding tool assembly", async () => {
+  it("forwards client caps alongside channel authority context", async () => {
     // Regression: capability-gated tools (requiredClientCaps) vanished on the
     // Codex app-server path because this harness dropped params.clientCaps.
+    // Keep that fact composed with the operation-local message context.
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.clientCaps = ["tool-events", "inline-widgets"];
-    let receivedClientCaps: string[] | undefined;
+    params.chatId = "native-chat-123";
+    params.chatType = "direct";
+    params.messageActionTurnCapability = "turn-capability-1";
+    let receivedOptions: unknown;
     setOpenClawCodingToolsFactoryForTests((options) => {
-      receivedClientCaps = (options as { clientCaps?: string[] }).clientCaps;
+      receivedOptions = options;
       return [createRuntimeDynamicTool("message")];
     });
 
     await buildDynamicToolsForTest(params, workspaceDir);
 
-    expect(receivedClientCaps).toEqual(["tool-events", "inline-widgets"]);
+    expect(receivedOptions).toMatchObject({
+      clientCaps: ["tool-events", "inline-widgets"],
+      chatType: "direct",
+      nativeChannelId: "native-chat-123",
+      messageActionTurnCapability: "turn-capability-1",
+    });
   });
 
   it("shares the computer context epoch with dynamic tool assembly", async () => {

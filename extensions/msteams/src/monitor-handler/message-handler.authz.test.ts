@@ -21,7 +21,9 @@ type TestAttachment = {
 
 const runtimeApiMockState = getRuntimeApiMockState();
 const graphThreadMockState = vi.hoisted(() => ({
-  resolveTeamGroupId: vi.fn(async () => "group-1"),
+  resolveTeamGroupId: vi.fn(
+    async (params: { aadGroupId?: string }) => params.aadGroupId?.trim() || "group-1",
+  ),
   fetchChannelMessage: vi.fn<
     (
       token: string,
