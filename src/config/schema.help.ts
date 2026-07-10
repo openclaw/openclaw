@@ -495,6 +495,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Extra random delay in [0, jitterMs) milliseconds added to each arm so many idle sessions do not all fire on the same tick (default: 5000).",
   "tools.experimental.goalDriver.maxNoProgressContinuations":
     "Consecutive driver-fired continuations with no intervening real turn before the goal auto-pauses as stuck (default: 3). A real inbound turn resets the counter.",
+  "tools.experimental.goalDriver.judge":
+    "Optional bounded LLM judge run after a goal turn completes and the gates pass, before a continuation fires. The judge returns done | continue | wait: done marks the goal complete, wait parks it behind a time barrier, continue proceeds. Fail-open — any judge error falls through to a normal continuation. Default off.",
+  "tools.experimental.goalDriver.judge.enabled":
+    "Enable the goal-completion judge (default: false).",
+  "tools.experimental.goalDriver.judge.modelRef":
+    "Model ref override for the judge. Defaults to the agent's configured utility model.",
   "tools.toolSearch":
     "Compact large OpenClaw, MCP, and client tool catalogs. Set to true for the default code bridge or use the object form to choose structured controls or a compact visible tool directory.",
   "tools.toolSearch.enabled":

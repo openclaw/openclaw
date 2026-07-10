@@ -28,6 +28,13 @@ type CreateSessionGoalOptions = SessionGoalStoreOptions & {
 type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
   status: Extract<SessionGoalStatus, "active" | "paused" | "blocked" | "complete">;
   note?: string;
+  /**
+   * When set, the update throws ("goal is not active") unless the stored goal is
+   * currently `active`. Used by the goal driver's completion judge so a `done`
+   * verdict cannot override a goal the user paused/blocked in the gap between the
+   * bounded judge call and this write.
+   */
+  requireActiveStatus?: boolean;
 };
 
 export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = ["complete", "blocked"] as const;
@@ -290,6 +297,11 @@ export async function updateSessionGoalStatus(
       }
       if (TERMINAL_GOAL_STATUSES.has(accounted.status) && accounted.status !== options.status) {
         throw new Error(`goal is already ${accounted.status}`);
+      }
+      // Guard for the goal driver's completion judge: never override a goal the
+      // user changed away from `active` during the bounded judge call.
+      if (options.requireActiveStatus && accounted.status !== "active") {
+        throw new Error(`goal is not active (status: ${accounted.status})`);
       }
       const resetsBudgetWindow =
         options.status === "active" &&

@@ -764,6 +764,19 @@ export type ToolsConfig = {
       jitterMs?: number;
       /** Consecutive no-progress driver continuations before the goal auto-pauses (default: 3). */
       maxNoProgressContinuations?: number;
+      /**
+       * Optional bounded LLM judge run after a goal turn completes and the gates
+       * pass, before a continuation fires. Default off; when enabled the judge
+       * returns done | continue | wait — done marks the goal complete, wait parks
+       * it behind a time barrier, continue proceeds. Fail-open: any judge error
+       * falls through to a normal continuation.
+       */
+      judge?: {
+        /** Enable the goal-completion judge (default: false). */
+        enabled?: boolean;
+        /** Model ref override for the judge; defaults to the agent's utility model. */
+        modelRef?: string;
+      };
     };
   };
 };

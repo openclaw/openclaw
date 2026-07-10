@@ -17,10 +17,12 @@ import {
   clearSessionGoalWaitBarrier,
   recordSessionGoalContinuation,
   resetSessionGoalContinuations,
+  setSessionGoalWaitBarrier,
   updateSessionGoalStatus,
 } from "../../config/sessions/goals.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
+import { streamSessionTranscriptLinesReverse } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChatAbortControllerEntry } from "../../gateway/chat-abort.js";
 import type { QueuedChatTurnMap } from "../../gateway/chat-queued-turns.js";
@@ -36,7 +38,9 @@ import {
   type GoalDriverEvent,
   type GoalDriverGoalSnapshot,
   type GoalDriverLogger,
+  type GoalJudge,
 } from "./driver.js";
+import { createGoalJudge } from "./goal-judge.js";
 
 export type GoalDriverServiceDeps = {
   config: OpenClawConfig;
@@ -62,6 +66,7 @@ type GoalDriverConfig = {
   debounceMs: number;
   jitterMs: number;
   maxNoProgressContinuations: number;
+  judge: { enabled: boolean; modelRef?: string };
 };
 
 const DEFAULT_DEBOUNCE_MS = 20_000;
@@ -80,11 +85,19 @@ export function resolveGoalDriverConfig(config: OpenClawConfig): GoalDriverConfi
     typeof raw?.maxNoProgressContinuations === "number" && raw.maxNoProgressContinuations > 0
       ? Math.floor(raw.maxNoProgressContinuations)
       : DEFAULT_MAX_NO_PROGRESS;
+  const judgeModelRef =
+    typeof raw?.judge?.modelRef === "string" && raw.judge.modelRef.trim()
+      ? raw.judge.modelRef.trim()
+      : undefined;
   return {
     enabled: raw?.enabled === true,
     debounceMs,
     jitterMs,
     maxNoProgressContinuations,
+    judge: {
+      enabled: raw?.judge?.enabled === true,
+      ...(judgeModelRef ? { modelRef: judgeModelRef } : {}),
+    },
   };
 }
 
@@ -124,6 +137,62 @@ function readGoalSnapshot(
   };
 }
 
+/** Extracts plain text from a transcript message's `content` (string or blocks). */
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((block) =>
+      block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+        ? String((block as { text?: unknown }).text ?? "")
+        : "",
+    )
+    .join("");
+}
+
+/**
+ * Reads the agent's most recent assistant response for a session by scanning the
+ * transcript from the tail. Bounded (stops at the first assistant message) and
+ * fail-safe: any missing entry / unreadable transcript yields undefined so the
+ * judge degrades to `continue` and a continuation still fires.
+ */
+async function readLastAssistantResponse(
+  config: OpenClawConfig,
+  sessionKey: string,
+): Promise<string | undefined> {
+  try {
+    const { storePath } = resolveScope(config, sessionKey);
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    if (!entry?.sessionId) {
+      return undefined;
+    }
+    const agentId = normalizeAgentId(parseAgentSessionKey(sessionKey)?.agentId);
+    const transcriptPath = resolveSessionTranscriptPath(entry.sessionId, agentId);
+    for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
+      if (!line.trim()) {
+        continue;
+      }
+      let record: { type?: unknown; message?: { role?: unknown; content?: unknown } };
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (record.type === "message" && record.message?.role === "assistant") {
+        const text = extractMessageText(record.message.content).trim();
+        return text || undefined;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Builds the goal continuation driver bound to the live gateway, or `undefined`
  * when `tools.experimental.goalDriver.enabled` is not set.
@@ -136,6 +205,23 @@ export function createGoalDriverService(
     return undefined;
   }
   const { config, chatAbortControllers, chatQueuedTurns, log } = deps;
+
+  // The completion judge is built per-session (agent id resolved from the
+  // session key) and only when explicitly enabled; otherwise the driver fires
+  // every continuation exactly as before.
+  const judgeGoal: GoalJudge | undefined = cfg.judge.enabled
+    ? (sessionKey, goal) => {
+        const agentId = normalizeAgentId(parseAgentSessionKey(sessionKey)?.agentId);
+        const judge = createGoalJudge({
+          cfg: config,
+          agentId,
+          ...(cfg.judge.modelRef ? { modelRef: cfg.judge.modelRef } : {}),
+          readLastResponse: (sk) => readLastAssistantResponse(config, sk),
+          ...(log ? { log } : {}),
+        });
+        return judge(sessionKey, goal);
+      }
+    : undefined;
 
   const driver = createGoalContinuationDriver({
     log,
@@ -218,6 +304,37 @@ export function createGoalDriverService(
           log?.warn({ err: String(err), sessionKey }, "goal-driver: pauseGoal failed");
         },
       );
+    },
+
+    ...(judgeGoal ? { judgeGoal } : {}),
+    // The judge's `done` verdict marks the goal complete; `wait` parks it on a
+    // time barrier. Both reuse the same durable store mutations the tools use,
+    // and both no-op on a goal the user changed away from `active` during the
+    // judge call: `requireActiveStatus` guards the completion write, and
+    // `setSessionGoalWaitBarrier` already refuses a non-active goal.
+    markGoalComplete: (sessionKey, reason) => {
+      const { storePath } = resolveScope(config, sessionKey);
+      void updateSessionGoalStatus({
+        sessionKey,
+        storePath,
+        status: "complete",
+        requireActiveStatus: true,
+        ...(reason ? { note: reason } : {}),
+      }).catch((err: unknown) => {
+        log?.warn({ err: String(err), sessionKey }, "goal-driver: markGoalComplete failed");
+      });
+    },
+    setWaitBarrier: (sessionKey, params) => {
+      const { storePath } = resolveScope(config, sessionKey);
+      const seconds = params.seconds && params.seconds > 0 ? params.seconds : 60;
+      void setSessionGoalWaitBarrier({
+        sessionKey,
+        storePath,
+        waitingUntil: Date.now() + seconds * 1000,
+        ...(params.reason ? { reason: params.reason } : {}),
+      }).catch((err: unknown) => {
+        log?.warn({ err: String(err), sessionKey }, "goal-driver: setWaitBarrier failed");
+      });
     },
 
     ...(deps.onEvent ? { onEvent: deps.onEvent } : {}),

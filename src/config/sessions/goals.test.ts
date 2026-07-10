@@ -139,6 +139,57 @@ describe("session goals", () => {
     expect(snapshot.goal?.tokensUsed).toBe(0);
   });
 
+  it("requireActiveStatus refuses to complete a goal the user paused (judge guard)", async () => {
+    await writeSession();
+    await createSessionGoal({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "finish task",
+      now: 10,
+    });
+    // User pauses the goal (as could happen mid-judge).
+    await updateSessionGoalStatus({
+      storePath: fixture.storePath(),
+      sessionKey,
+      status: "paused",
+      now: 20,
+    });
+
+    // The goal driver's completion judge tries to complete it; the guard blocks it.
+    await expect(
+      updateSessionGoalStatus({
+        storePath: fixture.storePath(),
+        sessionKey,
+        status: "complete",
+        requireActiveStatus: true,
+        now: 30,
+      }),
+    ).rejects.toThrow(/not active/);
+
+    // The paused status is preserved — the judge did not override it.
+    const snapshot = await getSessionGoal({ storePath: fixture.storePath(), sessionKey, now: 40 });
+    expect(snapshot.goal?.status).toBe("paused");
+  });
+
+  it("requireActiveStatus completes a goal that is still active", async () => {
+    await writeSession();
+    await createSessionGoal({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "finish task",
+      now: 10,
+    });
+
+    const completed = await updateSessionGoalStatus({
+      storePath: fixture.storePath(),
+      sessionKey,
+      status: "complete",
+      requireActiveStatus: true,
+      now: 20,
+    });
+    expect(completed.status).toBe("complete");
+  });
+
   it("ignores stale token snapshots for budget accounting", async () => {
     await upsertSessionEntry({
       storePath: fixture.storePath(),

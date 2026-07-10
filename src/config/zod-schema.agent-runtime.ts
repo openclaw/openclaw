@@ -1156,6 +1156,13 @@ export const ToolsSchema = z
             debounceMs: z.number().optional(),
             jitterMs: z.number().optional(),
             maxNoProgressContinuations: z.number().optional(),
+            judge: z
+              .object({
+                enabled: z.boolean().optional(),
+                modelRef: z.string().optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),
