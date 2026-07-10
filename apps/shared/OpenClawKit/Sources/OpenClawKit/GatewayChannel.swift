@@ -254,12 +254,8 @@ public actor GatewayChannelActor {
         while self.shouldReconnect {
             guard await self.sleepUnlessCancelled(nanoseconds: 30 * 1_000_000_000) else { return } // 30s cadence
             guard self.shouldReconnect else { return }
-            if self.reconnectPausedForAuthFailure {
-                continue
-            }
-            if self.connected {
-                continue
-            }
+            if self.reconnectPausedForAuthFailure { continue }
+            if self.connected { continue }
             do {
                 try await self.connect()
             } catch {
@@ -367,9 +363,7 @@ public actor GatewayChannelActor {
         guard self.shouldReconnect else { throw CancellationError() }
         guard !self.disconnectNotificationInProgress else { throw CancellationError() }
         if self.connected {
-            if self.task?.state == .running {
-                return
-            }
+            if self.task?.state == .running { return }
             let staleGeneration = self.connectionGeneration
             let staleError = NSError(
                 domain: "Gateway",
@@ -1148,9 +1142,7 @@ extension GatewayChannelActor {
                 waiter.resume(returning: .res(res))
             }
         case let .event(evt):
-            if evt.event == "connect.challenge" {
-                return
-            }
+            if evt.event == "connect.challenge" { return }
             if let seq = evt.seq {
                 if let last = lastSeq, seq > last + 1 {
                     await self.pushHandler?(
@@ -1163,9 +1155,7 @@ extension GatewayChannelActor {
                 }
                 self.lastSeq = seq
             }
-            if evt.event == "tick" {
-                self.lastTick = Date()
-            }
+            if evt.event == "tick" { self.lastTick = Date() }
             await self.pushHandler?(.event(evt), connectionGeneration)
         default:
             break

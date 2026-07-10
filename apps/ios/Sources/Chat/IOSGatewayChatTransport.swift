@@ -233,24 +233,12 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         unread: Bool? = nil) throws -> String
     {
         var params: [String: Any] = ["key": key]
-        if let agentId {
-            params["agentId"] = agentId
-        }
-        if let label {
-            params["label"] = label ?? NSNull()
-        }
-        if let category {
-            params["category"] = category ?? NSNull()
-        }
-        if let pinned {
-            params["pinned"] = pinned
-        }
-        if let archived {
-            params["archived"] = archived
-        }
-        if let unread {
-            params["unread"] = unread
-        }
+        if let agentId { params["agentId"] = agentId }
+        if let label { params["label"] = label ?? NSNull() }
+        if let category { params["category"] = category ?? NSNull() }
+        if let pinned { params["pinned"] = pinned }
+        if let archived { params["archived"] = archived }
+        if let unread { params["unread"] = unread }
         return try self.encodeJSONObject(params)
     }
 
@@ -493,12 +481,28 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func setSessionModel(sessionKey: String, model: String?) async throws {
-        let target = self.sessionTarget(for: sessionKey)
+        _ = try await self.patchSessionModel(sessionKey: sessionKey, agentID: nil, model: model)
+    }
+
+    func patchSessionModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
+    {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
         let json = try Self.makeSessionPatchModelParamsJSON(
             sessionKey: target.sessionKey,
             agentId: target.agentID,
             model: model)
-        _ = try await self.gateway.request(method: "sessions.patch", paramsJSON: json, timeoutSeconds: 15)
+        let response = try await self.gateway.request(
+            method: "sessions.patch",
+            paramsJSON: json,
+            timeoutSeconds: 15)
+        return try Self.decodeModelPatchResult(response)
+    }
+
+    static func decodeModelPatchResult(_ data: Data) throws -> OpenClawChatModelPatchResult {
+        try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
     }
 
     func patchSession(
@@ -790,9 +794,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             let task = Task {
                 let stream = await self.gateway.subscribeServerEvents()
                 for await evt in stream {
-                    if Task.isCancelled {
-                        return
-                    }
+                    if Task.isCancelled { return }
                     if let mapped = Self.mapEventFrame(evt) {
                         continuation.yield(mapped)
                     }
@@ -809,6 +811,15 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         switch evt.event {
         case "tick":
             return .tick
+        case "sessions.changed":
+            guard let payload = evt.payload else { return nil }
+            guard let change = try? GatewayPayloadDecoding.decode(
+                payload,
+                as: OpenClawChatSessionsChangedEvent.self)
+            else {
+                return nil
+            }
+            return .sessionsChanged(change)
         case "seqGap":
             return .seqGap
         case "health":

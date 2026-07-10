@@ -927,7 +927,7 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("openclaw-tui");
   });
 
-  test("buildGatewaySessionRow displayName uses group display name for group sessions", () => {
+  test("buildGatewaySessionRow displayName prefers the human chat title for group sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry = {
       chatType: "group",
@@ -942,8 +942,65 @@ describe("gateway session utils", () => {
       key: "agent:main:telegram:group:99",
       entry,
     });
-    expect(row.displayName).toMatch(/^telegram:/);
-    expect(row.displayName).not.toBe("openclaw-tui");
+    expect(row.displayName).toBe("Engineering");
+  });
+
+  test("buildGatewaySessionRow group displayName prefers #channel and falls back to the token", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const channelEntry = {
+      chatType: "channel",
+      channel: "slack",
+      groupChannel: "general",
+      space: "Acme",
+    } as SessionEntry;
+    const channelRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:slack:channel:C1": channelEntry },
+      key: "agent:main:slack:channel:C1",
+      entry: channelEntry,
+    });
+    expect(channelRow.displayName).toBe("Acme #general");
+
+    const labeled = { ...channelEntry, label: "Team room" } as SessionEntry;
+    const labeledRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:slack:channel:C1": labeled },
+      key: "agent:main:slack:channel:C1",
+      entry: labeled,
+    });
+    expect(labeledRow.displayName).toBe("Team room");
+
+    const opaque = { chatType: "group", channel: "telegram" } as SessionEntry;
+    const opaqueRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:group:99": opaque },
+      key: "agent:main:telegram:group:99",
+      entry: opaque,
+    });
+    expect(opaqueRow.displayName).toMatch(/^telegram:/);
+  });
+
+  test("buildGatewaySessionRow projects worktree and execNode bindings", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      sessionId: "s1",
+      updatedAt: 1,
+      spawnedCwd: "/state/worktrees/abc/wt-1234",
+      worktree: { id: "wt-id", branch: "openclaw/wt-1234", repoRoot: "/repo" },
+      execNode: "macbook",
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:dashboard:x": entry },
+      key: "agent:main:dashboard:x",
+      entry,
+    });
+    expect(row.worktree).toEqual({ id: "wt-id", branch: "openclaw/wt-1234", repoRoot: "/repo" });
+    expect(row.execNode).toBe("macbook");
   });
 
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {

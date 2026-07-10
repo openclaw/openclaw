@@ -45,6 +45,10 @@ export type GatewaySessionRow = {
   spawnedBy?: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  /** Managed worktree bound to this session (repo checkout + branch). */
+  worktree?: SessionEntry["worktree"];
+  /** Session-scoped exec node binding (exec host=node routing). */
+  execNode?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
   subagentRole?: SessionEntry["subagentRole"];
