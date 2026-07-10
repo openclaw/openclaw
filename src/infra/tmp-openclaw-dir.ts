@@ -106,6 +106,12 @@ export function resolvePreferredOpenClawTmpDir(
       if ((st.mode & 0o022) === 0) {
         return resolveDirState(candidatePath) === "available";
       }
+      // Sticky-bit directories (e.g. /tmp, /var/tmp) are shared system
+      // directories. Their group/other write bits are expected and safe
+      // because the sticky-bit restricts deletion to file owners.
+      if ((st.mode & 0o1000) !== 0) {
+        return resolveDirState(candidatePath) === "available";
+      }
       try {
         chmodSync(candidatePath, 0o700);
       } catch (chmodErr) {
