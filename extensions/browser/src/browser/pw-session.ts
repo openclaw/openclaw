@@ -1411,7 +1411,7 @@ async function removePageNavigationRequestGuard(
   return undefined;
 }
 
-/** Return true when Playwright aborted the denied request before network dispatch. */
+/** Return true when Playwright safely answered the denied request before network dispatch. */
 export function wasBrowserNavigationRequestBlockedBeforeDispatch(err: unknown): boolean {
   return typeof err === "object" && err !== null && blockedBeforeDispatchErrors.has(err);
 }
@@ -1433,8 +1433,8 @@ export async function withPageNavigationRequestGuard<T>(
   const inFlight = new Set<Promise<void>>();
   let hasGuardError = false;
   let firstGuardError: unknown;
-  let deniedRequestAbortCount = 0;
-  let deniedRequestAbortFailed = false;
+  let policyDeniedRequestCount = 0;
+  let policyDeniedRequestFulfillCount = 0;
 
   const recordGuardError = (err: unknown) => {
     if (hasGuardError) {
@@ -1444,13 +1444,21 @@ export async function withPageNavigationRequestGuard<T>(
     firstGuardError = err;
   };
 
-  const abortGuardedRoute = async (route: Route) => {
-    try {
-      await route.abort();
-      deniedRequestAbortCount += 1;
-    } catch {
-      deniedRequestAbortFailed = true;
+  const stopGuardedRoute = async (route: Route, preserveDocument: boolean) => {
+    if (preserveDocument && isPolicyDenyNavigationError(firstGuardError)) {
+      policyDeniedRequestCount += 1;
+      try {
+        // Chromium keeps the current document for a 204 navigation response.
+        // route.abort() prevents the request but commits chrome-error:// instead.
+        await route.fulfill({ status: 204, body: "" });
+        policyDeniedRequestFulfillCount += 1;
+        return;
+      } catch {
+        // Abort remains the network-prevention fallback, but callers quarantine
+        // because the source document may already be unusable.
+      }
     }
+    await route.abort().catch(() => {});
   };
 
   const handleRoute = async (route: Route, request: Request) => {
@@ -1459,12 +1467,12 @@ export async function withPageNavigationRequestGuard<T>(
         await fallbackRouteSafely(route);
       } catch (err) {
         recordGuardError(err);
-        await abortGuardedRoute(route);
+        await stopGuardedRoute(route, false);
       }
       return;
     }
     if (hasGuardError) {
-      await abortGuardedRoute(route);
+      await stopGuardedRoute(route, true);
       return;
     }
     try {
@@ -1476,20 +1484,20 @@ export async function withPageNavigationRequestGuard<T>(
       recordGuardError(err);
     }
     if (hasGuardError) {
-      await abortGuardedRoute(route);
+      await stopGuardedRoute(route, true);
       return;
     }
     try {
       await fallbackRouteSafely(route);
     } catch (err) {
       recordGuardError(err);
-      await abortGuardedRoute(route);
+      await stopGuardedRoute(route, true);
     }
   };
   const handler = (route: Route, request: Request) => {
     const operation = handleRoute(route, request).catch(async (err) => {
       recordGuardError(err);
-      await abortGuardedRoute(route);
+      await stopGuardedRoute(route, true);
     });
     inFlight.add(operation);
     void operation.then(
@@ -1518,13 +1526,13 @@ export async function withPageNavigationRequestGuard<T>(
   const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
   await Promise.allSettled(inFlight);
 
-  // Policy denial wins over action and cleanup errors. Mark it only when every
-  // denied request was stopped, so callers quarantine residual navigations.
+  // Policy denial wins over action and cleanup errors. Only 204 responses keep
+  // the source document usable; abort fallbacks require quarantine.
   if (hasGuardError) {
     if (
       isPolicyDenyNavigationError(firstGuardError) &&
-      deniedRequestAbortCount > 0 &&
-      !deniedRequestAbortFailed &&
+      policyDeniedRequestCount > 0 &&
+      policyDeniedRequestFulfillCount === policyDeniedRequestCount &&
       typeof firstGuardError === "object" &&
       firstGuardError !== null
     ) {

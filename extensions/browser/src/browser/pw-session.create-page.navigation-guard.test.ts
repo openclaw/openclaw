@@ -35,6 +35,7 @@ const PROXY_ENV_KEYS = [
 type MockRoute = {
   continue: () => Promise<void>;
   fallback: () => Promise<void>;
+  fulfill: (options: { status: number; body: string }) => Promise<void>;
   abort: () => Promise<void>;
 };
 type MockRequest = {
@@ -141,6 +142,7 @@ function createMockRoute(route?: Partial<MockRoute>): MockRoute {
   return {
     continue: vi.fn(async () => {}),
     fallback: vi.fn(async () => {}),
+    fulfill: vi.fn(async () => {}),
     abort: vi.fn(async () => {}),
     ...route,
   };
@@ -806,7 +808,8 @@ describe("pw-session page-scoped interaction request guard", () => {
           },
         }),
       ).rejects.toBe(blocked);
-      expect(route.abort).toHaveBeenCalledTimes(1);
+      expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+      expect(route.abort).not.toHaveBeenCalled();
       expect(wasBrowserNavigationRequestBlockedBeforeDispatch(blocked)).toBe(true);
     } finally {
       assertNavigationAllowedSpy.mockRestore();
@@ -844,6 +847,8 @@ describe("pw-session page-scoped interaction request guard", () => {
 
     expect(allowedDocument.fallback).toHaveBeenCalledTimes(1);
     expect(image.fallback).toHaveBeenCalledTimes(1);
+    expect(allowedDocument.fulfill).not.toHaveBeenCalled();
+    expect(image.fulfill).not.toHaveBeenCalled();
     expect(allowedDocument.continue).not.toHaveBeenCalled();
     expect(image.continue).not.toHaveBeenCalled();
     const handler = pageRoute.mock.calls[0]?.[1];
@@ -855,7 +860,7 @@ describe("pw-session page-scoped interaction request guard", () => {
     { name: "top-level", subframe: false },
     { name: "subframe", subframe: true },
   ])(
-    "aborts a blocked $name document and returns policy denial ahead of the action error",
+    "blocks a $name document with a 204 and returns policy denial ahead of the action error",
     async ({ subframe }) => {
       const { getRouteHandler, mainFrame, page } = installBrowserMocks();
       const route = createMockRoute();
@@ -881,7 +886,8 @@ describe("pw-session page-scoped interaction request guard", () => {
       }
 
       expect(caught).toBeInstanceOf(SsrFBlockedError);
-      expect(route.abort).toHaveBeenCalledTimes(1);
+      expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+      expect(route.abort).not.toHaveBeenCalled();
       expect(route.fallback).not.toHaveBeenCalled();
       expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(true);
     },
@@ -931,10 +937,10 @@ describe("pw-session page-scoped interaction request guard", () => {
     }
   });
 
-  it("does not claim pre-dispatch prevention when route.abort fails", async () => {
+  it("falls back to abort but does not claim source safety when route.fulfill fails", async () => {
     const { getRouteHandler, mainFrame, page } = installBrowserMocks();
     const route = createMockRoute({
-      abort: vi.fn(async () => {
+      fulfill: vi.fn(async () => {
         throw new Error("Route is already handled");
       }),
     });
@@ -958,10 +964,47 @@ describe("pw-session page-scoped interaction request guard", () => {
     }
 
     expect(caught).toBeInstanceOf(SsrFBlockedError);
+    expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+    expect(route.abort).toHaveBeenCalledTimes(1);
     expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(false);
   });
 
-  it("keeps the first concurrent policy error stable and aborts every denied route", async () => {
+  it("leaves the denial unmarked when both route.fulfill and route.abort fail", async () => {
+    const { getRouteHandler, mainFrame, page } = installBrowserMocks();
+    const route = createMockRoute({
+      fulfill: vi.fn(async () => {
+        throw new Error("Route fulfill failed");
+      }),
+      abort: vi.fn(async () => {
+        throw new Error("Route abort failed");
+      }),
+    });
+    let caught: unknown;
+
+    try {
+      await withPageNavigationRequestGuard({
+        page,
+        ssrfPolicy: strictPolicy,
+        action: async () => {
+          await dispatchMockNavigation({
+            getRouteHandler,
+            mainFrame,
+            url: "http://127.0.0.1:18080/private",
+            route,
+          });
+        },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(SsrFBlockedError);
+    expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+    expect(route.abort).toHaveBeenCalledTimes(1);
+    expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(false);
+  });
+
+  it("keeps the first concurrent policy error stable and fulfills every denied route", async () => {
     const { getRouteHandler, mainFrame, page } = installBrowserMocks();
     const firstError = new InvalidBrowserNavigationUrlError("first denial");
     const secondError = new InvalidBrowserNavigationUrlError("second denial");
@@ -1006,16 +1049,18 @@ describe("pw-session page-scoped interaction request guard", () => {
     }
 
     expect(caught).toBe(firstError);
-    expect(firstRoute.abort).toHaveBeenCalledTimes(1);
-    expect(secondRoute.abort).toHaveBeenCalledTimes(1);
+    expect(firstRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+    expect(secondRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+    expect(firstRoute.abort).not.toHaveBeenCalled();
+    expect(secondRoute.abort).not.toHaveBeenCalled();
     expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(true);
   });
 
-  it("leaves a concurrent denial unmarked when any denied route cannot abort", async () => {
+  it("leaves concurrent denials unmarked when any denied route cannot fulfill", async () => {
     const { getRouteHandler, mainFrame, page } = installBrowserMocks();
     const firstRoute = createMockRoute();
     const failedRoute = createMockRoute({
-      abort: vi.fn(async () => {
+      fulfill: vi.fn(async () => {
         throw new Error("Route is already handled");
       }),
     });
@@ -1047,7 +1092,9 @@ describe("pw-session page-scoped interaction request guard", () => {
     }
 
     expect(caught).toBeInstanceOf(SsrFBlockedError);
-    expect(firstRoute.abort).toHaveBeenCalledTimes(1);
+    expect(firstRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+    expect(firstRoute.abort).not.toHaveBeenCalled();
+    expect(failedRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
     expect(failedRoute.abort).toHaveBeenCalledTimes(1);
     expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(false);
   });
