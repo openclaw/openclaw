@@ -9,7 +9,7 @@ export {
   type ClawHubTrustErrorDetails,
 } from "./clawhub-trust-error-details.js";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
-import { formatValidationErrors, type ValidationError } from "./validation-errors.js";
+import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 import {
   type AgentEvent,
