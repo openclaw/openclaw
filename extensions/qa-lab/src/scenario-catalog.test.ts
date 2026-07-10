@@ -435,18 +435,20 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
       "qa/scenarios/runtime/long-context-progress-watchdog.yaml",
     );
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("EmbeddedAttemptSessionTakeoverError");
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("AbortError");
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("This operation was aborted");
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("liveTurnTimeoutMs(env, 180000)");
+    const gatewayRestartFlow = readQaScenarioById("gateway-restart-inflight-run").execution.flow;
+    const interruptedStatusAssertion = gatewayRestartFlow?.steps
+      .flatMap((step) => step.actions)
+      .find((action) =>
+        JSON.stringify(action).includes("interrupted agent run ended with unexpected status"),
+      );
+    expect(interruptedStatusAssertion).toBeDefined();
+    const interruptedStatusContract = JSON.stringify(interruptedStatusAssertion);
+    expect(interruptedStatusContract).toContain("waited.stopReason === 'restart'");
+    expect(interruptedStatusContract).toContain("waited.stopReason === 'aborted'");
+    expect(interruptedStatusContract).toContain("EmbeddedAttemptSessionTakeoverError");
+    expect(interruptedStatusContract).toContain("AbortError");
+    expect(interruptedStatusContract).toContain("This operation was aborted");
+    expect(JSON.stringify(gatewayRestartFlow)).toContain("liveTurnTimeoutMs(env, 180000)");
     const longContextFlow = JSON.stringify(
       readQaScenarioById("long-context-progress-watchdog").execution.flow,
     );
