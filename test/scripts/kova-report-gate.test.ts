@@ -853,6 +853,10 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
       (report) => setAt(report, ["records", 0, "violations"], [{}]),
     ],
     [
+      "rejects PARTIAL records with null violations",
+      (report) => setAt(report, ["records", 0, "violations"], null),
+    ],
+    [
       "rejects PARTIAL reports without sampled RSS",
       (report) => deleteAt(report, ["performance", "groups", 0, "metrics", "peakRssMb"]),
     ],
