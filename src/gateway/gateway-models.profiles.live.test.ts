@@ -2275,14 +2275,17 @@ function isToolNonceProbeMiss(error: string): boolean {
 
 function isTransientToolReadProbeErrorForLiveModel(error: string): boolean {
   const msg = error.toLowerCase();
+  // Some tool-capable providers complete a tool turn without appending reply text.
+  // Retry here; the existing model policy decides whether exhausted misses may skip.
+  const isCompletedWithoutReply =
+    msg.includes("agent.wait error") && msg.includes("(error=completed)");
   const isTransientProviderFailure =
     msg.includes("unknown error occurred") ||
     (msg.includes("ai service returned an internal error") &&
       msg.includes("try again in a moment"));
   return (
     msg.includes("tool-read: agent-wait") &&
-    msg.includes("failovererror") &&
-    isTransientProviderFailure
+    (isCompletedWithoutReply || (msg.includes("failovererror") && isTransientProviderFailure))
   );
 }
 
@@ -2361,6 +2364,19 @@ describe("isTransientToolReadProbeErrorForLiveModel", () => {
     expect(
       isTransientToolReadProbeErrorForLiveModel(
         "[all-models] 1/1 openai/gpt-5.5: prompt: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: The AI service returned an internal error. Please try again in a moment.)",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches terminal tool-read runs that completed without a reply", () => {
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 openrouter/ai21/jamba-large-1.7: tool-read: agent-wait: agent.wait error for runId=run-1 (error=completed)",
+      ),
+    ).toBe(true);
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 openrouter/ai21/jamba-large-1.7: prompt: agent-wait: agent.wait error for runId=run-1 (error=completed)",
       ),
     ).toBe(false);
   });
@@ -3961,7 +3977,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     toolReadAttempt + 1 < maxToolReadAttempts
                   ) {
                     logProgress(
-                      `${progressLabel}: tool-read retry (${toolReadAttempt + 2}/${maxToolReadAttempts}) transient provider failover`,
+                      `${progressLabel}: tool-read retry (${toolReadAttempt + 2}/${maxToolReadAttempts}) transient provider result`,
                     );
                     continue;
                   }
@@ -3969,7 +3985,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     isTransientToolReadProbeErrorForLiveModel(message) &&
                     shouldSkipToolNonceProbeMissForLiveModel(modelKey)
                   ) {
-                    logProgress(`${progressLabel}: skip (${modelKey} tool-read provider failover)`);
+                    logProgress(`${progressLabel}: skip (${modelKey} transient tool-read result)`);
                     return "skip";
                   }
                   throw error;
