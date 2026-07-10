@@ -25,17 +25,21 @@ type TempDownloadTarget = {
 const SHARED_SYSTEM_TMP_DIRS = new Set(["/tmp", "/private/tmp", "/var/tmp", "/dev/shm"]);
 
 function resolveTempRoot(tmpDir?: string): string {
-  if (tmpDir === undefined) {
-    return resolvePreferredOpenClawTmpDir();
-  }
+  return tmpDir ?? resolvePreferredOpenClawTmpDir();
+}
+
+/** Redirects bare system temp directory to a subdirectory to avoid corrupting shared temp permissions. */
+function resolveSecureTempRoot(tmpDir?: string): string {
+  const root = resolveTempRoot(tmpDir);
   // When callers pass the bare system temp directory (e.g. os.tmpdir()),
-  // redirect to a subdirectory to avoid corrupting shared temp permissions.
-  // resolvePreferredOpenClawTmpDir already handles this by preferring
-  // /tmp/openclaw, but callers that pass tmpDir directly bypass it.
-  if (SHARED_SYSTEM_TMP_DIRS.has(tmpDir) || tmpDir === getOsTmpDir()) {
-    return path.join(tmpDir, "openclaw");
+  // redirect to a subdirectory so ensurePrivateDirectory does not chmod
+  // the shared system temp dir. resolvePreferredOpenClawTmpDir already
+  // handles this by preferring /tmp/openclaw, but callers that pass
+  // tmpDir directly bypass it.
+  if (SHARED_SYSTEM_TMP_DIRS.has(root) || root === getOsTmpDir()) {
+    return path.join(root, "openclaw");
   }
-  return tmpDir;
+  return root;
 }
 
 function sanitizeTempPrefix(prefix: string): string {
@@ -102,7 +106,7 @@ export async function createTempDownloadTarget(params: {
   tmpDir?: string;
 }): Promise<TempDownloadTarget> {
   const workspace = await tempWorkspace({
-    rootDir: resolveTempRoot(params.tmpDir),
+    rootDir: resolveSecureTempRoot(params.tmpDir),
     prefix: sanitizeTempPrefix(params.prefix),
   });
   const target = buildTempDownloadTarget(workspace, params.fileName);
