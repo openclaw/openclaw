@@ -1040,14 +1040,14 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
   function createBackfillHarness() {
     const client = createMattermostClientMock();
     const channelHistories = new Map<string, HistoryEntry[]>();
-    const threadsBackfilledThisSession = new Set<string>();
+    const threadBackfillMarkers = new Map<string, string>();
     const fetchThreadPosts = vi.fn(async () => [] as MattermostPost[]);
 
     return {
       channelHistories,
       client,
       fetchThreadPosts,
-      threadsBackfilledThisSession,
+      threadBackfillMarkers,
     };
   }
 
@@ -1074,11 +1074,17 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       baseSessionKey: sessionBackfillKey,
       historyLimit: 2,
       channelHistories: harness.channelHistories,
-      threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
       fetchThreadPosts: harness.fetchThreadPosts,
     });
 
     expect(harness.fetchThreadPosts).toHaveBeenCalledTimes(1);
+    // Bounded request: historyLimit + 1 leaves room to drop the triggering post.
+    expect(harness.fetchThreadPosts).toHaveBeenCalledWith(
+      harness.client,
+      "root-1",
+      expect.objectContaining({ limit: 3 }),
+    );
     expect(harness.channelHistories.get(historyKey)).toStrictEqual([
       {
         sender: "user-2",
@@ -1093,9 +1099,7 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
         messageId: "old-3",
       },
     ]);
-    expect(harness.threadsBackfilledThisSession.has(`${historyKey}:${sessionBackfillKey}`)).toBe(
-      true,
-    );
+    expect(harness.threadBackfillMarkers.get(historyKey)).toBe(sessionBackfillKey);
   });
 
   it("marks populated windows so same-session follow-ups do not refetch after history clears", async () => {
@@ -1112,7 +1116,7 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       baseSessionKey: sessionBackfillKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
-      threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
       fetchThreadPosts: harness.fetchThreadPosts,
     });
     harness.channelHistories.set(historyKey, []);
@@ -1124,14 +1128,12 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       baseSessionKey: sessionBackfillKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
-      threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
       fetchThreadPosts: harness.fetchThreadPosts,
     });
 
     expect(harness.fetchThreadPosts).not.toHaveBeenCalled();
-    expect(harness.threadsBackfilledThisSession.has(`${historyKey}:${sessionBackfillKey}`)).toBe(
-      true,
-    );
+    expect(harness.threadBackfillMarkers.get(historyKey)).toBe(sessionBackfillKey);
   });
 
   it("marks failed fetch attempts so same-session follow-ups do not retry", async () => {
@@ -1146,7 +1148,7 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       baseSessionKey: sessionBackfillKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
-      threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
       fetchThreadPosts: harness.fetchThreadPosts,
     });
     await backfillMattermostThreadHistoryForMonitor({
@@ -1157,14 +1159,12 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       baseSessionKey: sessionBackfillKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
-      threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
       fetchThreadPosts: harness.fetchThreadPosts,
     });
 
     expect(harness.fetchThreadPosts).toHaveBeenCalledTimes(1);
-    expect(harness.threadsBackfilledThisSession.has(`${historyKey}:${sessionBackfillKey}`)).toBe(
-      true,
-    );
+    expect(harness.threadBackfillMarkers.get(historyKey)).toBe(sessionBackfillKey);
   });
 
   it("adopts pending markers without blocking later session rotations", async () => {
@@ -1186,13 +1186,11 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       baseSessionKey: pendingSessionKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
-      threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
       fetchThreadPosts: harness.fetchThreadPosts,
     });
     expect(harness.fetchThreadPosts).toHaveBeenCalledTimes(1);
-    expect(harness.threadsBackfilledThisSession.has(`${historyKey}:${pendingSessionKey}`)).toBe(
-      true,
-    );
+    expect(harness.threadBackfillMarkers.get(historyKey)).toBe(pendingSessionKey);
 
     await backfillMattermostThreadHistoryForMonitor({
       client: harness.client,
@@ -1203,16 +1201,12 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       adoptBackfillSessionKey: pendingSessionKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
-      threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
       fetchThreadPosts: harness.fetchThreadPosts,
     });
     expect(harness.fetchThreadPosts).toHaveBeenCalledTimes(1);
-    expect(harness.threadsBackfilledThisSession.has(`${historyKey}:${createdSessionKey}`)).toBe(
-      true,
-    );
-    expect(harness.threadsBackfilledThisSession.has(`${historyKey}:${pendingSessionKey}`)).toBe(
-      false,
-    );
+    expect(harness.threadBackfillMarkers.get(historyKey)).toBe(createdSessionKey);
+    expect(harness.threadBackfillMarkers.get(historyKey)).not.toBe(pendingSessionKey);
 
     await backfillMattermostThreadHistoryForMonitor({
       client: harness.client,
@@ -1223,7 +1217,7 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       adoptBackfillSessionKey: pendingSessionKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
-      threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
       fetchThreadPosts: harness.fetchThreadPosts,
     });
     expect(harness.fetchThreadPosts).toHaveBeenCalledTimes(2);
@@ -1250,7 +1244,7 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       baseSessionKey: sessionBackfillKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
-      threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
       fetchThreadPosts: harness.fetchThreadPosts,
     });
     harness.channelHistories.set(historyKey, [
@@ -1264,7 +1258,7 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       baseSessionKey: "session-after-reset",
       historyLimit: 5,
       channelHistories: harness.channelHistories,
-      threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
+      threadBackfillMarkers: harness.threadBackfillMarkers,
       fetchThreadPosts: harness.fetchThreadPosts,
     });
 

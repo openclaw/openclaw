@@ -691,7 +691,7 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.fetchMattermostThreadPosts).toHaveBeenLastCalledWith(
       expect.anything(),
       "root-1",
-      expect.any(AbortSignal),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx.Body).toContain(
       "context before restart",

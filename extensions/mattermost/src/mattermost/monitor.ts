@@ -137,7 +137,7 @@ type MonitorMattermostOpts = {
 type MattermostThreadBackfillFetcher = (
   client: MattermostClient,
   rootPostId: string,
-  signal?: AbortSignal,
+  options: { limit: number; signal?: AbortSignal },
 ) => Promise<MattermostPost[]>;
 
 export async function backfillMattermostThreadHistoryForMonitor(params: {
@@ -149,7 +149,7 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
   adoptBackfillSessionKey?: string;
   historyLimit: number;
   channelHistories: Map<string, HistoryEntry[]>;
-  threadsBackfilledThisSession: Set<string>;
+  threadBackfillMarkers: Map<string, string>;
   fetchThreadPosts?: MattermostThreadBackfillFetcher;
   timeoutMs?: number;
 }): Promise<void> {
@@ -162,7 +162,7 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
     adoptBackfillSessionKey,
     historyLimit,
     channelHistories,
-    threadsBackfilledThisSession,
+    threadBackfillMarkers,
     fetchThreadPosts = fetchMattermostThreadPosts,
     timeoutMs = 10_000,
   } = params;
@@ -170,25 +170,26 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
     return;
   }
 
-  const backfillKey = `${historyKey}:${baseSessionKey}`;
-  if (threadsBackfilledThisSession.has(backfillKey)) {
+  // One marker per thread history key: the value is the current session marker.
+  // This bounds marker memory and lookup cost to the number of live threads,
+  // instead of accumulating a `${historyKey}:${session}` entry for every session
+  // rotation and scanning the whole process-lifetime set on each candidate.
+  const currentMarker = threadBackfillMarkers.get(historyKey);
+  if (currentMarker === baseSessionKey) {
     return;
   }
-  const adoptBackfillKey = adoptBackfillSessionKey
-    ? `${historyKey}:${adoptBackfillSessionKey}`
-    : undefined;
-  if (adoptBackfillKey && threadsBackfilledThisSession.has(adoptBackfillKey)) {
-    threadsBackfilledThisSession.add(backfillKey);
-    threadsBackfilledThisSession.delete(adoptBackfillKey);
+  // Adopt the earlier pending marker once the stored session id appears, so a
+  // same-session follow-up does not refetch while a later real session rotation
+  // still can.
+  if (adoptBackfillSessionKey && currentMarker === adoptBackfillSessionKey) {
+    threadBackfillMarkers.set(historyKey, baseSessionKey);
     return;
   }
-  const hasPriorBackfillForThread = [...threadsBackfilledThisSession].some((key) =>
-    key.startsWith(`${historyKey}:`),
-  );
+  const hasPriorBackfillForThread = currentMarker !== undefined;
 
   const existing = channelHistories.get(historyKey);
   if (existing && existing.length > 0 && !hasPriorBackfillForThread) {
-    threadsBackfilledThisSession.add(backfillKey);
+    threadBackfillMarkers.set(historyKey, baseSessionKey);
     return;
   }
 
@@ -196,8 +197,13 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
     const abort = new AbortController();
     const timeoutId = setTimeout(() => abort.abort(), timeoutMs);
     try {
-      threadsBackfilledThisSession.add(backfillKey);
-      const threadPosts = await fetchThreadPosts(client, threadRootId, abort.signal);
+      threadBackfillMarkers.set(historyKey, baseSessionKey);
+      // Request one extra post so the window still fills after we drop the
+      // triggering post below when it is among the newest entries.
+      const threadPosts = await fetchThreadPosts(client, threadRootId, {
+        limit: historyLimit + 1,
+        signal: abort.signal,
+      });
       if (threadPosts.length === 0) {
         return;
       }
@@ -669,14 +675,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
-  // Per-(historyKey, agent-session) backfill tracking.
-  // Compound key binds the thread key to the current stored agent session id,
-  // which rotates on /new or session reset.  This way
-  // session reset gets its own first-sighting backfill, and marking
-  // non-empty first sightings prevents normal post-turn empty windows
-  // from re-triggering an unnecessary server fetch (kernel.ts:577 clears
-  // pending group history after a successful dispatch).
-  const threadsBackfilledThisSession = new Set<string>();
+  // Thread backfill tracking: one marker per thread history key, valued by the
+  // current stored agent session id (which rotates on /new or session reset).
+  // Keeping a single current marker per thread bounds memory to live threads and
+  // still lets a session reset earn its own first-sighting backfill; marking
+  // non-empty first sightings prevents normal post-turn empty windows from
+  // re-triggering an unnecessary server fetch (kernel.ts:577 clears pending group
+  // history after a successful dispatch).
+  const threadBackfillMarkers = new Map<string, string>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1263,12 +1269,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
         const historyKey = resolveMattermostPendingHistoryKey({ kind, sessionKey });
-        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
-        const currentAgentSessionId = normalizeOptionalString(
-          getSessionEntry({ storePath, sessionKey })?.sessionId,
-        );
 
         const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
         const wasMentioned =
@@ -1379,19 +1379,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // backfill thread history from the Mattermost server when the local
         // in-memory window is genuinely cold for the current agent session.
         //
-        // Compound key (historyKey + backfill session marker): historyKey alone
-        // is stable across /new for the same thread channel, while route.sessionKey
-        // is also stable. The stored session id rotates on /new, so binding to it
-        // gives reset its own first-sighting backfill. If the first cold turn has
-        // not been recorded yet, use a pending marker and adopt it once the stored
-        // session id appears; this prevents a same-session follow-up fetch without
-        // blocking a later real session-id rotation.
+        // Read the stored agent session id here (not before the gates) so posts
+        // dropped before admission never touch the session store. The backfill
+        // marker binds historyKey to this session id: historyKey alone is stable
+        // across /new for the same thread, but the stored session id rotates on
+        // /new, so binding to it gives reset its own first-sighting backfill. If
+        // the first cold turn has not recorded a session id yet, use a pending
+        // marker and adopt it once the stored id appears; this prevents a
+        // same-session follow-up fetch without blocking a later session rotation.
         //
         // Active-thread guard: if a thread is first seen with a populated
         // window, mark that session so the kernel clearing pending history
         // after a successful turn does not make same-session follow-ups fetch.
         //
         // Best-effort — never blocks inbound dispatch.
+        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+          agentId: route.agentId,
+        });
+        const currentAgentSessionId = normalizeOptionalString(
+          getSessionEntry({ storePath, sessionKey })?.sessionId,
+        );
         const backfillSessionMarker = currentAgentSessionId
           ? `session:${currentAgentSessionId}`
           : `pending:${sessionKey}`;
@@ -1405,7 +1412,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           adoptBackfillSessionKey,
           historyLimit,
           channelHistories,
-          threadsBackfilledThisSession,
+          threadBackfillMarkers,
         });
 
         core.channel.activity.record({

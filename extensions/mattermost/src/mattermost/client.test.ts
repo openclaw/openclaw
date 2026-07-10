@@ -665,4 +665,17 @@ describe("fetchMattermostThreadPosts", () => {
     expect(posts).toHaveLength(2);
     expect(posts.map((p) => p.id)).toEqual(["post1", "post2"]);
   });
+
+  it("bounds the request and restores chronological order when a limit is given", async () => {
+    const { client, calls } = createTestClient({
+      // direction=up returns the newest posts newest-first; the helper must
+      // re-sort ascending so callers build history oldest-first.
+      body: { order: ["post3", "post2", "post1"], posts: mockThreadPosts },
+    });
+    const posts = await fetchMattermostThreadPosts(client, "post1", { limit: 2 });
+    expect(calls[0].url).toBe(
+      "http://localhost:8065/api/v4/posts/post1/thread?perPage=2&direction=up",
+    );
+    expect(posts.map((p) => p.id)).toEqual(["post1", "post2", "post3"]);
+  });
 });

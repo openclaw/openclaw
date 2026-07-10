@@ -697,13 +697,22 @@ export async function deleteMattermostPost(
 export async function fetchMattermostThreadPosts(
   client: MattermostClient,
   postId: string,
-  signal?: AbortSignal,
+  options: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<MattermostPost[]> {
+  const { limit, signal } = options;
+  // GET /posts/{id}/thread returns the ENTIRE thread at the Mattermost default
+  // perPage=0, so a long thread would allocate and parse unboundedly on the
+  // inbound path. The endpoint reads camelCase perPage (not per_page); bound the
+  // response to the newest posts the caller needs: direction=up returns the most
+  // recent perPage posts (server orders CreateAt DESC), so we restore ascending
+  // chronological order below for callers that build history oldest-first.
+  const query = typeof limit === "number" && limit > 0 ? `?perPage=${limit}&direction=up` : "";
   const data = await client.request<{
     order: string[];
     posts: Record<string, MattermostPost>;
-  }>(`/posts/${postId}/thread`, signal ? { signal } : undefined);
-  return (data.order ?? []).map((pid) => data.posts?.[pid]).filter(Boolean);
+  }>(`/posts/${postId}/thread${query}`, signal ? { signal } : undefined);
+  const posts = (data.order ?? []).map((pid) => data.posts?.[pid]).filter(Boolean);
+  return posts.toSorted((a, b) => (a.create_at ?? 0) - (b.create_at ?? 0));
 }
 
 export async function uploadMattermostFile(
