@@ -984,9 +984,10 @@ jobs:
         env:
           RELEASE_CHECK_JOB: qa_lab_parity_lane_release_checks
           RELEASE_CHECK_VARIANT: ${{ matrix.lane }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
           RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_parity_lane_artifacts.outcome }}
-        run: |
+        run: &record_release_check_advisory_status |
           set -euo pipefail
           status="success"
           mark_status() {
@@ -1006,10 +1007,17 @@ jobs:
             mark_status "$outcome"
           done
           mkdir -p .artifacts/release-check-status
-          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}-${RELEASE_CHECK_VARIANT}.env"
+          status_name="$RELEASE_CHECK_JOB"
+          if [[ -n "${RELEASE_CHECK_VARIANT:-}" ]]; then
+            status_name="${status_name}-${RELEASE_CHECK_VARIANT}"
+          fi
+          status_path=".artifacts/release-check-status/${status_name}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
           {
+            printf 'run_id=%s\n' "${GITHUB_RUN_ID:?}"
+            printf 'run_attempt=%s\n' "${GITHUB_RUN_ATTEMPT:?}"
+            printf 'target_sha=%s\n' "${RELEASE_CHECK_TARGET_SHA:?}"
             printf 'job=%s\n' "$RELEASE_CHECK_JOB"
-            printf 'variant=%s\n' "$RELEASE_CHECK_VARIANT"
+            printf 'variant=%s\n' "${RELEASE_CHECK_VARIANT:-}"
             printf 'status=%s\n' "$status"
             printf 'job_status=%s\n' "${JOB_STATUS:-}"
             printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
@@ -1019,8 +1027,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-check-status-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/release-check-status/qa_lab_parity_lane_release_checks-${{ matrix.lane }}.env
+          name: release-check-status-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_lab_parity_lane_release_checks-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}.env
           retention-days: 14
           if-no-files-found: error
 
@@ -1089,42 +1097,17 @@ jobs:
         shell: bash
         env:
           RELEASE_CHECK_JOB: qa_lab_parity_report_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
           RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.generate_report.outcome }} ${{ steps.upload_parity_artifacts.outcome }}
-        run: |
-          set -euo pipefail
-          status="success"
-          mark_status() {
-            case "$1" in
-              failure) status="failure" ;;
-              cancelled)
-                if [[ "$status" != "failure" ]]; then
-                  status="cancelled"
-                fi
-                ;;
-              success|skipped|"") ;;
-              *) status="failure" ;;
-            esac
-          }
-          mark_status "${JOB_STATUS:-}"
-          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
-            mark_status "$outcome"
-          done
-          mkdir -p .artifacts/release-check-status
-          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
-          {
-            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "${JOB_STATUS:-}"
-            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
-          } > "$status_path"
+        run: *record_release_check_advisory_status
 
       - name: Upload advisory status
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-check-status-qa-parity-report-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/release-check-status/qa_lab_parity_report_release_checks.env
+          name: release-check-status-qa-parity-report-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_lab_parity_report_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
           retention-days: 14
           if-no-files-found: error
 
@@ -1261,42 +1244,17 @@ jobs:
         shell: bash
         env:
           RELEASE_CHECK_JOB: qa_lab_runtime_parity_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
           RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.runtime_parity_lane.outcome }} ${{ steps.runtime_parity_standard_lane.outcome }} ${{ steps.runtime_parity_soak_lane.outcome }} ${{ steps.generate_runtime_parity_report.outcome }} ${{ steps.generate_runtime_parity_standard_report.outcome }} ${{ steps.generate_runtime_parity_soak_report.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
-        run: |
-          set -euo pipefail
-          status="success"
-          mark_status() {
-            case "$1" in
-              failure) status="failure" ;;
-              cancelled)
-                if [[ "$status" != "failure" ]]; then
-                  status="cancelled"
-                fi
-                ;;
-              success|skipped|"") ;;
-              *) status="failure" ;;
-            esac
-          }
-          mark_status "${JOB_STATUS:-}"
-          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
-            mark_status "$outcome"
-          done
-          mkdir -p .artifacts/release-check-status
-          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
-          {
-            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "${JOB_STATUS:-}"
-            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
-          } > "$status_path"
+        run: *record_release_check_advisory_status
 
       - name: Upload advisory status
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/release-check-status/qa_lab_runtime_parity_release_checks.env
+          name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_lab_runtime_parity_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
           retention-days: 14
           if-no-files-found: error
 
@@ -1329,15 +1287,45 @@ jobs:
       - name: Download runtime parity status
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
+          name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/release-check-status/
 
       - name: Verify runtime parity producer status
         id: verify_runtime_parity_status
         shell: bash
+        env:
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
         run: |
           set -euo pipefail
-          status_path=".artifacts/release-check-status/qa_lab_runtime_parity_release_checks.env"
+          status_path=".artifacts/release-check-status/qa_lab_runtime_parity_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
+          status_field() {
+            local key="$1"
+            awk -v key="$key" '
+              index($0, key "=") == 1 {
+                count += 1
+                value = substr($0, length(key) + 2)
+              }
+              END {
+                if (count != 1) {
+                  exit 1
+                }
+                print value
+              }
+            ' "$status_path"
+          }
+          run_id="$(status_field run_id)"
+          run_attempt="$(status_field run_attempt)"
+          target_sha="$(status_field target_sha)"
+          job_name="$(status_field job)"
+          variant="$(status_field variant)"
+          if [[ "$run_id" != "$GITHUB_RUN_ID" ||
+                "$run_attempt" != "$GITHUB_RUN_ATTEMPT" ||
+                "$target_sha" != "$RELEASE_CHECK_TARGET_SHA" ||
+                "$job_name" != "qa_lab_runtime_parity_release_checks" ||
+                -n "$variant" ]]; then
+            echo "Runtime parity producer status does not match the current run, attempt, target, job, and variant." >&2
+            exit 1
+          fi
           status="$(sed -n 's/^status=//p' "$status_path" | tail -n 1)"
           if [[ "$status" != "success" ]]; then
             echo "Runtime parity producer status is ${status:-missing}; skipping coverage artifact consumer."
@@ -1457,42 +1445,17 @@ jobs:
         shell: bash
         env:
           RELEASE_CHECK_JOB: qa_live_matrix_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
           RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_matrix_qa_artifacts.outcome }}
-        run: |
-          set -euo pipefail
-          status="success"
-          mark_status() {
-            case "$1" in
-              failure) status="failure" ;;
-              cancelled)
-                if [[ "$status" != "failure" ]]; then
-                  status="cancelled"
-                fi
-                ;;
-              success|skipped|"") ;;
-              *) status="failure" ;;
-            esac
-          }
-          mark_status "${JOB_STATUS:-}"
-          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
-            mark_status "$outcome"
-          done
-          mkdir -p .artifacts/release-check-status
-          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
-          {
-            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "${JOB_STATUS:-}"
-            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
-          } > "$status_path"
+        run: *record_release_check_advisory_status
 
       - name: Upload advisory status
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-check-status-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/release-check-status/qa_live_matrix_release_checks.env
+          name: release-check-status-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_live_matrix_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
           retention-days: 14
           if-no-files-found: error
 
@@ -1598,42 +1561,17 @@ jobs:
         shell: bash
         env:
           RELEASE_CHECK_JOB: qa_live_telegram_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
           RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_telegram_qa_artifacts.outcome }}
-        run: |
-          set -euo pipefail
-          status="success"
-          mark_status() {
-            case "$1" in
-              failure) status="failure" ;;
-              cancelled)
-                if [[ "$status" != "failure" ]]; then
-                  status="cancelled"
-                fi
-                ;;
-              success|skipped|"") ;;
-              *) status="failure" ;;
-            esac
-          }
-          mark_status "${JOB_STATUS:-}"
-          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
-            mark_status "$outcome"
-          done
-          mkdir -p .artifacts/release-check-status
-          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
-          {
-            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "${JOB_STATUS:-}"
-            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
-          } > "$status_path"
+        run: *record_release_check_advisory_status
 
       - name: Upload advisory status
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-check-status-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/release-check-status/qa_live_telegram_release_checks.env
+          name: release-check-status-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_live_telegram_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
           retention-days: 14
           if-no-files-found: error
 
@@ -1720,42 +1658,17 @@ jobs:
         shell: bash
         env:
           RELEASE_CHECK_JOB: qa_live_discord_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
           RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_discord_qa_artifacts.outcome }}
-        run: |
-          set -euo pipefail
-          status="success"
-          mark_status() {
-            case "$1" in
-              failure) status="failure" ;;
-              cancelled)
-                if [[ "$status" != "failure" ]]; then
-                  status="cancelled"
-                fi
-                ;;
-              success|skipped|"") ;;
-              *) status="failure" ;;
-            esac
-          }
-          mark_status "${JOB_STATUS:-}"
-          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
-            mark_status "$outcome"
-          done
-          mkdir -p .artifacts/release-check-status
-          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
-          {
-            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "${JOB_STATUS:-}"
-            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
-          } > "$status_path"
+        run: *record_release_check_advisory_status
 
       - name: Upload advisory status
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-check-status-qa-live-discord-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/release-check-status/qa_live_discord_release_checks.env
+          name: release-check-status-qa-live-discord-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_live_discord_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
           retention-days: 14
           if-no-files-found: error
 
@@ -1845,42 +1758,17 @@ jobs:
         shell: bash
         env:
           RELEASE_CHECK_JOB: qa_live_whatsapp_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
           RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_whatsapp_qa_artifacts.outcome }}
-        run: |
-          set -euo pipefail
-          status="success"
-          mark_status() {
-            case "$1" in
-              failure) status="failure" ;;
-              cancelled)
-                if [[ "$status" != "failure" ]]; then
-                  status="cancelled"
-                fi
-                ;;
-              success|skipped|"") ;;
-              *) status="failure" ;;
-            esac
-          }
-          mark_status "${JOB_STATUS:-}"
-          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
-            mark_status "$outcome"
-          done
-          mkdir -p .artifacts/release-check-status
-          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
-          {
-            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "${JOB_STATUS:-}"
-            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
-          } > "$status_path"
+        run: *record_release_check_advisory_status
 
       - name: Upload advisory status
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-check-status-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/release-check-status/qa_live_whatsapp_release_checks.env
+          name: release-check-status-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_live_whatsapp_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
           retention-days: 14
           if-no-files-found: error
 
@@ -1967,48 +1855,24 @@ jobs:
         shell: bash
         env:
           RELEASE_CHECK_JOB: qa_live_slack_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
           RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_slack_qa_artifacts.outcome }}
-        run: |
-          set -euo pipefail
-          status="success"
-          mark_status() {
-            case "$1" in
-              failure) status="failure" ;;
-              cancelled)
-                if [[ "$status" != "failure" ]]; then
-                  status="cancelled"
-                fi
-                ;;
-              success|skipped|"") ;;
-              *) status="failure" ;;
-            esac
-          }
-          mark_status "${JOB_STATUS:-}"
-          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
-            mark_status "$outcome"
-          done
-          mkdir -p .artifacts/release-check-status
-          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
-          {
-            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "${JOB_STATUS:-}"
-            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
-          } > "$status_path"
+        run: *record_release_check_advisory_status
 
       - name: Upload advisory status
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-check-status-qa-live-slack-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/release-check-status/qa_live_slack_release_checks.env
+          name: release-check-status-qa-live-slack-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_live_slack_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
           retention-days: 14
           if-no-files-found: error
 
   summary:
     name: Verify release checks
     needs:
+      - resolve_target
       - prepare_release_package
       - install_smoke_release_checks
       - cross_os_release_checks
@@ -2036,39 +1900,192 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: release-check-status-*
+          pattern: release-check-status-*-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/release-check-status
           merge-multiple: true
 
       - name: Verify release check results
         shell: bash
         env:
+          PREPARE_RELEASE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
+          INSTALL_SMOKE_RELEASE_CHECKS_RESULT: ${{ needs.install_smoke_release_checks.result }}
+          CROSS_OS_RELEASE_CHECKS_RESULT: ${{ needs.cross_os_release_checks.result }}
+          LIVE_REPO_E2E_RELEASE_CHECKS_RESULT: ${{ needs.live_repo_e2e_release_checks.result }}
+          DOCKER_E2E_RELEASE_CHECKS_RESULT: ${{ needs.docker_e2e_release_checks.result }}
+          PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT: ${{ needs.package_acceptance_release_checks.result }}
+          QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_lane_release_checks.result }}
+          MATURITY_SCORECARD_RELEASE_CHECKS_RESULT: ${{ needs.maturity_scorecard_release_checks.result }}
+          QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_report_release_checks.result }}
+          QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_runtime_parity_release_checks.result }}
+          RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: ${{ needs.runtime_tool_coverage_release_checks.result }}
+          QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_matrix_release_checks.result }}
+          QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
+          QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
+          QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_whatsapp_release_checks.result }}
+          QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_slack_release_checks.result }}
+          RELEASE_CHECK_RUN_ID: ${{ github.run_id }}
+          RELEASE_CHECK_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           failed=0
+          release_check_items=(
+            "prepare_release_package=${PREPARE_RELEASE_PACKAGE_RESULT}"
+            "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
+            "cross_os_release_checks=${CROSS_OS_RELEASE_CHECKS_RESULT}"
+            "live_repo_e2e_release_checks=${LIVE_REPO_E2E_RELEASE_CHECKS_RESULT}"
+            "docker_e2e_release_checks=${DOCKER_E2E_RELEASE_CHECKS_RESULT}"
+            "package_acceptance_release_checks=${PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT}"
+            "qa_lab_parity_lane_release_checks=${QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT}"
+            "maturity_scorecard_release_checks=${MATURITY_SCORECARD_RELEASE_CHECKS_RESULT}"
+            "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
+            "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
+            "runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"
+            "qa_live_matrix_release_checks=${QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT}"
+            "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
+            "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
+            "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
+            "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
+          )
+          advisory_status_items=(
+            "qa_lab_parity_lane_release_checks=${QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT}"
+            "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
+            "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
+            "qa_live_matrix_release_checks=${QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT}"
+            "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
+            "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
+            "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
+            "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
+          )
           tideclaw_alpha=false
           if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha=true
           fi
+          status_field() {
+            local file="$1"
+            local key="$2"
+            awk -v key="$key" '
+              index($0, key "=") == 1 {
+                count += 1
+                value = substr($0, length(key) + 2)
+              }
+              END {
+                if (count != 1) {
+                  exit 1
+                }
+                print value
+              }
+            ' "$file"
+          }
+          validate_status_file() {
+            local file="$1"
+            local expected_job="$2"
+            local expected_variant="$3"
+            local actual_run_id actual_run_attempt actual_target_sha actual_job actual_variant
+            if [[ ! -f "$file" ]]; then
+              echo "::error::Missing advisory status file: ${file}" >&2
+              return 1
+            fi
+            actual_run_id="$(status_field "$file" run_id)" || {
+              echo "::error::Advisory status file ${file} has invalid run_id metadata." >&2
+              return 1
+            }
+            actual_run_attempt="$(status_field "$file" run_attempt)" || {
+              echo "::error::Advisory status file ${file} has invalid run_attempt metadata." >&2
+              return 1
+            }
+            actual_target_sha="$(status_field "$file" target_sha)" || {
+              echo "::error::Advisory status file ${file} has invalid target_sha metadata." >&2
+              return 1
+            }
+            actual_job="$(status_field "$file" job)" || {
+              echo "::error::Advisory status file ${file} has invalid job metadata." >&2
+              return 1
+            }
+            actual_variant="$(status_field "$file" variant)" || {
+              echo "::error::Advisory status file ${file} has invalid variant metadata." >&2
+              return 1
+            }
+            if [[ "$actual_run_id" != "$RELEASE_CHECK_RUN_ID" ||
+                  "$actual_run_attempt" != "$RELEASE_CHECK_RUN_ATTEMPT" ||
+                  "$actual_target_sha" != "$RELEASE_CHECK_TARGET_SHA" ||
+                  "$actual_job" != "$expected_job" ||
+                  "$actual_variant" != "$expected_variant" ]]; then
+              echo "::error::Advisory status file ${file} does not match the current run, attempt, target, job, and variant." >&2
+              return 1
+            fi
+          }
+          expected_status_artifact_count() {
+            local name="$1"
+            local fallback="$2"
+            if [[ "$fallback" == "skipped" ]]; then
+              printf '0\n'
+              return
+            fi
+            if [[ "$name" == "qa_lab_parity_lane_release_checks" ]]; then
+              printf '2\n'
+            else
+              printf '1\n'
+            fi
+          }
+          expected_status_count=0
+          for item in "${advisory_status_items[@]}"; do
+            name="${item%%=*}"
+            raw_result="${item#*=}"
+            expected_count="$(expected_status_artifact_count "$name" "$raw_result")"
+            expected_status_count=$((expected_status_count + expected_count))
+          done
+          status_dir=".artifacts/release-check-status"
+          actual_status_count=0
+          if [[ -d "$status_dir" ]]; then
+            actual_status_count="$(find "$status_dir" -maxdepth 1 -type f -name '*.env' | wc -l | tr -d '[:space:]')"
+          fi
+          if [[ "$actual_status_count" != "$expected_status_count" ]]; then
+            status_count_message="Expected ${expected_status_count} advisory status artifacts for run ${RELEASE_CHECK_RUN_ID} attempt ${RELEASE_CHECK_RUN_ATTEMPT}, found ${actual_status_count}."
+            if [[ "$tideclaw_alpha" == "true" ]]; then
+              echo "::warning::${status_count_message} Tideclaw alpha treats non-package-safety release-check lanes as advisory."
+            else
+              echo "::error::${status_count_message}"
+              failed=1
+            fi
+          fi
           release_check_result() {
             local name="$1"
             local fallback="$2"
-            local status_dir=".artifacts/release-check-status"
             local saw=0
             local saw_failure=0
             local saw_cancelled=0
-            if [[ -d "$status_dir" ]]; then
-              while IFS= read -r -d '' file; do
-                saw=1
-                status="$(sed -n 's/^status=//p' "$file" | tail -n 1)"
-                case "$status" in
-                  success|skipped) ;;
-                  cancelled) saw_cancelled=1 ;;
-                  failure|"") saw_failure=1 ;;
-                  *) saw_failure=1 ;;
-                esac
-              done < <(find "$status_dir" -type f -name "${name}*.env" -print0)
+            local variants=()
+            if [[ "$fallback" != "skipped" ]]; then
+              if [[ "$name" == "qa_lab_parity_lane_release_checks" ]]; then
+                variants=(candidate baseline)
+              else
+                variants=("")
+              fi
+            fi
+            for variant in "${variants[@]}"; do
+              suffix=""
+              if [[ -n "$variant" ]]; then
+                suffix="-${variant}"
+              fi
+              file="${status_dir}/${name}${suffix}-${RELEASE_CHECK_RUN_ID}-${RELEASE_CHECK_RUN_ATTEMPT}.env"
+              if ! validate_status_file "$file" "$name" "$variant"; then
+                saw_failure=1
+                continue
+              fi
+              saw=1
+              status="$(status_field "$file" status)" || status=""
+              case "$status" in
+                success|skipped) ;;
+                cancelled) saw_cancelled=1 ;;
+                failure|"") saw_failure=1 ;;
+                *) saw_failure=1 ;;
+              esac
+            done
+            if [[ "$fallback" == "skipped" ]]; then
+              printf 'skipped\n'
+              return
             fi
             if [[ "$saw_failure" == "1" ]]; then
               printf 'failure\n'
@@ -2094,24 +2111,7 @@ jobs:
                 ;;
             esac
           }
-          for item in \
-            "prepare_release_package=${{ needs.prepare_release_package.result }}" \
-            "install_smoke_release_checks=${{ needs.install_smoke_release_checks.result }}" \
-            "cross_os_release_checks=${{ needs.cross_os_release_checks.result }}" \
-            "live_repo_e2e_release_checks=${{ needs.live_repo_e2e_release_checks.result }}" \
-            "docker_e2e_release_checks=${{ needs.docker_e2e_release_checks.result }}" \
-            "package_acceptance_release_checks=${{ needs.package_acceptance_release_checks.result }}" \
-            "qa_lab_parity_lane_release_checks=${{ needs.qa_lab_parity_lane_release_checks.result }}" \
-            "maturity_scorecard_release_checks=${{ needs.maturity_scorecard_release_checks.result }}" \
-            "qa_lab_parity_report_release_checks=${{ needs.qa_lab_parity_report_release_checks.result }}" \
-            "qa_lab_runtime_parity_release_checks=${{ needs.qa_lab_runtime_parity_release_checks.result }}" \
-            "runtime_tool_coverage_release_checks=${{ needs.runtime_tool_coverage_release_checks.result }}" \
-            "qa_live_matrix_release_checks=${{ needs.qa_live_matrix_release_checks.result }}" \
-            "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}" \
-            "qa_live_discord_release_checks=${{ needs.qa_live_discord_release_checks.result }}" \
-            "qa_live_whatsapp_release_checks=${{ needs.qa_live_whatsapp_release_checks.result }}" \
-            "qa_live_slack_release_checks=${{ needs.qa_live_slack_release_checks.result }}"
-          do
+          for item in "${release_check_items[@]}"; do
             name="${item%%=*}"
             raw_result="${item#*=}"
             if advisory_status_override_allowed "$name"; then
