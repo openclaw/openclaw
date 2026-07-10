@@ -1,5 +1,5 @@
 // Coverage for incomplete-turn safety, retry instructions, and liveness states.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
@@ -77,14 +77,17 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(warnMessages().join("\n")).not.toContain(text);
   }
 
-  function runAttemptCall(index: number): { prompt?: string } {
+  function runAttemptCall(index: number): {
+    prompt?: string;
+    suppressNextUserMessagePersistence?: boolean;
+  } {
     // Continuation prompt assertions read the exact prompt passed to the runner
     // attempt rather than derived result metadata.
     const call = mockedRunEmbeddedAttempt.mock.calls[index];
     if (!call) {
       throw new Error(`Expected run embedded attempt call ${index}`);
     }
-    return call[0] as { prompt?: string };
+    return call[0] as { prompt?: string; suppressNextUserMessagePersistence?: boolean };
   }
 
   it("counts failed tool results in trace tool summaries", async () => {
@@ -848,6 +851,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
@@ -1105,6 +1109,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
     expectWarnMessageWith("empty response detected");
   });
 
@@ -1151,6 +1156,47 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta?.finalAssistantVisibleText).toBe("Recovered answer.");
     expectWarnMessageWith("empty response detected");
     expectNoWarnMessageWith("missing assistant terminal message detected");
+    expectNoWarnMessageWith("incomplete turn detected");
+  });
+
+  it("retries missing terminal assistant turns with the same prompt without re-persisting the user message", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+      }),
+    );
+    const recoveredAssistant = {
+      role: "assistant",
+      stopReason: "end_turn",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Recovered answer." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered answer."],
+        lastAssistant: recoveredAssistant,
+        currentAttemptAssistant: recoveredAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-missing-assistant-same-prompt-retry",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    // The same-prompt replay must not append the inbound user message a second time.
+    expect(runAttemptCall(1).prompt).toBe(runAttemptCall(0).prompt);
+    expect(runAttemptCall(1).suppressNextUserMessagePersistence).toBe(true);
+    expect(result.meta?.finalAssistantVisibleText).toBe("Recovered answer.");
+    expectWarnMessageWith("missing assistant terminal message detected");
+    expectNoWarnMessageWith("empty response detected");
     expectNoWarnMessageWith("incomplete turn detected");
   });
 
@@ -1471,6 +1517,112 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         isError: true,
       },
     ]);
+  });
+
+  describe("OPENCLAW_REASONING_ONLY_RETRY_LIMIT override", () => {
+    const previousLimitEnv = process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT;
+
+    afterEach(() => {
+      if (previousLimitEnv === undefined) {
+        delete process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT;
+      } else {
+        process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT = previousLimitEnv;
+      }
+    });
+
+    it("surfaces the incomplete-turn error on the first reasoning-only turn with no retries when set to 0", async () => {
+      process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT = "0";
+      const { runEmbeddedAgent: freshRunEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+      await warmRunOverflowCompactionHarness(freshRunEmbeddedAgent);
+      mockedClassifyFailoverReason.mockReturnValue(null);
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "end_turn",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal reasoning",
+                thinkingSignature: JSON.stringify({
+                  id: "rs_env_limit_zero",
+                  type: "reasoning",
+                }),
+              },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      );
+
+      const result = await freshRunEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.4",
+        reasoningLevel: "on",
+        runId: "run-reasoning-only-env-limit-zero",
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]?.isError).toBe(true);
+      expect(result.payloads?.[0]?.text).toContain("Please try again");
+      expectWarnMessageWith("reasoning-only retries exhausted");
+    });
+  });
+
+  describe("retry limit env var parsing", () => {
+    const RETRY_LIMIT_ENV_VARS = [
+      "OPENCLAW_REASONING_ONLY_RETRY_LIMIT",
+      "OPENCLAW_EMPTY_RESPONSE_RETRY_LIMIT",
+    ] as const;
+    const previousEnv: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      for (const key of RETRY_LIMIT_ENV_VARS) {
+        previousEnv[key] = process.env[key];
+      }
+    });
+
+    afterEach(() => {
+      for (const key of RETRY_LIMIT_ENV_VARS) {
+        if (previousEnv[key] === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = previousEnv[key];
+        }
+      }
+    });
+
+    async function importIncompleteTurnFresh(): Promise<typeof import("./run/incomplete-turn.js")> {
+      vi.resetModules();
+      return import("./run/incomplete-turn.js");
+    }
+
+    it("reads valid non-negative integer overrides from env", async () => {
+      process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT = "5";
+      process.env.OPENCLAW_EMPTY_RESPONSE_RETRY_LIMIT = "0";
+      const mod = await importIncompleteTurnFresh();
+      expect(mod.DEFAULT_REASONING_ONLY_RETRY_LIMIT).toBe(5);
+      expect(mod.DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(0);
+    });
+
+    it.each(["abc", "-1"])("falls back to the default for invalid value %s", async (value) => {
+      process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT = value;
+      process.env.OPENCLAW_EMPTY_RESPONSE_RETRY_LIMIT = value;
+      const mod = await importIncompleteTurnFresh();
+      expect(mod.DEFAULT_REASONING_ONLY_RETRY_LIMIT).toBe(2);
+      expect(mod.DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
+    });
+
+    it("falls back to the default when unset", async () => {
+      delete process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT;
+      delete process.env.OPENCLAW_EMPTY_RESPONSE_RETRY_LIMIT;
+      const mod = await importIncompleteTurnFresh();
+      expect(mod.DEFAULT_REASONING_ONLY_RETRY_LIMIT).toBe(2);
+      expect(mod.DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
+    });
   });
 
   it("marks incomplete-turn retries as replay-invalid abandoned runs", () => {
