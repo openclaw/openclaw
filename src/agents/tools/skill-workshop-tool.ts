@@ -27,7 +27,7 @@ import type {
 import { stringEnum } from "../schema/typebox.js";
 import {
   asToolParamsRecord,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
   ToolInputError,
   type AnyAgentTool,
@@ -366,13 +366,7 @@ function readProposalStatusParam(params: Record<string, unknown>): SkillProposal
 }
 
 function readListLimitParam(params: Record<string, unknown>): number {
-  return (
-    readNumberParam(params, "limit", {
-      integer: true,
-      positiveInteger: true,
-      label: "limit",
-    }) ?? 20
-  );
+  return readPositiveIntegerParam(params, "limit") ?? 20;
 }
 
 function listProposalEntries(params: {

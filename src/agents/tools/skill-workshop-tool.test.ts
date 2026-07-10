@@ -83,6 +83,19 @@ describe("skill_workshop tool", () => {
     expect(tools.some((tool) => tool.name === "skill_workshop")).toBe(false);
   });
 
+  it.each([0, 1.5, "1.5", "many"])("rejects invalid list limit %s", async (limit) => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    await expect(tool.execute("call-list-limit", { action: "list", limit })).rejects.toThrow(
+      "limit must be a positive integer",
+    );
+  });
+
   it("creates pending skill proposals without applying them", async () => {
     // Creation writes reviewable proposal artifacts under state, not live skill
     // files in the workspace.
