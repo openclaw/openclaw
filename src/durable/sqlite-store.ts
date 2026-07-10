@@ -23,6 +23,7 @@ import type {
   CompactDurableRuntimeRunResult,
   CreateDurableRuntimeLinkInput,
   CreateDurableParentWakeInput,
+  CreateDurableWakeInput,
   CreateDurableRuntimeRefInput,
   CreateDurableRuntimeRunInput,
   CreateDurableRuntimeSignalInput,
@@ -37,6 +38,11 @@ import type {
   DurableDedupeScope,
   DurableParentWake,
   DurableParentWakeStatus,
+  DurableWake,
+  DurableWakeOwnerKind,
+  DurableWakeStatus,
+  DurableWakeTargetKind,
+  DurableWakeTargetResolutionStatus,
   DurableRuntimeLink,
   DurableRuntimeLinkStatus,
   DurableRuntimeLinkType,
@@ -64,6 +70,7 @@ import type {
   RecordDurableDedupeLedgerInput,
   ResolveDurableSideEffectUncertaintyFactInput,
   UpdateDurableParentWakeInput,
+  UpdateDurableWakeInput,
   UpdateDurableRuntimeStepInput,
   UpdateDurableRuntimeTimerInput,
 } from "./types.js";
@@ -194,6 +201,13 @@ type DurableParentWakeRow = {
   target_agent: string | null;
   target_session: string | null;
   target_channel: string | null;
+  target_kind: DurableWakeTargetKind | null;
+  target_ref: string | null;
+  owner_kind: DurableWakeOwnerKind | null;
+  owner_ref: string | null;
+  report_route_ref: string | null;
+  target_resolution_status: DurableWakeTargetResolutionStatus | null;
+  target_resolution_reason: string | null;
   reason: DurableParentWake["reason"];
   facts_ref: string | null;
   source_run_id: string | null;
@@ -450,6 +464,17 @@ function rowToParentWake(row: DurableParentWakeRow): DurableParentWake {
     ...(row.target_agent ? { targetAgent: row.target_agent } : {}),
     ...(row.target_session ? { targetSession: row.target_session } : {}),
     ...(row.target_channel ? { targetChannel: row.target_channel } : {}),
+    ...(row.target_kind ? { targetKind: row.target_kind } : {}),
+    ...(row.target_ref ? { targetRef: row.target_ref } : {}),
+    ...(row.owner_kind ? { ownerKind: row.owner_kind } : {}),
+    ...(row.owner_ref ? { ownerRef: row.owner_ref } : {}),
+    ...(row.report_route_ref ? { reportRouteRef: row.report_route_ref } : {}),
+    ...(row.target_resolution_status
+      ? { targetResolutionStatus: row.target_resolution_status }
+      : {}),
+    ...(row.target_resolution_reason
+      ? { targetResolutionReason: row.target_resolution_reason }
+      : {}),
     reason: row.reason,
     ...(row.facts_ref ? { factsRef: row.facts_ref } : {}),
     ...(row.source_run_id ? { sourceRunId: row.source_run_id } : {}),
@@ -644,6 +669,209 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
     }
   })();
   let closed = false;
+
+  const createDurableWakeRecord = (
+    input: CreateDurableWakeInput,
+    options?: { requireParentTarget?: boolean },
+  ): DurableWake => {
+    const parentRunId = optionalText(input.parentRunId);
+    const parentSessionKey = optionalText(input.parentSessionKey);
+    if (options?.requireParentTarget && !parentRunId && !parentSessionKey) {
+      throw new Error("Durable parent wake requires parentRunId or parentSessionKey");
+    }
+    const targetRef = optionalText(input.targetRef);
+    const reportRouteRef = optionalText(input.reportRouteRef);
+    const targetResolutionStatus = input.targetResolutionStatus;
+    const hasInspectableResolution =
+      targetResolutionStatus === "ambiguous" ||
+      targetResolutionStatus === "missing" ||
+      targetResolutionStatus === "unauthorized" ||
+      targetResolutionStatus === "inspect_only";
+    if (
+      !parentRunId &&
+      !parentSessionKey &&
+      !targetRef &&
+      !reportRouteRef &&
+      !hasInspectableResolution
+    ) {
+      throw new Error(
+        "Durable wake requires a parent target, generalized target, report route, or inspect-only resolution",
+      );
+    }
+    const dedupeKey = optionalText(input.dedupeKey);
+    if (!dedupeKey) {
+      throw new Error("Durable wake requires a dedupeKey");
+    }
+    const now = input.now ?? Date.now();
+    const wakeId = input.wakeId ?? `wake_${randomUUID()}`;
+    return runSqliteImmediateTransactionSync(db, () => {
+      const existing = queryFirst<DurableParentWakeRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_parent_wakes")
+          .selectAll()
+          .where("dedupe_key", "=", dedupeKey),
+      );
+      if (existing) {
+        return rowToParentWake(existing);
+      }
+      executeQuery(
+        db,
+        durableDb.insertInto("durable_runtime_parent_wakes").values({
+          wake_id: wakeId,
+          parent_run_id: parentRunId,
+          parent_session_key: parentSessionKey,
+          target_agent: optionalText(input.targetAgent),
+          target_session: optionalText(input.targetSession),
+          target_channel: optionalText(input.targetChannel),
+          target_kind: optionalText(input.targetKind),
+          target_ref: targetRef,
+          owner_kind: optionalText(input.ownerKind),
+          owner_ref: optionalText(input.ownerRef),
+          report_route_ref: reportRouteRef,
+          target_resolution_status: optionalText(input.targetResolutionStatus),
+          target_resolution_reason: optionalText(input.targetResolutionReason),
+          reason: input.reason,
+          facts_ref: optionalText(input.factsRef),
+          source_run_id: optionalText(input.sourceRunId),
+          dedupe_key: dedupeKey,
+          attempt_count: 0,
+          last_attempt_at: null,
+          acked_at: null,
+          failed_reason: null,
+          status: "pending",
+          created_at: now,
+          updated_at: now,
+          metadata_json: serializeJson(input.metadata),
+        }),
+      );
+      const row = queryFirst<DurableParentWakeRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_parent_wakes")
+          .selectAll()
+          .where("wake_id", "=", wakeId),
+      );
+      return rowToParentWake(row!);
+    });
+  };
+
+  const updateDurableWakeRecord = (input: UpdateDurableWakeInput): DurableWake | undefined => {
+    const now = input.now ?? Date.now();
+    return runSqliteImmediateTransactionSync(db, () => {
+      const current = queryFirst<DurableParentWakeRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_parent_wakes")
+          .selectAll()
+          .where("wake_id", "=", input.wakeId),
+      );
+      if (!current) {
+        return undefined;
+      }
+      const nextAttemptCount = input.attemptCount ?? current.attempt_count;
+      const nextLastAttemptAt =
+        input.lastAttemptAt === undefined ? current.last_attempt_at : input.lastAttemptAt;
+      const nextAckedAt = input.ackedAt === undefined ? current.acked_at : input.ackedAt;
+      const nextFailedReason =
+        input.failedReason === undefined
+          ? current.failed_reason
+          : optionalText(input.failedReason ?? undefined);
+      const nextMetadataJson =
+        input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
+      if (isTerminalWakeStatus(current.status)) {
+        const isNoOp =
+          input.status === current.status &&
+          isSameSqlValue(nextAttemptCount, current.attempt_count) &&
+          isSameSqlValue(nextLastAttemptAt, current.last_attempt_at) &&
+          isSameSqlValue(nextAckedAt, current.acked_at) &&
+          isSameSqlValue(nextFailedReason, current.failed_reason) &&
+          isSameSqlValue(nextMetadataJson, current.metadata_json);
+        return isNoOp ? rowToParentWake(current) : undefined;
+      }
+      if (!isAllowedWakeStatusTransition(current.status, input.status)) {
+        return undefined;
+      }
+      executeQuery(
+        db,
+        durableDb
+          .updateTable("durable_runtime_parent_wakes")
+          .set({
+            status: input.status,
+            attempt_count: Number(nextAttemptCount),
+            last_attempt_at: nextLastAttemptAt == null ? null : Number(nextLastAttemptAt),
+            acked_at: nextAckedAt == null ? null : Number(nextAckedAt),
+            failed_reason: nextFailedReason,
+            updated_at: now,
+            metadata_json: nextMetadataJson,
+          })
+          .where("wake_id", "=", input.wakeId),
+      );
+      const row = queryFirst<DurableParentWakeRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_parent_wakes")
+          .selectAll()
+          .where("wake_id", "=", input.wakeId),
+      );
+      return rowToParentWake(row!);
+    });
+  };
+
+  const getDurableWakeRecord = (wakeId: string): DurableWake | undefined => {
+    const row = queryFirst<DurableParentWakeRow>(
+      db,
+      durableDb
+        .selectFrom("durable_runtime_parent_wakes")
+        .selectAll()
+        .where("wake_id", "=", wakeId),
+    );
+    return row ? rowToParentWake(row) : undefined;
+  };
+
+  const listDurableWakeRecords = (options?: {
+    parentRunId?: string;
+    parentSessionKey?: string;
+    targetKind?: DurableWakeTargetKind;
+    targetRef?: string;
+    ownerKind?: DurableWakeOwnerKind;
+    ownerRef?: string;
+    reportRouteRef?: string;
+    targetResolutionStatus?: DurableWakeTargetResolutionStatus;
+    status?: DurableWakeStatus;
+    limit?: number;
+  }): DurableWake[] => {
+    const parentRunId = optionalText(options?.parentRunId);
+    const parentSessionKey = optionalText(options?.parentSessionKey);
+    const targetRef = optionalText(options?.targetRef);
+    const ownerRef = optionalText(options?.ownerRef);
+    const reportRouteRef = optionalText(options?.reportRouteRef);
+    const rows = queryRows<DurableParentWakeRow>(
+      db,
+      durableDb
+        .selectFrom("durable_runtime_parent_wakes")
+        .selectAll()
+        .$if(Boolean(parentRunId), (qb) => qb.where("parent_run_id", "=", parentRunId!))
+        .$if(Boolean(parentSessionKey), (qb) =>
+          qb.where("parent_session_key", "=", parentSessionKey!),
+        )
+        .$if(Boolean(options?.targetKind), (qb) =>
+          qb.where("target_kind", "=", options!.targetKind!),
+        )
+        .$if(Boolean(targetRef), (qb) => qb.where("target_ref", "=", targetRef!))
+        .$if(Boolean(options?.ownerKind), (qb) => qb.where("owner_kind", "=", options!.ownerKind!))
+        .$if(Boolean(ownerRef), (qb) => qb.where("owner_ref", "=", ownerRef!))
+        .$if(Boolean(reportRouteRef), (qb) => qb.where("report_route_ref", "=", reportRouteRef!))
+        .$if(Boolean(options?.targetResolutionStatus), (qb) =>
+          qb.where("target_resolution_status", "=", options!.targetResolutionStatus!),
+        )
+        .$if(Boolean(options?.status), (qb) => qb.where("status", "=", options!.status!))
+        .orderBy("updated_at", "desc")
+        .orderBy("wake_id", "desc")
+        .limit(normalizeQueryLimit(options?.limit, 500)),
+    );
+    return rows.map(rowToParentWake);
+  };
 
   return {
     createRun(input: CreateDurableRuntimeRunInput): DurableRuntimeRun {
@@ -1634,134 +1862,43 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       return rows.map(rowToSignal);
     },
 
+    createDurableWake(input: CreateDurableWakeInput): DurableWake {
+      return createDurableWakeRecord(input);
+    },
+
+    updateDurableWake(input: UpdateDurableWakeInput): DurableWake | undefined {
+      return updateDurableWakeRecord(input);
+    },
+
+    getDurableWake(wakeId: string): DurableWake | undefined {
+      return getDurableWakeRecord(wakeId);
+    },
+
+    listDurableWakes(options?: {
+      parentRunId?: string;
+      parentSessionKey?: string;
+      targetKind?: DurableWakeTargetKind;
+      targetRef?: string;
+      ownerKind?: DurableWakeOwnerKind;
+      ownerRef?: string;
+      reportRouteRef?: string;
+      targetResolutionStatus?: DurableWakeTargetResolutionStatus;
+      status?: DurableWakeStatus;
+      limit?: number;
+    }): DurableWake[] {
+      return listDurableWakeRecords(options);
+    },
+
     createParentWake(input: CreateDurableParentWakeInput): DurableParentWake {
-      const parentRunId = optionalText(input.parentRunId);
-      const parentSessionKey = optionalText(input.parentSessionKey);
-      if (!parentRunId && !parentSessionKey) {
-        throw new Error("Durable parent wake requires parentRunId or parentSessionKey");
-      }
-      const dedupeKey = optionalText(input.dedupeKey);
-      if (!dedupeKey) {
-        throw new Error("Durable parent wake requires a dedupeKey");
-      }
-      const now = input.now ?? Date.now();
-      const wakeId = input.wakeId ?? `wake_${randomUUID()}`;
-      return runSqliteImmediateTransactionSync(db, () => {
-        const existing = queryFirst<DurableParentWakeRow>(
-          db,
-          durableDb
-            .selectFrom("durable_runtime_parent_wakes")
-            .selectAll()
-            .where("dedupe_key", "=", dedupeKey),
-        );
-        if (existing) {
-          return rowToParentWake(existing);
-        }
-        executeQuery(
-          db,
-          durableDb.insertInto("durable_runtime_parent_wakes").values({
-            wake_id: wakeId,
-            parent_run_id: parentRunId,
-            parent_session_key: parentSessionKey,
-            target_agent: optionalText(input.targetAgent),
-            target_session: optionalText(input.targetSession),
-            target_channel: optionalText(input.targetChannel),
-            reason: input.reason,
-            facts_ref: optionalText(input.factsRef),
-            source_run_id: optionalText(input.sourceRunId),
-            dedupe_key: dedupeKey,
-            attempt_count: 0,
-            last_attempt_at: null,
-            acked_at: null,
-            failed_reason: null,
-            status: "pending",
-            created_at: now,
-            updated_at: now,
-            metadata_json: serializeJson(input.metadata),
-          }),
-        );
-        const row = queryFirst<DurableParentWakeRow>(
-          db,
-          durableDb
-            .selectFrom("durable_runtime_parent_wakes")
-            .selectAll()
-            .where("wake_id", "=", wakeId),
-        );
-        return rowToParentWake(row!);
-      });
+      return createDurableWakeRecord(input, { requireParentTarget: true });
     },
 
     updateParentWake(input: UpdateDurableParentWakeInput): DurableParentWake | undefined {
-      const now = input.now ?? Date.now();
-      return runSqliteImmediateTransactionSync(db, () => {
-        const current = queryFirst<DurableParentWakeRow>(
-          db,
-          durableDb
-            .selectFrom("durable_runtime_parent_wakes")
-            .selectAll()
-            .where("wake_id", "=", input.wakeId),
-        );
-        if (!current) {
-          return undefined;
-        }
-        const nextAttemptCount = input.attemptCount ?? current.attempt_count;
-        const nextLastAttemptAt =
-          input.lastAttemptAt === undefined ? current.last_attempt_at : input.lastAttemptAt;
-        const nextAckedAt = input.ackedAt === undefined ? current.acked_at : input.ackedAt;
-        const nextFailedReason =
-          input.failedReason === undefined
-            ? current.failed_reason
-            : optionalText(input.failedReason ?? undefined);
-        const nextMetadataJson =
-          input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
-        if (isTerminalWakeStatus(current.status)) {
-          const isNoOp =
-            input.status === current.status &&
-            isSameSqlValue(nextAttemptCount, current.attempt_count) &&
-            isSameSqlValue(nextLastAttemptAt, current.last_attempt_at) &&
-            isSameSqlValue(nextAckedAt, current.acked_at) &&
-            isSameSqlValue(nextFailedReason, current.failed_reason) &&
-            isSameSqlValue(nextMetadataJson, current.metadata_json);
-          return isNoOp ? rowToParentWake(current) : undefined;
-        }
-        if (!isAllowedWakeStatusTransition(current.status, input.status)) {
-          return undefined;
-        }
-        executeQuery(
-          db,
-          durableDb
-            .updateTable("durable_runtime_parent_wakes")
-            .set({
-              status: input.status,
-              attempt_count: Number(nextAttemptCount),
-              last_attempt_at: nextLastAttemptAt == null ? null : Number(nextLastAttemptAt),
-              acked_at: nextAckedAt == null ? null : Number(nextAckedAt),
-              failed_reason: nextFailedReason,
-              updated_at: now,
-              metadata_json: nextMetadataJson,
-            })
-            .where("wake_id", "=", input.wakeId),
-        );
-        const row = queryFirst<DurableParentWakeRow>(
-          db,
-          durableDb
-            .selectFrom("durable_runtime_parent_wakes")
-            .selectAll()
-            .where("wake_id", "=", input.wakeId),
-        );
-        return rowToParentWake(row!);
-      });
+      return updateDurableWakeRecord(input);
     },
 
     getParentWake(wakeId: string): DurableParentWake | undefined {
-      const row = queryFirst<DurableParentWakeRow>(
-        db,
-        durableDb
-          .selectFrom("durable_runtime_parent_wakes")
-          .selectAll()
-          .where("wake_id", "=", wakeId),
-      );
-      return row ? rowToParentWake(row) : undefined;
+      return getDurableWakeRecord(wakeId);
     },
 
     listParentWakes(options?: {
@@ -1770,23 +1907,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       status?: DurableParentWakeStatus;
       limit?: number;
     }): DurableParentWake[] {
-      const parentRunId = optionalText(options?.parentRunId);
-      const parentSessionKey = optionalText(options?.parentSessionKey);
-      const rows = queryRows<DurableParentWakeRow>(
-        db,
-        durableDb
-          .selectFrom("durable_runtime_parent_wakes")
-          .selectAll()
-          .$if(Boolean(parentRunId), (qb) => qb.where("parent_run_id", "=", parentRunId!))
-          .$if(Boolean(parentSessionKey), (qb) =>
-            qb.where("parent_session_key", "=", parentSessionKey!),
-          )
-          .$if(Boolean(options?.status), (qb) => qb.where("status", "=", options!.status!))
-          .orderBy("updated_at", "desc")
-          .orderBy("wake_id", "desc")
-          .limit(normalizeQueryLimit(options?.limit, 500)),
-      );
-      return rows.map(rowToParentWake);
+      return listDurableWakeRecords(options);
     },
 
     recordSideEffectUncertaintyFact(
