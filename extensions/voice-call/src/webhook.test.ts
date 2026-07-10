@@ -1738,6 +1738,61 @@ describe("VoiceCallWebhookServer classic response routing", () => {
       [call.callId, "Spoken before compaction. Final detail.", { listenAfterPlayback: true }],
     ]);
   });
+
+  it("logs only char counts for inbound user text, early AI text, and final AI text", async () => {
+    const call = createCall(Date.now());
+    const speak = vi.fn(async () => ({ success: true }));
+    const manager = {
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      speak,
+    } as unknown as CallManager;
+
+    const logEntries: string[] = [];
+    const spyLogger = {
+      info: (msg: string) => {
+        logEntries.push(msg);
+      },
+      warn: (msg: string) => {
+        logEntries.push(msg);
+      },
+      error: (msg: string) => {
+        logEntries.push(msg);
+      },
+    };
+
+    const server = new VoiceCallWebhookServer(
+      createConfig({ agentId: "main" }),
+      manager,
+      provider,
+      {} as never,
+      undefined,
+      {} as never,
+      spyLogger,
+    );
+
+    const userMessage = "sensitive user speech content";
+    const earlyText = "confidential early AI response";
+    const finalText = "private final AI response";
+    mocks.generateVoiceResponse.mockReset().mockImplementationOnce(async (params) => {
+      await params?.onEarlyText?.(earlyText);
+      return { text: finalText, deliveredEarly: false };
+    });
+
+    await (
+      server as unknown as {
+        handleInboundResponse: (callId: string, message: string) => Promise<void>;
+      }
+    ).handleInboundResponse(call.callId, userMessage);
+
+    const logOutput = logEntries.join(" ");
+    // Call identifier and character count metadata must be present.
+    expect(logOutput).toContain(call.callId);
+    expect(logOutput).toContain("chars=");
+    // Raw message bodies must never appear in log output.
+    expect(logOutput).not.toContain(userMessage);
+    expect(logOutput).not.toContain(earlyText);
+    expect(logOutput).not.toContain(finalText);
+  });
 });
 
 describe("VoiceCallWebhookServer response normalization", () => {
@@ -1929,6 +1984,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       config: {
         onSpeechStart?: (providerCallId: string) => void;
         onTranscript?: (providerCallId: string, transcript: string) => void;
+        onPartialTranscript?: (providerCallId: string, partial: string) => void;
       };
     };
 
@@ -1952,19 +2008,103 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
         },
       },
     });
-    const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(vi.fn()));
+
+    const logEntries: string[] = [];
+    const spyLogger = {
+      info: (msg: string) => {
+        logEntries.push(msg);
+      },
+      warn: (msg: string) => {
+        logEntries.push(msg);
+      },
+      error: (msg: string) => {
+        logEntries.push(msg);
+      },
+    };
+
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      createTwilioProvider(vi.fn()),
+      undefined,
+      undefined,
+      undefined,
+      spyLogger,
+    );
     await server.start();
 
     try {
-      // Transcript content with emoji must not crash the handler.
-      // The log now only records char count, never the transcript body.
+      // Transcript content with emoji must not appear in log output.
+      // The injected logger asserts the boundary: only char counts and
+      // identifiers, never the raw transcript body.
       const transcript = `${"a".repeat(199)}\uD83D\uDE80tail`;
       getMediaCallbacks(server).config.onTranscript?.("CA-utf16", transcript);
 
-      // The callback text "No active call found" is expected because the
-      // mock manager returns undefined for getCallByProviderCallId.
-      // The important assertion is that this didn't throw and didn't log
-      // the raw transcript content through the old console.log path.
+      const logOutput = logEntries.join(" ");
+      // Caller identifier and character count metadata must be present.
+      expect(logOutput).toContain("CA-utf16");
+      expect(logOutput).toContain("chars=");
+      // Raw transcript body must never appear in log output.
+      expect(logOutput).not.toContain(transcript);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("logs partial transcript char count without logging partial content", async () => {
+    const manager = {
+      getActiveCalls: () => [],
+      endCall: vi.fn(async () => ({ success: true })),
+      speakInitialMessage: vi.fn(async () => {}),
+      processEvent: vi.fn(),
+    } as unknown as CallManager;
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: {
+          openai: {
+            apiKey: "test-key", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    const logEntries: string[] = [];
+    const spyLogger = {
+      info: (msg: string) => {
+        logEntries.push(msg);
+      },
+      warn: (msg: string) => {
+        logEntries.push(msg);
+      },
+      error: (msg: string) => {
+        logEntries.push(msg);
+      },
+    };
+
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      createTwilioProvider(vi.fn()),
+      undefined,
+      undefined,
+      undefined,
+      spyLogger,
+    );
+    await server.start();
+
+    try {
+      const partialText = "user is saying something sensitive";
+      getMediaCallbacks(server).config.onPartialTranscript?.("CA-partial", partialText);
+
+      const logOutput = logEntries.join(" ");
+      // Caller identifier and character count metadata must be present.
+      expect(logOutput).toContain("CA-partial");
+      expect(logOutput).toContain("chars=");
+      // Raw partial transcript text must never appear in log output.
+      expect(logOutput).not.toContain(partialText);
     } finally {
       await server.stop();
     }
