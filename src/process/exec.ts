@@ -33,9 +33,6 @@ function assignChildEnvValue(params: {
   platform: NodeJS.Platform;
   value: string | undefined;
 }): void {
-  if (params.value === undefined) {
-    return;
-  }
   if (params.platform === "win32") {
     const normalizedKey = params.key.toLowerCase();
     for (const existingKey of Object.keys(params.env)) {
@@ -43,6 +40,10 @@ function assignChildEnvValue(params: {
         delete params.env[existingKey];
       }
     }
+  }
+  if (params.value === undefined) {
+    delete params.env[params.key];
+    return;
   }
   params.env[params.key] = params.value;
 }
