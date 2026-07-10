@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { resolveIsConfigManaged } from "../config/config-ownership.js";
 import { createConfigIO, replaceConfigFile } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -317,14 +318,19 @@ export async function collectSecurityPermissionTargets(params: {
   cfg: OpenClawConfig;
   includePaths?: readonly string[];
 }): Promise<SecurityPermissionTarget[]> {
+  const configTargets: SecurityPermissionTarget[] = resolveIsConfigManaged(params.env)
+    ? []
+    : [
+        { path: params.configPath, mode: 0o600, require: "file" },
+        ...(params.includePaths ?? []).map((targetPath) => ({
+          path: targetPath,
+          mode: 0o600,
+          require: "file" as const,
+        })),
+      ];
   const targets: SecurityPermissionTarget[] = [
     { path: params.stateDir, mode: 0o700, require: "dir" },
-    { path: params.configPath, mode: 0o600, require: "file" },
-    ...(params.includePaths ?? []).map((targetPath) => ({
-      path: targetPath,
-      mode: 0o600,
-      require: "file" as const,
-    })),
+    ...configTargets,
   ];
   const credsDir = resolveOAuthDir(params.env, params.stateDir);
   targets.push({ path: credsDir, mode: 0o700, require: "dir" });

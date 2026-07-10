@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { resolveIsConfigManaged } from "../config/config-ownership.js";
 import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import {
   readConfigFileSnapshot,
@@ -27,6 +28,9 @@ const loadDoctorCron = createLazyRuntimeModule(() => import("./doctor/cron/index
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
+  if (resolveIsConfigManaged()) {
+    return changes;
+  }
   const home = resolveHomeDir();
   if (!home) {
     return changes;

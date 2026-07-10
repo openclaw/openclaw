@@ -5,6 +5,7 @@ import {
   formatInvalidConfigRecoveryHint,
   formatPluginPackagingRuntimeOutputRecoveryHint,
 } from "../cli/config-recovery-hints.js";
+import { resolveIsConfigManaged } from "../config/config-ownership.js";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
@@ -127,7 +128,10 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     );
   }
   if (configSnapshot.exists) {
-    assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
+    assertValidGatewayStartupConfigSnapshot(configSnapshot, {
+      includeDoctorHint: true,
+      managedConfig: resolveIsConfigManaged(),
+    });
   }
 
   const autoEnable = params.minimalTestGateway
@@ -410,7 +414,7 @@ export function createRuntimeSecretsActivator(params: {
 /** Throw a formatted startup error when the loaded config snapshot is invalid. */
 function assertValidGatewayStartupConfigSnapshot(
   snapshot: ConfigFileSnapshot,
-  options: { includeDoctorHint?: boolean } = {},
+  options: { includeDoctorHint?: boolean; managedConfig?: boolean } = {},
 ): void {
   if (snapshot.valid) {
     return;
@@ -422,10 +426,19 @@ function assertValidGatewayStartupConfigSnapshot(
   const recoveryHint =
     options.includeDoctorHint && isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
       ? `\n${formatPluginPackagingRuntimeOutputRecoveryHint()}`
-      : options.includeDoctorHint
-        ? `\n${formatInvalidConfigRecoveryHint()}`
-        : "";
+      : options.managedConfig
+        ? `\n${formatManagedConfigRecoveryHint()}`
+        : options.includeDoctorHint
+          ? `\n${formatInvalidConfigRecoveryHint()}`
+          : "";
   throw createInvalidConfigError(snapshot.path, `${issues}${recoveryHint}`);
+}
+
+function formatManagedConfigRecoveryHint(): string {
+  if (isNixMode) {
+    return "Update your Nix-managed OpenClaw config and rebuild, then retry.";
+  }
+  return "Config is externally managed. Fix and republish the external deployment source, then retry.";
 }
 
 /** Prepare the effective Gateway startup config after auth, overrides, and secrets activation. */

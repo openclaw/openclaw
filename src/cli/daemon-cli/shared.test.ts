@@ -2,12 +2,14 @@
 import { describe, expect, it } from "vitest";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
+  filterDaemonEnv,
   filterContainerGenericHints,
   parsePortFromArgs,
   renderRuntimeHints,
   renderGatewayServiceStartHints,
   resolveDaemonContainerContext,
   resolveRuntimeStatusColor,
+  safeDaemonEnv,
 } from "./shared.js";
 
 describe("resolveRuntimeStatusColor", () => {
@@ -31,6 +33,18 @@ describe("parsePortFromArgs", () => {
   it("accepts valid inline and space-separated port values", () => {
     expect(parsePortFromArgs(["--port=14720"])).toBe(14_720);
     expect(parsePortFromArgs(["--port", "14721"])).toBe(14_721);
+  });
+});
+
+describe("managed config daemon status", () => {
+  it("reports managed config ownership as a safe daemon selector", () => {
+    const env = {
+      OPENCLAW_CONFIG_MANAGED: "1",
+      OPENCLAW_GATEWAY_TOKEN: "secret",
+    };
+
+    expect(filterDaemonEnv(env)).toEqual({ OPENCLAW_CONFIG_MANAGED: "1" });
+    expect(safeDaemonEnv(env)).toEqual(["OPENCLAW_CONFIG_MANAGED=1"]);
   });
 });
 

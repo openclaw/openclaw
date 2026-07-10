@@ -13,6 +13,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { WizardSession } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
+import { rejectExternallyManagedConfigMutation } from "./config-mutation-guard.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -41,6 +42,9 @@ function findWizardSessionOrRespond(params: {
 export const wizardHandlers: GatewayRequestHandlers = {
   "wizard.start": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
+      return;
+    }
+    if (rejectExternallyManagedConfigMutation(respond)) {
       return;
     }
     const running = context.findRunningWizard();

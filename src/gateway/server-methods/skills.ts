@@ -66,6 +66,7 @@ import {
   rejectSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
+import { rejectExternallyManagedConfigMutation } from "./config-mutation-guard.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
 import type {
   GatewayRequestContext,
@@ -761,6 +762,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
               },
             }),
       );
+      return;
+    }
+    if (rejectExternallyManagedConfigMutation(respond)) {
       return;
     }
     const p = params as {

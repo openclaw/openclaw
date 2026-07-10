@@ -260,6 +260,31 @@ describe("config io write", () => {
     });
   });
 
+  it("refuses direct writes to externally managed config without changing the file", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const initialRaw = `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`;
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+      const io = createConfigIO({
+        configPath,
+        env: {
+          OPENCLAW_CONFIG_MANAGED: "1",
+          OPENCLAW_TEST_FAST: "1",
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      await expect(io.writeConfigFile({ gateway: { mode: "local", port: 19001 } })).rejects.toThrow(
+        "Config is externally managed (`OPENCLAW_CONFIG_MANAGED=1`)",
+      );
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+      expect(mockMaintainConfigBackups).not.toHaveBeenCalled();
+    });
+  });
+
   it("loads shipped plugin install config records without mutating config or plugin index", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -989,6 +1014,28 @@ describe("config io write", () => {
           )})`,
         ],
       ]);
+    });
+  });
+
+  it("does not repair or snapshot externally managed config with a JSON prefix", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const cleanRaw = `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`;
+      const managedRaw = `Found and updated: False\n${cleanRaw}`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, managedRaw, "utf-8");
+      const io = createConfigIO({
+        env: { OPENCLAW_CONFIG_MANAGED: "1", VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+      await expect(io.recoverConfigFromJsonRootSuffix(snapshot)).resolves.toBe(false);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(managedRaw);
+      const entries = await fs.readdir(path.dirname(configPath));
+      expect(entries.filter((entry) => entry.includes(".clobbered."))).toHaveLength(0);
     });
   });
 

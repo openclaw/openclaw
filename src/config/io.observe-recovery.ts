@@ -1,6 +1,7 @@
 // Observes and recovers config files that appear missing, corrupt, or clobbered.
 import crypto from "node:crypto";
 import { isRecord } from "../utils.js";
+import { resolveIsConfigManaged } from "./config-ownership.js";
 import {
   appendConfigAuditRecord,
   appendConfigAuditRecordSync,
@@ -614,6 +615,10 @@ function collectPollutedSecretPlaceholders(
 export async function maybeRecoverSuspiciousConfigRead(
   params: ConfigReadRecoveryParams,
 ): Promise<ConfigReadRecoveryResult> {
+  // External managers own rollback; never replace or snapshot their source files.
+  if (resolveIsConfigManaged(params.deps.env)) {
+    return returnOriginalConfigRead(params);
+  }
   const stat = await params.deps.fs.promises.stat(params.configPath).catch(() => null);
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
@@ -731,6 +736,10 @@ export async function maybeRecoverSuspiciousConfigRead(
 export function maybeRecoverSuspiciousConfigReadSync(
   params: ConfigReadRecoveryParams,
 ): ConfigReadRecoveryResult {
+  // Keep sync reads aligned with async reload reads for externally managed config.
+  if (resolveIsConfigManaged(params.deps.env)) {
+    return returnOriginalConfigRead(params);
+  }
   const stat = params.deps.fs.statSync(params.configPath, { throwIfNoEntry: false }) ?? null;
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
@@ -848,6 +857,10 @@ export async function promoteConfigSnapshotToLastKnownGood(params: {
   logger?: Pick<typeof console, "warn">;
 }): Promise<boolean> {
   const { deps, snapshot } = params;
+  // External source history replaces OpenClaw-owned adjacent LKG snapshots.
+  if (resolveIsConfigManaged(deps.env)) {
+    return false;
+  }
   if (!snapshot.exists || !snapshot.valid || typeof snapshot.raw !== "string") {
     return false;
   }
@@ -898,6 +911,10 @@ export async function recoverConfigFromLastKnownGood(params: {
   reason: string;
 }): Promise<boolean> {
   const { deps, snapshot } = params;
+  // Reject the managed generation in place; its owner must publish the repair.
+  if (resolveIsConfigManaged(deps.env)) {
+    return false;
+  }
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
     return false;
   }

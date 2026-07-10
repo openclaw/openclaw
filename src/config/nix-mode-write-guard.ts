@@ -1,5 +1,5 @@
-// Guards config writes that are disallowed in Nix-managed installs.
-import { resolveIsNixMode } from "./paths.js";
+// Guards config writes owned by Nix or another external config manager.
+import { ManagedConfigMutationError, resolveConfigOwnership } from "./config-ownership.js";
 
 /** Agent-first Nix install docs shown when runtime config writes are blocked. */
 const NIX_OPENCLAW_AGENT_FIRST_URL = "https://github.com/openclaw/nix-openclaw#quick-start";
@@ -36,9 +36,13 @@ export function assertConfigWriteAllowedInCurrentMode(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): void {
-  if (!resolveIsNixMode(params.env)) {
+  const ownership = resolveConfigOwnership(params.env);
+  if (ownership.mode === "mutable") {
     return;
   }
-  // In Nix mode, all writes must happen in the declarative source and then rebuild.
-  throw new NixModeConfigMutationError({ configPath: params.configPath });
+  if (ownership.owner === "nix") {
+    // In Nix mode, all writes must happen in the declarative source and then rebuild.
+    throw new NixModeConfigMutationError({ configPath: params.configPath });
+  }
+  throw new ManagedConfigMutationError({ configPath: params.configPath });
 }

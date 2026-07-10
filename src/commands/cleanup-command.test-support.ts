@@ -4,7 +4,7 @@ import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 const resolveCleanupPlanFromDisk = vi.fn();
-const removePath = vi.fn();
+export const removePath = vi.fn();
 const listAgentSessionDirs = vi.fn();
 export const removeStateAndLinkedPaths = vi.fn();
 const removeWorkspaceDirs = vi.fn();

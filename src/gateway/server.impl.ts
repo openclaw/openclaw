@@ -15,6 +15,7 @@ import {
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
+import { resolveIsConfigManaged } from "../config/config-ownership.js";
 import {
   getRuntimeConfig,
   promoteConfigSnapshotToLastKnownGood,
@@ -419,14 +420,17 @@ function createGatewayStartupTrace() {
 function formatRuntimeGatewayAuthTokenWarning(): string {
   const base =
     "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token.";
-  if (!isNixMode) {
-    return `${base} Persist one with \`openclaw config set gateway.auth.mode token\` and \`openclaw config set gateway.auth.token <token>\`.`;
+  if (isNixMode) {
+    return [
+      base,
+      "In Nix mode, set gateway.auth.token in your Nix-managed OpenClaw config and rebuild.",
+      "For the first-party Nix flow, see https://github.com/openclaw/nix-openclaw#quick-start and https://docs.openclaw.ai/install/nix.",
+    ].join(" ");
   }
-  return [
-    base,
-    "In Nix mode, set gateway.auth.token in your Nix-managed OpenClaw config and rebuild.",
-    "For the first-party Nix flow, see https://github.com/openclaw/nix-openclaw#quick-start and https://docs.openclaw.ai/install/nix.",
-  ].join(" ");
+  if (resolveIsConfigManaged()) {
+    return `${base} Set gateway.auth.token in the external deployment source, then let its config update propagate to OpenClaw.`;
+  }
+  return `${base} Persist one with \`openclaw config set gateway.auth.mode token\` and \`openclaw config set gateway.auth.token <token>\`.`;
 }
 
 async function stopTaskRegistryMaintenanceOnDemand(): Promise<void> {
@@ -531,6 +535,7 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
+  const configManaged = resolveIsConfigManaged();
   // runGatewayLoop calls this after closing the previous server on both fresh
   // and in-process restarts, making retired plugin generations safe to remove.
   try {
@@ -1796,8 +1801,9 @@ export async function startGatewayServer(
       initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
       initialInternalWriteHash: startupInternalWriteHash,
       watchPath: configSnapshot.path,
+      watchParentDirectory: configManaged,
       readSnapshot: readConfigFileSnapshot,
-      promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
+      ...(configManaged ? {} : { promoteSnapshot: promoteConfigSnapshotToLastKnownGood }),
       subscribeToWrites: registerConfigWriteListener,
       deps,
       broadcast,
@@ -1845,9 +1851,11 @@ export async function startGatewayServer(
       sharedGatewaySessionGenerationState,
       clients,
     });
-    await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
-      log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
-    });
+    if (!configManaged) {
+      await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
+        log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
+      });
+    }
     if (!minimalTestGateway) {
       const gatewayRuntimeServices = await loadScheduledServicesModule();
       postReadyMaintenanceTimer = gatewayRuntimeServices.scheduleGatewayPostReadyMaintenance({

@@ -7,6 +7,7 @@ import {
   resolveWorkspaceAttestationPaths,
   shouldRemoveWorkspaceAttestation,
 } from "../agents/workspace.js";
+import { resolveIsConfigManaged } from "../config/config-ownership.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -32,6 +33,7 @@ type RemovalOptions = {
 
 type StateRemovalOptions = {
   dryRun?: boolean;
+  env?: NodeJS.ProcessEnv;
   preservePaths?: readonly string[];
 };
 
@@ -215,10 +217,15 @@ export async function removeStateAndLinkedPaths(
   opts?: StateRemovalOptions,
 ): Promise<void> {
   const stateDir = path.resolve(cleanup.stateDir);
+  const configManaged = resolveIsConfigManaged(opts?.env);
+  const requestedPreservePaths = [
+    ...(opts?.preservePaths ?? []),
+    ...(configManaged ? [cleanup.configPath] : []),
+  ];
   const preservePaths = (
     opts?.dryRun
-      ? (opts.preservePaths ?? []).map((target) => path.resolve(target))
-      : await existingPaths(opts?.preservePaths ?? [])
+      ? requestedPreservePaths.map((target) => path.resolve(target))
+      : await existingPaths(requestedPreservePaths)
   ).filter((target) => isPathWithin(target, stateDir));
   if (preservePaths.length > 0) {
     await removePathPreserving(stateDir, preservePaths, runtime, {
@@ -231,11 +238,13 @@ export async function removeStateAndLinkedPaths(
       label: cleanup.stateDir,
     });
   }
-  if (!cleanup.configInsideState) {
+  if (!cleanup.configInsideState && !configManaged) {
     await removePath(cleanup.configPath, runtime, {
       dryRun: opts?.dryRun,
       label: cleanup.configPath,
     });
+  } else if (!cleanup.configInsideState && configManaged && opts?.dryRun) {
+    runtime.log(`[dry-run] preserve ${shortenHomeInString(cleanup.configPath)}`);
   }
   if (!cleanup.oauthInsideState) {
     await removePath(cleanup.oauthDir, runtime, {

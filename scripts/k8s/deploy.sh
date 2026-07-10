@@ -32,7 +32,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 Usage: ./scripts/k8s/deploy.sh [OPTION]
 
   (no args)        Deploy OpenClaw (creates secret from env if needed)
-  --create-secret  Create or update the K8s Secret from env vars without deploying
+  --create-secret  Create or update the K8s Secret without deploying or restarting
   --show-token     Print the gateway token after deploy or secret creation
   --delete         Delete the namespace and all resources
   -h, --help       Show this help
@@ -48,6 +48,7 @@ fi
 
 SHOW_TOKEN=false
 MODE="deploy"
+RESTART_AFTER_SECRET_CREATE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -178,9 +179,17 @@ if [[ "$MODE" == "create-secret" ]]; then
   fi
 
   _apply_secret
-  echo ""
-  echo "Now run:"
-  echo "  ./scripts/k8s/deploy.sh"
+  if kubectl get deployment openclaw -n "$NS" &>/dev/null; then
+    echo ""
+    echo "Secret-backed environment variables load at process start."
+    echo "Restart the existing deployment explicitly to apply them:"
+    echo "  kubectl rollout restart deployment/openclaw -n $NS"
+    echo "  kubectl rollout status deployment/openclaw -n $NS --timeout=300s"
+  else
+    echo ""
+    echo "Now run:"
+    echo "  ./scripts/k8s/deploy.sh"
+  fi
   exit 0
 fi
 
@@ -188,6 +197,9 @@ fi
 # Check that the secret exists in the cluster
 # ---------------------------------------------------------------------------
 if ! kubectl get secret openclaw-secrets -n "$NS" &>/dev/null; then
+  if kubectl get deployment openclaw -n "$NS" &>/dev/null; then
+    RESTART_AFTER_SECRET_CREATE=true
+  fi
   HAS_KEY=false
   for key in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
     [[ -n "${!key:-}" ]] && HAS_KEY=true
@@ -213,9 +225,13 @@ fi
 echo "Deploying to namespace '$NS'..."
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl apply -k "$MANIFESTS" -n "$NS"
-kubectl rollout restart deployment/openclaw -n "$NS" 2>/dev/null || true
+if $RESTART_AFTER_SECRET_CREATE; then
+  echo ""
+  echo "Restarting the existing deployment to load the recreated Secret..."
+  kubectl rollout restart deployment/openclaw -n "$NS"
+fi
 echo ""
-echo "Waiting for rollout..."
+echo "Waiting for deployment availability..."
 kubectl rollout status deployment/openclaw -n "$NS" --timeout=300s
 echo ""
 echo "Done. Access the gateway:"

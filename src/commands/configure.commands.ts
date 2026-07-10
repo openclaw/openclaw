@@ -1,6 +1,7 @@
 // Entry points for the full configure wizard and section-limited runs.
 import process from "node:process";
 import { formatCliCommand } from "../cli/command-format.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import type { WizardSection } from "./configure.shared.js";
@@ -33,10 +34,7 @@ const CONFIGURE_NON_TTY_HINT = [
  *
  * Returns true when the wizard may proceed.
  */
-function assertInteractiveConfigureTerminal(
-  runtime: RuntimeEnv,
-  interactive?: boolean,
-): boolean {
+function assertInteractiveConfigureTerminal(runtime: RuntimeEnv, interactive?: boolean): boolean {
   const interactiveTerminal = interactive ?? (process.stdin.isTTY && process.stdout.isTTY);
   if (interactiveTerminal) {
     return true;
@@ -73,16 +71,17 @@ export async function configureCommandFromSectionsArg(
   }
 
   const { sections, invalid } = parseConfigureWizardSections(rawSections);
-  if (sections.length === 0) {
-    await configureCommand(runtime);
-    return;
-  }
-
   if (invalid.length > 0) {
     runtime.error(
       `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}. Run ${formatCliCommand("openclaw configure")} without --section to use the full wizard.`,
     );
     runtime.exit(1);
+    return;
+  }
+
+  assertConfigWriteAllowedInCurrentMode();
+  if (sections.length === 0) {
+    await configureCommand(runtime);
     return;
   }
 

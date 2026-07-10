@@ -239,6 +239,38 @@ describe("security fix", () => {
     await expectTightenedStateAndConfigPerms(stateDir, configPath);
   });
 
+  it.skipIf(isWindows)(
+    "tightens mutable state without changing externally managed config permissions",
+    async () => {
+      const stateDir = await createStateDir("managed-config");
+      const includePath = path.join(stateDir, "includes", "extra.json5");
+      const configPath = path.join(stateDir, "openclaw.json");
+      await fs.mkdir(path.dirname(includePath), { recursive: true });
+      await fs.writeFile(includePath, "{}\n", "utf-8");
+      await fs.writeFile(
+        configPath,
+        `{ "$include": "./includes/extra.json5", gateway: { mode: "local" } }\n`,
+        "utf-8",
+      );
+      await fs.chmod(stateDir, 0o755);
+      await fs.chmod(configPath, 0o644);
+      await fs.chmod(includePath, 0o644);
+      const env = {
+        ...createFixEnv(stateDir, configPath),
+        OPENCLAW_CONFIG_MANAGED: "1",
+      };
+
+      const result = await fixSecurityFootguns({ env, stateDir, configPath });
+
+      expect(result.ok).toBe(true);
+      expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o700);
+      expect((await fs.stat(configPath)).mode & 0o777).toBe(0o644);
+      expect((await fs.stat(includePath)).mode & 0o777).toBe(0o644);
+      expect(result.actions.map((action) => action.path)).not.toContain(configPath);
+      expect(result.actions.map((action) => action.path)).not.toContain(includePath);
+    },
+  );
+
   it("collects permission targets for credentials + agent auth/sessions + include files", async () => {
     const stateDir = await createStateDir("includes");
 

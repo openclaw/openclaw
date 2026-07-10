@@ -29,6 +29,25 @@ describe("config env vars", () => {
     });
   });
 
+  it("does not allow config to claim host-owned config modes", () => {
+    const env = {} as NodeJS.ProcessEnv;
+
+    applyConfigEnvVars(
+      {
+        env: {
+          vars: {
+            OPENCLAW_CONFIG_MANAGED: "1",
+            OPENCLAW_NIX_MODE: "1",
+          },
+        },
+      } as OpenClawConfig,
+      env,
+    );
+
+    expect(env.OPENCLAW_CONFIG_MANAGED).toBeUndefined();
+    expect(env.OPENCLAW_NIX_MODE).toBeUndefined();
+  });
+
   it("overrides only exact lower-precedence env values", () => {
     const config = {
       env: { vars: { OPENROUTER_API_KEY: "config-key" } },

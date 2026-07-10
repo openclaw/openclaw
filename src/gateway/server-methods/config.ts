@@ -60,6 +60,7 @@ import {
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
 import { resolveBaseHashParam } from "./base-hash.js";
+import { rejectExternallyManagedConfigMutation } from "./config-mutation-guard.js";
 import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
@@ -325,6 +326,9 @@ async function readConfigWriteSnapshotOrRespond(
   params: unknown,
   respond: RespondFn,
 ): Promise<Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>> | null> {
+  if (rejectExternallyManagedConfigMutation(respond)) {
+    return null;
+  }
   const result = await readConfigFileSnapshotForWrite();
   if (!requireConfigBaseHash(params, result.snapshot, respond)) {
     return null;

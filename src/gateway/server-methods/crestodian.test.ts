@@ -1,8 +1,19 @@
 // crestodian.chat handler tests: session reuse, reset, and action mapping.
 import { describe, expect, it, vi } from "vitest";
+import { OPENCLAW_CONFIG_MANAGED_ENV } from "../../config/config-ownership.js";
 import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { crestodianHandlers, type CrestodianChatSession } from "./crestodian.js";
 import type { GatewayRequestContext } from "./types.js";
+
+const activateSetupInference = vi.hoisted(() => vi.fn());
+
+vi.mock("../../crestodian/setup-inference.js", async () => {
+  const actual = await vi.importActual<typeof import("../../crestodian/setup-inference.js")>(
+    "../../crestodian/setup-inference.js",
+  );
+  return { ...actual, activateSetupInference };
+});
 
 type RespondCall = {
   ok: boolean;
@@ -126,5 +137,32 @@ describe("crestodian.chat", () => {
     expect(dispose).toHaveBeenCalledOnce();
     expect(sessions.get("s1")?.engine).not.toBe(engine);
     expect(calls[0]?.ok).toBe(true);
+  });
+});
+
+describe("crestodian.setup.activate", () => {
+  it("rejects managed config before starting setup inference", async () => {
+    await withEnvAsync(
+      { [OPENCLAW_CONFIG_MANAGED_ENV]: "1", OPENCLAW_NIX_MODE: undefined },
+      async () => {
+        const { calls, respond } = makeRespond();
+
+        await crestodianHandlers["crestodian.setup.activate"]({
+          params: { kind: "existing-model" },
+          respond,
+          context: {} as GatewayRequestContext,
+        } as never);
+
+        expect(calls[0]).toMatchObject({
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            details: { code: "OPENCLAW_CONFIG_MANAGED" },
+          },
+        });
+      },
+    );
+
+    expect(activateSetupInference).not.toHaveBeenCalled();
   });
 });

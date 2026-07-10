@@ -56,6 +56,7 @@ import {
   isConfiguredAgent,
   updateAgentConfigEntry,
 } from "./agents-config-mutations.js";
+import { rejectExternallyManagedConfigMutation } from "./config-mutation-guard.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -508,6 +509,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respondInvalidMethodParams(respond, "agents.create", validateAgentsCreateParams.errors);
       return;
     }
+    if (rejectExternallyManagedConfigMutation(respond)) {
+      return;
+    }
 
     const cfg = context.getRuntimeConfig();
     const rawName = params.name.trim();
@@ -607,6 +611,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respondInvalidMethodParams(respond, "agents.update", validateAgentsUpdateParams.errors);
       return;
     }
+    if (rejectExternallyManagedConfigMutation(respond)) {
+      return;
+    }
 
     const cfg = context.getRuntimeConfig();
     const agentId = normalizeAgentId(params.agentId);
@@ -699,6 +706,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
   "agents.delete": async ({ params, respond, context }) => {
     if (!validateAgentsDeleteParams(params)) {
       respondInvalidMethodParams(respond, "agents.delete", validateAgentsDeleteParams.errors);
+      return;
+    }
+    if (rejectExternallyManagedConfigMutation(respond)) {
       return;
     }
 

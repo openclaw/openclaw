@@ -8,6 +8,7 @@ import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
 import { buildOnboardingWelcome } from "../../crestodian/onboarding-welcome.js";
 import { formatCrestodianStartupMessage } from "../../crestodian/overview.js";
 import { defaultRuntime } from "../../runtime.js";
+import { rejectExternallyManagedConfigMutation } from "./config-mutation-guard.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -77,6 +78,9 @@ export const crestodianHandlers: GatewayRequestHandlers = {
         respond,
       )
     ) {
+      return;
+    }
+    if (rejectExternallyManagedConfigMutation(respond)) {
       return;
     }
     const { activateSetupInference } = await import("../../crestodian/setup-inference.js");

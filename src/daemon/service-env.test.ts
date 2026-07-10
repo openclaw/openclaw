@@ -950,6 +950,32 @@ describe("buildNodeServiceEnvironment", () => {
   });
 });
 
+describe("managed config service environment", () => {
+  const builders = [
+    {
+      name: "gateway service env",
+      build: (env: Record<string, string | undefined>) =>
+        buildServiceEnvironment({ env, port: 18789 }),
+    },
+    {
+      name: "node service env",
+      build: (env: Record<string, string | undefined>) => buildNodeServiceEnvironment({ env }),
+    },
+  ] as const;
+
+  it.each(builders)("$name forwards the exact managed-config host value", ({ build }) => {
+    expect(build({ HOME: "/home/user", OPENCLAW_CONFIG_MANAGED: "1" })).toMatchObject({
+      OPENCLAW_CONFIG_MANAGED: "1",
+    });
+  });
+
+  it.each(builders)("$name omits non-contract managed-config values", ({ build }) => {
+    expect(
+      build({ HOME: "/home/user", OPENCLAW_CONFIG_MANAGED: "true" }).OPENCLAW_CONFIG_MANAGED,
+    ).toBeUndefined();
+  });
+});
+
 describe("shared Node TLS env defaults matrix", () => {
   const builders = [
     {
