@@ -1785,6 +1785,8 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     ).handleInboundResponse(call.callId, userMessage);
 
     const logOutput = logEntries.join(" ");
+    // Voice-call attribution must be present on every log message.
+    expect(logOutput).toContain("[voice-call]");
     // Call identifier and character count metadata must be present.
     expect(logOutput).toContain(call.callId);
     expect(logOutput).toContain("chars=");
@@ -2041,6 +2043,8 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       getMediaCallbacks(server).config.onTranscript?.("CA-utf16", transcript);
 
       const logOutput = logEntries.join(" ");
+      // Voice-call attribution must be present on every log message.
+      expect(logOutput).toContain("[voice-call]");
       // Caller identifier and character count metadata must be present.
       expect(logOutput).toContain("CA-utf16");
       expect(logOutput).toContain("chars=");
@@ -2100,6 +2104,8 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       getMediaCallbacks(server).config.onPartialTranscript?.("CA-partial", partialText);
 
       const logOutput = logEntries.join(" ");
+      // Voice-call attribution must be present on every log message.
+      expect(logOutput).toContain("[voice-call]");
       // Caller identifier and character count metadata must be present.
       expect(logOutput).toContain("CA-partial");
       expect(logOutput).toContain("chars=");

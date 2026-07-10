@@ -219,6 +219,16 @@ export class VoiceCallWebhookServer {
       error: console.error,
       debug: console.debug,
     };
+    // Route all webhook diagnostics through a single logging path with
+    // consistent [voice-call] attribution so operational tooling can
+    // identify voice-call messages on the shared plugin logger.
+    const rawLogger = this.logger;
+    this.logger = {
+      info: (msg: string) => rawLogger.info(`[voice-call] ${msg}`),
+      warn: (msg: string) => rawLogger.warn(`[voice-call] ${msg}`),
+      error: (msg: string) => rawLogger.error(`[voice-call] ${msg}`),
+      debug: rawLogger.debug ? (msg: string) => rawLogger.debug(`[voice-call] ${msg}`) : undefined,
+    };
   }
 
   /**
@@ -521,14 +531,12 @@ export class VoiceCallWebhookServer {
         const url = this.resolveListeningUrl(bind, webhookPath);
         this.listeningUrl = url;
         this.startPromise = null;
-        this.logger.info(`[voice-call] Webhook server listening on ${url}`);
+        this.logger.info(`Webhook server listening on ${url}`);
         if (this.mediaStreamHandler) {
           const address = this.server?.address();
           const actualPort =
             address && typeof address === "object" ? address.port : this.config.serve.port;
-          this.logger.info(
-            `[voice-call] Media stream WebSocket on ws://${bind}:${actualPort}${streamPath}`,
-          );
+          this.logger.info(`Media stream WebSocket on ws://${bind}:${actualPort}${streamPath}`);
         }
         resolve(url);
 
