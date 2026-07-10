@@ -1625,6 +1625,64 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels compaction when the summary still fails the quality audit after all retries", async () => {
+    // #103931: adopting a summary the guard just proved structurally broken
+    // silently replaced history with known-bad content. Exhausted retries with
+    // a failing audit must fail closed like the exception path.
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages
+      .mockResolvedValueOnce("unstructured fragment one")
+      .mockResolvedValueOnce("unstructured fragment two");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 1,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "older context", timestamp: 1 },
+          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          { role: "user", content: "latest ask status", timestamp: 3 },
+          {
+            role: "assistant",
+            content: "latest assistant reply",
+            timestamp: 4,
+          } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).toBe(true);
+    expect(result.compaction).toBeUndefined();
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+  });
+
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages
@@ -1632,7 +1690,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       .mockResolvedValueOnce(
         [
           "## Decisions",
-          "Keep current flow.",
+          "Keep current flow for the older context thread.",
           "## Open TODOs",
           "None.",
           "## Constraints/Rules",

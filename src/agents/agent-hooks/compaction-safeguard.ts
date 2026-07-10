@@ -1262,6 +1262,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               `Compaction safeguard: quality retry failed on attempt ${attempt + 1}; ` +
                 `keeping last successful summary: ${formatErrorMessage(attemptError)}`,
             );
+            // Deliberate resilience adoption (already surfaced via the warn):
+            // the fail-closed audit gate below only applies when the final
+            // attempt's audit actually completed and rejected the summary.
+            finalQualityFailureReasons = undefined;
             summary = lastSuccessfulSummary;
             break;
           }
@@ -1275,6 +1279,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           messagesToSummarize.length > 0 ||
           (preparation.isSplitTurn && turnPrefixMessages.length > 0);
         if (!qualityGuardEnabled || !canRegenerate) {
+          // No final audit ran on this attempt: adopting here is the
+          // pre-existing contract, so a stale failure from an earlier
+          // attempt must not cancel the compaction.
+          finalQualityFailureReasons = undefined;
           summary = summaryWithPreservedTurns;
           break;
         }
