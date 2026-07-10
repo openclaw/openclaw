@@ -2657,6 +2657,63 @@ describe("google transport stream", () => {
     });
   });
 
+  it("keeps a fallback when a text-only Google model omits an image", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel({ input: ["text"] }), {
+      messages: [
+        googleToolCallAssistantTurn({ model: "gemini-2.5-pro", name: "screenshot" }),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "screenshot",
+          content: [
+            { type: "text", text: "" },
+            { type: "image", mimeType: "image/png", data: "png-bytes" },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    expect(params.contents[1]).toMatchObject({
+      parts: [{ functionResponse: { response: { output: "(see attached image)" } } }],
+    });
+    expect(params.contents).toHaveLength(2);
+  });
+
+  it("suppresses the fallback when a Google vision model receives the image", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3.1-pro-preview", input: ["text", "image"] }),
+      {
+        messages: [
+          googleToolCallAssistantTurn({ model: "gemini-3.1-pro-preview", name: "screenshot" }),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "screenshot",
+            content: [
+              { type: "text", text: "" },
+              { type: "image", mimeType: "image/png", data: "png-bytes" },
+            ],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as never,
+    );
+
+    expect(params.contents[1]).toMatchObject({
+      parts: [
+        {
+          functionResponse: {
+            response: { output: "" },
+            parts: [{ inlineData: { mimeType: "image/png", data: "png-bytes" } }],
+          },
+        },
+      ],
+    });
+  });
+
   it.each([
     ["bare Gemini 2.5 image first", "gemini-2.5-flash", ["screenshot", "weather"]],
     ["bare Gemini 2.5 image last", "gemini-2.5-flash", ["weather", "screenshot"]],

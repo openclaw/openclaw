@@ -665,9 +665,11 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
               item.type === "image",
           )
         : [];
-      // Keep the public media-description helper independent; this serializer
-      // suppresses its fallback only when a text block is already present.
-      const mediaPlaceholder = hasTextBlock
+      // Empty text owns the fallback only when its image is actually delivered.
+      // Text-only models still need a description for media they omit.
+      const suppressMediaPlaceholder =
+        hasTextBlock && (textResult.length > 0 || imageContent.length > 0);
+      const mediaPlaceholder = suppressMediaPlaceholder
         ? undefined
         : describeToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
