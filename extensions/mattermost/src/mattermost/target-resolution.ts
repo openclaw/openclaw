@@ -17,10 +17,13 @@ type MattermostOpaqueTargetResolution = {
 };
 
 const MATTERMOST_OPAQUE_TARGET_CACHE_MAX_ENTRIES = 1024;
-const mattermostOpaqueTargetCache = new Map<string, boolean>();
+const mattermostOpaqueTargetCache = new Map<string, MattermostOpaqueTargetResolution["kind"]>();
 
-function cacheMattermostOpaqueTarget(key: string, value: boolean): void {
-  mattermostOpaqueTargetCache.set(key, value);
+function cacheMattermostOpaqueTarget(
+  key: string,
+  kind: MattermostOpaqueTargetResolution["kind"],
+): void {
+  mattermostOpaqueTargetCache.set(key, kind);
   // Keep the newest resolved IDs while bounding process-lifetime retention.
   pruneMapToMaxSize(mattermostOpaqueTargetCache, MATTERMOST_OPAQUE_TARGET_CACHE_MAX_ENTRIES);
 }
@@ -82,12 +85,9 @@ export async function resolveMattermostOpaqueTarget(params: {
   }
 
   const key = cacheKey(baseUrl, token, input);
-  const cached = mattermostOpaqueTargetCache.get(key);
-  if (cached === true) {
-    return { kind: "user", id: input, to: `user:${input}` };
-  }
-  if (cached === false) {
-    return { kind: "channel", id: input, to: `channel:${input}` };
+  const cachedKind = mattermostOpaqueTargetCache.get(key);
+  if (cachedKind) {
+    return { kind: cachedKind, id: input, to: `${cachedKind}:${input}` };
   }
 
   const client = createMattermostClient({
@@ -97,11 +97,11 @@ export async function resolveMattermostOpaqueTarget(params: {
   });
   try {
     await fetchMattermostUser(client, input);
-    cacheMattermostOpaqueTarget(key, true);
+    cacheMattermostOpaqueTarget(key, "user");
     return { kind: "user", id: input, to: `user:${input}` };
   } catch (err) {
     if (parseMattermostApiStatus(err) === 404) {
-      cacheMattermostOpaqueTarget(key, false);
+      cacheMattermostOpaqueTarget(key, "channel");
     }
     return { kind: "channel", id: input, to: `channel:${input}` };
   }

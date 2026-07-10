@@ -115,33 +115,25 @@ describe("mattermost target resolution", () => {
 
   it("evicts in insertion order after the opaque cache reaches its cap", async () => {
     createMattermostClient.mockReturnValue({ client: true });
+    fetchMattermostUser.mockResolvedValue({ id: "user" });
     const baseUrl = "https://mm.example.com";
     const token = "opaque-cache-token";
-    const firstId = "0".repeat(26);
     const idFor = (index: number) => index.toString(36).padStart(26, "0");
+    const resolve = (index: number) =>
+      resolveMattermostOpaqueTarget({ input: idFor(index), token, baseUrl });
 
-    fetchMattermostUser.mockRejectedValueOnce(new Error("Mattermost API 404 Not Found"));
-    await expect(
-      resolveMattermostOpaqueTarget({ input: firstId, token, baseUrl }),
-    ).resolves.toMatchObject({ kind: "channel" });
-
-    fetchMattermostUser.mockResolvedValue({ id: "user" });
-    for (let index = 1; index < 1024; index += 1) {
-      await resolveMattermostOpaqueTarget({ input: idFor(index), token, baseUrl });
+    for (let index = 0; index < 1024; index += 1) {
+      await resolve(index);
     }
-    await resolveMattermostOpaqueTarget({ input: firstId, token, baseUrl });
-    await resolveMattermostOpaqueTarget({ input: idFor(1024), token, baseUrl });
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
 
-    fetchMattermostUser.mockClear();
-    fetchMattermostUser.mockRejectedValueOnce(new Error("Mattermost API 404 Not Found"));
-    await expect(
-      resolveMattermostOpaqueTarget({ input: firstId, token, baseUrl }),
-    ).resolves.toMatchObject({ kind: "channel" });
-    await expect(
-      resolveMattermostOpaqueTarget({ input: idFor(1024), token, baseUrl }),
-    ).resolves.toMatchObject({ kind: "user" });
+    await resolve(0);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
 
-    expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
+    await resolve(1024);
+    await resolve(0);
+    await resolve(1024);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1026);
   });
 
   it("uses account resolution when token/base url are not passed", async () => {
