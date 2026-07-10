@@ -1555,20 +1555,35 @@ class ChatController internal constructor(
       is OutboxSendResult.DeliveryUnconfirmed -> {
         // Every transmitted failure is ambiguous: gateway error responses can be cached after
         // agent dispatch, and gateway dedupe is process-local and time-bounded.
-        runCatching {
-          outbox.updateStatus(
-            item.id,
-            ChatOutboxStatus.Failed,
-            item.retryCount,
-            OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-          )
-        }
+        val persisted =
+          try {
+            outbox.updateStatus(
+              item.id,
+              ChatOutboxStatus.Failed,
+              item.retryCount,
+              OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+            )
+          } catch (err: CancellationException) {
+            throw err
+          } catch (_: Throwable) {
+            null
+          }
         publishOutbox()
-        if (result.gatewayResponse == GatewayResponseState.Unknown) {
-          _healthOk.value = false
-          OutboxSendOutcome.Stop
-        } else {
-          OutboxSendOutcome.Continue
+        when {
+          persisted == null -> {
+            // The ambiguous row is still Sending. Stop before younger work; startup recovery
+            // will park it after storage becomes available again.
+            _healthOk.value = false
+            OutboxSendOutcome.Stop
+          }
+          // Sending is controller-owned and Retry only transitions Failed rows. Zero means a
+          // concurrent delete removed the claimed row, so advancing cannot hide ambiguous state.
+          persisted == 0 -> OutboxSendOutcome.Continue
+          result.gatewayResponse == GatewayResponseState.Unknown -> {
+            _healthOk.value = false
+            OutboxSendOutcome.Stop
+          }
+          else -> OutboxSendOutcome.Continue
         }
       }
     }
