@@ -329,6 +329,72 @@ type PackageRefRow = {
   updated_at_ms: number | bigint;
 };
 
+export function updateClawInstallRecord(
+  plan: ClawAddPlan,
+  options: OpenClawStateDatabaseOptions & {
+    nowMs?: number;
+    expectedClaw?: { version: string; integrity: string };
+  } = {},
+): PersistedClawInstall {
+  const current = readClawInstallRecord(plan.agent.finalId, options);
+  if (!current) {
+    throw new Error(
+      `No Claw install record exists for agent ${JSON.stringify(plan.agent.finalId)}.`,
+    );
+  }
+  const updatedAtMs = options.nowMs ?? Date.now();
+  const agentConfigDigest = digestAgentConfig(plan);
+  runOpenClawStateWriteTransaction(({ db }) => {
+    ensureClawInstallTable(db);
+    const result = db
+      .prepare(
+        `UPDATE claw_installs
+            SET source_kind = @source_kind,
+                claw_name = @claw_name,
+                claw_version = @claw_version,
+                package_root = @package_root,
+                manifest_path = @manifest_path,
+                integrity = @integrity,
+                workspace = @workspace,
+                agent_config_digest = @agent_config_digest,
+                status = 'complete',
+                updated_at_ms = @updated_at_ms
+          WHERE agent_id = @agent_id
+            AND claw_version = @expected_claw_version
+            AND integrity = @expected_integrity`,
+      )
+      .run({
+        agent_id: plan.agent.finalId,
+        source_kind: plan.claw.kind,
+        claw_name: plan.claw.name,
+        claw_version: plan.claw.version,
+        package_root: plan.claw.packageRoot,
+        manifest_path: plan.claw.manifestPath,
+        integrity: plan.claw.integrity,
+        workspace: plan.agent.workspace,
+        agent_config_digest: agentConfigDigest,
+        updated_at_ms: updatedAtMs,
+        expected_claw_version: options.expectedClaw?.version ?? current.claw.version,
+        expected_integrity: options.expectedClaw?.integrity ?? current.claw.integrity,
+      });
+    if (Number(result.changes) !== 1) {
+      throw new Error(
+        `Claw install record changed for agent ${JSON.stringify(plan.agent.finalId)}.`,
+      );
+    }
+  }, options);
+  return {
+    schemaVersion: CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+    claw: plan.claw,
+    agentId: plan.agent.finalId,
+    workspace: plan.agent.workspace,
+    agentConfigDigest,
+    status: "complete",
+    addedAtMs: current.addedAtMs,
+    updatedAtMs,
+  };
+}
+
 function rowToPackageRef(row: PackageRefRow): PersistedClawPackageRef {
   return {
     schemaVersion: CLAW_PACKAGE_REF_SCHEMA_VERSION,
@@ -479,4 +545,59 @@ export function readClawPackageRefs(
       )
       .all(params) as PackageRefRow[];
   return rows.map(rowToPackageRef);
+}
+
+export function deleteClawPackageRef(
+  ref: Pick<PersistedClawPackageRef, "agentId" | "kind" | "source" | "ref" | "version">,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    ensureClawPackageRefTable(db);
+    db.prepare(
+      `DELETE FROM claw_package_refs
+        WHERE agent_id = @agent_id
+          AND package_kind = @package_kind
+          AND package_source = @package_source
+          AND package_ref = @package_ref
+          AND package_version = @package_version`,
+    ).run({
+      agent_id: ref.agentId,
+      package_kind: ref.kind,
+      package_source: ref.source,
+      package_ref: ref.ref,
+      package_version: ref.version,
+    });
+  }, options);
+}
+
+export function upsertClawPackageRef(
+  ref: PersistedClawPackageRef,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    ensureClawPackageRefTable(db);
+    db.prepare(
+      `INSERT INTO claw_package_refs (
+         agent_id, package_kind, package_source, package_ref, package_version,
+         schema_version, claw_name, installed_at_ms
+       ) VALUES (
+         @agent_id, @package_kind, @package_source, @package_ref, @package_version,
+         @schema_version, @claw_name, @installed_at_ms
+       )
+       ON CONFLICT(agent_id, package_kind, package_source, package_ref, package_version)
+       DO UPDATE SET
+         schema_version = excluded.schema_version,
+         claw_name = excluded.claw_name,
+         installed_at_ms = excluded.installed_at_ms`,
+    ).run({
+      agent_id: ref.agentId,
+      package_kind: ref.kind,
+      package_source: ref.source,
+      package_ref: ref.ref,
+      package_version: ref.version,
+      schema_version: ref.schemaVersion,
+      claw_name: ref.clawName,
+      installed_at_ms: ref.installedAtMs,
+    });
+  }, options);
 }

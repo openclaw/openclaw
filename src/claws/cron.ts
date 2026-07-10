@@ -163,7 +163,7 @@ function updateRef(
   return updated;
 }
 
-function schedulerJobFromResult(value: unknown): { id: string } | undefined {
+export function clawCronSchedulerJobFromResult(value: unknown): { id: string } | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -200,15 +200,18 @@ function schedulerJobByDeclarationKey(
   return match ? { id: match.id as string } : undefined;
 }
 
-function gatewayInput(plan: ClawAddPlan, ref: PersistedClawCronRef): Record<string, unknown> {
+export function clawCronGatewayInput(
+  agentId: string,
+  ref: PersistedClawCronRef,
+): Record<string, unknown> {
   const job = ref.job;
   return {
     name: job.name ?? job.id,
     declarationKey: ref.declarationKey,
     ...(job.name ? { displayName: job.name } : {}),
-    owner: { agentId: plan.agent.finalId },
+    owner: { agentId },
     enabled: true,
-    agentId: plan.agent.finalId,
+    agentId,
     schedule: {
       kind: "cron",
       expr: job.schedule.cron,
@@ -276,7 +279,9 @@ export async function installClawCronJobs(
           pending.declarationKey,
         );
       }
-      result ??= schedulerJobFromResult(await options.gateway.add(gatewayInput(plan, pending)));
+      result ??= clawCronSchedulerJobFromResult(
+        await options.gateway.add(clawCronGatewayInput(plan.agent.finalId, pending)),
+      );
       if (!result) {
         throw new Error("cron.add returned no scheduler job id");
       }
@@ -349,4 +354,40 @@ export function markClawCronRefRemoved(
     (candidate) => candidate.manifestId === manifestId,
   );
   return ref ? updateRef(ref, { status: "removed" }, options) : undefined;
+}
+
+export function upsertClawCronRef(
+  ref: PersistedClawCronRef,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    db.prepare(
+      `INSERT INTO claw_cron_refs (
+         agent_id, manifest_id, schema_version, declaration_key, scheduler_job_id,
+         status, job_json, error, created_at_ms, updated_at_ms
+       ) VALUES (
+         @agent_id, @manifest_id, @schema_version, @declaration_key, @scheduler_job_id,
+         @status, @job_json, @error, @created_at_ms, @updated_at_ms
+       )
+       ON CONFLICT(agent_id, manifest_id) DO UPDATE SET
+         schema_version = excluded.schema_version,
+         declaration_key = excluded.declaration_key,
+         scheduler_job_id = excluded.scheduler_job_id,
+         status = excluded.status,
+         job_json = excluded.job_json,
+         error = excluded.error,
+         updated_at_ms = excluded.updated_at_ms`,
+    ).run({
+      agent_id: ref.agentId,
+      manifest_id: ref.manifestId,
+      schema_version: ref.schemaVersion,
+      declaration_key: ref.declarationKey,
+      scheduler_job_id: ref.schedulerJobId ?? null,
+      status: ref.status,
+      job_json: JSON.stringify(ref.job),
+      error: ref.error ?? null,
+      created_at_ms: ref.createdAtMs,
+      updated_at_ms: ref.updatedAtMs,
+    });
+  }, options);
 }

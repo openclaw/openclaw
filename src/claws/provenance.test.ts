@@ -11,7 +11,15 @@ import {
 import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
 import { ClawCronInstallError } from "./cron.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import { persistClawInstallRecord, readClawInstallRecord } from "./provenance.js";
+import { ClawMcpInstallError } from "./mcp.js";
+import { ClawPackageInstallError } from "./packages.js";
+import {
+  persistClawInstallRecord,
+  persistClawPackageRef,
+  readClawInstallRecord,
+  readClawPackageRefs,
+  updateClawInstallRecord,
+} from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
@@ -136,6 +144,76 @@ describe("Claw root install provenance", () => {
       status: "pending",
       addedAtMs: 1,
     });
+  });
+
+  it("advances package identity while preserving install creation time", async () => {
+    const { root, plan } = await makePlan();
+    const original = persistClawInstallRecord(plan, { env: stateEnv(root), nowMs: 1 });
+    const target = {
+      ...plan,
+      claw: { ...plan.claw, version: "2.0.0", integrity: "sha256:target" },
+      agent: {
+        ...plan.agent,
+        config: { ...plan.agent.config, name: "Worker v2" },
+      },
+    };
+
+    const updated = updateClawInstallRecord(target, { env: stateEnv(root), nowMs: 2 });
+
+    expect(updated).toMatchObject({
+      claw: { version: "2.0.0", integrity: "sha256:target" },
+      addedAtMs: 1,
+      updatedAtMs: 2,
+      status: "complete",
+    });
+    expect(updated.agentConfigDigest).not.toBe(original.agentConfigDigest);
+    expect(readClawInstallRecord("worker", { env: stateEnv(root) })).toEqual(updated);
+  });
+
+  it("rejects an update when package provenance changed after planning", async () => {
+    const { root, plan } = await makePlan();
+    const original = persistClawInstallRecord(plan, { env: stateEnv(root), nowMs: 1 });
+    const target = {
+      ...plan,
+      claw: { ...plan.claw, version: "2.0.0", integrity: "sha256:target" },
+    };
+
+    expect(() =>
+      updateClawInstallRecord(target, {
+        env: stateEnv(root),
+        nowMs: 2,
+        expectedClaw: { version: "0.9.0", integrity: "sha256:stale" },
+      }),
+    ).toThrow("changed");
+    expect(readClawInstallRecord("worker", { env: stateEnv(root) })).toEqual(original);
+  });
+
+  it("records package references independently of shared package ownership", async () => {
+    const { root, plan } = await makePlan();
+    const pkg = {
+      kind: "plugin" as const,
+      source: "clawhub" as const,
+      ref: "@acme/audit",
+      version: "2.3.4",
+    };
+
+    const record = persistClawPackageRef(plan, pkg, { env: stateEnv(root), nowMs: 43 });
+
+    expect(record).toMatchObject({
+      schemaVersion: "openclaw.clawPackageRef.v1",
+      agentId: "worker",
+      clawName: "@acme/worker",
+      ...pkg,
+    });
+    expect(
+      readClawPackageRefs({
+        env: stateEnv(root),
+        kind: "plugin",
+        source: "clawhub",
+        ref: "@acme/audit",
+        version: "2.3.4",
+      }),
+    ).toEqual([record]);
   });
 });
 

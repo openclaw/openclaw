@@ -131,6 +131,52 @@ function updateWorkspaceFileStatus(
   }, options);
 }
 
+export function upsertClawWorkspaceFile(
+  record: PersistedClawWorkspaceFile,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    ensureWorkspaceFileTable(db);
+    db.prepare(
+      `INSERT INTO claw_workspace_files (
+         agent_id, target_path, schema_version, workspace, source_path,
+         content_digest, created_at_ms
+       ) VALUES (
+         @agent_id, @target_path, @schema_version, @workspace, @source_path,
+         @content_digest, @created_at_ms
+       )
+       ON CONFLICT(agent_id, target_path) DO UPDATE SET
+         schema_version = excluded.schema_version,
+         workspace = excluded.workspace,
+         source_path = excluded.source_path,
+         content_digest = excluded.content_digest,
+         created_at_ms = excluded.created_at_ms`,
+    ).run({
+      agent_id: record.agentId,
+      target_path: record.path,
+      schema_version: record.schemaVersion,
+      workspace: record.workspace,
+      source_path: record.sourcePath,
+      content_digest: record.contentDigest,
+      created_at_ms: record.createdAtMs,
+    });
+  }, options);
+}
+
+export function deleteClawWorkspaceFileRecord(
+  agentId: string,
+  path: string,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    ensureWorkspaceFileTable(db);
+    db.prepare("DELETE FROM claw_workspace_files WHERE agent_id = ? AND target_path = ?").run(
+      agentId,
+      path,
+    );
+  }, options);
+}
+
 function workspaceFileActions(plan: ClawAddPlan): ClawAddPlanAction[] {
   return plan.actions.filter((action) => action.kind === "workspaceFile");
 }
