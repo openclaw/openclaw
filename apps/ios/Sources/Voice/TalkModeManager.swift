@@ -2233,7 +2233,7 @@ final class TalkModeManager: NSObject {
         var assistantText: String?
     }
 
-    private static func lifecycleCompletionState(
+    private nonisolated static func lifecycleCompletionState(
         data: [String: AnyCodable]) -> ChatCompletionState?
     {
         func lowerString(_ key: String) -> String? {
