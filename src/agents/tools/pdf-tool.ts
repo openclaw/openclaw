@@ -36,6 +36,7 @@ import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
+  REMOTE_MEDIA_TIMEOUT_MS,
   resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
@@ -517,7 +518,12 @@ export function createPdfTool(options?: {
           : await loadWebMediaRaw(resolvedPathInfo.resolved, {
               maxBytes,
               localRoots,
-              ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
+              ...(isHttpUrl
+                ? {
+                    readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
+                    timeoutMs: REMOTE_MEDIA_TIMEOUT_MS,
+                  }
+                : {}),
               ssrfPolicy: remoteMediaSsrfPolicy,
             });
 

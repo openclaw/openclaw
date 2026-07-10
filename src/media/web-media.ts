@@ -57,6 +57,9 @@ type WebMediaOptions = {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   requestInit?: RequestInit;
   readIdleTimeoutMs?: number;
+  /** Overall request lifetime forwarded to the guarded fetch; bounds endpoints
+   * that never respond, separate from readIdleTimeoutMs (gaps between chunks). */
+  timeoutMs?: number;
   trustExplicitProxyDns?: boolean;
   workspaceDir?: string;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
@@ -861,6 +864,7 @@ async function loadWebMediaInternal(
     fetchImpl,
     requestInit,
     readIdleTimeoutMs,
+    timeoutMs,
     trustExplicitProxyDns,
     workspaceDir,
     localRoots,
@@ -996,6 +1000,7 @@ async function loadWebMediaInternal(
       fetchImpl,
       requestInit,
       readIdleTimeoutMs,
+      timeoutMs,
       maxBytes: fetchCap,
       ssrfPolicy,
       dispatcherPolicy,

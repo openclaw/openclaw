@@ -78,6 +78,11 @@ type TaskRunDetailHandle = {
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
+/** Overall request lifetime for remote media fetches. Matches the shared
+ * bounded-media ceiling so a never-responding endpoint still aborts while
+ * slow-but-progressing transfers stay bounded by REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS. */
+export const REMOTE_MEDIA_TIMEOUT_MS = 15 * 60_000;
+
 /**
  * Applies an image-editing model as the agent default without mutating the loaded config.
  */
