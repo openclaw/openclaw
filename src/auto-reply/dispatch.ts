@@ -11,6 +11,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
+import { logWarn } from "../logger.js";
 import { logMessageReceived } from "../logging/diagnostic.js";
 import { hasOutboundReplyContent } from "../plugin-sdk/reply-payload.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -42,9 +43,9 @@ import { consumeReplyUsageState } from "./reply/reply-usage-state.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { ReplyPayload } from "./types.js";
 
-/** Maximum time a single beforeDeliver hook may block the chain.
- *  A hung hook is treated as a silent cancellation (#103684). */
-const BEFORE_DELIVER_HOOK_TIMEOUT_MS = 30_000;
+/** Default per-hook deadline. Overridable per dispatcher via
+ *  dispatcherOptions.beforeDeliverTimeoutMs (#103684). */
+const DEFAULT_BEFORE_DELIVER_HOOK_TIMEOUT_MS = 30_000;
 
 type InternalDispatchReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
 
@@ -451,9 +452,11 @@ function markReplyPayloadSendingBeforeDeliverInstalled(
 }
 
 // Exported for real-behavior proof (scripts/proof/).
-export function combineBeforeDeliverHooks(
+function combineBeforeDeliverHooks(
+  opts?: { timeoutMs?: number },
   ...hooks: Array<ReplyDispatchBeforeDeliver | undefined>
 ): ReplyDispatchBeforeDeliver | undefined {
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_BEFORE_DELIVER_HOOK_TIMEOUT_MS;
   const activeHooks = hooks.filter((hook): hook is ReplyDispatchBeforeDeliver => Boolean(hook));
   if (activeHooks.length === 0) {
     return undefined;
@@ -466,16 +469,26 @@ export function combineBeforeDeliverHooks(
         return null;
       }
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const result: ReplyPayload | null = await Promise.race([
-        hook(current, info),
-        new Promise<ReplyPayload | null>((resolve) => {
-          timer = setTimeout(resolve, BEFORE_DELIVER_HOOK_TIMEOUT_MS, null);
-        }),
-      ]);
-      if (timer !== undefined) {
-        clearTimeout(timer);
+      let timedOut = false;
+      try {
+        const result: ReplyPayload | null = await Promise.race([
+          hook(current, info),
+          new Promise<ReplyPayload | null>((resolve) => {
+            timer = setTimeout(() => {
+              timedOut = true;
+              resolve(null);
+            }, timeoutMs);
+          }),
+        ]);
+        if (timedOut) {
+          logWarn(`beforeDeliver hook timed out after ${timeoutMs}ms; payload cancelled (#103684)`);
+        }
+        current = result ? copyReplyPayloadMetadata(current, result) : null;
+      } finally {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+        }
       }
-      current = result ? copyReplyPayloadMetadata(current, result) : null;
     }
     return current;
   };
@@ -617,12 +630,18 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     finalized,
     replyPayloadRunState,
   );
+  const hookTimeoutOpts = { timeoutMs: params.dispatcherOptions.beforeDeliverTimeoutMs };
   const globalBeforeDeliver = combineBeforeDeliverHooks(
+    hookTimeoutOpts,
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(finalized),
   );
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? combineBeforeDeliverHooks(
+        hookTimeoutOpts,
+        params.dispatcherOptions.beforeDeliver,
+        replyPayloadBeforeDeliver,
+      )
     : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
@@ -729,12 +748,18 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     params.ctx,
     replyPayloadRunState,
   );
+  const hookTimeoutOpts = { timeoutMs: params.dispatcherOptions.beforeDeliverTimeoutMs };
   const globalBeforeDeliver = combineBeforeDeliverHooks(
+    hookTimeoutOpts,
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(params.ctx),
   );
   const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? combineBeforeDeliverHooks(
+        hookTimeoutOpts,
+        params.dispatcherOptions.beforeDeliver,
+        replyPayloadBeforeDeliver,
+      )
     : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,

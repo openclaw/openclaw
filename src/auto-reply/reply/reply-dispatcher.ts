@@ -125,6 +125,9 @@ export type ReplyDispatcherOptions = {
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
+  /** Per-hook deadline in ms. Hooks exceeding this limit are cancelled.
+   *  Default 30s. Set higher for channels with known slow hooks. */
+  beforeDeliverTimeoutMs?: number;
   onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
   /** Observe each queued payload settling, including cancellation and delivery failure. */
   onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;
