@@ -8339,6 +8339,72 @@ public struct PluginApprovalResolveParams: Codable, Sendable {
     }
 }
 
+public struct PluginCatalogEntry: Codable, Sendable {
+    public let id: String
+    public let name: String
+    public let packagename: String?
+    public let description: String?
+    public let version: String?
+    public let kind: [String]?
+    public let origin: String?
+    public let installed: Bool
+    public let enabled: Bool
+    public let state: AnyCodable
+    public let featured: Bool?
+    public let order: Double?
+    public let install: PluginCatalogInstallAction?
+    public let error: String?
+
+    public init(
+        id: String,
+        name: String,
+        packagename: String?,
+        description: String?,
+        version: String?,
+        kind: [String]?,
+        origin: String?,
+        installed: Bool,
+        enabled: Bool,
+        state: AnyCodable,
+        featured: Bool?,
+        order: Double?,
+        install: PluginCatalogInstallAction?,
+        error: String?)
+    {
+        self.id = id
+        self.name = name
+        self.packagename = packagename
+        self.description = description
+        self.version = version
+        self.kind = kind
+        self.origin = origin
+        self.installed = installed
+        self.enabled = enabled
+        self.state = state
+        self.featured = featured
+        self.order = order
+        self.install = install
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case packagename = "packageName"
+        case description
+        case version
+        case kind
+        case origin
+        case installed
+        case enabled
+        case state
+        case featured
+        case order
+        case install
+        case error
+    }
+}
+
 public struct PluginControlUiDescriptor: Codable, Sendable {
     public let id: String
     public let pluginid: String
@@ -8382,6 +8448,148 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         case placement
         case schema
         case requiredscopes = "requiredScopes"
+    }
+}
+
+public struct PluginSearchPackage: Codable, Sendable {
+    public let name: String
+    public let displayname: String
+    public let family: AnyCodable
+    public let channel: AnyCodable
+    public let isofficial: Bool
+    public let summary: String?
+    public let latestversion: String?
+    public let runtimeid: String?
+
+    public init(
+        name: String,
+        displayname: String,
+        family: AnyCodable,
+        channel: AnyCodable,
+        isofficial: Bool,
+        summary: String?,
+        latestversion: String?,
+        runtimeid: String?)
+    {
+        self.name = name
+        self.displayname = displayname
+        self.family = family
+        self.channel = channel
+        self.isofficial = isofficial
+        self.summary = summary
+        self.latestversion = latestversion
+        self.runtimeid = runtimeid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case displayname = "displayName"
+        case family
+        case channel
+        case isofficial = "isOfficial"
+        case summary
+        case latestversion = "latestVersion"
+        case runtimeid = "runtimeId"
+    }
+}
+
+public struct PluginSearchResultEntry: Codable, Sendable {
+    public let score: Double
+    public let package: PluginSearchPackage
+
+    public init(
+        score: Double,
+        package: PluginSearchPackage)
+    {
+        self.score = score
+        self.package = package
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case score
+        case package
+    }
+}
+
+public struct PluginsInstallResult: Codable, Sendable {
+    public let ok: Bool
+    public let plugin: PluginCatalogEntry
+    public let restartrequired: Bool
+    public let warnings: [String]?
+
+    public init(
+        ok: Bool,
+        plugin: PluginCatalogEntry,
+        restartrequired: Bool,
+        warnings: [String]?)
+    {
+        self.ok = ok
+        self.plugin = plugin
+        self.restartrequired = restartrequired
+        self.warnings = warnings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case plugin
+        case restartrequired = "restartRequired"
+        case warnings
+    }
+}
+
+public struct PluginsListParams: Codable, Sendable {}
+
+public struct PluginsListResult: Codable, Sendable {
+    public let plugins: [PluginCatalogEntry]
+    public let diagnostics: [AnyCodable]
+    public let mutationallowed: Bool
+
+    public init(
+        plugins: [PluginCatalogEntry],
+        diagnostics: [AnyCodable],
+        mutationallowed: Bool)
+    {
+        self.plugins = plugins
+        self.diagnostics = diagnostics
+        self.mutationallowed = mutationallowed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case plugins
+        case diagnostics
+        case mutationallowed = "mutationAllowed"
+    }
+}
+
+public struct PluginsSearchParams: Codable, Sendable {
+    public let query: String
+    public let limit: Int?
+
+    public init(
+        query: String,
+        limit: Int?)
+    {
+        self.query = query
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+        case limit
+    }
+}
+
+public struct PluginsSearchResult: Codable, Sendable {
+    public let results: [PluginSearchResultEntry]
+
+    public init(
+        results: [PluginSearchResultEntry])
+    {
+        self.results = results
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case results
     }
 }
 
@@ -8532,6 +8740,50 @@ public struct PluginsSessionActionSuccessResult: Codable, Sendable {
         try container.encodeIfPresent(result, forKey: .result)
         try container.encodeIfPresent(continueagent, forKey: .continueagent)
         try container.encodeIfPresent(reply, forKey: .reply)
+    }
+}
+
+public struct PluginsSetEnabledParams: Codable, Sendable {
+    public let pluginid: String
+    public let enabled: Bool
+
+    public init(
+        pluginid: String,
+        enabled: Bool)
+    {
+        self.pluginid = pluginid
+        self.enabled = enabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case enabled
+    }
+}
+
+public struct PluginsSetEnabledResult: Codable, Sendable {
+    public let ok: Bool
+    public let plugin: PluginCatalogEntry
+    public let restartrequired: Bool
+    public let warnings: [String]?
+
+    public init(
+        ok: Bool,
+        plugin: PluginCatalogEntry,
+        restartrequired: Bool,
+        warnings: [String]?)
+    {
+        self.ok = ok
+        self.plugin = plugin
+        self.restartrequired = restartrequired
+        self.warnings = warnings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case plugin
+        case restartrequired = "restartRequired"
+        case warnings
     }
 }
 

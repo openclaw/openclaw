@@ -1,10 +1,8 @@
-// Plugin install persist tests cover saving installed plugin records after install.
+// Plugin install persistence tests cover saving installed plugin records after install.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import {
   applyExclusiveSlotSelection,
   buildPluginDiagnosticsReport,
@@ -21,7 +19,9 @@ import {
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecords,
   applyPluginUninstallDirectoryRemoval,
-} from "./plugins-cli-test-helpers.js";
+} from "../cli/plugins-cli-test-helpers.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 
 function requireMockCallArg(
   mockFn: { mock: { calls: unknown[][] } },
@@ -51,7 +51,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("adds installed plugins to restrictive allowlists before enabling", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         allow: ["memory-core"],
@@ -130,7 +130,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("persists installs even when runtime cache invalidation fails", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {},
@@ -168,7 +168,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("removes a replaced managed install directory before refreshing the registry", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {},
@@ -255,7 +255,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("preserves replaced install directories when the new install path overlaps", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {},
@@ -296,7 +296,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("preserves replaced npm install directories across generation updates", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {},
@@ -398,7 +398,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("warns when an installed npm plugin remains shadowed by a config-selected source", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {},
@@ -457,7 +457,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("does not warn when the config-selected source is inside the npm install path", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {},
@@ -501,7 +501,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("invalidates runtime cache even when registry refresh fails", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {},
@@ -538,7 +538,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("skips runtime cache invalidation when the caller opts out", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {},
@@ -574,7 +574,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("removes stale denylist entries before enabling installed plugins", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         deny: ["alpha", "other"],
@@ -613,7 +613,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("scopes runtime kind lookup to the selected plugin when metadata omits kind", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {
@@ -690,7 +690,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("uses cold metadata for manifest-kind slot selection without loading runtime siblings", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {
@@ -759,7 +759,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("does not load every plugin runtime for non-slot installs without manifest kind", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {},
@@ -813,7 +813,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("can persist an install record without enabling a plugin that needs config first", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         entries: {},
@@ -854,7 +854,7 @@ describe("persistPluginInstall", () => {
   });
 
   it("does not add disabled installs to restrictive allowlists", async () => {
-    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         allow: ["memory-core"],

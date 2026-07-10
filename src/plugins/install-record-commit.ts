@@ -20,14 +20,14 @@ import {
   PLUGIN_INSTALLS_CONFIG_PATH,
   withoutPluginInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
-} from "../plugins/installed-plugin-index-records.js";
+} from "./installed-plugin-index-records.js";
 import {
   clearRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallPackageInfo,
   resolveRetainedManagedNpmInstallMarkerPath,
-} from "../plugins/managed-npm-retention.js";
-import { planPluginUninstall } from "../plugins/uninstall.js";
+} from "./managed-npm-retention.js";
+import { planPluginUninstall } from "./uninstall.js";
 
 function mergeUnsetPaths(
   left?: ConfigWriteOptions["unsetPaths"],

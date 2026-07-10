@@ -1,0 +1,553 @@
+import { consume } from "@lit/context";
+import { html, type PropertyValues } from "lit";
+import { property, state } from "lit/decorators.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
+import {
+  installPlugin,
+  loadPluginCatalog,
+  pluginInstallNeedsRiskAcknowledgement,
+  readPluginInstallTrustError,
+  searchPluginCatalog,
+  setPluginEnabled,
+  type PluginCatalogItem,
+  type PluginInstallRequest,
+  type PluginListResult,
+  type PluginMutationResult,
+  type PluginSearchResult,
+} from "../../lib/plugins/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { pluginRowKey, renderPlugins, type PluginRowMessage, type PluginsTab } from "./view.ts";
+
+export type PluginsRouteData = {
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
+  result: PluginListResult | null;
+  error: string | null;
+};
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function withPlugin(
+  current: PluginListResult | null,
+  plugin: PluginCatalogItem,
+): PluginListResult | null {
+  if (!current) {
+    return current;
+  }
+  const existingIndex = current.plugins.findIndex((entry) => entry.id === plugin.id);
+  const plugins = [...current.plugins];
+  if (existingIndex >= 0) {
+    plugins[existingIndex] = plugin;
+  } else {
+    plugins.push(plugin);
+  }
+  return { ...current, plugins };
+}
+
+function mutationSuccessMessage(
+  action: "installed" | "enabled" | "disabled",
+  result: PluginMutationResult,
+): string {
+  const key = result.restartRequired
+    ? `pluginsPage.${action}Restart`
+    : `pluginsPage.${action}Success`;
+  const warnings = "warnings" in result ? (result.warnings ?? []) : [];
+  const lines = [t(key, { name: result.plugin.name }), ...warnings];
+  return lines.filter(Boolean).join("\n");
+}
+
+class PluginsPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
+  private context!: ApplicationContext;
+
+  @property({ attribute: false }) routeData?: PluginsRouteData;
+
+  @state() private client: GatewayBrowserClient | null = null;
+  @state() private connected = false;
+  @state() private loading = false;
+  @state() private result: PluginListResult | null = null;
+  @state() private error: string | null = null;
+  @state() private configRefreshError: string | null = null;
+  @state() private activeTab: PluginsTab = "recommended";
+  @state() private query = "";
+  @state() private searchResults: PluginSearchResult[] | null = null;
+  @state() private searchLoading = false;
+  @state() private searchError: string | null = null;
+  @state() private busy: Record<string, boolean> = {};
+  @state() private messages: Record<string, PluginRowMessage> = {};
+
+  private gatewaySource?: ApplicationContext["gateway"];
+  private sourceGeneration = 0;
+  private catalogRequestGeneration = 0;
+  private configRequestGeneration = 0;
+  private searchRequestGeneration = 0;
+  private routeDataConsumed = false;
+  private searchTimer: ReturnType<typeof setTimeout> | null = null;
+  private mutationToken = 0;
+  private readonly mutationTokens = new Map<string, number>();
+
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.gateway,
+    (gateway) => {
+      const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
+      this.gatewaySource = gateway;
+      this.applyGatewaySnapshot(gateway.snapshot, sourceChanged);
+      return gateway.subscribe((snapshot) => {
+        if (this.gatewaySource === gateway) {
+          this.applyGatewaySnapshot(snapshot, false);
+        }
+      });
+    },
+  );
+
+  override willUpdate(changed: PropertyValues<this>) {
+    if (changed.has("routeData")) {
+      this.applyRouteData();
+    }
+  }
+
+  override disconnectedCallback() {
+    this.subscriptions.clear();
+    this.clearSearchTimer();
+    this.invalidateRequests();
+    super.disconnectedCallback();
+  }
+
+  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, sourceChanged: boolean) {
+    const connectionChanged = snapshot.connected !== this.connected;
+    const clientChanged = snapshot.client !== this.client;
+    const shouldRefreshAfterChange =
+      (sourceChanged || connectionChanged || clientChanged) &&
+      snapshot.connected &&
+      this.routeDataConsumed;
+    if (sourceChanged || connectionChanged || clientChanged) {
+      this.invalidateRequests();
+      this.client = snapshot.client;
+      this.connected = snapshot.connected;
+      this.loading = false;
+      this.searchLoading = false;
+      this.busy = {};
+      this.configRefreshError = null;
+      this.searchResults = null;
+      this.searchError = null;
+      if (sourceChanged || clientChanged) {
+        this.result = null;
+        this.error = null;
+        this.messages = {};
+      }
+    }
+    if (shouldRefreshAfterChange) {
+      void this.refreshPage();
+    } else {
+      this.ensureInitialData();
+    }
+    if (
+      (sourceChanged || connectionChanged || clientChanged) &&
+      snapshot.connected &&
+      this.activeTab === "clawhub"
+    ) {
+      this.scheduleSearch();
+    }
+  }
+
+  private applyRouteData() {
+    const data = this.routeData;
+    this.routeDataConsumed = true;
+    if (!data) {
+      this.ensureInitialData();
+      return;
+    }
+    const snapshot = this.context.gateway.snapshot;
+    if (data.gateway !== this.context.gateway || data.gatewaySnapshot !== snapshot) {
+      this.ensureInitialData();
+      return;
+    }
+    this.client = snapshot.client;
+    this.connected = snapshot.connected;
+    this.loading = false;
+    this.result = data.result;
+    this.error = data.error;
+    this.ensureInitialData();
+  }
+
+  private invalidateRequests() {
+    this.sourceGeneration += 1;
+    this.catalogRequestGeneration += 1;
+    this.configRequestGeneration += 1;
+    this.searchRequestGeneration += 1;
+    this.clearSearchTimer();
+    this.mutationTokens.clear();
+  }
+
+  private clearSearchTimer() {
+    if (this.searchTimer) {
+      clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+    }
+  }
+
+  private isCurrentSource(client: GatewayBrowserClient, sourceGeneration: number): boolean {
+    return (
+      this.isConnected &&
+      this.connected &&
+      this.client === client &&
+      this.sourceGeneration === sourceGeneration
+    );
+  }
+
+  private ensureInitialData() {
+    if (!this.connected || !this.client || this.loading || this.result || this.error) {
+      return;
+    }
+    if (this.routeData && !this.routeDataConsumed) {
+      return;
+    }
+    void this.refreshCatalog();
+  }
+
+  private async refreshCatalog(): Promise<void> {
+    const client = this.client;
+    if (!client || !this.connected) {
+      return;
+    }
+    const sourceGeneration = this.sourceGeneration;
+    const requestGeneration = ++this.catalogRequestGeneration;
+    const isCurrent = () =>
+      this.isCurrentSource(client, sourceGeneration) &&
+      requestGeneration === this.catalogRequestGeneration;
+    this.loading = true;
+    this.error = null;
+    try {
+      const result = await loadPluginCatalog(client);
+      if (isCurrent()) {
+        this.result = result;
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.error = errorMessage(error);
+      }
+    } finally {
+      if (isCurrent()) {
+        this.loading = false;
+      }
+    }
+  }
+
+  private async refreshRuntimeConfig(): Promise<void> {
+    const client = this.client;
+    if (!client || !this.connected) {
+      return;
+    }
+    const runtimeConfig = this.context.runtimeConfig;
+    const sourceGeneration = this.sourceGeneration;
+    const requestGeneration = ++this.configRequestGeneration;
+    const isCurrent = () =>
+      this.isCurrentSource(client, sourceGeneration) &&
+      requestGeneration === this.configRequestGeneration;
+    this.configRefreshError = null;
+    let refreshError: string | null = null;
+    try {
+      // Keep app-global pending config edits; the new snapshot/base hash still refreshes.
+      await runtimeConfig.refresh();
+    } catch (error) {
+      refreshError = errorMessage(error);
+    }
+    if (!isCurrent()) {
+      return;
+    }
+    const failure = refreshError ?? runtimeConfig.state.lastError;
+    this.configRefreshError = failure
+      ? t("pluginsPage.configRefreshFailed", { error: failure })
+      : null;
+  }
+
+  private async refreshPage(): Promise<void> {
+    await Promise.all([this.refreshCatalog(), this.refreshRuntimeConfig()]);
+  }
+
+  private changeTab(tab: PluginsTab) {
+    this.activeTab = tab;
+    this.clearSearchTimer();
+    this.searchRequestGeneration += 1;
+    this.searchLoading = false;
+    this.searchResults = null;
+    this.searchError = null;
+    if (tab === "clawhub") {
+      this.scheduleSearch();
+    }
+  }
+
+  private changeQuery(query: string) {
+    this.query = query;
+    this.clearSearchTimer();
+    this.searchRequestGeneration += 1;
+    this.searchLoading = false;
+    this.searchResults = null;
+    this.searchError = null;
+    if (this.activeTab === "clawhub") {
+      this.scheduleSearch();
+    }
+  }
+
+  private scheduleSearch() {
+    const query = this.query.trim();
+    if (query.length < 2 || !this.connected || !this.client) {
+      return;
+    }
+    this.searchTimer = setTimeout(() => {
+      this.searchTimer = null;
+      void this.searchClawHub(query);
+    }, 300);
+  }
+
+  private async searchClawHub(query: string) {
+    const client = this.client;
+    if (!client || !this.connected || query.length < 2) {
+      return;
+    }
+    const sourceGeneration = this.sourceGeneration;
+    const requestGeneration = ++this.searchRequestGeneration;
+    const isCurrent = () =>
+      this.isCurrentSource(client, sourceGeneration) &&
+      requestGeneration === this.searchRequestGeneration &&
+      this.activeTab === "clawhub" &&
+      this.query.trim() === query;
+    this.searchLoading = true;
+    this.searchError = null;
+    this.searchResults = null;
+    try {
+      const response = await searchPluginCatalog(client, query);
+      if (isCurrent()) {
+        this.searchResults = response.results;
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.searchError = errorMessage(error);
+      }
+    } finally {
+      if (isCurrent()) {
+        this.searchLoading = false;
+      }
+    }
+  }
+
+  private mutationBlockedReason(): string | null {
+    if (!this.connected) {
+      return t("pluginsPage.connectToChange");
+    }
+    const auth = this.context.gateway.snapshot.hello?.auth ?? null;
+    if (!hasOperatorAdminAccess(auth)) {
+      return t("pluginsPage.adminRequired");
+    }
+    if (this.result && !this.result.mutationAllowed) {
+      return t("pluginsPage.changesDisabled");
+    }
+    return null;
+  }
+
+  private canMutate(): boolean {
+    return Boolean(this.result?.mutationAllowed) && this.mutationBlockedReason() === null;
+  }
+
+  private setBusy(key: string, value: boolean) {
+    const next = { ...this.busy };
+    if (value) {
+      next[key] = true;
+    } else {
+      delete next[key];
+    }
+    this.busy = next;
+  }
+
+  private setMessage(key: string, message: PluginRowMessage | null) {
+    const next = { ...this.messages };
+    if (message) {
+      next[key] = message;
+    } else {
+      delete next[key];
+    }
+    this.messages = next;
+  }
+
+  private applyMutationResult(result: PluginMutationResult) {
+    this.result = withPlugin(this.result, result.plugin);
+  }
+
+  /** Plugin changes can affect both catalog state and route visibility (for example Workboard). */
+  private async refreshAfterMutation(
+    client: GatewayBrowserClient,
+    sourceGeneration: number,
+  ): Promise<void> {
+    const requestGeneration = ++this.catalogRequestGeneration;
+    // This authoritative refresh supersedes a visible catalog refresh and owns its cleanup.
+    this.loading = false;
+    this.error = null;
+    const [catalogResult] = await Promise.allSettled([
+      loadPluginCatalog(client),
+      this.refreshRuntimeConfig(),
+    ]);
+    if (
+      !this.isCurrentSource(client, sourceGeneration) ||
+      requestGeneration !== this.catalogRequestGeneration
+    ) {
+      return;
+    }
+    if (catalogResult.status === "fulfilled") {
+      this.result = catalogResult.value;
+    } else {
+      this.error = errorMessage(catalogResult.reason);
+    }
+  }
+
+  private pageError(): string | null {
+    const errors = [this.error, this.configRefreshError].filter((message): message is string =>
+      Boolean(message),
+    );
+    return errors.length > 0 ? errors.join(" ") : null;
+  }
+
+  private async install(rowKey: string, request: PluginInstallRequest) {
+    const client = this.client;
+    if (!client || !this.canMutate() || this.busy[rowKey]) {
+      return;
+    }
+    const sourceGeneration = this.sourceGeneration;
+    const mutationToken = ++this.mutationToken;
+    this.mutationTokens.set(rowKey, mutationToken);
+    const isCurrent = () =>
+      this.isCurrentSource(client, sourceGeneration) &&
+      this.mutationTokens.get(rowKey) === mutationToken;
+    this.setBusy(rowKey, true);
+    this.setMessage(rowKey, null);
+    try {
+      const result = await installPlugin(client, request);
+      if (!isCurrent()) {
+        return;
+      }
+      this.applyMutationResult(result);
+      this.setMessage(rowKey, {
+        kind: "success",
+        text: mutationSuccessMessage("installed", result),
+      });
+      await this.refreshAfterMutation(client, sourceGeneration);
+    } catch (error) {
+      if (!isCurrent()) {
+        return;
+      }
+      const trust = readPluginInstallTrustError(error);
+      const packageName = request.source === "clawhub" ? request.packageName : null;
+      if (packageName && pluginInstallNeedsRiskAcknowledgement(error)) {
+        this.setMessage(rowKey, {
+          kind: "error",
+          text: trust?.warning ?? t("pluginsPage.defaultRiskWarning"),
+          acknowledge: {
+            packageName,
+            ...(trust?.version ? { version: trust.version } : {}),
+          },
+        });
+      } else {
+        this.setMessage(rowKey, { kind: "error", text: errorMessage(error) });
+      }
+    } finally {
+      if (this.mutationTokens.get(rowKey) === mutationToken) {
+        this.mutationTokens.delete(rowKey);
+        this.setBusy(rowKey, false);
+      }
+    }
+  }
+
+  private async updateEnabled(pluginId: string, enabled: boolean, key = pluginRowKey(pluginId)) {
+    const client = this.client;
+    if (!client || !this.canMutate() || this.busy[key]) {
+      return;
+    }
+    const sourceGeneration = this.sourceGeneration;
+    const mutationToken = ++this.mutationToken;
+    this.mutationTokens.set(key, mutationToken);
+    const isCurrent = () =>
+      this.isCurrentSource(client, sourceGeneration) &&
+      this.mutationTokens.get(key) === mutationToken;
+    this.setBusy(key, true);
+    this.setMessage(key, null);
+    try {
+      const result = await setPluginEnabled(client, pluginId, enabled);
+      if (!isCurrent()) {
+        return;
+      }
+      this.applyMutationResult(result);
+      this.setMessage(key, {
+        kind: "success",
+        text: mutationSuccessMessage(enabled ? "enabled" : "disabled", result),
+      });
+      await this.refreshAfterMutation(client, sourceGeneration);
+    } catch (error) {
+      if (isCurrent()) {
+        this.setMessage(key, { kind: "error", text: errorMessage(error) });
+      }
+    } finally {
+      if (this.mutationTokens.get(key) === mutationToken) {
+        this.mutationTokens.delete(key);
+        this.setBusy(key, false);
+      }
+    }
+  }
+
+  override render() {
+    const blockedReason = this.mutationBlockedReason();
+    return html`
+      <section class="content-header content-header--page plugins-content-header">
+        <div>
+          <h1 class="page-title">${titleForRoute("plugins")}</h1>
+          <div class="page-sub">${subtitleForRoute("plugins")}</div>
+        </div>
+      </section>
+      ${renderSettingsWorkspace(
+        renderPlugins({
+          connected: this.connected,
+          loading: this.loading,
+          result: this.result,
+          error: this.pageError(),
+          activeTab: this.activeTab,
+          query: this.query,
+          searchResults: this.searchResults,
+          searchLoading: this.searchLoading,
+          searchError: this.searchError,
+          busy: this.busy,
+          messages: this.messages,
+          canMutate: this.canMutate(),
+          mutationBlockedReason: blockedReason,
+          onTabChange: (tab) => this.changeTab(tab),
+          onQueryChange: (query) => this.changeQuery(query),
+          onRefresh: () => void this.refreshPage(),
+          onSetEnabled: (pluginId, enabled, rowKey) =>
+            void this.updateEnabled(pluginId, enabled, rowKey),
+          onInstall: (rowKey, request) => void this.install(rowKey, request),
+        }),
+      )}
+    `;
+  }
+}
+
+if (!customElements.get("openclaw-plugins-page")) {
+  customElements.define("openclaw-plugins-page", PluginsPage);
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-plugins-page": PluginsPage;
+  }
+}
+
+export { PluginsPage };

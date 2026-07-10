@@ -1,9 +1,8 @@
-// Persistence helpers for plugin and hook-pack installs plus related config mutation.
+// Persistence helpers for plugin installs plus related config mutation.
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { replaceConfigFile } from "../config/config.js";
 import {
   hashConfigIncludeRaw,
   readConfigIncludeFileWithGuards,
@@ -12,33 +11,27 @@ import {
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { enablePluginInConfig } from "./enable.js";
+import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   recordPluginInstallInRecords,
   withoutPluginInstallRecords,
-} from "../plugins/installed-plugin-index-records.js";
-import type { PluginInstallUpdate } from "../plugins/installs.js";
-import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
-import { buildPluginSnapshotReport } from "../plugins/status.js";
+} from "./installed-plugin-index-records.js";
+import type { PluginInstallUpdate } from "./installs.js";
+import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
+import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
+import { applySlotSelectionForPlugin } from "./slot-selection.js";
+import { buildPluginSnapshotReport } from "./status.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   planPluginUninstall,
   type PluginUninstallDirectoryRemoval,
-} from "../plugins/uninstall.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
-import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
-import {
-  applySlotSelectionForPlugin,
-  enableInternalHookEntries,
-  logHookPackRestartHint,
-  logSlotWarnings,
-} from "./plugins-command-helpers.js";
-import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
+} from "./uninstall.js";
 
 function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const allow = cfg.plugins?.allow;
@@ -358,6 +351,12 @@ function logShadowedNpmInstallWarning(params: {
   );
 }
 
+function logSlotWarnings(warnings: string[], runtime: RuntimeEnv): void {
+  for (const warning of warnings) {
+    runtime.log(theme.warn(warning));
+  }
+}
+
 function resolveComparableInstallPath(
   install: Pick<PluginInstallRecord, "installPath" | "sourcePath">,
 ) {
@@ -528,30 +527,5 @@ export async function persistPluginInstall(params: {
     runtime,
   });
   runtime.log("Restart the gateway to load plugins.");
-  return next;
-}
-
-export async function persistHookPackInstall(params: {
-  snapshot: ConfigSnapshotForInstallPersist;
-  hookPackId: string;
-  hooks: string[];
-  install: Omit<HookInstallUpdate, "hookId" | "hooks">;
-  successMessage?: string;
-  runtime?: RuntimeEnv;
-}): Promise<OpenClawConfig> {
-  const runtime = params.runtime ?? defaultRuntime;
-  let next = enableInternalHookEntries(params.snapshot.config, params.hooks);
-  next = recordHookInstall(next, {
-    hookId: params.hookPackId,
-    hooks: params.hooks,
-    ...params.install,
-  });
-  await replaceConfigFile({
-    nextConfig: next,
-    baseHash: params.snapshot.baseHash,
-    writeOptions: params.snapshot.writeOptions,
-  });
-  runtime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
-  logHookPackRestartHint(runtime);
   return next;
 }

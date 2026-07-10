@@ -1,10 +1,10 @@
 // Registry refresh helper shared by plugin config mutations that need post-write discovery repair.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
-import type { InstalledPluginIndexRefreshReason } from "../plugins/installed-plugin-index.js";
-import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
-import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
+import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import type { InstalledPluginIndexRefreshReason } from "./installed-plugin-index.js";
+import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
+import { refreshPluginRegistry } from "./plugin-registry.js";
 
 /** Optional warning sink for best-effort registry/cache refresh failures. */
 export type PluginRegistryRefreshLogger = {
@@ -56,7 +56,7 @@ export async function invalidatePluginRuntimeDiscoveryAfterConfigMutation(params
   logger?: PluginRegistryRefreshLogger;
 }): Promise<void> {
   try {
-    const { clearPluginRegistryLoadCache } = await import("../plugins/loader.js");
+    const { clearPluginRegistryLoadCache } = await import("./loader.js");
     clearPluginRegistryLoadCache();
   } catch (error) {
     params.logger?.warn?.(`Plugin runtime cache invalidation failed: ${formatErrorMessage(error)}`);

@@ -1,0 +1,702 @@
+// Plugin management service tests cover cold state, catalog identity, and guarded mutations.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  applyUninstall: vi.fn(),
+  clawhubInstall: vi.fn(),
+  installRecords: vi.fn(),
+  metadata: vi.fn(),
+  npmInstall: vi.fn(),
+  officialCatalog: vi.fn(),
+  persistInstall: vi.fn(),
+  preflight: vi.fn(),
+  readConfig: vi.fn(),
+  refreshRegistry: vi.fn(),
+  replaceConfig: vi.fn(),
+  planUninstall: vi.fn(),
+  selectWriteOptions: vi.fn((writeOptions: unknown) => writeOptions),
+  slotSelection: vi.fn((config: unknown): { config: unknown; warnings: string[] } => ({
+    config,
+    warnings: [],
+  })),
+}));
+
+vi.mock("../config/config.js", () => ({
+  assertConfigWriteAllowedInCurrentMode: (params?: { env?: NodeJS.ProcessEnv }) => {
+    if (params?.env?.OPENCLAW_NIX_MODE === "1") {
+      throw new Error("Config is managed by Nix");
+    }
+  },
+  readConfigFileSnapshotForWrite: () => mocks.readConfig(),
+  replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
+}));
+
+vi.mock("./install-persistence.js", () => ({
+  persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
+  resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
+  selectInstallMutationWriteOptions: (writeOptions: unknown) =>
+    mocks.selectWriteOptions(writeOptions),
+}));
+
+vi.mock("./slot-selection.js", () => ({
+  applySlotSelectionForPlugin: (config: unknown) => mocks.slotSelection(config),
+}));
+
+vi.mock("./registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: (...args: unknown[]) => mocks.refreshRegistry(...args),
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
+}));
+
+vi.mock("./clawhub.js", () => ({
+  installPluginFromClawHub: (...args: unknown[]) => mocks.clawhubInstall(...args),
+}));
+
+vi.mock("./install.js", () => ({
+  installPluginFromNpmSpec: (...args: unknown[]) => mocks.npmInstall(...args),
+}));
+
+vi.mock("./installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecords: (...args: unknown[]) => mocks.installRecords(...args),
+}));
+
+vi.mock("./uninstall.js", () => ({
+  applyPluginUninstallDirectoryRemoval: (...args: unknown[]) => mocks.applyUninstall(...args),
+  planPluginUninstall: (...args: unknown[]) => mocks.planUninstall(...args),
+}));
+
+vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./official-external-plugin-catalog.js")>()),
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
+    mocks.officialCatalog(...args),
+}));
+
+const {
+  clearManagedPluginOfficialCatalogCache,
+  installManagedPlugin,
+  listManagedPlugins,
+  overlayBundledOfficialPluginCatalogMetadata,
+  setManagedPluginEnabled,
+} = await import("./management-service.js");
+
+function configSnapshot(config: Record<string, unknown> = {}) {
+  return {
+    snapshot: {
+      valid: true,
+      parsed: {},
+      path: "/tmp/openclaw.json",
+      sourceConfig: config,
+      hash: "base-hash",
+    },
+    writeOptions: {
+      expectedConfigPath: "/tmp/openclaw.json",
+      includeFileHashesForWrite: { "/tmp/plugins.json": "include-hash" },
+      includeFileTargetsForWrite: { "/tmp/plugins.json": "/tmp/plugins.json" },
+    },
+  };
+}
+
+function metadataSnapshot(params: {
+  enabled: boolean;
+  id?: string;
+  name?: string;
+  origin?: "bundled" | "global";
+}) {
+  const id = params.id ?? "workboard";
+  const manifest = {
+    id,
+    name: params.name ?? "Workboard",
+    description: "Coordinate agent work in a shared board.",
+    catalog: { featured: true, order: 10 },
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: params.origin ?? "bundled",
+    rootDir: `/tmp/${id}`,
+    source: `/tmp/${id}/index.ts`,
+    manifestPath: `/tmp/${id}/openclaw.plugin.json`,
+  };
+  return {
+    index: {
+      plugins: [
+        {
+          pluginId: id,
+          packageName: `@openclaw/${id}`,
+          origin: params.origin ?? "bundled",
+          enabled: params.enabled,
+        },
+      ],
+    },
+    byPluginId: new Map([[id, manifest]]),
+    plugins: [manifest],
+    diagnostics: [],
+    normalizePluginId: (pluginId: string) => pluginId,
+  };
+}
+
+function emptyMetadataSnapshot() {
+  return {
+    index: { plugins: [] },
+    byPluginId: new Map(),
+    plugins: [],
+    diagnostics: [],
+    normalizePluginId: (pluginId: string) => pluginId,
+  };
+}
+
+const hostedDiffsEntry = {
+  name: "@openclaw/diffs",
+  version: "2.0.0",
+  description: "Hosted description",
+  openclaw: {
+    plugin: { id: "diffs", label: "Hosted Diffs" },
+    install: { clawhubSpec: "clawhub:@openclaw/diffs", defaultChoice: "clawhub" },
+  },
+};
+
+const bundledDiffsEntry = {
+  name: "@openclaw/diffs",
+  version: "1.0.0",
+  description: "Bundled description",
+  openclaw: {
+    plugin: { id: "diffs", label: "Bundled Diffs" },
+    catalog: { featured: true, order: 40 },
+    install: { clawhubSpec: "clawhub:@openclaw/diffs", defaultChoice: "npm" },
+  },
+};
+
+// Mirrors the current default ClawHub feed shape: package identity lives in a
+// source candidate while runtime/editorial metadata remains local.
+const hostedFeedDiffsEntry = {
+  id: "@openclaw/diffs",
+  title: "Diffs",
+  state: "available",
+  publisher: { id: "openclaw", trust: "official" },
+  install: {
+    candidates: [
+      {
+        sourceRef: "public-clawhub",
+        package: "@openclaw/diffs",
+        version: "2026.6.11",
+        integrity: `sha256:${"a".repeat(64)}`,
+      },
+    ],
+  },
+};
+
+describe("plugin management service", () => {
+  beforeEach(() => {
+    clearManagedPluginOfficialCatalogCache();
+    for (const mock of Object.values(mocks)) {
+      if (typeof mock === "function" && "mockReset" in mock) {
+        mock.mockReset();
+      }
+    }
+    mocks.selectWriteOptions.mockImplementation((writeOptions) => writeOptions);
+    mocks.preflight.mockReturnValue({
+      hookMutation: { mode: "allowed" },
+      pluginMutation: { mode: "allowed" },
+    });
+    mocks.slotSelection.mockImplementation((config) => ({ config, warnings: [] }));
+    mocks.installRecords.mockResolvedValue({});
+    mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
+    mocks.officialCatalog.mockResolvedValue({
+      source: "hosted",
+      entries: [],
+      feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
+      metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+    });
+  });
+
+  it("overlays bundled runtime identity and curation while keeping hosted install metadata", () => {
+    const [merged] = overlayBundledOfficialPluginCatalogMetadata(
+      [hostedDiffsEntry] as never,
+      [bundledDiffsEntry] as never,
+    );
+
+    expect(merged).toMatchObject({
+      name: "@openclaw/diffs",
+      version: "2.0.0",
+      description: "Hosted description",
+      openclaw: {
+        plugin: { id: "diffs", label: "Bundled Diffs" },
+        install: { clawhubSpec: "clawhub:@openclaw/diffs", defaultChoice: "clawhub" },
+        catalog: { featured: true, order: 40 },
+      },
+    });
+  });
+
+  it("normalizes the current package-shaped hosted feed against exact local identity", async () => {
+    const [merged] = overlayBundledOfficialPluginCatalogMetadata(
+      [hostedFeedDiffsEntry] as never,
+      [bundledDiffsEntry] as never,
+    );
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+
+    const catalog = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: { entries: merged ? [merged] : [] },
+    });
+
+    expect(merged).toMatchObject({
+      id: "@openclaw/diffs",
+      title: "Diffs",
+      name: "@openclaw/diffs",
+      description: "Bundled description",
+      install: hostedFeedDiffsEntry.install,
+      openclaw: {
+        plugin: { id: "diffs", label: "Bundled Diffs" },
+        catalog: { featured: true, order: 40 },
+      },
+    });
+    expect(catalog.plugins).toEqual([
+      expect.objectContaining({
+        id: "diffs",
+        name: "Bundled Diffs",
+        installed: false,
+        featured: true,
+        order: 40,
+        install: { source: "official", pluginId: "diffs" },
+      }),
+    ]);
+  });
+
+  it("deduplicates a package-shaped hosted row against its installed runtime id", async () => {
+    const [merged] = overlayBundledOfficialPluginCatalogMetadata(
+      [hostedFeedDiffsEntry] as never,
+      [bundledDiffsEntry] as never,
+    );
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
+    );
+
+    const catalog = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: { entries: merged ? [merged] : [] },
+    });
+
+    expect(catalog.plugins).toHaveLength(1);
+    expect(catalog.plugins[0]).toMatchObject({ id: "diffs", installed: true, enabled: true });
+  });
+
+  it("does not transfer endorsement to a hosted entry that only reuses the plugin id", () => {
+    const impostor = {
+      ...hostedDiffsEntry,
+      name: "community/impostor",
+      openclaw: {
+        ...hostedDiffsEntry.openclaw,
+        install: { clawhubSpec: "clawhub:community/impostor", defaultChoice: "clawhub" },
+      },
+    };
+
+    const [merged] = overlayBundledOfficialPluginCatalogMetadata(
+      [impostor] as never,
+      [bundledDiffsEntry] as never,
+    );
+
+    expect(merged?.openclaw?.catalog).toBeUndefined();
+  });
+
+  it("normalizes hosted catalog hints before building the public DTO", async () => {
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+
+    const catalog = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: {
+        entries: [
+          {
+            name: "community/partial",
+            openclaw: {
+              plugin: { id: "partial", label: "Partial" },
+              catalog: { featured: "yes", order: 25 },
+            },
+          },
+          {
+            name: "community/invalid",
+            openclaw: {
+              plugin: { id: "invalid", label: "Invalid" },
+              catalog: { featured: "yes", order: "first" },
+            },
+          },
+        ] as never,
+      },
+    });
+
+    expect(catalog.plugins).toEqual([
+      expect.objectContaining({
+        id: "partial",
+        order: 25,
+      }),
+    ]);
+    expect(catalog.plugins[0]).not.toHaveProperty("featured");
+  });
+
+  it("lists bundled Workboard as installed, default-off, and cold-disabled", async () => {
+    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
+
+    const catalog = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: { entries: [] },
+    });
+
+    expect(catalog.plugins).toEqual([
+      expect.objectContaining({
+        id: "workboard",
+        packageName: "@openclaw/workboard",
+        installed: true,
+        enabled: false,
+        state: "disabled",
+        featured: true,
+        order: 10,
+      }),
+    ]);
+    expect(catalog.mutationAllowed).toBe(true);
+  });
+
+  it("refuses mutation in Nix mode before reading or writing config", async () => {
+    await expect(
+      setManagedPluginEnabled({
+        pluginId: "workboard",
+        enabled: true,
+        env: { OPENCLAW_NIX_MODE: "1" },
+      }),
+    ).rejects.toThrow("managed by Nix");
+    expect(mocks.readConfig).not.toHaveBeenCalled();
+    expect(mocks.replaceConfig).not.toHaveBeenCalled();
+  });
+
+  it("blocks unsupported plugin includes before config mutation", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.preflight.mockReturnValue({
+      hookMutation: { mode: "allowed" },
+      pluginMutation: { mode: "blocked", reason: "nested plugins include" },
+    });
+
+    await expect(
+      setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} }),
+    ).rejects.toThrow("nested plugins include");
+    expect(mocks.replaceConfig).not.toHaveBeenCalled();
+  });
+
+  it("preserves config hash and include ownership when enabling Workboard", async () => {
+    const prepared = configSnapshot();
+    mocks.readConfig.mockResolvedValue(prepared);
+    mocks.metadata
+      .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
+      .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
+    mocks.replaceConfig.mockResolvedValue({});
+    mocks.refreshRegistry.mockResolvedValue(undefined);
+
+    const result = await setManagedPluginEnabled({
+      pluginId: "workboard",
+      enabled: true,
+      env: {},
+    });
+
+    expect(mocks.replaceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseHash: "base-hash",
+        writeOptions: prepared.writeOptions,
+      }),
+    );
+    expect(mocks.refreshRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "policy-changed",
+        policyPluginIds: ["workboard"],
+      }),
+    );
+    expect(result).toMatchObject({
+      plugin: { id: "workboard", enabled: true, state: "enabled" },
+      changedPaths: ["plugins"],
+    });
+  });
+
+  it("reports exclusive-slot side effects in established plugin config", async () => {
+    const config = {
+      plugins: {
+        entries: { workboard: { enabled: false } },
+        slots: { memory: "memory-core" },
+      },
+    };
+    mocks.readConfig.mockResolvedValue(configSnapshot(config));
+    mocks.slotSelection.mockImplementation((next) => ({
+      config: {
+        ...(next as Record<string, unknown>),
+        plugins: {
+          ...(next as { plugins?: Record<string, unknown> }).plugins,
+          slots: { memory: "workboard" },
+        },
+      },
+      warnings: ["Selected workboard for the memory slot."],
+    }));
+    mocks.replaceConfig.mockResolvedValue({});
+    mocks.refreshRegistry.mockResolvedValue(undefined);
+    mocks.metadata
+      .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
+      .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
+
+    const result = await setManagedPluginEnabled({
+      pluginId: "workboard",
+      enabled: true,
+      env: {},
+    });
+
+    expect(result.changedPaths).toEqual([
+      "plugins.entries.workboard.enabled",
+      "plugins.slots.memory",
+    ]);
+    expect(result.warnings).toEqual(["Selected workboard for the memory slot."]);
+  });
+
+  it("pins curated ClawHub installs to the expected runtime id", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.officialCatalog.mockResolvedValue({
+      source: "hosted",
+      entries: [hostedFeedDiffsEntry],
+      feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
+      metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+    });
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "impostor",
+      targetDir: "/tmp/extensions/impostor",
+      extensions: ["index.js"],
+      packageName: "@openclaw/diffs",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "@openclaw/diffs",
+        clawhubFamily: "code-plugin",
+      },
+    });
+
+    await expect(
+      installManagedPlugin({
+        request: {
+          source: "clawhub",
+          packageName: "@openclaw/diffs",
+          acknowledgeClawHubRisk: true,
+        },
+        env: {},
+      }),
+    ).rejects.toThrow("expected diffs, got impostor");
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:@openclaw/diffs@2026.6.11",
+        expectedPluginId: "diffs",
+        expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
+        acknowledgeClawHubRisk: true,
+      }),
+    );
+    expect(mocks.persistInstall).not.toHaveBeenCalled();
+  });
+
+  it("threads hosted ClawHub candidate integrity into official installs", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.officialCatalog.mockResolvedValue({
+      source: "hosted",
+      entries: [hostedFeedDiffsEntry],
+      feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
+      metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+    });
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "diffs",
+      targetDir: "/tmp/extensions/diffs",
+      extensions: ["index.js"],
+      packageName: "@openclaw/diffs",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "@openclaw/diffs",
+        clawhubFamily: "code-plugin",
+      },
+    });
+    mocks.persistInstall.mockResolvedValue({});
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
+    );
+
+    await installManagedPlugin({
+      request: { source: "official", pluginId: "diffs" },
+      env: {},
+    });
+
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:@openclaw/diffs@2026.6.11",
+        expectedPluginId: "diffs",
+        expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
+      }),
+    );
+  });
+
+  it("removes only the newly installed managed target after persistence conflicts", async () => {
+    const conflict = new Error("config changed during plugin install");
+    const targetDir = "/tmp/extensions/demo";
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir,
+      extensions: ["index.js"],
+      packageName: "community/demo",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "community/demo",
+        clawhubFamily: "code-plugin",
+      },
+    });
+    mocks.persistInstall.mockRejectedValue(conflict);
+    mocks.planUninstall.mockReturnValue({
+      ok: true,
+      config: {},
+      pluginId: "demo",
+      actions: {},
+      directoryRemoval: { target: targetDir },
+    });
+
+    await expect(
+      installManagedPlugin({
+        request: { source: "clawhub", packageName: "community/demo" },
+        env: {},
+      }),
+    ).rejects.toBe(conflict);
+    expect(mocks.planUninstall).toHaveBeenCalledWith({
+      config: {
+        plugins: {
+          installs: {
+            demo: expect.objectContaining({
+              source: "clawhub",
+              spec: "clawhub:community/demo",
+              installPath: targetDir,
+            }),
+          },
+        },
+      },
+      pluginId: "demo",
+      deleteFiles: true,
+      extensionsDir: expect.any(String),
+    });
+    expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
+  });
+
+  it("retains a failed install target when the durable record already owns it", async () => {
+    const persistenceError = new Error("post-commit refresh failed");
+    const targetDir = "/tmp/extensions/demo";
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir,
+      extensions: ["index.js"],
+      packageName: "community/demo",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "community/demo",
+        clawhubFamily: "code-plugin",
+      },
+    });
+    mocks.persistInstall.mockRejectedValue(persistenceError);
+    mocks.installRecords.mockResolvedValue({
+      demo: { source: "clawhub", installPath: targetDir },
+    });
+
+    await expect(
+      installManagedPlugin({
+        request: { source: "clawhub", packageName: "community/demo" },
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      message: "post-commit refresh failed",
+      warning: expect.stringContaining("retained the managed target"),
+      cause: persistenceError,
+    });
+    expect(mocks.planUninstall).not.toHaveBeenCalled();
+    expect(mocks.applyUninstall).not.toHaveBeenCalled();
+  });
+
+  it("serializes install and enable mutations through one Gateway lock", async () => {
+    let releasePersist: ((config: Record<string, unknown>) => void) | undefined;
+    const heldPersist = new Promise<Record<string, unknown>>((resolve) => {
+      releasePersist = resolve;
+    });
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/extensions/demo",
+      extensions: ["index.js"],
+      packageName: "community/demo",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "community/demo",
+        clawhubFamily: "code-plugin",
+      },
+    });
+    mocks.persistInstall.mockReturnValueOnce(heldPersist);
+    mocks.replaceConfig.mockResolvedValue({});
+    mocks.refreshRegistry.mockResolvedValue(undefined);
+    mocks.metadata
+      .mockReturnValueOnce(metadataSnapshot({ enabled: true, id: "demo", origin: "global" }))
+      .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
+      .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
+
+    const install = installManagedPlugin({
+      request: { source: "clawhub", packageName: "community/demo" },
+      env: {},
+    });
+    await vi.waitFor(() => expect(mocks.persistInstall).toHaveBeenCalledTimes(1));
+    const enable = setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
+    await Promise.resolve();
+
+    expect(mocks.readConfig).toHaveBeenCalledTimes(1);
+    releasePersist?.({});
+    await install;
+    await enable;
+    expect(mocks.readConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      code: "clawhub_risk_acknowledgement_required",
+      expectedKind: "invalid-request",
+    },
+    {
+      code: "clawhub_security_unavailable",
+      expectedKind: "unavailable",
+    },
+  ] as const)("classifies ClawHub failure $code", async ({ code, expectedKind }) => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: false,
+      error: "ClawHub install failed",
+      code,
+      version: "1.2.3",
+      warning: "Review the release",
+    });
+
+    await expect(
+      installManagedPlugin({
+        request: { source: "clawhub", packageName: "community/plugin" },
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      kind: expectedKind,
+      code,
+      version: "1.2.3",
+      warning: "Review the release",
+    });
+  });
+});

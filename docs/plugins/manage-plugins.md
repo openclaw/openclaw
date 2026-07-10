@@ -1,6 +1,7 @@
 ---
-summary: "Quick examples for listing, installing, updating, inspecting, and uninstalling OpenClaw plugins"
+summary: "Manage OpenClaw plugins from the Control UI or CLI"
 read_when:
+  - You want to browse, install, enable, or disable plugins in the Control UI
   - You want quick plugin list, install, update, inspect, or uninstall examples
   - You want to choose a plugin install source
   - You want the right reference for publishing plugin packages
@@ -9,12 +10,38 @@ sidebarTitle: "Manage plugins"
 doc-schema-version: 1
 ---
 
-Common plugin management commands. For the full command contract, flags,
-source-selection rules, and edge cases, see [`openclaw plugins`](/cli/plugins).
+The Control UI covers the common discovery, install, enable, and disable
+workflow. The CLI adds update, uninstall, advanced configuration, and explicit
+install-source controls. For its full command contract, flags, source-selection
+rules, and edge cases, see [`openclaw plugins`](/cli/plugins).
 
-Typical workflow: find a package, install it from ClawHub, npm, git, or a
-local path, let the managed Gateway auto-restart (or restart it manually),
-then verify the plugin's runtime registrations.
+Typical CLI workflow: find a package, install it from ClawHub, npm, git, or a
+local path, let the managed Gateway auto-restart (or restart it manually), then
+verify the plugin's runtime registrations.
+
+## Use the Control UI
+
+Open **Plugins** in the Control UI, or use `/settings/plugins` relative to the
+configured Control UI base path. For example, a base path of `/openclaw` uses
+`/openclaw/settings/plugins`. The page is always available and shows a curated
+set of included and official plugins, installed plugins, and inline
+[ClawHub](https://clawhub.ai/plugins) search.
+
+Included plugins do not need a package install. Their action is **Enable** or
+**Disable**. Workboard, for example, is included with OpenClaw and disabled by
+default, so choose **Enable** to turn it on.
+
+Catalog and search access require `operator.read`. Install, enable, and disable
+actions require `operator.admin`. A ClawHub install is performed by the Gateway
+and preserves its trust, integrity, and plugin-install policy checks.
+
+Installing plugin code requires a Gateway restart. Enablement changes can be
+applied without a restart when the installed plugin and current Gateway runtime
+support it; otherwise the UI tells you a restart is required.
+
+The Control UI does not install from arbitrary npm, git, or local-path sources,
+update or uninstall plugins, or expose rich plugin configuration. Use the CLI
+workflows below for those operations.
 
 ## List and search plugins
 
