@@ -468,6 +468,18 @@
   }
 }
 
+/* Narrow Mac windows: the slide-over drawer is fixed at top: 0 and covers the
+   native titlebar area, so its first controls need their own clearance from
+   the AppKit traffic lights and drag regions (the topbar inset above only
+   protects the desktop layout). Covers the app drawer and the settings
+   sidebar that rides inside the drawer below the breakpoint. */
+@media (max-width: 1100px) {
+  html.openclaw-native-macos .shell-nav .sidebar-shell,
+  html.openclaw-native-macos .shell-nav .settings-sidebar__head {
+    padding-top: max(18px, var(--openclaw-native-titlebar-height, 50px));
+  }
+}
+
 .topnav-shell {
   display: flex;
   align-items: center;
