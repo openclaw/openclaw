@@ -566,6 +566,25 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun runIdOnlyAckRemainsAcceptedForOlderGateways() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      chat.sendMessageAwaitAcceptance(message = "compatible ack", thinkingLevel = "off", attachments = emptyList())
+
+      gateway.online = true
+      gateway.sendResponse = { key -> """{"runId":"$key"}""" }
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("compatible ack"), gateway.sentMessages)
+      assertTrue(chat.outboxItems.value.isEmpty())
+    }
+
+  @Test
   fun unknownOrMalformedAckFailsUnconfirmed() =
     runTest {
       val responses =

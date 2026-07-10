@@ -1636,7 +1636,7 @@ class ChatController internal constructor(
         OutboxSendResult.DeliveryUnconfirmed
       } else {
         when (ack.normalizedStatus) {
-          "started", "in_flight", "ok" -> OutboxSendResult.Accepted
+          "", "started", "in_flight", "ok" -> OutboxSendResult.Accepted
           "timeout", "error" -> OutboxSendResult.Rejected("Chat failed before the run started")
           else -> OutboxSendResult.DeliveryUnconfirmed
         }
