@@ -1229,7 +1229,10 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     token,
     password,
     tlsFingerprint,
-    preauthHandshakeTimeoutMs: context.config.gateway?.handshakeTimeoutMs,
+    preauthHandshakeTimeoutMs:
+      context.config.gateway?.handshakeTimeoutMs !== undefined
+        ? context.config.gateway.handshakeTimeoutMs
+        : timeoutMs ?? undefined,
     timeoutMs,
     startupTimeoutMs,
     safeTimerTimeoutMs,
