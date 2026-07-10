@@ -648,6 +648,35 @@ function appendLegacyCrossAgentTask(taskRunsPath: string): void {
   }
 }
 
+function appendLegacyTaskWithObsoleteDeliveryStatus(taskRunsPath: string): void {
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(taskRunsPath);
+  try {
+    db.prepare(
+      `
+        INSERT INTO task_runs (
+          task_id, runtime, requester_session_key, agent_id, run_id, task,
+          status, delivery_status, notify_policy, created_at, last_event_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "legacy-not-requested",
+      "cron",
+      "",
+      "ops",
+      "legacy-not-requested-run",
+      "Legacy cancelled task",
+      "cancelled",
+      "not-requested",
+      "silent",
+      150,
+      160,
+    );
+  } finally {
+    db.close();
+  }
+}
+
 async function detectAndRunMigrations(params: {
   root: string;
   cfg: OpenClawConfig;
@@ -3062,6 +3091,27 @@ describe("doctor legacy state migrations", () => {
         requesterAgentId: "main",
         requesterSessionKey: "agent:main:main",
         childSessionKey: "agent:worker:subagent:child",
+      });
+    });
+  });
+
+  it("normalizes legacy not-requested delivery status so one bad row does not abort restore", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath } = writeLegacyTaskStateSidecars(root);
+    appendLegacyTaskWithObsoleteDeliveryStatus(taskRunsPath);
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 2 task registry sidecar rows → shared SQLite state");
+
+    await withStateDir(root, async () => {
+      const taskState = loadTaskRegistryStateFromSqlite();
+      expect(taskState.tasks.get("legacy-not-requested")).toMatchObject({
+        taskId: "legacy-not-requested",
+        deliveryStatus: "not_applicable",
       });
     });
   });

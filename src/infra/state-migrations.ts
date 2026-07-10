@@ -832,6 +832,13 @@ function legacyStringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+// Legacy sidecars persisted delivery_status="not-requested"; the current shared schema only
+// accepts "not_applicable" for that state. Left unmapped, one such row throws inside
+// parseTaskDeliveryStatus() and aborts restoration of the entire task registry (#103168).
+function normalizeLegacyTaskDeliveryStatus(value: unknown): unknown {
+  return value === "not-requested" ? "not_applicable" : value;
+}
+
 function legacyKeyValue(value: SQLInputValue): string {
   if (typeof value === "string") {
     return value;
@@ -882,7 +889,7 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
     label: legacyBindValue(row.label),
     task: legacyBindValue(row.task ?? ""),
     status: legacyBindValue(row.status ?? ""),
-    delivery_status: legacyBindValue(row.delivery_status ?? ""),
+    delivery_status: legacyBindValue(normalizeLegacyTaskDeliveryStatus(row.delivery_status ?? "")),
     notify_policy: legacyBindValue(row.notify_policy ?? ""),
     created_at: normalizeLegacySqliteInteger(row.created_at as number | bigint | null) ?? 0,
     started_at: normalizeLegacySqliteInteger(row.started_at as number | bigint | null),
