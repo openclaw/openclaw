@@ -2094,7 +2094,7 @@ class TalkModeManager internal constructor(
       Log.d(tag, "chat.send start sessionKey=${mainSessionKey.ifBlank { "main" }} chars=${prompt.length}")
       val ack = sendChat(prompt, session)
       val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
-      Log.d(tag, "chat.send ok runId=$runId status=${ack.normalizedStatus}")
+      Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
       if (ack.isTerminalFailure) {
         setStatus(if (ack.normalizedStatus == "error") "Chat error" else "Aborted")
         start()

@@ -35,7 +35,10 @@ class ChatControllerOutboxTest {
     var recoveryGate: CompletableDeferred<Unit>? = null
     var recoveryFailure: Throwable? = null
     var failedStatusUpdateFailure: Throwable? = null
+    var queuedStatusUpdateFailure: Throwable? = null
     var sendingStatusUpdateFailure: Throwable? = null
+    var deleteFailure: Throwable? = null
+    var deleteOnFailedStatus = false
     private var nextCreatedAt = 0L
 
     fun seed(
@@ -81,7 +84,13 @@ class ChatControllerOutboxTest {
       retryCount: Int,
       lastError: String?,
     ): Int {
+      if (status == ChatOutboxStatus.Failed && deleteOnFailedStatus) {
+        rows.remove(id)
+        gatewayIds.remove(id)
+        return 0
+      }
       if (status == ChatOutboxStatus.Failed) failedStatusUpdateFailure?.let { throw it }
+      if (status == ChatOutboxStatus.Queued) queuedStatusUpdateFailure?.let { throw it }
       if (status == ChatOutboxStatus.Sending) sendingStatusUpdateFailure?.let { throw it }
       val current = rows[id] ?: return 0
       rows[id] = current.copy(status = status, retryCount = retryCount, lastError = lastError)
@@ -102,6 +111,7 @@ class ChatControllerOutboxTest {
     }
 
     override suspend fun delete(id: String) {
+      deleteFailure?.let { throw it }
       rows.remove(id)
       gatewayIds.remove(id)
     }
@@ -293,6 +303,52 @@ class ChatControllerOutboxTest {
         assertEquals(listOf(status), gateway.sentMessages)
         assertTrue(chat.outboxItems.value.isEmpty())
       }
+    }
+
+  @Test
+  fun failedAcceptedDeleteRearmsRecoveryBeforeYoungerRows() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      chat.sendMessageAwaitAcceptance(
+        message = "accepted",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
+      chat.sendMessageAwaitAcceptance(
+        message = "younger",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
+
+      outbox.deleteFailure = IllegalStateException("storage unavailable")
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("accepted"), gateway.sentMessages)
+      assertFalse(chat.healthOk.value)
+      assertEquals(
+        ChatOutboxStatus.Sending,
+        outbox.rows.values.first { it.text == "accepted" }.status,
+      )
+      assertEquals(
+        ChatOutboxStatus.Queued,
+        outbox.rows.values.first { it.text == "younger" }.status,
+      )
+
+      outbox.deleteFailure = null
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("accepted", "younger"), gateway.sentMessages)
+      val recovered = chat.outboxItems.value.single()
+      assertEquals("accepted", recovered.text)
+      assertEquals(ChatOutboxStatus.Failed, recovered.status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, recovered.lastError)
     }
 
   @Test
@@ -558,15 +614,20 @@ class ChatControllerOutboxTest {
 
       outbox.failedStatusUpdateFailure = null
       gateway.sendResponse = { key -> """{"runId":"$key","status":"started"}""" }
-      val restarted = controller(this, gateway, outbox)
-      restarted.handleGatewayEvent("health", null)
+      chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
 
       assertEquals(listOf("ambiguous", "younger"), gateway.sentMessages)
-      val recovered = restarted.outboxItems.value.single()
+      val recovered = chat.outboxItems.value.single()
       assertEquals("ambiguous", recovered.text)
       assertEquals(ChatOutboxStatus.Failed, recovered.status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, recovered.lastError)
+
+      val restarted = controller(this, gateway, outbox)
+      restarted.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertEquals(listOf("ambiguous", "younger"), gateway.sentMessages)
+      assertEquals(ChatOutboxStatus.Failed, restarted.outboxItems.value.single().status)
     }
 
   @Test
@@ -606,6 +667,54 @@ class ChatControllerOutboxTest {
 
       assertEquals(listOf("older", "younger"), gateway.sentMessages)
       assertTrue(chat.outboxItems.value.isEmpty())
+    }
+
+  @Test
+  fun failedNotDispatchedPersistenceRearmsRecoveryBeforeYoungerRows() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      chat.sendMessageAwaitAcceptance(
+        message = "older",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
+      chat.sendMessageAwaitAcceptance(
+        message = "younger",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
+
+      outbox.queuedStatusUpdateFailure = IllegalStateException("storage unavailable")
+      gateway.online = true
+      gateway.sendFailureBeforeDispatch = GatewayRequestNotEnqueued("gateway send failed")
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertFalse(chat.healthOk.value)
+      assertEquals(
+        ChatOutboxStatus.Sending,
+        outbox.rows.values.first { it.text == "older" }.status,
+      )
+      assertEquals(
+        ChatOutboxStatus.Queued,
+        outbox.rows.values.first { it.text == "younger" }.status,
+      )
+
+      outbox.queuedStatusUpdateFailure = null
+      gateway.sendFailureBeforeDispatch = null
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("younger"), gateway.sentMessages)
+      val recovered = chat.outboxItems.value.single()
+      assertEquals("older", recovered.text)
+      assertEquals(ChatOutboxStatus.Failed, recovered.status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, recovered.lastError)
     }
 
   @Test
@@ -715,6 +824,44 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun deletedUnknownOutcomeStillStopsBeforeYoungerRows() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      chat.sendMessageAwaitAcceptance(
+        message = "older",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
+      chat.sendMessageAwaitAcceptance(
+        message = "younger",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
+
+      outbox.deleteOnFailedStatus = true
+      gateway.online = true
+      gateway.sendFailureAfterDispatch = GatewayRequestOutcomeUnknown("ack lost")
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("older"), gateway.sentMessages)
+      assertFalse(chat.healthOk.value)
+      assertEquals(listOf("younger"), chat.outboxItems.value.map { it.text })
+
+      outbox.deleteOnFailedStatus = false
+      gateway.sendFailureAfterDispatch = null
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("older", "younger"), gateway.sentMessages)
+      assertTrue(chat.outboxItems.value.isEmpty())
+    }
+
+  @Test
   fun droppedAckFailsUnconfirmedAndNeverReplaysUntilExplicitRetry() =
     runTest {
       val gateway = FakeGateway()
@@ -761,22 +908,29 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun runIdOnlyAckRemainsAcceptedForOlderGateways() =
+  fun runIdOnlyAckFailsUnconfirmed() =
     runTest {
       val gateway = FakeGateway()
       val outbox = FakeCommandOutbox()
       val chat = controller(this, gateway, outbox)
       chat.load("main")
       advanceUntilIdle()
-      chat.sendMessageAwaitAcceptance(message = "compatible ack", thinkingLevel = "off", attachments = emptyList())
+      chat.sendMessageAwaitAcceptance(
+        message = "missing status",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
 
       gateway.online = true
       gateway.sendResponse = { key -> """{"runId":"$key"}""" }
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
 
-      assertEquals(listOf("compatible ack"), gateway.sentMessages)
-      assertTrue(chat.outboxItems.value.isEmpty())
+      assertEquals(listOf("missing status"), gateway.sentMessages)
+      val failed = chat.outboxItems.value.single()
+      assertEquals(ChatOutboxStatus.Failed, failed.status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, failed.lastError)
+      assertTrue(chat.healthOk.value)
     }
 
   @Test
@@ -822,7 +976,7 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun terminalSuccessAckWithoutRunIdRemovesTheRow() =
+  fun terminalSuccessAckWithoutRunIdFailsUnconfirmed() =
     runTest {
       val gateway = FakeGateway()
       val outbox = FakeCommandOutbox()
@@ -837,7 +991,9 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertEquals(listOf("completed ack"), gateway.sentMessages)
-      assertTrue(chat.outboxItems.value.isEmpty())
+      val failed = chat.outboxItems.value.single()
+      assertEquals(ChatOutboxStatus.Failed, failed.status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, failed.lastError)
       assertTrue(chat.healthOk.value)
     }
 
