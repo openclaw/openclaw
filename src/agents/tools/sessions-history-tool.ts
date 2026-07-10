@@ -40,6 +40,7 @@ const SessionsHistoryToolSchema = Type.Object({
   limit: optionalPositiveIntegerSchema(),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   includeTools: Type.Optional(Type.Boolean()),
+  includeFamily: Type.Optional(Type.Boolean()),
 });
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
@@ -347,6 +348,10 @@ export function createSessionsHistoryTool(opts?: {
       const limit = readPositiveIntegerParam(params, "limit");
       const offset = readOffsetParam(params);
       const includeTools = Boolean(params.includeTools);
+      const includeFamily = params.includeFamily === true;
+      if (includeFamily && offset !== undefined) {
+        throw new ToolInputError("includeFamily cannot be combined with offset");
+      }
       const result = await gatewayCall<{
         messages: Array<unknown>;
         offset?: number;
@@ -359,6 +364,7 @@ export function createSessionsHistoryTool(opts?: {
           sessionKey: resolvedKey,
           limit,
           ...(offset !== undefined ? { offset } : {}),
+          includeFamily,
         },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];

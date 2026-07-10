@@ -2270,6 +2270,8 @@ async function runAgentTurnWithFallbackInternal(
                     fastModeAutoProgressState,
                     isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
                     sandboxSessionKey: params.runtimePolicySessionKey,
+                    sessionStorePath: params.storePath,
+                    sessionStoreEntry: params.getActiveSessionEntry(),
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,
                     userTurnTranscriptRecorder,

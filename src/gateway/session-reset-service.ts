@@ -20,7 +20,6 @@ import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
-import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -79,6 +78,7 @@ import {
   loadSessionEntry,
   resolveGatewaySessionStoreTarget,
   resolveSessionStoreKey,
+  resolveSessionModelRef,
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
@@ -115,6 +115,23 @@ function resolveResetSessionFile(params: {
       storePath: params.storePath,
       agentId: params.agentId,
     }),
+  );
+}
+
+function resolveResetUsageFamilySessionIds(params: {
+  currentEntry?: SessionEntry;
+  nextSessionId: string;
+}): string[] | undefined {
+  const currentSessionId = params.currentEntry?.sessionId;
+  if (!currentSessionId) {
+    return undefined;
+  }
+  return Array.from(
+    new Set([
+      ...(params.currentEntry?.usageFamilySessionIds ?? []),
+      currentSessionId,
+      params.nextSessionId,
+    ]),
   );
 }
 
@@ -1079,6 +1096,10 @@ export async function performGatewaySessionReset(params: {
             storePath,
             agentId: sessionAgentId,
           });
+          const usageFamilySessionIds = resolveResetUsageFamilySessionIds({
+            currentEntry,
+            nextSessionId,
+          });
           const nextEntry: SessionEntry = {
             sessionId: nextSessionId,
             sessionFile,
@@ -1106,6 +1127,10 @@ export async function performGatewaySessionReset(params: {
             chatType: currentEntry?.chatType,
             compactionCount: currentEntry?.compactionCount,
             compactionCheckpoints: currentEntry?.compactionCheckpoints,
+            usageFamilyKey: usageFamilySessionIds
+              ? (currentEntry?.usageFamilyKey ?? primaryKey)
+              : currentEntry?.usageFamilyKey,
+            usageFamilySessionIds,
             sendPolicy: currentEntry?.sendPolicy,
             queueMode: currentEntry?.queueMode,
             queueDebounceMs: currentEntry?.queueDebounceMs,

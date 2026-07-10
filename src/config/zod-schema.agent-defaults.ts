@@ -92,6 +92,7 @@ export const AgentDefaultsSchema = z
     experimental: z
       .object({
         localModelLean: z.boolean().optional(),
+        sessionFamilyCarryover: z.boolean().optional(),
       })
       .strict()
       .optional(),

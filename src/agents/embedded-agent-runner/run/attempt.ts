@@ -393,6 +393,12 @@ import {
   type CompletionRequiredAsyncTaskWaitResult,
 } from "./attempt.async-tasks.js";
 import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
+export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
+import {
+  installSessionFamilyCarryoverContextTransform,
+  resolveSessionFamilyCarryoverSummary,
+  shouldInstallSessionFamilyCarryoverContextTransform,
+} from "../session-family-carryover.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -2668,6 +2674,28 @@ export async function runEmbeddedAttempt(
               normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()),
             ),
           );
+      }
+      if (
+        shouldInstallSessionFamilyCarryoverContextTransform({
+          isRawModelRun,
+          enabled: params.config?.agents?.defaults?.experimental?.sessionFamilyCarryover === true,
+        })
+      ) {
+        installSessionFamilyCarryoverContextTransform({
+          messages: activeSession.messages,
+          getTransformContext: () => activeSession.agent.transformContext,
+          setTransformContext: (transform) => {
+            activeSession.agent.transformContext = transform;
+          },
+          resolveCarryover: async () =>
+            await resolveSessionFamilyCarryoverSummary({
+              sessionId: params.sessionId,
+              sessionFile: params.sessionFile,
+              storePath: params.sessionStorePath,
+              agentId: sessionAgentId,
+              entry: params.sessionStoreEntry,
+            }),
+        });
       }
       let prePromptMessageCount = activeSession.messages.length;
       // Session-owned projections survive attempt teardown so already-sent tool results

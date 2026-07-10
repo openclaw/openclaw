@@ -49,6 +49,7 @@ vi.mock("./sessions/index.js", async (importOriginal) => {
 
 const { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } =
   await import("./agent-tools.read.js");
+const { createApplyPatchTool } = await import("./apply-patch.js");
 
 function requireOps(ops: WorkspaceFileOps | undefined, label: string): WorkspaceFileOps {
   if (!ops) {
@@ -70,6 +71,7 @@ describe("workspace-scoped coding tools resolve their fs root lazily", () => {
 
     createHostWorkspaceEditTool(missingWorkspace, { workspaceOnly: true });
     createHostWorkspaceWriteTool(missingWorkspace, { workspaceOnly: true });
+    createApplyPatchTool({ cwd: missingWorkspace, workspaceOnly: true });
 
     expect(rootSpy).not.toHaveBeenCalled();
   });

@@ -846,6 +846,8 @@ export function runAgentAttempt(params: {
     senderId: params.runContext.senderId,
     senderIsOwner: params.opts.senderIsOwner,
     sessionFile: params.sessionFile,
+    sessionStorePath: params.storePath,
+    sessionStoreEntry: params.sessionEntry,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     config: params.cfg,

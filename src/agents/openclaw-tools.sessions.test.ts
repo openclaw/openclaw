@@ -768,6 +768,47 @@ describe("sessions tools", () => {
     );
   });
 
+  it("sessions_history forwards includeFamily to chat.history", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    await tool.execute("call-family", { sessionKey: "main", includeFamily: true });
+
+    const historyCalls = calls.filter((call) => call.method === "chat.history");
+    expect(historyCalls).toHaveLength(1);
+    expect(historyCalls[0]?.params).toMatchObject({ sessionKey: "main", includeFamily: true });
+  });
+
+  it("sessions_history rejects includeFamily with offset", async () => {
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    await expect(
+      tool.execute("call-family-offset", {
+        sessionKey: "main",
+        includeFamily: true,
+        offset: 0,
+      }),
+    ).rejects.toThrow("includeFamily cannot be combined with offset");
+    expect(callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "chat.history" }),
+    );
+  });
+
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
     const oversized = Array.from({ length: 80 }, (_, idx) => ({
       role: "assistant",

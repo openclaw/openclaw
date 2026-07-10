@@ -248,14 +248,16 @@ async function fetchHistoryMessages(
   params?: {
     limit?: number;
     maxChars?: number;
+    includeFamily?: boolean;
   },
 ): Promise<unknown[]> {
   const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
     sessionKey: "main",
     limit: params?.limit ?? 1000,
     ...(typeof params?.maxChars === "number" ? { maxChars: params.maxChars } : {}),
+    ...(params?.includeFamily === true ? { includeFamily: true } : {}),
   });
-  expect(historyRes.ok).toBe(true);
+  expect(historyRes, JSON.stringify(historyRes.error ?? null)).toMatchObject({ ok: true });
   return historyRes.payload?.messages ?? [];
 }
 
@@ -488,6 +490,246 @@ describe("gateway server chat", () => {
       expect(synthetic.payload?.sessionInfo?.modelProvider).toBeTruthy();
       expect(synthetic.payload?.sessionInfo?.model).toBeTruthy();
       expect(synthetic.payload?.sessionInfo?.contextTokens).toEqual(expect.any(Number));
+    });
+  });
+
+  test("chat.history can include reset ancestor transcripts from the session family", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const currentSessionId = "current-thread-session";
+      const ancestorSessionId = "ancestor-thread-session";
+      const startedAt = new Date("2026-01-18T05:00:00.000Z").getTime();
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: currentSessionId,
+            updatedAt: startedAt,
+            sessionStartedAt: startedAt,
+            usageFamilySessionIds: [ancestorSessionId, currentSessionId],
+          },
+        },
+      });
+      await fs.writeFile(
+        path.join(sessionDir, ancestorSessionId + ".jsonl.reset.2026-01-18T04-50-00.000Z"),
+        [
+          JSON.stringify({
+            type: "session",
+            version: 1,
+            id: ancestorSessionId,
+            timestamp: "2026-01-18T04:50:00.000Z",
+            cwd: sessionDir,
+          }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "newer plain ancestor context" }],
+              timestamp: startedAt - 60_000,
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(
+          sessionDir,
+          ancestorSessionId + "-topic-456.jsonl.reset.2026-01-18T04-20-00.000Z",
+        ),
+        [
+          JSON.stringify({
+            type: "session",
+            version: 1,
+            id: ancestorSessionId,
+            timestamp: "2026-01-18T04:20:00.000Z",
+            cwd: sessionDir,
+          }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "older topic ancestor context" }],
+              timestamp: startedAt - 40_000,
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(
+          sessionDir,
+          ancestorSessionId + "-topic-secret.jsonl.reset.2026-01-18T04-30-00.000Z",
+        ),
+        [
+          JSON.stringify({
+            type: "session",
+            version: 1,
+            id: ancestorSessionId + "-topic-secret",
+            timestamp: "2026-01-18T04:30:00.000Z",
+            cwd: sessionDir,
+          }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "unrelated topic context" }],
+              timestamp: startedAt - 30_000,
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(
+          sessionDir,
+          ancestorSessionId + "-topic-no-header.jsonl.reset.2026-01-18T04-45-00.000Z",
+        ),
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "headerless topic context" }],
+            timestamp: startedAt - 15_000,
+          },
+        }) + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(sessionDir, currentSessionId + ".jsonl"),
+        [
+          JSON.stringify({
+            message: {
+              role: "user",
+              content:
+                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+              provenance: {
+                kind: "inter_session",
+                sourceSessionKey: "agent:main:subagent:child",
+                sourceTool: "subagent_announce",
+              },
+              timestamp: startedAt - 30_000,
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "stale active announce reply" }],
+              timestamp: startedAt - 29_000,
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "current thread context" }],
+              timestamp: startedAt + 60_000,
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const defaultHistory = JSON.stringify(await fetchHistoryMessages(ws));
+      expect(defaultHistory).not.toContain("newer plain ancestor context");
+      expect(defaultHistory).toContain("current thread context");
+
+      const familyHistory = JSON.stringify(await fetchHistoryMessages(ws, { includeFamily: true }));
+      expect(familyHistory).toContain("newer plain ancestor context");
+      expect(familyHistory).toContain("older topic ancestor context");
+      expect(familyHistory).toContain("current thread context");
+      expect(familyHistory).not.toContain("unrelated topic context");
+      expect(familyHistory).not.toContain("headerless topic context");
+      expect(familyHistory).not.toContain("stale active announce reply");
+
+      const limitedFamilyHistory = JSON.stringify(
+        await fetchHistoryMessages(ws, { includeFamily: true, limit: 2 }),
+      );
+      expect(limitedFamilyHistory).toContain("newer plain ancestor context");
+      expect(limitedFamilyHistory).toContain("current thread context");
+      expect(limitedFamilyHistory).not.toContain("older topic ancestor context");
+    });
+  });
+
+  test("chat.history preserves current transcript when family targets hit the cap", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const currentSessionId = "current-cap-session";
+      const ancestorSessionIds = Array.from(
+        { length: 40 },
+        (_, index) => `ancestor-cap-session-${String(index).padStart(2, "0")}`,
+      );
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: currentSessionId,
+            updatedAt: Date.now(),
+            usageFamilySessionIds: [...ancestorSessionIds, currentSessionId],
+          },
+        },
+      });
+      await fs.writeFile(
+        path.join(sessionDir, currentSessionId + ".jsonl"),
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "current survives family target cap" }],
+            timestamp: Date.now(),
+          },
+        }) + "\n",
+        "utf-8",
+      );
+      for (const [index, ancestorSessionId] of ancestorSessionIds.entries()) {
+        await fs.writeFile(
+          path.join(sessionDir, ancestorSessionId + ".jsonl"),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: `ancestor cap context ${index}` }],
+              timestamp: Date.now() - index - 1,
+            },
+          }) + "\n",
+          "utf-8",
+        );
+      }
+
+      const familyHistory = JSON.stringify(await fetchHistoryMessages(ws, { includeFamily: true }));
+      expect(familyHistory).toContain("current survives family target cap");
+      expect(familyHistory).not.toContain("ancestor cap context 0");
+      expect(familyHistory).not.toContain("ancestor cap context 9");
+      expect(familyHistory).toContain("ancestor cap context 10");
+      expect(familyHistory).toContain("ancestor cap context 31");
+      expect(familyHistory).toContain("ancestor cap context 39");
+
+      const limitedFamilyHistory = JSON.stringify(
+        await fetchHistoryMessages(ws, { includeFamily: true, limit: 2 }),
+      );
+      expect(limitedFamilyHistory).toContain("current survives family target cap");
+      expect(limitedFamilyHistory).toContain("ancestor cap context");
+    });
+  });
+
+  test("chat.history returns reset archive history when the active transcript is missing", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      await writeSessionStore({
+        entries: {
+          main: { sessionId: "sess-main", updatedAt: Date.now() },
+        },
+      });
+      await fs.writeFile(
+        path.join(sessionDir, "sess-main.jsonl.reset.2026-02-16T22-26-34.000Z"),
+        [
+          JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "archive-backed main history" }],
+              timestamp: Date.now(),
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const defaultHistory = JSON.stringify(await fetchHistoryMessages(ws));
+      expect(defaultHistory).toContain("archive-backed main history");
     });
   });
 
@@ -3181,6 +3423,70 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history drops pre-session subagent announce pair across overread boundary", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            sessionStartedAt,
+          },
+        },
+      });
+      const announce = {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceTool: "subagent_announce",
+      };
+      const silentTail = Array.from({ length: 58 }, (_, index) =>
+        JSON.stringify({
+          timestamp: `2026-05-23T04:03:${String(index).padStart(2, "0")}.000Z`,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+          },
+        }),
+      );
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:31.000Z",
+          message: {
+            role: "user",
+            content:
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+            provenance: announce,
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:33.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "stale announce reply across overread" }],
+          },
+        }),
+        ...silentTail,
+        JSON.stringify({
+          timestamp: "2026-05-23T04:04:10.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "fresh turn after silent tail" }],
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 2 });
+      const serialized = JSON.stringify(messages);
+      expect(serialized).not.toContain("stale announce reply across overread");
+      expect(serialized).not.toContain("NO_REPLY");
+      expect(serialized).toContain("fresh turn after silent tail");
+    });
+  });
+
   test("chat.history offset pages overread context before filtering stale announce replies", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -3865,6 +4171,23 @@ describe("gateway server chat", () => {
       expect(tooLargeRes.ok).toBe(false);
       expect((tooLargeRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
         /invalid chat\.history params/i,
+      );
+    });
+  });
+
+  test("chat.history rejects includeFamily with offset", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+
+      const res = await rpcReq(ws, "chat.history", {
+        sessionKey: "main",
+        includeFamily: true,
+        offset: 0,
+      });
+
+      expect(res.ok).toBe(false);
+      expect((res.error as { message?: string } | undefined)?.message ?? "").toContain(
+        "includeFamily cannot be combined with offset",
       );
     });
   });

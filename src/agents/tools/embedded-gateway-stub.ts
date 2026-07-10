@@ -10,6 +10,8 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import { dropPreSessionStartAnnouncePairs } from "../../gateway/chat-display-projection.js";
+import { resolveSessionFamilyTranscriptReadTargets } from "../../gateway/session-history-family.js";
 import type {
   ReadSessionMessagesAsyncOptions,
   SessionTranscriptReadScope,
@@ -213,6 +215,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   sessionKey: string;
   sessionId: string | undefined;
   messages: unknown[];
+  includeFamily?: boolean;
   offset?: number;
   nextOffset?: number;
   hasMore?: boolean;
@@ -252,30 +255,48 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
           ...(typeof entry.sessionFile === "string" ? { sessionFile: entry.sessionFile } : {}),
         }
       : undefined;
+  if (params.includeFamily === true && params.offset !== undefined) {
+    throw new Error("includeFamily cannot be combined with offset");
+  }
+  const includeFamilyHistory = params.includeFamily === true && params.offset === undefined;
+  const transcriptTargets = await resolveSessionFamilyTranscriptReadTargets({
+    entry,
+    sessionId,
+    storePath,
+    agentId: sessionAgentId,
+    includeFamily: includeFamilyHistory,
+  });
 
   const localMessages =
-    params.offset === undefined && sessionId && storePath
-      ? await rt.readSessionMessagesAsync(
-          {
-            agentId: sessionAgentId,
-            sessionEntry,
-            sessionId,
-            sessionKey,
-            storePath,
-          },
-          params.offset === undefined
-            ? {
-                mode: "recent",
-                maxMessages: max,
-                maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-                allowResetArchiveFallback: true,
-              }
-            : {
-                mode: "full",
-                reason: "chat.history offset pagination",
-                allowResetArchiveFallback: true,
-              },
-        )
+    params.offset === undefined && transcriptTargets.length > 0 && storePath
+      ? (
+          await Promise.all(
+            transcriptTargets.map(async (target) => {
+              const targetSessionEntry = target.useStoreEntryFallback ? sessionEntry : undefined;
+              const messages = await rt.readSessionMessagesAsync(
+                {
+                  agentId: sessionAgentId,
+                  ...(targetSessionEntry ? { sessionEntry: targetSessionEntry, sessionKey } : {}),
+                  ...(target.sessionFile ? { sessionFile: target.sessionFile } : {}),
+                  sessionId: target.sessionId,
+                  storePath,
+                },
+                {
+                  mode: "recent",
+                  maxMessages: max,
+                  maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+                  allowResetArchiveFallback: true,
+                },
+              );
+              return dropPreSessionStartAnnouncePairs(
+                messages,
+                target.applySessionStartedAtFilter && typeof entry?.sessionStartedAt === "number"
+                  ? entry.sessionStartedAt
+                  : undefined,
+              );
+            }),
+          )
+        ).flat()
       : [];
   const offsetPage =
     params.offset !== undefined && sessionId && storePath
@@ -339,7 +360,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
       : localMessagesForHistory;
   const recencyFilteredMessages = rt.dropPreSessionStartAnnouncePairs(
     rawMessages,
-    sessionStartedAt,
+    !includeFamilyHistory ? sessionStartedAt : undefined,
   );
 
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
@@ -388,6 +409,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     sessionKey,
     sessionId,
     messages: bounded.messages,
+    includeFamily: includeFamilyHistory,
     ...(params.offset !== undefined
       ? { offset, hasMore, totalMessages: offsetPage?.totalMessages ?? projected.length }
       : {}),
