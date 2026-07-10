@@ -46,6 +46,7 @@ type DiscordRequest = DiscordRetryRunner;
 export {
   buildDiscordMessagePayload,
   buildDiscordMessageRequest,
+  createDiscordMessageNonce,
   resolveDiscordMessageFlags,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,

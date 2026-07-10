@@ -1,4 +1,5 @@
 // Discord plugin module implements send.message request behavior.
+import { randomBytes } from "node:crypto";
 import { MessageFlags, type APIAllowedMentions, type APIEmbed } from "discord-api-types/v10";
 import {
   Embed,
@@ -15,6 +16,10 @@ export type DiscordSendComponentFactory = (text: string) => TopLevelComponents[]
 export type DiscordSendComponents = TopLevelComponents[] | DiscordSendComponentFactory;
 export type DiscordSendEmbeds = Array<APIEmbed | Embed>;
 export type DiscordAllowedMentions = APIAllowedMentions;
+
+export function createDiscordMessageNonce(): string {
+  return randomBytes(12).toString("hex");
+}
 
 export function resolveDiscordSendComponents(params: {
   components?: DiscordSendComponents;
@@ -100,6 +105,7 @@ export function buildDiscordMessageRequest(params: {
   files?: MessagePayloadFile[];
   flags?: number;
   replyTo?: string;
+  nonce?: string;
 }) {
   const payload = buildDiscordMessagePayload(params);
   return stripUndefinedFields({
@@ -107,6 +113,8 @@ export function buildDiscordMessageRequest(params: {
     ...(params.replyTo
       ? { message_reference: { message_id: params.replyTo, fail_if_not_exists: false } }
       : {}),
+    nonce: params.nonce ?? createDiscordMessageNonce(),
+    enforce_nonce: true,
   });
 }
 

@@ -35,6 +35,7 @@ import { DiscordError, RateLimitError, type RequestClient } from "./internal/dis
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
 import type { DiscordRetryRunner } from "./retry.js";
+import { createDiscordMessageNonce } from "./send.message-request.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
@@ -447,6 +448,8 @@ export async function sendDiscordVoiceMessage(
     : DISCORD_VOICE_MESSAGE_FLAG;
   const messagePayload: {
     flags: number;
+    nonce: string;
+    enforce_nonce: true;
     attachments: Array<{
       id: string;
       filename: string;
@@ -457,6 +460,8 @@ export async function sendDiscordVoiceMessage(
     message_reference?: { message_id: string; fail_if_not_exists: boolean };
   } = {
     flags,
+    nonce: createDiscordMessageNonce(),
+    enforce_nonce: true,
     attachments: [
       {
         id: "0",

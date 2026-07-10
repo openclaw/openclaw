@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./internal/discord.js";
 import {
   createDiscordRetryRunner,
-  isRetryableDiscordPreConnectError,
+  isRetryableDiscordNonIdempotentError,
   isRetryableDiscordTransientError,
 } from "./retry.js";
 
@@ -57,10 +57,11 @@ describe("isRetryableDiscordTransientError", () => {
   });
 });
 
-describe("isRetryableDiscordPreConnectError", () => {
+describe("isRetryableDiscordNonIdempotentError", () => {
   it.each([
     ["rate limit", createRateLimitError()],
     ["429 status", Object.assign(new Error("rate limited"), { status: 429 })],
+    ["502 status", Object.assign(new Error("bad gateway"), { status: 502 })],
     ["ECONNREFUSED", Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" })],
     ["ENOTFOUND", Object.assign(new Error("dns failure"), { code: "ENOTFOUND" })],
     ["EAI_AGAIN cause", new Error("request failed", { cause: { code: "EAI_AGAIN" } })],
@@ -69,7 +70,7 @@ describe("isRetryableDiscordPreConnectError", () => {
       Object.assign(new Error("connect"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
     ],
   ])("retries %s", (_name, err) => {
-    expect(isRetryableDiscordPreConnectError(err)).toBe(true);
+    expect(isRetryableDiscordNonIdempotentError(err)).toBe(true);
   });
 
   it.each([
@@ -79,10 +80,9 @@ describe("isRetryableDiscordPreConnectError", () => {
     ["headers timeout", Object.assign(new Error("timeout"), { code: "UND_ERR_HEADERS_TIMEOUT" })],
     ["body timeout", Object.assign(new Error("timeout"), { code: "UND_ERR_BODY_TIMEOUT" })],
     ["socket", Object.assign(new Error("socket"), { code: "UND_ERR_SOCKET" })],
-    ["502 status", Object.assign(new Error("bad gateway"), { status: 502 })],
     ["fetch failed", new TypeError("fetch failed")],
   ])("does not retry %s", (_name, err) => {
-    expect(isRetryableDiscordPreConnectError(err)).toBe(false);
+    expect(isRetryableDiscordNonIdempotentError(err)).toBe(false);
   });
 });
 
@@ -102,6 +102,17 @@ describe("createDiscordRetryRunner nonIdempotent", () => {
     const fn = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(runner(fn, "text", { nonIdempotent: true })).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a 502 for non-idempotent sends", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
       .mockResolvedValue("ok");
     const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
 

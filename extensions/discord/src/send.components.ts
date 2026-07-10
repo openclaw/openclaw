@@ -31,6 +31,7 @@ import { createDiscordSendResult } from "./send.receipt.js";
 import {
   buildDiscordSendError,
   createDiscordClient,
+  createDiscordMessageNonce,
   resolveChannelId,
   resolveDiscordChannel,
   stripUndefinedFields,
@@ -258,6 +259,8 @@ async function buildDiscordComponentPayload(params: {
   const body = stripUndefinedFields({
     ...serializePayload(payload),
     ...(messageReference ? { message_reference: messageReference } : {}),
+    nonce: createDiscordMessageNonce(),
+    enforce_nonce: true,
   });
 
   return { body, buildResult };

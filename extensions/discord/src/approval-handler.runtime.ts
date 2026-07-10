@@ -34,7 +34,11 @@ import {
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "./internal/discord.js";
-import { createDiscordClient, stripUndefinedFields } from "./send.shared.js";
+import {
+  createDiscordClient,
+  createDiscordMessageNonce,
+  stripUndefinedFields,
+} from "./send.shared.js";
 import { DiscordUiContainer } from "./ui.js";
 
 type PendingApproval = {
@@ -493,7 +497,11 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
               actionRow,
             });
       return {
-        body: stripUndefinedFields(serializePayload(buildExecApprovalPayload(container))),
+        body: stripUndefinedFields({
+          ...serializePayload(buildExecApprovalPayload(container)),
+          nonce: createDiscordMessageNonce(),
+          enforce_nonce: true,
+        }),
       };
     },
     buildResolvedResult: ({ cfg, accountId, context, view }) => {
