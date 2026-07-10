@@ -952,6 +952,7 @@ describe("installPluginFromNpmSpec", () => {
       throw new Error("expected hollow dependency tree install to fail");
     }
     expect(result.error).toContain("@example/required-runtime");
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
   it("accepts hoisted required dependencies and ignores missing optional dependencies", async () => {
