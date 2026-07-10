@@ -1,27 +1,22 @@
-// Qa Lab tests cover bounded CI smoke lane planning.
+// Qa Lab tests cover bounded CI smoke profile planning.
 import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { describe, expect, it } from "vitest";
-import { createQaSmokeCiShard } from "./ci-smoke-plan.js";
+import { createQaSmokeCiPart } from "./ci-smoke-plan.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 
-describe("createQaSmokeCiShard", () => {
-  it("partitions every smoke scenario into bounded channel-compatible lanes", () => {
-    const matrix = createQaSmokeCiShard("matrix");
-    const crablineShards = [
-      createQaSmokeCiShard("crabline-1"),
-      createQaSmokeCiShard("crabline-2"),
-      createQaSmokeCiShard("crabline-3"),
-    ];
-    const repeatedCrabline = createQaSmokeCiShard("crabline-1");
+describe("createQaSmokeCiPart", () => {
+  it("balances every smoke scenario across two profile parts", () => {
+    const first = createQaSmokeCiPart("profile-1");
+    const second = createQaSmokeCiPart("profile-2");
+    const repeatedSecond = createQaSmokeCiPart("profile-2");
 
-    expect(repeatedCrabline).toEqual(crablineShards[0]);
-    expect(matrix.channel).toBe("matrix");
-    expect(
-      crablineShards.every((shard) => shard.channel === OPENCLAW_CRABLINE_DEFAULT_CHANNEL),
-    ).toBe(true);
+    expect(repeatedSecond).toEqual(second);
+    expect(first.runs[0]?.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
+    expect(second.runs[0]?.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
+    expect(first.runs.some((run) => run.channel === "matrix")).toBe(false);
+    expect(second.runs.some((run) => run.channel === "matrix")).toBe(true);
 
-    const crablineScenarioIds = crablineShards.flatMap((shard) => shard.scenario_ids);
-    const scenarioIds = [...matrix.scenario_ids, ...crablineScenarioIds];
+    const scenarioIds = [...first.runs, ...second.runs].flatMap((run) => run.scenario_ids);
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
     const scenarioById = new Map(
       readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario] as const),
@@ -31,15 +26,17 @@ describe("createQaSmokeCiShard", () => {
     ).toEqual(new Set(["flow", "playwright", "script"]));
     expect(scenarioIds).not.toContain("slack-restart-resume");
     expect(scenarioIds).not.toContain("whatsapp-restart-resume");
-    expect(crablineScenarioIds).toContain("subagent-fanout-synthesis");
-    expect(matrix.scenario_ids.length).toBeGreaterThan(0);
-    const crablineShardSizes = crablineShards.map((shard) => shard.scenario_ids.length);
-    expect(Math.max(...crablineShardSizes) - Math.min(...crablineShardSizes)).toBeLessThanOrEqual(
-      1,
+    expect(scenarioIds).toContain("subagent-fanout-synthesis");
+
+    const primaryRunSizes = [first, second].map(
+      (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids.length ?? 0,
     );
+    expect(Math.abs(primaryRunSizes[0] - primaryRunSizes[1])).toBeLessThanOrEqual(4);
   });
 
-  it("rejects undeclared CI lanes", () => {
-    expect(() => createQaSmokeCiShard("slack")).toThrow("unknown QA smoke CI lane: slack");
+  it("rejects undeclared profile parts", () => {
+    expect(() => createQaSmokeCiPart("profile-3")).toThrow(
+      "unknown QA smoke CI profile part: profile-3",
+    );
   });
 });

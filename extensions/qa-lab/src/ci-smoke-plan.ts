@@ -1,4 +1,4 @@
-// Qa Lab plugin module plans the bounded CI smoke lanes.
+// Qa Lab plugin module plans the bounded CI smoke profile parts.
 import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./model-selection.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
@@ -6,28 +6,41 @@ import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
 
 const QA_SMOKE_PROFILE = "smoke-ci";
-const QA_SMOKE_CI_LANES = {
-  matrix: { channel: "matrix", shardIndex: 0, shardCount: 1 },
-  "crabline-1": { channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL, shardIndex: 0, shardCount: 3 },
-  "crabline-2": { channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL, shardIndex: 1, shardCount: 3 },
-  "crabline-3": { channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL, shardIndex: 2, shardCount: 3 },
-} as const;
+const QA_SMOKE_CI_PARTS = ["profile-1", "profile-2"] as const;
+const QA_SMOKE_CI_CHANNELS = ["matrix", OPENCLAW_CRABLINE_DEFAULT_CHANNEL] as const;
 
-type QaSmokeCiLane = keyof typeof QA_SMOKE_CI_LANES;
+type QaSmokeCiPartId = (typeof QA_SMOKE_CI_PARTS)[number];
 
-type QaSmokeCiShard = {
-  lane: QaSmokeCiLane;
+type QaSmokeCiRun = {
   channel: string;
+  slug: string;
   scenario_ids: string[];
 };
 
-function isQaSmokeCiLane(value: string): value is QaSmokeCiLane {
-  return Object.hasOwn(QA_SMOKE_CI_LANES, value);
+type QaSmokeCiPart = {
+  id: QaSmokeCiPartId;
+  runs: QaSmokeCiRun[];
+};
+
+function isQaSmokeCiPartId(value: string): value is QaSmokeCiPartId {
+  return QA_SMOKE_CI_PARTS.includes(value as QaSmokeCiPartId);
 }
 
-export function createQaSmokeCiShard(lane: string): QaSmokeCiShard {
-  if (!isQaSmokeCiLane(lane)) {
-    throw new Error(`unknown QA smoke CI lane: ${lane}`);
+function estimateScenarioCost(
+  scenario: ReturnType<typeof readQaScenarioPack>["scenarios"][number],
+) {
+  if (scenario.execution.kind === "script") {
+    return 8;
+  }
+  if (scenario.execution.kind === "playwright") {
+    return 6;
+  }
+  return scenario.execution.kind === "flow" && scenario.execution.isolationReason ? 4 : 1;
+}
+
+export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
+  if (!isQaSmokeCiPartId(partId)) {
+    throw new Error(`unknown QA smoke CI profile part: ${partId}`);
   }
 
   const scenarioPack = readQaScenarioPack();
@@ -57,9 +70,7 @@ export function createQaSmokeCiShard(lane: string): QaSmokeCiShard {
     throw new Error(`${QA_SMOKE_PROFILE} did not resolve any executable QA scenarios.`);
   }
 
-  const supportedChannels = new Set<string>(
-    Object.values(QA_SMOKE_CI_LANES).map((entry) => entry.channel),
-  );
+  const supportedChannels = new Set<string>(QA_SMOKE_CI_CHANNELS);
   const unsupportedChannels = new Set(
     scenarios
       .map((scenario) => scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL)
@@ -71,17 +82,43 @@ export function createQaSmokeCiShard(lane: string): QaSmokeCiShard {
     );
   }
 
-  const { channel, shardIndex, shardCount } = QA_SMOKE_CI_LANES[lane];
-  const scenarioIds = scenarios
+  const matrixScenarios = scenarios.filter((scenario) => scenario.execution.channel === "matrix");
+  const defaultChannelScenarios = scenarios
     .filter(
-      (scenario) => (scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL) === channel,
+      (scenario) =>
+        (scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL) ===
+        OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
     )
-    .map((scenario) => scenario.id)
-    .toSorted()
-    .filter((_, index) => index % shardCount === shardIndex);
-  if (scenarioIds.length === 0) {
-    throw new Error(`${QA_SMOKE_PROFILE} CI lane ${lane} did not resolve any scenarios.`);
+    .toSorted(
+      (left, right) =>
+        estimateScenarioCost(right) - estimateScenarioCost(left) || left.id.localeCompare(right.id),
+    );
+  const partitions = QA_SMOKE_CI_PARTS.map(() => ({ cost: 0, scenarios: [] as typeof scenarios }));
+  for (const scenario of defaultChannelScenarios) {
+    const partition = partitions[0].cost <= partitions[1].cost ? partitions[0] : partitions[1];
+    partition.scenarios.push(scenario);
+    partition.cost += estimateScenarioCost(scenario);
   }
 
-  return { lane, channel, scenario_ids: scenarioIds };
+  const matrixPartIndex = 1;
+  const partIndex = QA_SMOKE_CI_PARTS.indexOf(partId);
+  const runs: QaSmokeCiRun[] = [
+    {
+      channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
+      slug: "primary",
+      scenario_ids: partitions[partIndex].scenarios.map((scenario) => scenario.id).toSorted(),
+    },
+  ];
+  if (partIndex === matrixPartIndex) {
+    runs.push({
+      channel: "matrix",
+      slug: "matrix",
+      scenario_ids: matrixScenarios.map((scenario) => scenario.id).toSorted(),
+    });
+  }
+  if (runs.some((run) => run.scenario_ids.length === 0)) {
+    throw new Error(`${QA_SMOKE_PROFILE} CI profile part ${partId} did not resolve any scenarios.`);
+  }
+
+  return { id: partId, runs };
 }
