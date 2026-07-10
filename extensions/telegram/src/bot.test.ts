@@ -2989,6 +2989,8 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     replySpy.mockClear();
     getFileSpy.mockClear();
+    const shutdown = new AbortController();
+    let replyGetFileSignal: AbortSignal | undefined;
     loadWebMedia.mockResolvedValueOnce({ path: "/tmp/reply-photo.png", contentType: "image/png" });
 
     const mediaFetch = vi.fn(
@@ -3003,6 +3005,7 @@ describe("createTelegramBot", () => {
     try {
       createTelegramBot({
         token: "tok",
+        fetchAbortSignal: shutdown.signal,
         telegramTransport: {
           fetch: mediaFetch as typeof fetch,
           sourceFetch: mediaFetch as typeof fetch,
@@ -3025,7 +3028,15 @@ describe("createTelegramBot", () => {
         me: { username: "openclaw_bot" },
         getFile: async () => ({}),
       });
+      replyGetFileSignal = mockArg(
+        getFileSpy as unknown as MockCallSource,
+        0,
+        1,
+        "reply getFile signal",
+      ) as AbortSignal;
+      expect(replyGetFileSignal.aborted).toBe(false);
     } finally {
+      shutdown.abort();
       ssrfMock.mockRestore();
     }
 
@@ -3041,9 +3052,58 @@ describe("createTelegramBot", () => {
       ReplyToBody?: string;
     };
     expect(payload.ReplyToBody).toBe("<media:image>");
-    expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+    expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
+    expect(replyGetFileSignal?.aborted).toBe(true);
     expect(loadWebMedia).not.toHaveBeenCalled();
     expect(mediaFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches the current text when best-effort reply media times out", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+    const timeout = Object.assign(new Error("media response headers timed out"), {
+      name: "TimeoutError",
+    });
+    const mediaFetch = vi.fn(async () => {
+      throw timeout;
+    });
+    const ssrfMock = mockPinnedHostnameResolution();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: {
+          fetch: mediaFetch as typeof fetch,
+          sourceFetch: mediaFetch as typeof fetch,
+          close: async () => {},
+        },
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "continue without the old image",
+          date: 1736380800,
+          reply_to_message: {
+            message_id: 9001,
+            photo: [{ file_id: "reply-photo-1" }],
+            from: { first_name: "Ada" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+    } finally {
+      ssrfMock.mockRestore();
+    }
+
+    expect(mediaFetch).toHaveBeenCalledTimes(1);
+    expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.Body).toContain("continue without the old image");
   });
 
   it("hydrates reply chains from cached Telegram messages", async () => {
@@ -3164,7 +3224,7 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("9000")?.media_path).toMatch(/^media:\/\/inbound\//);
     expect(messagesById.get("9000")?.media_path).not.toBe(payload.ReplyChain?.[1]?.mediaPath);
     expect(messagesById.get("9000")?.media_ref).toBeUndefined();
-    expect(getFileSpy).toHaveBeenCalledWith("root-photo-1");
+    expect(getFileSpy).toHaveBeenCalledWith("root-photo-1", expect.any(AbortSignal));
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -3322,7 +3382,7 @@ describe("createTelegramBot", () => {
       is_reply_target: true,
     });
     if (expectHydrated) {
-      expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1");
+      expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1", expect.any(AbortSignal));
       expect(mediaFetch).toHaveBeenCalledTimes(1);
     } else {
       expect(getFileSpy).not.toHaveBeenCalled();
@@ -3582,7 +3642,7 @@ describe("createTelegramBot", () => {
       if (expectHydrated) {
         expect(replyMessage?.media_path).toMatch(/^media:\/\/inbound\//);
         expect(replyMessage?.media_ref).toBeUndefined();
-        expect(getFileSpy).toHaveBeenCalledWith("allowed-photo-1");
+        expect(getFileSpy).toHaveBeenCalledWith("allowed-photo-1", expect.any(AbortSignal));
         expect(mediaFetch).toHaveBeenCalledTimes(1);
       } else {
         expect(replyMessage?.media_path).toBeUndefined();
@@ -3729,7 +3789,7 @@ describe("createTelegramBot", () => {
       await flushTimer?.();
       await replyDelivered;
 
-      expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+      expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
       expect(mediaFetch).toHaveBeenCalled();
     } finally {
       setTimeoutSpy.mockRestore();

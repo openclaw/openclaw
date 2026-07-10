@@ -3,6 +3,7 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
+import { createAbortError } from "../abort-signal.js";
 import {
   normalizeHeadersInitForFetch,
   normalizeRequestInitHeadersForFetch,
@@ -121,6 +122,39 @@ type GuardedFetchPresetOptions = Omit<
 const DEFAULT_MAX_REDIRECTS = 3;
 const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
 
+async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return await run();
+  }
+  if (signal.aborted) {
+    throw signal.reason ?? createAbortError("Guarded fetch aborted during network preflight");
+  }
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const settle = (complete: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      complete();
+    };
+    const onAbort = () =>
+      settle(() =>
+        reject(signal.reason ?? createAbortError("Guarded fetch aborted during network preflight")),
+      );
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    void run().then(
+      (value) => settle(() => resolve(value)),
+      (error: unknown) => settle(() => reject(error)),
+    );
+  });
+}
+
 function getRedirectVisitKey(url: string, init: RequestInit | undefined): string {
   return `${init?.method?.toUpperCase() ?? "GET"} ${url}`;
 }
@@ -216,6 +250,7 @@ async function assertExplicitProxyAllowed(
   dispatcherPolicy: PinnedDispatcherPolicy | undefined,
   lookupFn: LookupFn | undefined,
   policy: SsrFPolicy | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   // Explicit proxies are operator-configured, but the proxy host still needs
   // basic URL and private-network validation before target validation proceeds.
@@ -242,10 +277,14 @@ async function assertExplicitProxyAllowed(
           ...(dispatcherPolicy.allowPrivateProxy === true ? { allowPrivateNetwork: true } : {}),
         }
       : undefined;
-  await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
-    lookupFn,
-    policy: proxyPolicy,
-  });
+  await runAbortablePreflight(
+    async () =>
+      await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
+        lookupFn,
+        policy: proxyPolicy,
+      }),
+    signal,
+  );
 }
 
 function isRedirectStatus(status: number): boolean {
@@ -493,6 +532,15 @@ async function fetchWithSsrFGuardInternal(
     // Resolve inside the redirect loop so exact-origin trust never carries across origins.
     const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
     const dispatcherPolicy = params.resolveDispatcherPolicy?.(parsedUrl) ?? params.dispatcherPolicy;
+    const resolvePinnedHostname = async () =>
+      await runAbortablePreflight(
+        async () =>
+          await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+            lookupFn: params.lookupFn,
+            policy: policyForUrl,
+          }),
+        signal,
+      );
     try {
       const usesTrustedExplicitProxyMode =
         mode === GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY &&
@@ -502,7 +550,7 @@ async function fetchWithSsrFGuardInternal(
         dispatcherPolicy,
         usesTrustedExplicitProxyMode ? false : params.pinDns,
       );
-      await assertExplicitProxyAllowed(dispatcherPolicy, params.lookupFn, params.policy);
+      await assertExplicitProxyAllowed(dispatcherPolicy, params.lookupFn, params.policy, signal);
       const isStrictManagedProxyActive =
         mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive();
       const shouldCheckManagedProxyBypass =
@@ -538,10 +586,7 @@ async function fetchWithSsrFGuardInternal(
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (canUseManagedProxy) {
         if (shouldCheckManagedProxyBypass) {
-          const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-            lookupFn: params.lookupFn,
-            policy: policyForUrl,
-          });
+          const pinned = await resolvePinnedHostname();
           dispatcher = shouldUseConfiguredLocalOriginManagedProxyBypass({
             url: parsedUrl,
             managedProxyBypass: params.managedProxyBypass,
@@ -562,16 +607,10 @@ async function fetchWithSsrFGuardInternal(
         // real fetches continue through pinned DNS below.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
       } else if (params.pinDns === false) {
-        await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-          lookupFn: params.lookupFn,
-          policy: policyForUrl,
-        });
+        await resolvePinnedHostname();
         dispatcher = createPolicyDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
       } else {
-        const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-          lookupFn: params.lookupFn,
-          policy: policyForUrl,
-        });
+        const pinned = await resolvePinnedHostname();
         dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
       }
 

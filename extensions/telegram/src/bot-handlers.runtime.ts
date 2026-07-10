@@ -1440,7 +1440,7 @@ export const registerTelegramHandlers = ({
             ctx: {
               message: node.sourceMessage,
               me: ctx.me,
-              getFile: async () => await bot.api.getFile(replyFileId),
+              getFile: async (signal) => await bot.api.getFile(replyFileId, signal),
             },
             maxBytes: mediaMaxBytes,
             ...mediaRuntimeWithAbort,
