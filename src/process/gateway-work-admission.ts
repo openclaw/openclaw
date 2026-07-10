@@ -100,6 +100,21 @@ export function isGatewayWorkAdmissionClosed(): boolean {
   );
 }
 
+/** Existing admitted roots may finish spawning subordinate command/session work.
+ * New async chains still see the global fence, preserving refuse-only suspension. */
+export function isGatewaySubordinateWorkAdmissionClosed(): boolean {
+  if (
+    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
+    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending
+  ) {
+    return true;
+  }
+  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
+  return current && !current.released
+    ? false
+    : GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting";
+}
+
 export function getGatewaySuspendAdmissionPhase(): GatewaySuspendAdmissionPhase {
   return GATEWAY_WORK_ADMISSION_STATE.suspendPhase;
 }

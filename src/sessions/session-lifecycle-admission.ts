@@ -2,7 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   GatewayDrainingError,
-  isGatewayWorkAdmissionClosed,
+  isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
@@ -363,7 +363,7 @@ export async function beginSessionWorkAdmission(params: {
   onInterrupt?: () => void;
   signal?: AbortSignal;
 }): Promise<SessionWorkAdmissionLease> {
-  if (isGatewayWorkAdmissionClosed()) {
+  if (isGatewaySubordinateWorkAdmissionClosed()) {
     throw new GatewayDrainingError();
   }
   const identities = normalizeSessionIdentities(params.scope, params.identities);
@@ -375,7 +375,7 @@ export async function beginSessionWorkAdmission(params: {
       await params.assertAllowed();
       // assertAllowed can yield while a host suspension acquires its fence.
       // Recheck immediately before registration to close that admission race.
-      if (isGatewayWorkAdmissionClosed()) {
+      if (isGatewaySubordinateWorkAdmissionClosed()) {
         throw new GatewayDrainingError();
       }
       let resolveReleased = () => {};

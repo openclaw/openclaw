@@ -9,6 +9,7 @@ import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import {
   GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -483,7 +484,7 @@ export function enqueueCommandInLane<T>(
   opts?: CommandQueueEnqueueOptions,
 ): Promise<T> {
   const queueState = getQueueState();
-  if (isGatewayWorkAdmissionClosed()) {
+  if (isGatewaySubordinateWorkAdmissionClosed()) {
     return Promise.reject(new GatewayDrainingError());
   }
   const cleaned = normalizeLane(lane);

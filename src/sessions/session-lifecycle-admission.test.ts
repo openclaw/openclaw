@@ -3,6 +3,7 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import {
   resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import {
@@ -98,6 +99,39 @@ it("rejects an admission that resumes after suspension closes the async gap", as
   expect(getActiveSessionWorkAdmissionCount()).toBe(0);
   suspension?.release();
   resetGatewayWorkAdmission();
+});
+
+it("lets an admitted root enter session work while suspension preparation refuses new roots", async () => {
+  resetGatewayWorkAdmission();
+  const continueRoot = createDeferred();
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root).not.toBeNull();
+  const active = root?.run(async () => {
+    await continueRoot.promise;
+    const admission = await beginSessionWorkAdmission({
+      scope: "store-admitted-root",
+      identities: ["session-admitted-root"],
+      assertAllowed: () => {},
+    });
+    admission.release();
+  });
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+
+  try {
+    continueRoot.resolve();
+    await expect(active).resolves.toBeUndefined();
+    await expect(
+      beginSessionWorkAdmission({
+        scope: "store-new-root",
+        identities: ["session-new-root"],
+        assertAllowed: () => {},
+      }),
+    ).rejects.toMatchObject({ name: "GatewayDrainingError" });
+  } finally {
+    suspension?.rollback();
+    root?.release();
+    resetGatewayWorkAdmission();
+  }
 });
 
 it("serializes lifecycle mutation and work admission across identity aliases", async () => {

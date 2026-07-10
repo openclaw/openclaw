@@ -2,7 +2,10 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { tryBeginGatewaySuspendAdmission } from "./gateway-work-admission.js";
+import {
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
@@ -867,6 +870,46 @@ describe("command queue", () => {
     await expect(enqueueCommandInLane(CommandLane.Main, async () => "resumed")).resolves.toBe(
       "resumed",
     );
+  });
+
+  it("lets an admitted root enqueue while suspension preparation refuses new work", async () => {
+    const continueRoot = createDeferred();
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+    const result = root?.run(async () => {
+      await continueRoot.promise;
+      return await enqueueCommandInLane(CommandLane.Main, async () => "continued");
+    });
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+
+    try {
+      continueRoot.resolve();
+      await expect(result).resolves.toBe("continued");
+      await expect(
+        enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
+      ).rejects.toBeInstanceOf(GatewayDrainingError);
+    } finally {
+      suspension?.rollback();
+      root?.release();
+    }
+  });
+
+  it("rejects subordinate enqueues from an admitted root after restart drain", async () => {
+    const continueRoot = createDeferred();
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+    const result = root?.run(async () => {
+      await continueRoot.promise;
+      return await enqueueCommandInLane(CommandLane.Main, async () => "blocked");
+    });
+
+    try {
+      markGatewayDraining();
+      continueRoot.resolve();
+      await expect(result).rejects.toBeInstanceOf(GatewayDrainingError);
+    } finally {
+      root?.release();
+    }
   });
 
   it("resetAllLanes clears gateway draining flag and re-allows enqueue", async () => {
