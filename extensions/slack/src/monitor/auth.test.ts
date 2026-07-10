@@ -30,6 +30,7 @@ function makeSlackCtx(allowFrom: string[]): SlackMonitorContext {
 
 function makeAuthorizeCtx(params?: {
   allowFrom?: string[];
+  dmPolicy?: SlackMonitorContext["dmPolicy"];
   channelsConfig?: Record<string, { users?: string[] }>;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
   resolveChannelName?: (
@@ -39,7 +40,7 @@ function makeAuthorizeCtx(params?: {
   return {
     allowFrom: params?.allowFrom ?? [],
     accountId: "main",
-    dmPolicy: "open",
+    dmPolicy: params?.dmPolicy ?? "open",
     dmEnabled: true,
     allowNameMatching: false,
     channelsConfig: params?.channelsConfig ?? {},
@@ -120,6 +121,7 @@ describe("authorizeSlackSystemEventSender", () => {
 
   beforeEach(() => {
     clearSlackAllowFromCacheForTest();
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
     delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
   });
 
@@ -450,6 +452,62 @@ describe("authorizeSlackSystemEventSender", () => {
       channelName: undefined,
     });
   });
+
+  it("allows MPDM system events for senders in explicit allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["UALLOWED"],
+        resolveChannelName: () => Promise.resolve({ name: "group-dm", type: "mpim" }),
+      }),
+      senderId: "UALLOWED",
+      channelId: "G1",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "mpim",
+      channelName: "group-dm",
+    });
+  });
+
+  it("blocks MPDM system events for senders outside explicit allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["UALLOWED"],
+        resolveChannelName: () => Promise.resolve({ name: "group-dm", type: "mpim" }),
+      }),
+      senderId: "UATTACKER",
+      channelId: "G1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-allowlisted",
+      channelType: "mpim",
+      channelName: "group-dm",
+    });
+  });
+
+  it("does not use pairing-store allowFrom for MPDM system events", async () => {
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["UALLOWED"]);
+
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        dmPolicy: "pairing",
+        resolveChannelName: () => Promise.resolve({ name: "group-dm", type: "mpim" }),
+      }),
+      senderId: "UALLOWED",
+      channelId: "G1",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-allowlisted",
+      channelType: "mpim",
+      channelName: "group-dm",
+    });
+    expect(readChannelIngressStoreAllowFromForDmPolicyMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolveSlackCommandIngress", () => {
@@ -478,6 +536,54 @@ describe("resolveSlackCommandIngress", () => {
     expect(result.ingress.decision).toBe("block");
     expect(result.commandAccess.authorized).toBe(false);
     expect(result.commandAccess.shouldBlockControlCommand).toBe(false);
+  });
+
+  it("allows MPDM command ingress for senders in explicit allowFrom", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      senderId: "UALLOWED",
+      channelType: "mpim",
+      channelId: "G1",
+      ownerAllowFromLower: ["uallowed"],
+      allowTextCommands: false,
+      hasControlCommand: false,
+    });
+
+    expect(result.ingress.decision).toBe("allow");
+    expect(result.senderAccess.allowed).toBe(true);
+  });
+
+  it("blocks MPDM command ingress for senders outside explicit allowFrom", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      senderId: "UATTACKER",
+      channelType: "mpim",
+      channelId: "G1",
+      ownerAllowFromLower: ["uallowed"],
+      channelUsers: ["UATTACKER"],
+      allowTextCommands: false,
+      hasControlCommand: false,
+    });
+
+    expect(result.ingress.decision).toBe("block");
+    expect(result.senderAccess.allowed).toBe(false);
+    expect(result.senderAccess.reasonCode).toBe("group_policy_not_allowlisted");
+  });
+
+  it("does not treat wildcard allowFrom as MPDM sender authorization", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      senderId: "UANYONE",
+      channelType: "mpim",
+      channelId: "G1",
+      ownerAllowFromLower: ["*"],
+      allowTextCommands: false,
+      hasControlCommand: false,
+    });
+
+    expect(result.ingress.decision).toBe("block");
+    expect(result.senderAccess.allowed).toBe(false);
+    expect(result.senderAccess.reasonCode).toBe("group_policy_empty_allowlist");
   });
 });
 
@@ -714,6 +820,26 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
       allowed: true,
       channelType: "channel",
       channelName: "general",
+    });
+  });
+
+  it("blocks interactive MPDM events for senders outside explicit allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["UALLOWED"],
+        resolveChannelName: () => Promise.resolve({ name: "group-dm", type: "mpim" }),
+      }),
+      senderId: "UATTACKER",
+      channelId: "G1",
+      expectedSenderId: "UATTACKER",
+      interactiveEvent: true,
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-allowlisted",
+      channelType: "mpim",
+      channelName: "group-dm",
     });
   });
 });

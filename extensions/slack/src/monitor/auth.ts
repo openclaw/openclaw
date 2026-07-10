@@ -297,6 +297,13 @@ function resolveExplicitSlackOwnerIds(allowFromLower: string[]): string[] {
   return [...ownerIds];
 }
 
+function resolveSlackGroupDmSenderAllowFrom(ownerAllowFromLower: string[]): string[] {
+  // MPDM senders are a group-DM trust boundary: only explicit Slack owner IDs
+  // from allowFrom may authorize them. Pairing-store, wildcard, and channel
+  // users remain outside this path.
+  return resolveExplicitSlackOwnerIds(ownerAllowFromLower);
+}
+
 export async function authorizeSlackBotRoomMessage(params: {
   ctx: SlackMonitorContext;
   channelId: string;
@@ -377,8 +384,13 @@ export async function resolveSlackCommandIngress(params: {
   >["modeWhenAccessGroupsOff"];
 }) {
   const isDirectMessage = params.channelType === "im";
+  const isGroupDm = params.channelType === "mpim";
   const channelUsers = normalizeAllowListLower(params.channelUsers);
-  const channelUsersConfigured = !isDirectMessage && channelUsers.length > 0;
+  const ownerAllowFromLower = isGroupDm
+    ? resolveSlackGroupDmSenderAllowFrom(params.ownerAllowFromLower)
+    : params.ownerAllowFromLower;
+  const groupAllowFrom = isGroupDm ? ownerAllowFromLower : channelUsers;
+  const groupAllowFromConfigured = !isDirectMessage && groupAllowFrom.length > 0;
   const result = await createSlackIngressResolver(params.ctx).message({
     subject: createSlackIngressSubject({
       senderId: params.senderId,
@@ -394,15 +406,15 @@ export async function resolveSlackCommandIngress(params: {
       mayPair: false,
     },
     dmPolicy: isDirectMessage ? "open" : "disabled",
-    groupPolicy: channelUsersConfigured ? "allowlist" : "open",
+    groupPolicy: isGroupDm || groupAllowFromConfigured ? "allowlist" : "open",
     policy: {
       groupAllowFromFallbackToAllowFrom: false,
       mutableIdentifierMatching: params.ctx.allowNameMatching ? "enabled" : "disabled",
       ...(params.activation ? { activation: params.activation } : {}),
     },
     mentionFacts: params.mentionFacts,
-    allowFrom: isDirectMessage ? ["*"] : params.ownerAllowFromLower,
-    groupAllowFrom: channelUsersConfigured ? channelUsers : [],
+    allowFrom: isDirectMessage ? ["*"] : ownerAllowFromLower,
+    groupAllowFrom: groupAllowFromConfigured ? groupAllowFrom : [],
     command: {
       allowTextCommands: params.allowTextCommands,
       hasControlCommand: params.hasControlCommand,
@@ -424,16 +436,23 @@ async function decideSlackSystemIngress(params: {
   interactiveEvent: boolean;
 }): Promise<ChannelIngressDecision> {
   const isDirectMessage = params.channelType === "im";
+  const isGroupDm = params.channelType === "mpim";
   const channelUsers = normalizeAllowListLower(params.channelUsers);
-  const channelUsersConfigured = !isDirectMessage && channelUsers.length > 0;
+  const channelUsersConfigured = !isDirectMessage && !isGroupDm && channelUsers.length > 0;
+  const ownerAllowFromLower = isGroupDm
+    ? resolveSlackGroupDmSenderAllowFrom(params.ownerAllowFromLower)
+    : params.ownerAllowFromLower;
   const ownerAllowFrom =
     params.interactiveEvent && channelUsersConfigured
-      ? params.ownerAllowFromLower.filter((entry) => entry !== "*")
-      : params.ownerAllowFromLower;
+      ? ownerAllowFromLower.filter((entry) => entry !== "*")
+      : ownerAllowFromLower;
   const hasAnyCommandAllowlist = ownerAllowFrom.length > 0 || channelUsersConfigured;
   const groupAllowFrom = (() => {
     if (isDirectMessage) {
       return [];
+    }
+    if (isGroupDm) {
+      return ownerAllowFrom;
     }
     if (params.interactiveEvent && hasAnyCommandAllowlist) {
       return channelUsersConfigured ? channelUsers : [];
@@ -458,8 +477,9 @@ async function decideSlackSystemIngress(params: {
       mayPair: false,
     },
     dmPolicy: isDirectMessage ? "open" : "disabled",
-    groupPolicy:
-      params.interactiveEvent && hasAnyCommandAllowlist
+    groupPolicy: isGroupDm
+      ? "allowlist"
+      : params.interactiveEvent && hasAnyCommandAllowlist
         ? "open"
         : channelUsersConfigured || (!params.channelId && params.ownerAllowFromLower.length > 0)
           ? "allowlist"
