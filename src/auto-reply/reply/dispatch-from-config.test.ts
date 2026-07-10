@@ -529,8 +529,13 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
   return {
     ...actual,
-    loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
-    patchSessionEntry: (...args: unknown[]) => sessionStoreMocks.patchSessionEntry(...args),
+    loadSessionEntry: (...args: Parameters<typeof actual.loadSessionEntry>) =>
+      sessionStoreMocks.loadSessionEntry(args[0]),
+    patchSessionEntry: (...args: Parameters<typeof actual.patchSessionEntry>) =>
+      sessionStoreMocks.patchSessionEntry(
+        args[0],
+        args[1] as Parameters<typeof sessionStoreMocks.patchSessionEntry>[1],
+      ),
   };
 });
 

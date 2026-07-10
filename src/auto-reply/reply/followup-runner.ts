@@ -2098,6 +2098,9 @@ export function createFollowupRunner(params: {
         const operationalDeliveryPayloads = deliveryPayloads.filter((payload) =>
           isOperationalReplyPayload({ payload, explicitCommandTurn: false }),
         );
+        const hasNonOperationalDeliveryPayloads = deliveryPayloads.some(
+          (payload) => !isOperationalReplyPayload({ payload, explicitCommandTurn: false }),
+        );
         const operationalPolicy = resolveOperationalReplyPolicy(runtimeConfig).policy;
         const shouldEvaluateOperationalPayloads =
           operationalDeliveryPayloads.length > 0 &&
@@ -2115,9 +2118,14 @@ export function createFollowupRunner(params: {
             },
             { runId },
           );
-          return;
+          if (!hasNonOperationalDeliveryPayloads) {
+            return;
+          }
         } else if (operationalDeliveryPayloads.length > 0) {
           logVerbose("followup queue: operational notice suppressed for room_event");
+          if (!hasNonOperationalDeliveryPayloads) {
+            return;
+          }
         }
         if (await enqueueStrandedReplyRecoveryRetry()) {
           return;

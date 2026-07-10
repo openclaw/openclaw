@@ -1429,16 +1429,14 @@ async function clearHeartbeatPendingFinalDeliveryIfOwned(params: {
   sessionKey: string;
   startedAt: number;
 }): Promise<void> {
-  await updateSessionStore(params.storePath, (store) => {
-    const current = store[params.sessionKey];
-    if (!heartbeatRunOwnsPendingFinalDelivery(current, params.startedAt)) {
-      return;
-    }
-    store[params.sessionKey] = {
-      ...current,
-      ...CLEARED_PENDING_FINAL_DELIVERY_FIELDS,
-    };
-  });
+  await patchSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    (current) =>
+      heartbeatRunOwnsPendingFinalDelivery(current, params.startedAt)
+        ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS
+        : null,
+    { preserveActivity: true },
+  );
 }
 
 export async function runHeartbeatOnce(opts: {
