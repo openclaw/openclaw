@@ -14267,7 +14267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1267,
+      "line": 1270,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Offline",
       "surface": "apple",
@@ -14275,7 +14275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1267,
+      "line": 1270,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Ready",
       "surface": "apple",
@@ -14283,7 +14283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1411,
+      "line": 1454,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening",
       "surface": "apple",
@@ -14291,7 +14291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1411,
+      "line": 1454,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speech error: \\(msg)",
       "surface": "apple",
@@ -14299,7 +14299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1761,
+      "line": 1782,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Aborted",
       "surface": "apple",
@@ -14307,7 +14307,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1761,
+      "line": 1782,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Chat error",
       "surface": "apple",
@@ -14315,7 +14315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3883,
+      "line": 3921,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -14323,7 +14323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3883,
+      "line": 3921,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",

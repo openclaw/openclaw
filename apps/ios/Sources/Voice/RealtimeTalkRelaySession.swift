@@ -659,9 +659,13 @@ final class RealtimeTalkRelaySession {
             self.onStatus("Listening (Realtime)")
         } catch {
             guard await self.isCurrentLifecycle(lifecycleGeneration) else { return }
-            try? await self.submitToolResult(callId: callId, result: [
+            let errorResult: [String: Any] = [
                 "error": error.localizedDescription,
-            ], lifecycleGeneration: lifecycleGeneration)
+            ]
+            try? await self.submitToolResult(
+                callId: callId,
+                result: errorResult,
+                lifecycleGeneration: lifecycleGeneration)
             guard await self.isCurrentLifecycle(lifecycleGeneration) else { return }
             self.onStatus("Listening (Realtime)")
         }
@@ -804,119 +808,6 @@ final class RealtimeTalkRelaySession {
     private func ensureCurrentLifecycle(_ lifecycleGeneration: UInt64) async throws {
         try Task.checkCancellation()
         guard await self.isCurrentLifecycle(lifecycleGeneration) else { throw CancellationError() }
-    }
-
-    private func startMicrophonePump(lifecycleGeneration: UInt64) throws {
-        self.stopMicrophonePump()
-        let input = self.audioEngine.inputNode
-        let format = input.inputFormat(forBus: 0)
-        let targetSampleRate = self.inputSampleRateHz
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw NSError(domain: "RealtimeTalkRelay", code: 5, userInfo: [
-                NSLocalizedDescriptionKey: "Invalid realtime audio input format",
-            ])
-        }
-        let tapBlock = makeRealtimeAudioTapBlock(
-            inputSampleRate: format.sampleRate,
-            targetSampleRate: targetSampleRate)
-        { [weak self] encoded, timestampMs, rms in
-            Task { @MainActor [weak self] in
-                _ = self?.enqueueMicrophoneFrame(
-                    encoded,
-                    timestampMs: timestampMs,
-                    rms: rms,
-                    lifecycleGeneration: lifecycleGeneration)
-            }
-        }
-        input.installTap(
-            onBus: 0,
-            bufferSize: Self.audioFrameBufferSize,
-            format: format,
-            block: tapBlock)
-        self.audioEngine.prepare()
-        try self.audioEngine.start()
-    }
-
-    @discardableResult
-    private func enqueueMicrophoneFrame(
-        _ encoded: Data,
-        timestampMs: Double,
-        rms: Float,
-        lifecycleGeneration: UInt64) -> Task<Void, Never>?
-    {
-        guard self.isCurrentLifecycleLocally(lifecycleGeneration),
-              let audioSender = self.audioSender
-        else { return nil }
-        self.recordMicrophoneFrame(byteCount: encoded.count, rms: rms, timestampMs: timestampMs)
-        self.refreshOutputPlaybackState(timestampMs: timestampMs)
-        if self.isOutputPlaying {
-            if self.shouldSuppressMicrophoneDuringOutput() {
-                self.recordSuppressedOutputEchoFrame(
-                    byteCount: encoded.count,
-                    rms: rms,
-                    timestampMs: timestampMs)
-                return nil
-            }
-            if rms >= Self.bargeInRmsThreshold {
-                self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
-            }
-        }
-
-        let taskID = UUID()
-        let task = Task { @MainActor [weak self, audioSender] in
-            guard let self else { return }
-            defer { self.audioSendTasks.removeValue(forKey: taskID) }
-            guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return }
-            guard let message = await audioSender.send(encoded, timestampMs: timestampMs) else { return }
-            guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return }
-            self.onStatus("Realtime audio failed: \(message)")
-        }
-        self.audioSendTasks[taskID] = task
-        return task
-    }
-
-    private func shouldSuppressMicrophoneDuringOutput() -> Bool {
-        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
-        // Built-in speaker output bleeds into the microphone even in voiceChat mode; keep the
-        // realtime provider from treating its own speech as user input. Headsets keep barge-in.
-        return outputs.contains { $0.portType == .builtInSpeaker }
-    }
-
-    private func recordMicrophoneFrame(byteCount: Int, rms: Float, timestampMs: Double) {
-        guard !self.isClosed else { return }
-        self.onInputLevel(TalkAudioLevel.normalized(rms: Double(rms)))
-        self.micLogFrameCount += 1
-        self.micLogByteCount += byteCount
-        self.micLogMaxRms = max(self.micLogMaxRms, rms)
-        guard timestampMs - self.lastMicLogAtMs >= 1000 else { return }
-        self.lastMicLogAtMs = timestampMs
-        let maxRms = String(format: "%.4f", Double(self.micLogMaxRms))
-        GatewayDiagnostics.log(
-            "talk realtime mic: buffers=\(self.micLogFrameCount) bytes=\(self.micLogByteCount) maxRms=\(maxRms)")
-        self.micLogFrameCount = 0
-        self.micLogByteCount = 0
-        self.micLogMaxRms = 0
-    }
-
-    private func recordSuppressedOutputEchoFrame(byteCount: Int, rms: Float, timestampMs: Double) {
-        self.suppressedEchoFrameCount += 1
-        self.suppressedEchoByteCount += byteCount
-        self.suppressedEchoMaxRms = max(self.suppressedEchoMaxRms, rms)
-        guard timestampMs - self.lastSuppressedEchoLogAtMs >= 1000 else { return }
-        self.lastSuppressedEchoLogAtMs = timestampMs
-        let maxRms = String(format: "%.4f", Double(self.suppressedEchoMaxRms))
-        GatewayDiagnostics.log(
-            "talk realtime mic suppressed during output: "
-                + "buffers=\(self.suppressedEchoFrameCount) "
-                + "bytes=\(self.suppressedEchoByteCount) maxRms=\(maxRms)")
-        self.suppressedEchoFrameCount = 0
-        self.suppressedEchoByteCount = 0
-        self.suppressedEchoMaxRms = 0
-    }
-
-    private func stopMicrophonePump() {
-        self.audioEngine.inputNode.removeTap(onBus: 0)
-        self.audioEngine.stop()
     }
 
     private func ensureOutputPlaybackStarted() {
@@ -1074,6 +965,121 @@ final class RealtimeTalkRelaySession {
     private func nonEmpty(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+}
+
+extension RealtimeTalkRelaySession {
+    private func startMicrophonePump(lifecycleGeneration: UInt64) throws {
+        self.stopMicrophonePump()
+        let input = self.audioEngine.inputNode
+        let format = input.inputFormat(forBus: 0)
+        let targetSampleRate = self.inputSampleRateHz
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw NSError(domain: "RealtimeTalkRelay", code: 5, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid realtime audio input format",
+            ])
+        }
+        let tapBlock = makeRealtimeAudioTapBlock(
+            inputSampleRate: format.sampleRate,
+            targetSampleRate: targetSampleRate)
+        { [weak self] encoded, timestampMs, rms in
+            Task { @MainActor [weak self] in
+                _ = self?.enqueueMicrophoneFrame(
+                    encoded,
+                    timestampMs: timestampMs,
+                    rms: rms,
+                    lifecycleGeneration: lifecycleGeneration)
+            }
+        }
+        input.installTap(
+            onBus: 0,
+            bufferSize: Self.audioFrameBufferSize,
+            format: format,
+            block: tapBlock)
+        self.audioEngine.prepare()
+        try self.audioEngine.start()
+    }
+
+    @discardableResult
+    private func enqueueMicrophoneFrame(
+        _ encoded: Data,
+        timestampMs: Double,
+        rms: Float,
+        lifecycleGeneration: UInt64) -> Task<Void, Never>?
+    {
+        guard self.isCurrentLifecycleLocally(lifecycleGeneration),
+              let audioSender = self.audioSender
+        else { return nil }
+        self.recordMicrophoneFrame(byteCount: encoded.count, rms: rms, timestampMs: timestampMs)
+        self.refreshOutputPlaybackState(timestampMs: timestampMs)
+        if self.isOutputPlaying {
+            if self.shouldSuppressMicrophoneDuringOutput() {
+                self.recordSuppressedOutputEchoFrame(
+                    byteCount: encoded.count,
+                    rms: rms,
+                    timestampMs: timestampMs)
+                return nil
+            }
+            if rms >= Self.bargeInRmsThreshold {
+                self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
+            }
+        }
+
+        let taskID = UUID()
+        let task = Task { @MainActor [weak self, audioSender] in
+            guard let self else { return }
+            defer { self.audioSendTasks.removeValue(forKey: taskID) }
+            guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return }
+            guard let message = await audioSender.send(encoded, timestampMs: timestampMs) else { return }
+            guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return }
+            self.onStatus("Realtime audio failed: \(message)")
+        }
+        self.audioSendTasks[taskID] = task
+        return task
+    }
+
+    private func shouldSuppressMicrophoneDuringOutput() -> Bool {
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        // Built-in speaker output bleeds into the microphone even in voiceChat mode; keep the
+        // realtime provider from treating its own speech as user input. Headsets keep barge-in.
+        return outputs.contains { $0.portType == .builtInSpeaker }
+    }
+
+    private func recordMicrophoneFrame(byteCount: Int, rms: Float, timestampMs: Double) {
+        guard !self.isClosed else { return }
+        self.onInputLevel(TalkAudioLevel.normalized(rms: Double(rms)))
+        self.micLogFrameCount += 1
+        self.micLogByteCount += byteCount
+        self.micLogMaxRms = max(self.micLogMaxRms, rms)
+        guard timestampMs - self.lastMicLogAtMs >= 1000 else { return }
+        self.lastMicLogAtMs = timestampMs
+        let maxRms = String(format: "%.4f", Double(self.micLogMaxRms))
+        GatewayDiagnostics.log(
+            "talk realtime mic: buffers=\(self.micLogFrameCount) bytes=\(self.micLogByteCount) maxRms=\(maxRms)")
+        self.micLogFrameCount = 0
+        self.micLogByteCount = 0
+        self.micLogMaxRms = 0
+    }
+
+    private func recordSuppressedOutputEchoFrame(byteCount: Int, rms: Float, timestampMs: Double) {
+        self.suppressedEchoFrameCount += 1
+        self.suppressedEchoByteCount += byteCount
+        self.suppressedEchoMaxRms = max(self.suppressedEchoMaxRms, rms)
+        guard timestampMs - self.lastSuppressedEchoLogAtMs >= 1000 else { return }
+        self.lastSuppressedEchoLogAtMs = timestampMs
+        let maxRms = String(format: "%.4f", Double(self.suppressedEchoMaxRms))
+        GatewayDiagnostics.log(
+            "talk realtime mic suppressed during output: "
+                + "buffers=\(self.suppressedEchoFrameCount) "
+                + "bytes=\(self.suppressedEchoByteCount) maxRms=\(maxRms)")
+        self.suppressedEchoFrameCount = 0
+        self.suppressedEchoByteCount = 0
+        self.suppressedEchoMaxRms = 0
+    }
+
+    private func stopMicrophonePump() {
+        self.audioEngine.inputNode.removeTap(onBus: 0)
+        self.audioEngine.stop()
     }
 }
 

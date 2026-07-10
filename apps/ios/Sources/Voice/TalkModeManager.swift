@@ -565,29 +565,7 @@ final class TalkModeManager: NSObject {
         GatewayDiagnostics.log(
             "talk.timeline manager start enter enabled=\(self.isEnabled) "
                 + "listening=\(self.isListening) gatewayConnected=\(self.gatewayConnected)")
-        guard self.isEnabled else { return }
-        guard self.captureMode != .pushToTalk else { return }
-        guard self.finishingPushToTalk == nil else { return }
-        guard self.foregroundAudioCaptureAllowed else {
-            self.statusText = "Paused"
-            GatewayDiagnostics.log("talk start ignored: app backgrounded")
-            return
-        }
-        // Realtime callbacks own Listening/Thinking/Speaking while their session
-        // exists. An idempotent enable must not replace that owner or its phase.
-        guard !self.hasRealtimeOwnerOrStart else { return }
-        if self.isListening {
-            return
-        }
-        guard !self.isStarting else {
-            GatewayDiagnostics.log("talk start ignored: already starting")
-            return
-        }
-        guard self.gatewayConnected else {
-            self.statusText = "Offline"
-            GatewayDiagnostics.log("talk.timeline manager start blocked gateway offline")
-            return
-        }
+        guard self.canBeginStart() else { return }
 
         self.isStarting = true
         self.startAttemptID += 1
@@ -620,7 +598,7 @@ final class TalkModeManager: NSObject {
             return
         }
         guard self.isCurrentStartAttempt(attemptID) else { return }
-        await ensureTalkConfigLoadedForStart()
+        await self.ensureTalkConfigLoadedForStart()
         guard self.isCurrentStartAttempt(attemptID) else { return }
         if self.gatewayTalkPermissionState.requiresTalkPermissionAction {
             self.statusText = "Gateway permission required"
@@ -678,6 +656,31 @@ final class TalkModeManager: NSObject {
             self.statusText = "Start failed: \(error.localizedDescription)"
             self.logger.error("start failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func canBeginStart() -> Bool {
+        guard self.isEnabled else { return false }
+        guard self.captureMode != .pushToTalk else { return false }
+        guard self.finishingPushToTalk == nil else { return false }
+        guard self.foregroundAudioCaptureAllowed else {
+            self.statusText = "Paused"
+            GatewayDiagnostics.log("talk start ignored: app backgrounded")
+            return false
+        }
+        // Realtime callbacks own Listening/Thinking/Speaking while their session
+        // exists. An idempotent enable must not replace that owner or its phase.
+        guard !self.hasRealtimeOwnerOrStart else { return false }
+        guard !self.isListening else { return false }
+        guard !self.isStarting else {
+            GatewayDiagnostics.log("talk start ignored: already starting")
+            return false
+        }
+        guard self.gatewayConnected else {
+            self.statusText = "Offline"
+            GatewayDiagnostics.log("talk.timeline manager start blocked gateway offline")
+            return false
+        }
+        return true
     }
 
     private func isCurrentStartAttempt(_ attemptID: Int) -> Bool {
@@ -1333,40 +1336,8 @@ final class TalkModeManager: NSObject {
         }
         input.removeTap(onBus: 0)
         let tapDiagnostics = AudioTapDiagnostics(label: "talk") { [weak self] level in
-            guard let self else { return }
             Task { @MainActor in
-                guard self.recognitionGeneration == recognitionGeneration else { return }
-                // Smooth + clamp for UI, and keep it cheap.
-                let raw = max(0, min(Double(level) * 10.0, 1.0))
-                let next = (self.micLevel * 0.80) + (raw * 0.20)
-                self.micLevel = next
-
-                // Dynamic thresholding so background noise doesn’t prevent endpointing.
-                if self.isListening, !self.isSpeaking, !self.noiseFloorReady {
-                    self.noiseFloorSamples.append(raw)
-                    if self.noiseFloorSamples.count >= 22 {
-                        let sorted = self.noiseFloorSamples.sorted()
-                        let take = max(6, sorted.count / 2)
-                        let slice = sorted.prefix(take)
-                        let avg = slice.reduce(0.0, +) / Double(slice.count)
-                        self.noiseFloor = avg
-                        self.noiseFloorReady = true
-                        self.noiseFloorSamples.removeAll(keepingCapacity: true)
-                        let threshold = min(0.35, max(0.12, avg + 0.10))
-                        GatewayDiagnostics.log(
-                            "talk audio: noiseFloor=\(String(format: "%.3f", avg)) "
-                                + "threshold=\(String(format: "%.3f", threshold))")
-                    }
-                }
-
-                let threshold: Double = if let floor = self.noiseFloor, self.noiseFloorReady {
-                    min(0.35, max(0.12, floor + 0.10))
-                } else {
-                    0.18
-                }
-                if raw >= threshold {
-                    self.lastAudioActivity = Date()
-                }
+                self?.updateMicLevel(level, recognitionGeneration: recognitionGeneration)
             }
         }
         self.audioTapDiagnostics = tapDiagnostics
@@ -1388,62 +1359,114 @@ final class TalkModeManager: NSObject {
                 + "engineRunning=\(self.audioEngine.isRunning)")
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
-            guard self.recognitionGeneration == recognitionGeneration else { return }
-            if let pttCaptureId, self.activePTTCaptureId != pttCaptureId {
-                return
-            }
-            if let error {
-                let msg = error.localizedDescription
-                let lowered = msg.lowercased()
-                let isCancellation = lowered.contains("cancelled") || lowered.contains("canceled")
-                if isCancellation {
-                    GatewayDiagnostics.log("talk speech: cancelled")
-                    if self.captureMode == .continuous, self.isEnabled, !self.isSpeaking {
-                        self.statusText = "Listening"
-                    }
-                    self.logger.debug("speech recognition cancelled")
-                    return
-                }
-                GatewayDiagnostics.log("talk speech: error=\(msg)")
-                if !self.isSpeaking {
-                    if msg.localizedCaseInsensitiveContains("no speech detected") {
-                        // Treat as transient silence. Don't scare users with an error banner.
-                        self.statusText = self.isEnabled ? "Listening" : "Speech error: \(msg)"
-                    } else {
-                        self.statusText = "Speech error: \(msg)"
-                    }
-                }
-                self.logger.debug("speech recognition error: \(msg, privacy: .public)")
-                // Speech recognition can terminate on transient errors (e.g. no speech detected).
-                // If talk mode is enabled and we're in continuous capture, try to restart.
-                if self.captureMode == .continuous, self.isEnabled, !self.isSpeaking {
-                    // Treat the task as terminal on error so we don't get stuck with a dead recognizer.
-                    self.stopRecognition()
-                    let restartGeneration = self.recognitionGeneration
-                    Task { @MainActor [weak self] in
-                        await self?.restartRecognitionAfterError(expectedGeneration: restartGeneration)
-                    }
-                }
-            }
-            guard self.recognitionGeneration == recognitionGeneration else { return }
-            guard let result else { return }
-            let transcript = result.bestTranscription.formattedString
-            if !result.isFinal, !self.loggedPartialThisCycle {
-                let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    self.loggedPartialThisCycle = true
-                    GatewayDiagnostics.log("talk speech: partial chars=\(trimmed.count)")
-                }
-            }
-            Task { @MainActor [weak self] in
-                guard let self, self.recognitionGeneration == recognitionGeneration else { return }
-                await self.handleTranscript(
-                    transcript: transcript,
-                    isFinal: result.isFinal,
-                    pttCaptureId: pttCaptureId,
-                    recognitionGeneration: recognitionGeneration)
+            self.handleRecognitionUpdate(
+                result: result,
+                error: error,
+                pttCaptureId: pttCaptureId,
+                recognitionGeneration: recognitionGeneration)
+        }
+    }
+
+    private func updateMicLevel(_ level: Float, recognitionGeneration: UInt64) {
+        guard self.recognitionGeneration == recognitionGeneration else { return }
+        // Smooth + clamp for UI, and keep it cheap.
+        let raw = max(0, min(Double(level) * 10.0, 1.0))
+        self.micLevel = (self.micLevel * 0.80) + (raw * 0.20)
+        self.updateNoiseFloorIfNeeded(raw)
+
+        let threshold: Double = if let floor = self.noiseFloor, self.noiseFloorReady {
+            min(0.35, max(0.12, floor + 0.10))
+        } else {
+            0.18
+        }
+        if raw >= threshold {
+            self.lastAudioActivity = Date()
+        }
+    }
+
+    private func updateNoiseFloorIfNeeded(_ raw: Double) {
+        guard self.isListening, !self.isSpeaking, !self.noiseFloorReady else { return }
+        self.noiseFloorSamples.append(raw)
+        guard self.noiseFloorSamples.count >= 22 else { return }
+
+        let sorted = self.noiseFloorSamples.sorted()
+        let slice = sorted.prefix(max(6, sorted.count / 2))
+        let average = slice.reduce(0.0, +) / Double(slice.count)
+        self.noiseFloor = average
+        self.noiseFloorReady = true
+        self.noiseFloorSamples.removeAll(keepingCapacity: true)
+        let threshold = min(0.35, max(0.12, average + 0.10))
+        GatewayDiagnostics.log(
+            "talk audio: noiseFloor=\(String(format: "%.3f", average)) "
+                + "threshold=\(String(format: "%.3f", threshold))")
+    }
+
+    private func handleRecognitionUpdate(
+        result: SFSpeechRecognitionResult?,
+        error: Error?,
+        pttCaptureId: String?,
+        recognitionGeneration: UInt64)
+    {
+        guard self.recognitionGeneration == recognitionGeneration else { return }
+        if let pttCaptureId, self.activePTTCaptureId != pttCaptureId {
+            return
+        }
+        if let error, !self.handleRecognitionError(error) {
+            return
+        }
+        guard self.recognitionGeneration == recognitionGeneration, let result else { return }
+        let transcript = result.bestTranscription.formattedString
+        if !result.isFinal, !self.loggedPartialThisCycle {
+            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                self.loggedPartialThisCycle = true
+                GatewayDiagnostics.log("talk speech: partial chars=\(trimmed.count)")
             }
         }
+        Task { @MainActor [weak self] in
+            guard let self, self.recognitionGeneration == recognitionGeneration else { return }
+            await self.handleTranscript(
+                transcript: transcript,
+                isFinal: result.isFinal,
+                pttCaptureId: pttCaptureId,
+                recognitionGeneration: recognitionGeneration)
+        }
+    }
+
+    /// Returns false for cancellation, whose callback must not process a result.
+    private func handleRecognitionError(_ error: Error) -> Bool {
+        let msg = error.localizedDescription
+        let lowered = msg.lowercased()
+        let isCancellation = lowered.contains("cancelled") || lowered.contains("canceled")
+        if isCancellation {
+            GatewayDiagnostics.log("talk speech: cancelled")
+            if self.captureMode == .continuous, self.isEnabled, !self.isSpeaking {
+                self.statusText = "Listening"
+            }
+            self.logger.debug("speech recognition cancelled")
+            return false
+        }
+
+        GatewayDiagnostics.log("talk speech: error=\(msg)")
+        if !self.isSpeaking {
+            if msg.localizedCaseInsensitiveContains("no speech detected") {
+                // Treat as transient silence. Don't scare users with an error banner.
+                self.statusText = self.isEnabled ? "Listening" : "Speech error: \(msg)"
+            } else {
+                self.statusText = "Speech error: \(msg)"
+            }
+        }
+        self.logger.debug("speech recognition error: \(msg, privacy: .public)")
+        // Recognition can terminate on transient errors. Retire the dead task
+        // before scheduling a restart so old callbacks cannot mutate the new turn.
+        if self.captureMode == .continuous, self.isEnabled, !self.isSpeaking {
+            self.stopRecognition()
+            let restartGeneration = self.recognitionGeneration
+            Task { @MainActor [weak self] in
+                await self?.restartRecognitionAfterError(expectedGeneration: restartGeneration)
+            }
+        }
+        return true
     }
 
     private func restartRecognitionAfterError(expectedGeneration: UInt64) async {
@@ -1717,7 +1740,6 @@ final class TalkModeManager: NSObject {
         streamingOwner: TranscriptStreamingOwner) async
     {
         guard self.isCurrentTranscriptProcessing(generation) else { return }
-
         self.isListening = false
         self.isUserSpeechDetected = false
         self.captureMode = .idle
@@ -1738,7 +1760,6 @@ final class TalkModeManager: NSObject {
         }
         guard self.isCurrentTranscriptProcessing(generation) else { return }
         let prompt = self.buildPrompt(transcript: transcript)
-        var completedSuccessfully = false
 
         do {
             let startedAt = Date().timeIntervalSince1970
@@ -1746,18 +1767,18 @@ final class TalkModeManager: NSObject {
             self.logger.info(
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send start sessionKey=\(sessionKey) chars=\(prompt.count)")
-            let ack = try await sendChat(
+            let acknowledgement = try await sendChat(
                 prompt,
                 gateway: gateway,
                 sessionKey: sessionKey,
                 gatewayRoute: gatewayRoute)
             guard self.isCurrentTranscriptProcessing(generation) else { return }
-            let runId = ack.runId
-            let normalizedStatus = Self.normalizedChatSendStatus(ack.status)
+            let runId = acknowledgement.runId
+            let normalizedStatus = Self.normalizedChatSendStatus(acknowledgement.status)
             self.logger.info(
                 "chat.send ok runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send ok runId=\(runId) status=\(normalizedStatus)")
-            if Self.isTerminalChatSendFailure(ack.status) {
+            if Self.isTerminalChatSendFailure(acknowledgement.status) {
                 streamingOwner.terminalStatus = normalizedStatus == "error" ? "Chat error" : "Aborted"
                 self.logger.warning(
                     """
@@ -1768,101 +1789,19 @@ final class TalkModeManager: NSObject {
                     "talk: chat.send terminal ack runId=\(runId) status=\(normalizedStatus)")
                 return
             }
-
-            let shouldIncremental = self.shouldUseIncrementalTTS()
-            if shouldIncremental {
-                self.resetIncrementalSpeech()
-                streamingOwner.speechGeneration = self.speechGeneration
-            }
-            let completion: ChatCompletionResult
-            if Self.isTerminalChatSendSuccess(ack.status) {
-                GatewayDiagnostics.log("talk: chat.send terminal ok runId=\(runId); using history fallback")
-                completion = ChatCompletionResult(state: .final, assistantText: nil)
-            } else {
-                if shouldIncremental {
-                    let speechGeneration = self.speechGeneration
-                    streamingOwner.task = Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        await self.streamAssistant(
-                            runId: runId,
-                            gateway: gateway,
-                            gatewayRoute: gatewayRoute,
-                            speechGeneration: speechGeneration,
-                            transcriptProcessingGeneration: generation)
-                    }
-                }
-                completion = await self.waitForChatCompletion(
-                    runId: runId,
-                    gateway: gateway,
-                    gatewayRoute: gatewayRoute,
-                    timeoutSeconds: 120)
-                guard self.isCurrentTranscriptProcessing(generation) else { return }
-                guard await gateway.currentRoute() == gatewayRoute else { return }
-                if completion.state == .timeout {
-                    self.logger.warning(
-                        "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
-                    GatewayDiagnostics.log("talk: chat completion timeout runId=\(runId)")
-                } else if completion.state == .aborted {
-                    self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
-                    GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
-                    streamingOwner.task?.cancel()
-                    await self.finishIncrementalSpeech()
-                    guard self.isCurrentTranscriptProcessing(generation) else { return }
-                    streamingOwner.terminalStatus = "Aborted"
-                    return
-                } else if completion.state == .error {
-                    self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
-                    GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
-                    streamingOwner.task?.cancel()
-                    await self.finishIncrementalSpeech()
-                    guard self.isCurrentTranscriptProcessing(generation) else { return }
-                    streamingOwner.terminalStatus = "Chat error"
-                    return
-                }
-            }
-
-            var assistantText = completion.assistantText
-            if assistantText == nil, shouldIncremental {
-                let fallback = self.incrementalSpeechBuffer.latestText
-                if !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    assistantText = fallback
-                }
-            }
-            if assistantText == nil {
-                assistantText = try await self.waitForAssistantTextFromHistory(
-                    gateway: gateway,
-                    sessionKey: sessionKey,
-                    gatewayRoute: gatewayRoute,
-                    runId: runId,
-                    since: Self.chatSendHistorySince(response: ack, startedAt: startedAt),
-                    timeoutSeconds: completion.state == .final ? 12 : 25)
-                guard self.isCurrentTranscriptProcessing(generation) else { return }
-            }
-            guard let assistantText else {
-                self.logger.warning("assistant text timeout runId=\(runId, privacy: .public)")
-                GatewayDiagnostics.log("talk: assistant text timeout runId=\(runId)")
-                streamingOwner.task?.cancel()
-                await self.finishIncrementalSpeech()
-                guard self.isCurrentTranscriptProcessing(generation) else { return }
-                streamingOwner.terminalStatus = "No reply"
-                return
-            }
-            self.logger.info("assistant text ok chars=\(assistantText.count, privacy: .public)")
-            GatewayDiagnostics.log("talk: assistant text ok chars=\(assistantText.count)")
-            streamingOwner.task?.cancel()
-            if shouldIncremental {
-                guard let speechGeneration = streamingOwner.speechGeneration else { return }
-                completedSuccessfully = await self.handleIncrementalAssistantFinal(
-                    text: assistantText,
-                    speechGeneration: speechGeneration)
-            } else {
-                await self.playAssistant(
-                    text: assistantText,
-                    gateway: gateway,
-                    gatewayRoute: gatewayRoute)
-                completedSuccessfully = true
-            }
+            guard let completedSuccessfully = try await self.completeTranscriptResponse(
+                acknowledgement: acknowledgement,
+                startedAt: startedAt,
+                gateway: gateway,
+                gatewayRoute: gatewayRoute,
+                sessionKey: sessionKey,
+                generation: generation,
+                streamingOwner: streamingOwner)
+            else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
+            if completedSuccessfully, !self.isEnabled {
+                streamingOwner.terminalStatus = "Ready"
+            }
         } catch is CancellationError {
             return
         } catch {
@@ -1871,11 +1810,110 @@ final class TalkModeManager: NSObject {
             self.logger.error("finalize failed: \(error.localizedDescription, privacy: .public)")
             GatewayDiagnostics.log("talk: failed error=\(error.localizedDescription)")
         }
+    }
 
-        guard self.isCurrentTranscriptProcessing(generation) else { return }
-        if completedSuccessfully, !self.isEnabled {
-            streamingOwner.terminalStatus = "Ready"
+    private func completeTranscriptResponse(
+        acknowledgement: OpenClawChatSendResponse,
+        startedAt: Double,
+        gateway: GatewayNodeSession,
+        gatewayRoute: GatewayNodeSessionRoute,
+        sessionKey: String,
+        generation: UInt64,
+        streamingOwner: TranscriptStreamingOwner) async throws -> Bool?
+    {
+        let runId = acknowledgement.runId
+        let shouldIncremental = self.shouldUseIncrementalTTS()
+        if shouldIncremental {
+            self.resetIncrementalSpeech()
+            streamingOwner.speechGeneration = self.speechGeneration
         }
+        let completion: ChatCompletionResult
+        if Self.isTerminalChatSendSuccess(acknowledgement.status) {
+            GatewayDiagnostics.log("talk: chat.send terminal ok runId=\(runId); using history fallback")
+            completion = ChatCompletionResult(state: .final, assistantText: nil)
+        } else {
+            if shouldIncremental {
+                let speechGeneration = self.speechGeneration
+                streamingOwner.task = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await self.streamAssistant(
+                        runId: runId,
+                        gateway: gateway,
+                        gatewayRoute: gatewayRoute,
+                        speechGeneration: speechGeneration,
+                        transcriptProcessingGeneration: generation)
+                }
+            }
+            completion = await self.waitForChatCompletion(
+                runId: runId,
+                gateway: gateway,
+                gatewayRoute: gatewayRoute,
+                timeoutSeconds: 120)
+            guard self.isCurrentTranscriptProcessing(generation) else { return nil }
+            guard await gateway.currentRoute() == gatewayRoute else { return nil }
+            if completion.state == .timeout {
+                self.logger.warning(
+                    "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
+                GatewayDiagnostics.log("talk: chat completion timeout runId=\(runId)")
+            } else if completion.state == .aborted {
+                self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
+                GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
+                streamingOwner.task?.cancel()
+                await self.finishIncrementalSpeech()
+                guard self.isCurrentTranscriptProcessing(generation) else { return nil }
+                streamingOwner.terminalStatus = "Aborted"
+                return nil
+            } else if completion.state == .error {
+                self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
+                GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
+                streamingOwner.task?.cancel()
+                await self.finishIncrementalSpeech()
+                guard self.isCurrentTranscriptProcessing(generation) else { return nil }
+                streamingOwner.terminalStatus = "Chat error"
+                return nil
+            }
+        }
+
+        var assistantText = completion.assistantText
+        if assistantText == nil, shouldIncremental {
+            let fallback = self.incrementalSpeechBuffer.latestText
+            if !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                assistantText = fallback
+            }
+        }
+        if assistantText == nil {
+            assistantText = try await self.waitForAssistantTextFromHistory(
+                gateway: gateway,
+                sessionKey: sessionKey,
+                gatewayRoute: gatewayRoute,
+                runId: runId,
+                since: Self.chatSendHistorySince(response: acknowledgement, startedAt: startedAt),
+                timeoutSeconds: completion.state == .final ? 12 : 25)
+            guard self.isCurrentTranscriptProcessing(generation) else { return nil }
+        }
+        guard let assistantText else {
+            self.logger.warning("assistant text timeout runId=\(runId, privacy: .public)")
+            GatewayDiagnostics.log("talk: assistant text timeout runId=\(runId)")
+            streamingOwner.task?.cancel()
+            await self.finishIncrementalSpeech()
+            guard self.isCurrentTranscriptProcessing(generation) else { return nil }
+            streamingOwner.terminalStatus = "No reply"
+            return nil
+        }
+        self.logger.info("assistant text ok chars=\(assistantText.count, privacy: .public)")
+        GatewayDiagnostics.log("talk: assistant text ok chars=\(assistantText.count)")
+        streamingOwner.task?.cancel()
+        if shouldIncremental {
+            guard let speechGeneration = streamingOwner.speechGeneration else { return nil }
+            return await self.handleIncrementalAssistantFinal(
+                text: assistantText,
+                speechGeneration: speechGeneration)
+        }
+        await self.playAssistant(
+            text: assistantText,
+            gateway: gateway,
+            gatewayRoute: gatewayRoute)
+        return true
     }
 
     private func quiesceTranscriptSpeech(ownedGeneration: Int?) async {
