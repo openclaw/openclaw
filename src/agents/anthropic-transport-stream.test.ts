@@ -2681,7 +2681,7 @@ describe("anthropic transport stream", () => {
     ]);
   });
 
-  it("preserves provider-signed Anthropic thinking text on replay", async () => {
+  it("drops completed Fable thinking while preserving the visible tool turn", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
     await runTransportStream(
@@ -2710,7 +2710,22 @@ describe("anthropic transport stream", () => {
                 thinking: "",
                 thinkingSignature: "sig_omitted",
               },
+              {
+                type: "thinking",
+                thinking: "[Reasoning redacted]",
+                thinkingSignature: "opaque_1",
+                redacted: true,
+              },
+              { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+              { type: "text", text: "Visible answer." },
             ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "42" }],
+            isError: false,
           },
           { role: "user", content: "again" },
         ],
@@ -2726,16 +2741,8 @@ describe("anthropic transport stream", () => {
       (record) => record.role === "assistant",
     );
     expect(assistantMessage.content).toEqual([
-      {
-        type: "thinking",
-        thinking: signedThinking,
-        signature: "sig_1",
-      },
-      {
-        type: "thinking",
-        thinking: "",
-        signature: "sig_omitted",
-      },
+      { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+      { type: "text", text: "Visible answer." },
     ]);
   });
 
@@ -2782,9 +2789,20 @@ describe("anthropic transport stream", () => {
     ]);
   });
 
-  it("preserves signed thinking for an active tool turn when new thinking is disabled", async () => {
+  it.each([
+    {
+      label: "disabled Sonnet",
+      model: makeAnthropicTransportModel(),
+      options: { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    },
+    {
+      label: "adaptive Fable",
+      model: makeAnthropicTransportModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      options: { apiKey: "sk-ant-api", reasoning: "high" } as AnthropicStreamOptions,
+    },
+  ])("preserves signed thinking for an active $label tool turn", async ({ model, options }) => {
     await runTransportStream(
-      makeAnthropicTransportModel(),
+      model,
       {
         messages: [
           { role: "user", content: "look it up" },
@@ -2792,7 +2810,7 @@ describe("anthropic transport stream", () => {
             role: "assistant",
             provider: "anthropic",
             api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
+            model: model.id,
             stopReason: "toolUse",
             timestamp: 0,
             content: [
@@ -2811,11 +2829,14 @@ describe("anthropic transport stream", () => {
             content: [{ type: "text", text: "42" }],
             isError: false,
           },
+          {
+            role: "user",
+            content: "current runtime context",
+            runtimeContextCarrier: true,
+          },
         ],
       } as AnthropicStreamContext,
-      {
-        apiKey: "sk-ant-api",
-      } as AnthropicStreamOptions,
+      options,
     );
 
     const assistantMessage = findRecord(

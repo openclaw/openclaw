@@ -8,6 +8,7 @@ import {
   defaultsClaudeAdaptiveThinking,
   applyAnthropicRefusal,
   findActiveAnthropicToolTurnAssistantIndex,
+  findAnthropicCurrentTurnStartIndex,
   omitFoundryBearerCredentialHeaders,
   prepareClaudeSonnet5RequestContext,
   projectAnthropicTools,
@@ -405,9 +406,11 @@ function convertAnthropicMessages(
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
-  const activeToolTurnAssistantIndex = replayThinkingEnabled
-    ? -1
-    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
+  const activeToolTurnAssistantIndex =
+    findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
+  const currentTurnStartIndex = replayThinkingEnabled
+    ? findAnthropicCurrentTurnStartIndex(transformedMessages)
+    : -1;
   for (let i = 0; i < transformedMessages.length; i += 1) {
     const msg = transformedMessages[i];
     if (msg.role === "user") {
@@ -482,7 +485,12 @@ function convertAnthropicMessages(
         if (block.type === "thinking") {
           const thinkingSignature = block.thinkingSignature?.trim();
           const isReasoningContent = thinkingSignature === "reasoning_content";
-          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex && !isReasoningContent) {
+          const isCompletedTurn = currentTurnStartIndex >= 0 && i < currentTurnStartIndex;
+          if (
+            i !== activeToolTurnAssistantIndex &&
+            (!replayThinkingEnabled || isCompletedTurn) &&
+            !isReasoningContent
+          ) {
             omittedThinking = true;
             continue;
           }

@@ -2,6 +2,7 @@ type ReplayMessage = {
   role?: unknown;
   content?: unknown;
   toolCallId?: unknown;
+  runtimeContextCarrier?: unknown;
 };
 
 export const ANTHROPIC_OMITTED_REASONING_TEXT = "[assistant reasoning omitted]";
@@ -17,6 +18,10 @@ function asReplayMessage(value: unknown): ReplayMessage | undefined {
 export function findActiveAnthropicToolTurnAssistantIndex(messages: readonly unknown[]): number {
   const toolResultIds = new Set<string>();
   let index = messages.length - 1;
+
+  while (index >= 0 && asReplayMessage(messages[index])?.runtimeContextCarrier === true) {
+    index -= 1;
+  }
 
   while (index >= 0) {
     const message = asReplayMessage(messages[index]);
@@ -55,4 +60,15 @@ export function findActiveAnthropicToolTurnAssistantIndex(messages: readonly unk
   }
 
   return [...toolResultIds].every((toolCallId) => toolCallIds.has(toolCallId)) ? index : -1;
+}
+
+/** The latest user message starts the current turn. */
+export function findAnthropicCurrentTurnStartIndex(messages: readonly unknown[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = asReplayMessage(messages[index]);
+    if (message?.role === "user" && message.runtimeContextCarrier !== true) {
+      return index;
+    }
+  }
+  return -1;
 }

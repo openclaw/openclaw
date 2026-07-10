@@ -68,6 +68,7 @@ import {
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   findActiveAnthropicToolTurnAssistantIndex,
+  findAnthropicCurrentTurnStartIndex,
 } from "./anthropic-thinking-replay.js";
 import {
   projectAnthropicTools,
@@ -1444,9 +1445,11 @@ function convertMessages(
 
   // Transform messages for cross-provider compatibility
   const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
-  const activeToolTurnAssistantIndex = replayThinkingEnabled
-    ? -1
-    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
+  const activeToolTurnAssistantIndex =
+    findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
+  const currentTurnStartIndex = replayThinkingEnabled
+    ? findAnthropicCurrentTurnStartIndex(transformedMessages)
+    : -1;
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
@@ -1511,7 +1514,8 @@ function convertMessages(
             text: sanitizeSurrogates(block.text),
           });
         } else if (block.type === "thinking") {
-          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex) {
+          const isCompletedTurn = currentTurnStartIndex >= 0 && i < currentTurnStartIndex;
+          if (i !== activeToolTurnAssistantIndex && (!replayThinkingEnabled || isCompletedTurn)) {
             omittedThinking = true;
             continue;
           }

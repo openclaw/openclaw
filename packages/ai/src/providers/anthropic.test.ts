@@ -568,7 +568,7 @@ describe("Anthropic provider", () => {
     expect(result.usage.contextUsage).toEqual({ state: "unavailable" });
   });
 
-  it("preserves provider-signed Anthropic thinking and drops reasoning_content placeholders", async () => {
+  it("drops completed Fable thinking while preserving the visible tool turn", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
     let capturedPayload: unknown;
@@ -634,10 +634,26 @@ describe("Anthropic provider", () => {
               },
               {
                 type: "thinking",
+                thinking: "[Reasoning redacted]",
+                thinkingSignature: "opaque_1",
+                redacted: true,
+              },
+              {
+                type: "thinking",
                 thinking: `sanitize${highSurrogate}synthetic`,
                 thinkingSignature: "reasoning_content",
               },
+              { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+              { type: "text", text: "Visible answer." },
             ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "42" }],
+            isError: false,
+            timestamp: 0,
           },
           { role: "user", content: "again", timestamp: 0 },
         ],
@@ -655,18 +671,10 @@ describe("Anthropic provider", () => {
 
     const payload = capturedPayload as { messages: Array<{ role: string; content: unknown[] }> };
     const assistantMessage = payload.messages.find((message) => message.role === "assistant");
-    expect(JSON.stringify(assistantMessage?.content)).not.toContain("reasoning_content");
+    expect(JSON.stringify(assistantMessage?.content)).not.toContain("thinking");
     expect(assistantMessage?.content).toEqual([
-      {
-        type: "thinking",
-        thinking: signedThinking,
-        signature: "sig_1",
-      },
-      {
-        type: "thinking",
-        thinking: "",
-        signature: "sig_omitted",
-      },
+      { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+      { type: "text", text: "Visible answer." },
     ]);
     expect(result.responseModel).toBe("claude-fable-5");
   });
@@ -683,6 +691,13 @@ describe("Anthropic provider", () => {
       label: "explicitly disabled",
       thinkingEnabled: false,
       expectedThinking: { type: "disabled" },
+      visibleText: "Visible answer.",
+      expectedContent: [{ type: "text", text: "Visible answer." }],
+    },
+    {
+      label: "enabled on a completed turn",
+      thinkingEnabled: true,
+      expectedThinking: { type: "adaptive", display: "summarized" },
       visibleText: "Visible answer.",
       expectedContent: [{ type: "text", text: "Visible answer." }],
     },
@@ -751,67 +766,87 @@ describe("Anthropic provider", () => {
     },
   );
 
-  it("preserves signed thinking for an active tool turn when new thinking is disabled", async () => {
-    let capturedPayload: unknown;
-    const stream = streamAnthropic(
-      makeAnthropicModel(),
-      {
-        messages: [
-          { role: "user", content: "look it up", timestamp: 0 },
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            content: [
-              {
-                type: "thinking",
-                thinking: "call lookup",
-                thinkingSignature: "sig_tool",
+  it.each([
+    {
+      label: "disabled Sonnet",
+      model: makeAnthropicModel(),
+      thinkingEnabled: false,
+    },
+    {
+      label: "adaptive Fable",
+      model: makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      thinkingEnabled: undefined,
+    },
+  ])(
+    "preserves signed thinking for an active $label tool turn",
+    async ({ model, thinkingEnabled }) => {
+      let capturedPayload: unknown;
+      const stream = streamAnthropic(
+        model,
+        {
+          messages: [
+            { role: "user", content: "look it up", timestamp: 0 },
+            {
+              role: "assistant",
+              provider: "anthropic",
+              api: "anthropic-messages",
+              model: model.id,
+              stopReason: "toolUse",
+              timestamp: 0,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
               },
-              { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
-            ],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "42" }],
-            isError: false,
-            timestamp: 0,
-          },
-        ],
-      },
-      {
-        apiKey: "sk-ant-provider",
-        thinkingEnabled: false,
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
+              content: [
+                {
+                  type: "thinking",
+                  thinking: "call lookup",
+                  thinkingSignature: "sig_tool",
+                },
+                { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_1",
+              toolName: "lookup",
+              content: [{ type: "text", text: "42" }],
+              isError: false,
+              timestamp: 0,
+            },
+            {
+              role: "user",
+              content: "current runtime context",
+              timestamp: 0,
+              runtimeContextCarrier: true,
+            },
+          ],
         },
-      },
-    );
+        {
+          apiKey: "sk-ant-provider",
+          thinkingEnabled,
+          onPayload: (payload) => {
+            capturedPayload = payload;
+            throw new Error("stop before network");
+          },
+        },
+      );
 
-    await stream.result();
+      await stream.result();
 
-    const payload = capturedPayload as {
-      messages: Array<{ role: string; content: unknown[] }>;
-    };
-    expect(payload.messages.find((message) => message.role === "assistant")?.content).toEqual([
-      { type: "thinking", thinking: "call lookup", signature: "sig_tool" },
-      { type: "tool_use", id: "call_1", name: "lookup", input: {} },
-    ]);
-  });
+      const payload = capturedPayload as {
+        messages: Array<{ role: string; content: unknown[] }>;
+      };
+      expect(payload.messages.find((message) => message.role === "assistant")?.content).toEqual([
+        { type: "thinking", thinking: "call lookup", signature: "sig_tool" },
+        { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+      ]);
+    },
+  );
 
   it("preserves mixed text and image tool-result order", async () => {
     let capturedPayload: unknown;
