@@ -946,11 +946,32 @@ describe("installContextEngineLoopHook", () => {
     const source = [makeUser("first"), makeToolResult("call_1", "r1")];
     await callTransform(agent, source);
     expect(log.warn).toHaveBeenCalledWith(
-      "context engine assemble/afterTurn failed; falling back to raw messages",
+      "context engine assemble failed; falling back to raw messages",
       expect.objectContaining({
         sessionId,
         modelId,
         error: "assemble failed",
+      }),
+    );
+  });
+  it("logs a warning with the correct operation when ingestBatch throws", async () => {
+    const { log } = await import("./logger.js");
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({
+      omitAfterTurn: true,
+      ingestBatch: async () => {
+        throw new Error("ingestBatch failed");
+      },
+    });
+    installHook(agent, engine, 1);
+    const source = [makeUser("first"), makeToolResult("call_1", "r1")];
+    await callTransform(agent, source);
+    expect(log.warn).toHaveBeenCalledWith(
+      "context engine ingestBatch failed; falling back to raw messages",
+      expect.objectContaining({
+        sessionId,
+        modelId,
+        error: "ingestBatch failed",
       }),
     );
   });

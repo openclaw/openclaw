@@ -393,8 +393,10 @@ export function installContextEngineLoopHook(params: {
       lastSourceMessages = transcriptMessages;
       return lastAssembledView ?? providerMessages;
     }
+    let currentOperation: "afterTurn" | "ingestBatch" | "ingest" | "assemble" | "none" = "none";
     try {
       if (typeof contextEngine.afterTurn === "function") {
+        currentOperation = "afterTurn";
         await contextEngine.afterTurn({
           sessionId,
           sessionKey,
@@ -413,6 +415,7 @@ export function installContextEngineLoopHook(params: {
         const newMessages = transcriptMessages.slice(prePromptMessageCount);
         if (newMessages.length > 0) {
           if (typeof contextEngine.ingestBatch === "function") {
+            currentOperation = "ingestBatch";
             await contextEngine.ingestBatch({
               sessionId,
               sessionKey,
@@ -421,6 +424,7 @@ export function installContextEngineLoopHook(params: {
             });
           } else {
             for (const message of newMessages) {
+              currentOperation = "ingest";
               await contextEngine.ingest({
                 sessionId,
                 sessionKey,
@@ -434,6 +438,7 @@ export function installContextEngineLoopHook(params: {
       lastSeenLength = transcriptMessages.length;
       params.onAfterTurnCheckpoint?.(lastSeenLength);
       lastSourceMessages = transcriptMessages;
+      currentOperation = "assemble";
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
@@ -457,7 +462,7 @@ export function installContextEngineLoopHook(params: {
       // swallowing it silently. A persistently-failing context engine (e.g. a
       // local model probe timing out under memory pressure) previously left
       // the session growing unbounded with zero signal to the operator.
-      log.warn("context engine assemble/afterTurn failed; falling back to raw messages", {
+      log.warn(`context engine ${currentOperation} failed; falling back to raw messages`, {
         sessionId,
         modelId,
         error: err instanceof Error ? err.message : String(err),
