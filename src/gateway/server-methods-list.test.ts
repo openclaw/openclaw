@@ -74,6 +74,11 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
   });
 
+  it("advertises the versioned activity audit method", () => {
+    expect(listGatewayMethods()).toContain("audit.activity.list");
+    expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");

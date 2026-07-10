@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 
 export type OutboundSessionContext = {
@@ -35,6 +36,8 @@ export type OutboundSessionContext = {
   policyKey?: string;
   /** Explicit conversation type for policy resolution when a session key is generic. */
   conversationType?: SilentReplyConversationType;
+  /** Original transport conversation kind retained for metadata-only audit projection. */
+  conversationKind?: "direct" | "group" | "channel";
   /** Active agent id used for workspace-scoped media roots. */
   agentId?: string;
   /** Originating account id used for requester-scoped group policy resolution. */
@@ -65,7 +68,13 @@ export function buildOutboundSessionContext(params: {
 }): OutboundSessionContext | undefined {
   const key = normalizeOptionalString(params.sessionKey);
   const policyKey = normalizeOptionalString(params.policySessionKey);
-  const normalizedChatType = normalizeChatType(params.conversationType ?? undefined);
+  const deliveryRoute = parseSessionDeliveryRoute(policyKey ?? key);
+  const normalizedChatType =
+    normalizeChatType(params.conversationType ?? undefined) ??
+    normalizeChatType(deliveryRoute?.peerKind);
+  // Policy intentionally folds channels into groups; retain only the detail
+  // that would otherwise be lost before metadata-only audit projection.
+  const conversationKind = normalizedChatType === "channel" ? "channel" : undefined;
   const conversationType: SilentReplyConversationType | undefined =
     normalizedChatType === "group" || normalizedChatType === "channel"
       ? "group"
@@ -92,6 +101,7 @@ export function buildOutboundSessionContext(params: {
     !key &&
     !policyKey &&
     !conversationType &&
+    !conversationKind &&
     !agentId &&
     !requesterAccountId &&
     !requesterSenderId &&
@@ -105,6 +115,7 @@ export function buildOutboundSessionContext(params: {
     ...(key ? { key } : {}),
     ...(policyKey ? { policyKey } : {}),
     ...(conversationType ? { conversationType } : {}),
+    ...(conversationKind ? { conversationKind } : {}),
     ...(agentId ? { agentId } : {}),
     ...(requesterAccountId ? { requesterAccountId } : {}),
     ...(requesterSenderId ? { requesterSenderId } : {}),

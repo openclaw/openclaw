@@ -127,6 +127,7 @@ describe("buildOutboundSessionContext", () => {
     ).toEqual({
       key: "agent:main:generic",
       conversationType: "group",
+      conversationKind: "channel",
     });
 
     expect(
@@ -157,6 +158,31 @@ describe("buildOutboundSessionContext", () => {
       }),
     ).toEqual({
       conversationType: "direct",
+    });
+  });
+
+  it("derives direct conversation type from a canonical delivery session", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "agent:main:discord:dm:U123",
+      }),
+    ).toEqual({
+      key: "agent:main:discord:dm:U123",
+      conversationType: "direct",
+    });
+  });
+
+  it("keeps an explicit conversation type authoritative over a direct fallback", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        conversationType: "channel",
+        isGroup: false,
+      }),
+    ).toEqual({
+      conversationType: "group",
+      conversationKind: "channel",
     });
   });
 
