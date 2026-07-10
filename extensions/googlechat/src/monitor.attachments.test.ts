@@ -1,6 +1,6 @@
 // Googlechat attachment tests cover inbound batch materialization and agent context.
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 import { testing } from "./monitor.js";
@@ -141,6 +141,10 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("googlechat monitor attachments", () => {
   it("materializes two attachments serially in message order with the configured byte cap", async () => {
     const harness = createHarness();
@@ -268,6 +272,7 @@ describe("googlechat monitor attachments", () => {
   });
 
   it("counts Drive-backed and missing data references as unavailable", async () => {
+    vi.useFakeTimers();
     const harness = createHarness();
 
     await processAttachments({
@@ -280,6 +285,7 @@ describe("googlechat monitor attachments", () => {
 
     expect(apiMocks.downloadGoogleChatMedia).not.toHaveBeenCalled();
     expect(harness.saveMediaBuffer).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
     expect(builtContext(harness)).toMatchObject({
       Body: "inspect these\n\n[googlechat 2 attachments unavailable]",
       BodyForAgent: "inspect these\n\n[googlechat 2 attachments unavailable]",
@@ -316,15 +322,21 @@ describe("googlechat monitor attachments", () => {
     });
   });
 
-  it("processes only the first 20 attachments and marks overflow unavailable", async () => {
+  it("quota-paces the first 20 attachments and marks overflow unavailable", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
     const harness = createHarness();
     const attachments = Array.from({ length: 21 }, (_, index) =>
       uploadedAttachment(`file-${index + 1}`),
     );
-    apiMocks.downloadGoogleChatMedia.mockImplementation(async ({ resourceName }) => ({
-      buffer: Buffer.from(resourceName),
-      contentType: "image/png",
-    }));
+    const downloadStartedAt: number[] = [];
+    apiMocks.downloadGoogleChatMedia.mockImplementation(async ({ resourceName }) => {
+      downloadStartedAt.push(Date.now());
+      return {
+        buffer: Buffer.from(resourceName),
+        contentType: "image/png",
+      };
+    });
     harness.saveMediaBuffer.mockImplementation(
       async (
         _buffer: Buffer,
@@ -338,11 +350,13 @@ describe("googlechat monitor attachments", () => {
       }),
     );
 
-    await processAttachments({
+    const processing = processAttachments({
       event: attachmentEvent({ text: "batch", attachments }),
       harness,
       mediaMaxMb: 3,
     });
+    await vi.runAllTimersAsync();
+    await processing;
 
     expect(apiMocks.downloadGoogleChatMedia).toHaveBeenCalledTimes(20);
     expect(harness.saveMediaBuffer).toHaveBeenCalledTimes(20);
@@ -355,6 +369,16 @@ describe("googlechat monitor attachments", () => {
         [expect.objectContaining({ resourceName: "media/file-20", maxBytes: 3 * 1024 * 1024 })],
       ]),
     );
+    expect(downloadStartedAt).toHaveLength(20);
+    for (let index = 1; index < downloadStartedAt.length; index += 1) {
+      expect(downloadStartedAt[index] - downloadStartedAt[index - 1]).toBeGreaterThanOrEqual(75);
+    }
+    for (const windowStart of downloadStartedAt) {
+      const startsInWindow = downloadStartedAt.filter(
+        (startedAt) => startedAt >= windowStart && startedAt < windowStart + 1_000,
+      );
+      expect(startsInWindow.length).toBeLessThanOrEqual(15);
+    }
     expect(builtContext(harness)).toMatchObject({
       Body: "batch\n\n[googlechat attachment unavailable]",
       BodyForAgent: "batch\n\n[googlechat attachment unavailable]",
