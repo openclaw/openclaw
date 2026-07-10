@@ -246,8 +246,9 @@ describe("chunkDiscordText", () => {
 
   it("does not prepend italics underscore to start of chunk when it opens with inline code", () => {
     // Same reasoning as above: chunk 2 opens with `inline code`,
-    // not a normal text line. Both close on the preceding chunk
-    // and reopen on this one must be skipped to keep delimiters balanced.
+    // not a normal text line. The preceding chunk should close
+    // normally, and the reopen should land after the first line
+    // to keep the backtick intact while italicizing trailing prose.
     const body = [
       "1. line",
       "2. line",
@@ -269,10 +270,17 @@ describe("chunkDiscordText", () => {
     for (const chunk of chunks) {
       expect(chunk).not.toMatch(/_`/);
     }
-    // The chunk immediately before the inline-code chunk must not end
-    // with an unmatched underscore.
+    // The chunk before inline code should close normally — inline
+    // code boundaries don't suppress the close (only fences do).
     const inlineIdx = chunks.findIndex((c) => c.trimStart().startsWith("`"));
     expect(inlineIdx).toBeGreaterThan(0);
-    expect(chunks[inlineIdx - 1].trimEnd().endsWith("_")).toBe(false);
+    expect(chunks[inlineIdx - 1].trimEnd().endsWith("_")).toBe(true);
+    // The inline code chunk should reopen italics on its second line
+    // (after the \n), so trailing prose gets italics without _` before
+    // the backtick breaking the code opener.
+    const inlineChunk = chunks[inlineIdx];
+    const lines = inlineChunk.split("\n");
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines[1].startsWith("_")).toBe(true);
   });
 });

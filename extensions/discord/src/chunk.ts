@@ -302,10 +302,14 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
     return chunks;
   }
 
-  // Code fences and inline code naturally break italic context — skip
-  // both close (current) and reopen (next) so no chunk carries an
-  // unmatched delimiter.
-  const startsWithCode = (s: string) => s.trimStart().startsWith("`");
+  // Code fences and inline code naturally break italic context.
+  // Fenced blocks (```): skip both close (current) and reopen (next) —
+  //   the entire chunk is code with no prose to italicize.
+  // Inline code (`): close the current chunk, then reopen after the
+  //   first line so trailing prose keeps its italics without _`  before
+  //   the backtick breaking the code opener.
+  const startsWithFence = (s: string) => s.trimStart().startsWith("```");
+  const startsWithBacktick = (s: string) => s.trimStart().startsWith("`");
 
   const adjusted = [...chunks];
   for (let i = 0; i < adjusted.length; i++) {
@@ -314,8 +318,8 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
 
     const skipClose =
       current.trimEnd().endsWith("_") ||
-      startsWithCode(current) ||
-      (next !== null && startsWithCode(next));
+      startsWithFence(current) ||
+      (next !== null && startsWithFence(next));
     if (!skipClose) {
       adjusted[i] = `${current}_`;
     }
@@ -324,9 +328,23 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
       break;
     }
 
-    if (!next.trimStart().startsWith("_") && !startsWithCode(next)) {
-      const wsLen = next.length - next.trimStart().length;
-      adjusted[i + 1] = `${next.slice(0, wsLen)}_${next.trimStart()}`;
+    if (next.trimStart().startsWith("_")) {
+      continue;
+    }
+    if (startsWithFence(next)) {
+      continue;
+    }
+
+    const wsLen = next.length - next.trimStart().length;
+    const body = next.trimStart();
+    if (startsWithBacktick(next)) {
+      // Reopen after the first line so _ doesn't touch the backtick opener.
+      const nl = body.indexOf("\n");
+      if (nl >= 0) {
+        adjusted[i + 1] = `${next.slice(0, wsLen)}${body.slice(0, nl + 1)}_${body.slice(nl + 1)}`;
+      }
+    } else {
+      adjusted[i + 1] = `${next.slice(0, wsLen)}_${body}`;
     }
   }
 
