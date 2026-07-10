@@ -902,7 +902,7 @@ export async function createManagedOutgoingImageBlocks(params: {
                 await assertLocalMediaAllowed(localMediaPath, localRoots, localMediaOptions);
               }
               return await saveMediaSource(
-                mediaUrl,
+                localMediaPath ?? mediaUrl,
                 undefined,
                 "outgoing/originals",
                 Math.max(limits.maxBytes, MEDIA_MAX_BYTES),
