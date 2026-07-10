@@ -56,6 +56,15 @@ export type SlackMessageEvent = {
   _ambiguousThreadReply?: boolean;
 };
 
+export type SlackMessageSource = "message" | "app_mention" | "interaction";
+
+/** Proof that the interaction actor passed Slack's signed block-action authorization path. */
+export type SlackVerifiedInteractionAuthorization = {
+  kind: "verified-block-action";
+  senderId: string;
+  sourceMessageId: string;
+};
+
 export type SlackAppMentionEvent = {
   type: "app_mention";
   user?: string;

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
 const onFlushCallbacks: Array<(entries: Array<Record<string, unknown>>) => Promise<void>> = [];
+const shouldDebounceCallbacks: Array<(entry: Record<string, unknown>) => boolean> = [];
 const prepareSlackMessageMock = vi.fn(async () => ({ ctxPayload: {} }));
 const dispatchPreparedSlackMessageMock = vi.fn(async () => {});
 const hasSlackInboundMessageDeliveryMock = vi.fn(async () => false);
@@ -21,8 +22,10 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
     ...actual,
     createChannelInboundDebouncer: (params: {
       onFlush: (entries: Array<Record<string, unknown>>) => Promise<void>;
+      shouldDebounce: (entry: Record<string, unknown>) => boolean;
     }) => {
       onFlushCallbacks.push(params.onFlush);
+      shouldDebounceCallbacks.push(params.shouldDebounce);
       return {
         debounceMs: 10,
         debouncer: {
@@ -113,6 +116,7 @@ describe("createSlackMessageHandler", () => {
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
     onFlushCallbacks.length = 0;
+    shouldDebounceCallbacks.length = 0;
     prepareSlackMessageMock.mockClear();
     dispatchPreparedSlackMessageMock.mockClear();
     hasSlackInboundMessageDeliveryMock.mockReset();
@@ -163,6 +167,67 @@ describe("createSlackMessageHandler", () => {
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
     expect(enqueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches interaction turns immediately", async () => {
+    const { handler, trackEvent } = createHandlerWithTracker();
+
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        channel_type: "channel",
+        user: "U111",
+        ts: "1709000000.000150",
+        event_ts: "1709000000.000200",
+        thread_ts: "1709000000.000100",
+        text: "User selected: Continue (continue)",
+      },
+      {
+        interactionAuthorization: {
+          kind: "verified-block-action",
+          senderId: "U111",
+          sourceMessageId: "1709000000.000150",
+        },
+        messageIdOverride: "1709000000.000200",
+        source: "interaction",
+        wasMentioned: true,
+      },
+    );
+
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+    expect(shouldDebounceCallbacks[0]?.(entry)).toBe(false);
+    expect(entry).toMatchObject({
+      message: { ts: "1709000000.000150" },
+      opts: {
+        interactionAuthorization: {
+          kind: "verified-block-action",
+          senderId: "U111",
+          sourceMessageId: "1709000000.000150",
+        },
+        messageIdOverride: "1709000000.000200",
+        source: "interaction",
+        wasMentioned: true,
+      },
+    });
+    expect(hasSlackInboundMessageDeliveryMock).toHaveBeenCalledWith({
+      accountId: "default",
+      channelId: "C111",
+      ts: "1709000000.000200",
+    });
+
+    await onFlushCallbacks[0]?.([entry]);
+    expect(prepareSlackMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ ts: "1709000000.000150" }),
+        opts: expect.objectContaining({ messageIdOverride: "1709000000.000200" }),
+      }),
+    );
+    expect(recordSlackInboundMessageDeliveriesMock).toHaveBeenCalledWith({
+      accountId: "default",
+      messages: [expect.objectContaining({ ts: "1709000000.000200" })],
+    });
   });
 
   it("records explicit channel type before the first delivery-state await", async () => {
@@ -269,6 +334,48 @@ describe("createSlackMessageHandler", () => {
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
   });
 
+  it("flushes pending top-level messages before a control interaction", async () => {
+    const handler = createSlackMessageHandler({
+      ctx: createContext(),
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000100",
+        text: "first buffered text",
+      },
+      { source: "message" },
+    );
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000150",
+        event_ts: "1709000000.000200",
+        text: "User selected: Continue (continue)",
+      },
+      {
+        interactionAuthorization: {
+          kind: "verified-block-action",
+          senderId: "U111",
+          sourceMessageId: "1709000000.000150",
+        },
+        messageIdOverride: "1709000000.000200",
+        source: "interaction",
+        wasMentioned: true,
+      },
+    );
+
+    expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
+  });
+
   it("waits for debounced dispatch completion when requested by relay delivery", async () => {
     const { handler } = createHandlerWithTracker();
     const handled = handler(
@@ -354,6 +461,65 @@ describe("createSlackMessageHandler", () => {
         },
       });
       expect(enqueueMock.mock.calls[1]?.[0]).not.toHaveProperty("opts.dispatchCompletion");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries interaction conflicts with the action timestamp identity", async () => {
+    const releaseSeenMessage = vi.fn();
+    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
+      new Error("reply session initialization conflicted for agent:main:slack:channel:c111"),
+    );
+    const { handler } = createHandlerWithTracker({ releaseSeenMessage });
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000700",
+        event_ts: "1709000000.000701",
+        text: "User selected: Continue (continue)",
+      },
+      {
+        interactionAuthorization: {
+          kind: "verified-block-action",
+          senderId: "U111",
+          sourceMessageId: "1709000000.000700",
+        },
+        messageIdOverride: "1709000000.000701",
+        source: "interaction",
+        wasMentioned: true,
+      },
+    );
+
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    vi.useFakeTimers();
+    try {
+      await expect(onFlushCallbacks[0]?.([entry])).rejects.toThrow(
+        "reply session initialization conflicted",
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(releaseSeenMessage).toHaveBeenCalledWith("C111", "1709000000.000701");
+      expect(recordSlackInboundMessageDeliveriesMock).not.toHaveBeenCalled();
+      expect(hasSlackInboundMessageDeliveryMock).toHaveBeenLastCalledWith({
+        accountId: "default",
+        channelId: "C111",
+        ts: "1709000000.000701",
+      });
+      expect(enqueueMock.mock.calls[1]?.[0]).toMatchObject({
+        opts: {
+          interactionAuthorization: {
+            kind: "verified-block-action",
+            senderId: "U111",
+            sourceMessageId: "1709000000.000700",
+          },
+          messageIdOverride: "1709000000.000701",
+          retryAttempt: 1,
+          source: "interaction",
+        },
+      });
     } finally {
       vi.useRealTimers();
     }

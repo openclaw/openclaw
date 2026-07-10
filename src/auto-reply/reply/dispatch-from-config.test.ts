@@ -1427,6 +1427,39 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it("keeps repeated controls on one Slack message distinct in transcript mirroring", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    installThreadingTestPlugin({ id: "slack" });
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    for (const actionId of ["action-ts-1", "action-ts-2"]) {
+      const dispatcher = createDispatcher();
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          OriginatingChannel: "slack",
+          OriginatingTo: "channel:C123",
+          ChatType: "group",
+          SessionKey: "agent:main:slack:channel:C123",
+          MessageSid: actionId,
+          CurrentMessageId: "control-message-ts",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => ({ text: `Reply for ${actionId}` }),
+      });
+      await settleReplyDispatcher({ dispatcher });
+    }
+
+    expect(
+      transcriptMocks.appendAssistantMessageToSessionTranscript.mock.calls.map(
+        ([call]) => (call as { idempotencyKey?: string }).idempotencyKey,
+      ),
+    ).toEqual(["channel-final:action-ts-1:0", "channel-final:action-ts-2:0"]);
+  });
+
   it("mirrors reset acknowledgements into the canonically prepared Slack session", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockReturnValue(false);
@@ -6988,6 +7021,7 @@ describe("dispatchReplyFromConfig", () => {
       RawBody: "raw text",
       Body: "body text",
       Timestamp: 1710000000000,
+      CurrentMessageId: "control-message-ts",
       MessageSidFull: "sid-full",
       SenderId: "user-1",
       SenderName: "Alice",

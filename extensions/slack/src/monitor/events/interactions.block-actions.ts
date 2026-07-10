@@ -23,6 +23,7 @@ import {
   SLACK_REPLY_SELECT_ACTION_ID,
 } from "../../reply-action-ids.js";
 import { truncateSlackText } from "../../truncate.js";
+import type { SlackMessageEvent } from "../../types.js";
 import {
   authorizeSlackSystemEventSender,
   resolveSlackCommandIngress,
@@ -35,6 +36,7 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "../conversation.runtime.js";
+import type { SlackMessageHandler } from "../message-handler.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 type InteractionMessageBlock = {
@@ -99,7 +101,12 @@ type SlackBlockActionBody = {
   trigger_id?: string;
   response_url?: string;
   channel?: { id?: string };
-  container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
+  container?: {
+    channel_id?: string;
+    message_ts?: string;
+    thread_ts?: string;
+    is_ephemeral?: boolean;
+  };
   message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
 };
 
@@ -115,11 +122,13 @@ type ParsedSlackBlockAction = {
     text?: { text?: string };
   };
   actionId: string;
+  actionTs?: string;
   blockId?: string;
   userId: string;
   channelId?: string;
   messageTs?: string;
   threadTs?: string;
+  sourceMessageIsEphemeral: boolean;
   actionSummary: SlackActionSummary;
 };
 
@@ -430,6 +439,7 @@ function parseSlackBlockAction(params: {
   }
   const typedActionWithText = typedAction as {
     action_id?: string;
+    action_ts?: string;
     block_id?: string;
     type?: string;
     text?: { text?: string };
@@ -440,12 +450,53 @@ function parseSlackBlockAction(params: {
     typedActionWithText,
     actionId:
       typeof typedActionWithText.action_id === "string" ? typedActionWithText.action_id : "unknown",
+    actionTs: normalizeOptionalString(typedActionWithText.action_ts),
     blockId: typedActionWithText.block_id,
     userId: typedBody.user?.id ?? "unknown",
     channelId: typedBody.channel?.id ?? typedBody.container?.channel_id,
     messageTs: typedBody.message?.ts ?? typedBody.container?.message_ts,
     threadTs: typedBody.container?.thread_ts ?? typedBody.message?.thread_ts,
+    sourceMessageIsEphemeral: typedBody.container?.is_ephemeral === true,
     actionSummary: summarizeAction(typedAction),
+  };
+}
+
+const SLACK_REPLY_ACTION_TEXT_MAX_CHARS = 2400;
+
+function formatSlackReplyActionText(parsed: ParsedSlackBlockAction): string {
+  const label = formatInteractionSelectionLabel({
+    actionId: parsed.actionId,
+    summary: parsed.actionSummary,
+    buttonText: parsed.typedActionWithText.text?.text,
+  });
+  const value =
+    parsed.actionSummary.selectedValues?.join(", ") ??
+    normalizeOptionalString(parsed.actionSummary.value);
+  const selection = value && value !== label ? `${label} (${value})` : label;
+  return truncateSlackText(`User selected: ${selection}`, SLACK_REPLY_ACTION_TEXT_MAX_CHARS);
+}
+
+function buildSlackReplyActionMessage(params: {
+  ctx: SlackMonitorContext;
+  parsed: ParsedSlackBlockAction;
+  channelType?: "im" | "mpim" | "channel" | "group";
+}): (SlackMessageEvent & { event_ts: string; ts: string }) | null {
+  const { parsed } = params;
+  if (!parsed.actionTs || !parsed.channelId || !parsed.messageTs) {
+    params.ctx.runtime.log?.(
+      `slack:interaction drop reply action=${parsed.actionId} user=${parsed.userId} reason=missing-action-context`,
+    );
+    return null;
+  }
+  return {
+    type: "message" as const,
+    channel: parsed.channelId,
+    channel_type: params.channelType,
+    user: parsed.userId,
+    text: formatSlackReplyActionText(parsed),
+    ts: parsed.messageTs,
+    event_ts: parsed.actionTs,
+    thread_ts: parsed.threadTs,
   };
 }
 
@@ -463,6 +514,32 @@ async function respondEphemeral(
     });
   } catch {
     // Best-effort feedback only.
+  }
+}
+
+async function rejectEphemeralSlackReplyAction(params: {
+  parsed: ParsedSlackBlockAction;
+  respond?: SlackBlockActionRespond;
+}): Promise<void> {
+  if (!params.respond) {
+    return;
+  }
+  const originalText = normalizeOptionalString(params.parsed.typedBody.message?.text);
+  const text = [
+    originalText,
+    formatSlackReplyActionText(params.parsed),
+    "Reply controls in ephemeral Slack messages cannot start an agent turn. Send the selection as a message instead.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  try {
+    await params.respond({
+      replace_original: true,
+      response_type: "ephemeral",
+      text,
+    });
+  } catch {
+    // The response URL is best-effort and may have expired.
   }
 }
 
@@ -880,16 +957,25 @@ async function updateSlackLegacyBlockAction(params: {
   ) {
     return;
   }
+  const blocks = buildSlackConfirmationBlocks({
+    parsed: params.parsed,
+    originalBlocks,
+  });
   try {
+    if (params.parsed.sourceMessageIsEphemeral && params.respond) {
+      await params.respond({
+        replace_original: true,
+        text: params.parsed.typedBody.message?.text ?? "",
+        blocks,
+      });
+      return;
+    }
     await updateSlackInteractionMessage({
       ctx: params.ctx,
       channelId: params.parsed.channelId,
       messageTs: params.parsed.messageTs,
       text: params.parsed.typedBody.message?.text ?? "",
-      blocks: buildSlackConfirmationBlocks({
-        parsed: params.parsed,
-        originalBlocks,
-      }),
+      blocks,
     });
   } catch {
     await respondEphemeral(params.respond, `Button "${params.parsed.actionId}" clicked!`);
@@ -898,6 +984,7 @@ async function updateSlackLegacyBlockAction(params: {
 
 async function handleSlackBlockAction(params: {
   ctx: SlackMonitorContext;
+  handleSlackMessage: SlackMessageHandler;
   trackEvent?: () => void;
   args: SlackActionMiddlewareArgs;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
@@ -973,6 +1060,42 @@ async function handleSlackBlockAction(params: {
       return;
     }
   }
+  // Approvals and plugin-owned callbacks returned above. Remaining reply controls are user turns;
+  // keeping them on the generic heartbeat path can consume the click without a visible reply.
+  if (isSlackReplyActionId(parsed.actionId)) {
+    if (parsed.sourceMessageIsEphemeral) {
+      params.ctx.runtime.log?.(
+        `slack:interaction reject ephemeral reply action=${parsed.actionId} user=${parsed.userId}`,
+      );
+      await rejectEphemeralSlackReplyAction({ parsed, respond });
+      return;
+    }
+    const message = buildSlackReplyActionMessage({
+      ctx: params.ctx,
+      parsed,
+      channelType: auth.channelType,
+    });
+    if (!message) {
+      return;
+    }
+    const dispatchPromise = params.handleSlackMessage(message, {
+      interactionAuthorization: {
+        kind: "verified-block-action",
+        senderId: parsed.userId,
+        sourceMessageId: message.ts,
+      },
+      messageIdOverride: message.event_ts,
+      source: "interaction",
+      wasMentioned: true,
+    });
+    const updatePromise = updateSlackLegacyBlockAction({
+      ctx: params.ctx,
+      parsed,
+      respond,
+    });
+    await Promise.all([dispatchPromise, updatePromise]);
+    return;
+  }
   enqueueSlackBlockActionEvent({
     ctx: params.ctx,
     parsed,
@@ -988,6 +1111,7 @@ async function handleSlackBlockAction(params: {
 
 export function registerSlackBlockActionHandler(params: {
   ctx: SlackMonitorContext;
+  handleSlackMessage: SlackMessageHandler;
   trackEvent?: () => void;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): void {
@@ -997,6 +1121,7 @@ export function registerSlackBlockActionHandler(params: {
   params.ctx.app.action(/.+/, async (args: SlackActionMiddlewareArgs) => {
     await handleSlackBlockAction({
       ctx: params.ctx,
+      handleSlackMessage: params.handleSlackMessage,
       trackEvent: params.trackEvent,
       args,
       formatSystemEvent: params.formatSystemEvent,

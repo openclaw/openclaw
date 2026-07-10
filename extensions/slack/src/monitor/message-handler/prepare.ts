@@ -44,7 +44,13 @@ import { formatSlackError } from "../../errors.js";
 import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackSendIdentity } from "../../send.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
-import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.js";
+import type {
+  SlackAttachment,
+  SlackFile,
+  SlackMessageEvent,
+  SlackMessageSource,
+  SlackVerifiedInteractionAuthorization,
+} from "../../types.js";
 import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import {
   authorizeSlackBotRoomMessage,
@@ -356,6 +362,7 @@ type SlackConversationContext = {
 type SlackAuthorizationContext = {
   senderId: string;
   allowFromLower: string[];
+  verifiedInteraction: boolean;
 };
 
 type SlackMentionMetadata = {
@@ -407,7 +414,7 @@ async function resolveSlackExplicitMentionState(params: {
   messageText: string;
   mentionedUserIds: readonly string[];
   hasSubteamMention: boolean;
-  source: "message" | "app_mention";
+  source: SlackMessageSource;
   eventScope?: SlackEventScope;
 }): Promise<SlackExplicitMentionState> {
   const normalizedBotUserId = normalizeSlackId(params.ctx.botUserId);
@@ -553,6 +560,7 @@ async function authorizeSlackInboundMessage(params: {
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
   conversation: SlackConversationContext;
+  interactionAuthorization?: SlackVerifiedInteractionAuthorization;
   eventScope?: SlackEventScope;
 }): Promise<SlackAuthorizationContext | null> {
   const { ctx, account, message, conversation } = params;
@@ -594,6 +602,14 @@ async function authorizeSlackInboundMessage(params: {
   const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
     includePairingStore: isDirectMessage,
   });
+  const verifiedInteraction =
+    params.interactionAuthorization?.kind === "verified-block-action" &&
+    params.interactionAuthorization.senderId === senderId &&
+    params.interactionAuthorization.sourceMessageId === message.ts;
+  if (params.interactionAuthorization && !verifiedInteraction) {
+    logVerbose("slack: drop interaction message (verified sender mismatch)");
+    return null;
+  }
 
   if (isDirectMessage) {
     const directUserId = message.user;
@@ -633,6 +649,7 @@ async function authorizeSlackInboundMessage(params: {
   return {
     senderId,
     allowFromLower,
+    verifiedInteraction,
   };
 }
 
@@ -641,10 +658,12 @@ export async function prepareSlackMessage(params: {
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
   opts: {
-    source: "message" | "app_mention";
+    source: SlackMessageSource;
     wasMentioned?: boolean;
     relayIdentity?: SlackSendIdentity;
     eventScope?: SlackEventScope;
+    messageIdOverride?: string;
+    interactionAuthorization?: SlackVerifiedInteractionAuthorization;
     /** Handler-owned race check for suppressing a duplicate dropped-history record. */
     shouldRecordDroppedHistory?: () => boolean;
   };
@@ -677,12 +696,14 @@ export async function prepareSlackMessage(params: {
     account,
     message,
     conversation,
+    interactionAuthorization:
+      opts.source === "interaction" ? opts.interactionAuthorization : undefined,
     eventScope: opts.eventScope,
   });
   if (!authorization) {
     return null;
   }
-  const { senderId, allowFromLower } = authorization;
+  const { senderId, allowFromLower, verifiedInteraction } = authorization;
   const messageText = message.text ?? "";
   let resolvedSenderName = normalizeOptionalString(message.username);
   const resolveSenderName = async (): Promise<string> => {
@@ -762,11 +783,15 @@ export async function prepareSlackMessage(params: {
     channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, channelChatType);
   const willImplicitlyThreadReply =
     isRoom && !channelRequireMention && channelReplyToMode !== "off";
+  // A control click uses wasMentioned to pass room policy, but its source message already owns
+  // routing. Seeding from that flag would manufacture a new thread session for top-level clicks.
+  const canSeedTopLevelRoomThread = opts.source !== "interaction";
   const seedTopLevelRoomThreadBySource =
-    opts.source === "app_mention" ||
-    opts.wasMentioned === true ||
-    explicitlyMentioned ||
-    willImplicitlyThreadReply;
+    canSeedTopLevelRoomThread &&
+    (opts.source === "app_mention" ||
+      opts.wasMentioned === true ||
+      explicitlyMentioned ||
+      willImplicitlyThreadReply);
   let routing = resolveSlackRoutingContext({
     ctx,
     account,
@@ -1041,7 +1066,7 @@ export async function prepareSlackMessage(params: {
     },
   });
   const senderGate = messageIngress.senderAccess.gate;
-  if (isRoom && senderGate?.allowed === false) {
+  if (isRoom && senderGate?.allowed === false && !verifiedInteraction) {
     logVerbose(`Blocked unauthorized slack sender ${senderId} (not in channel users)`);
     return null;
   }
@@ -1087,7 +1112,11 @@ export async function prepareSlackMessage(params: {
   }
 
   const canSeedMentionedRoomThread =
-    !seedTopLevelRoomThreadBySource && isRoom && !routing.isThreadReply && !hasBoundSession;
+    canSeedTopLevelRoomThread &&
+    !seedTopLevelRoomThreadBySource &&
+    isRoom &&
+    !routing.isThreadReply &&
+    !hasBoundSession;
   let seededMentionRouting: typeof routing | undefined;
   const getSeededMentionRouting = () => {
     seededMentionRouting ??= resolveSlackRoutingContext({
@@ -1306,7 +1335,8 @@ export async function prepareSlackMessage(params: {
       }),
     );
 
-  const ackReactionMessageTs = message.ts;
+  // Interaction timestamps identify the click, not a Slack message that can receive reactions.
+  const ackReactionMessageTs = opts.source === "interaction" ? undefined : message.ts;
   const allowToolOnlyStatusReaction =
     statusReactionsExplicitlyEnabled && (effectiveWasMentioned || shouldBypassMention);
   const shouldSendConfiguredAck = shouldAckReaction();
@@ -1364,6 +1394,7 @@ export async function prepareSlackMessage(params: {
     isThreadReply && threadTs
       ? ` thread_ts: ${threadTs}${message.parent_user_id ? ` parent_user_id: ${message.parent_user_id}` : ""}`
       : "";
+  const inboundMessageId = opts.messageIdOverride ?? threadContext.messageTs;
   const textWithId = `${bodyForAgent}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
   const storePath = resolveStorePath(ctx.cfg.session?.store, {
     agentId: route.agentId,
@@ -1373,6 +1404,9 @@ export async function prepareSlackMessage(params: {
     storePath,
     sessionKey,
   });
+  const inboundTimestamp = resolveSlackTimestampMs(
+    opts.source === "interaction" ? message.event_ts : message.ts,
+  );
   if (opts.source === "app_mention" && !ctx.botUserId && message.ts) {
     // The Slack message event can arrive first and queue the same timestamp as dropped history.
     // Remove only this route's copy before the trusted app_mention builds prompt context.
@@ -1395,7 +1429,7 @@ export async function prepareSlackMessage(params: {
   const body = formatInboundEnvelope({
     channel: "Slack",
     from: envelopeFrom,
-    timestamp: resolveSlackTimestampMs(message.ts),
+    timestamp: inboundTimestamp,
     body: textWithId,
     chatType,
     sender: { name: senderName, id: senderId },
@@ -1493,8 +1527,9 @@ export async function prepareSlackMessage(params: {
   const ctxPayload = buildChannelInboundEventContext({
     channel: "slack",
     accountId: route.accountId,
-    messageId: threadContext.messageTs,
-    timestamp: resolveSlackTimestampMs(message.ts),
+    messageId: inboundMessageId,
+    currentMessageId: opts.messageIdOverride ? threadContext.messageTs : undefined,
+    timestamp: inboundTimestamp,
     from: slackFrom,
     sender: {
       id: senderId,
@@ -1594,8 +1629,8 @@ export async function prepareSlackMessage(params: {
       entry: {
         sender: senderName,
         body: rawBody,
-        timestamp: resolveSlackTimestampMs(message.ts),
-        messageId: message.ts,
+        timestamp: inboundTimestamp,
+        messageId: inboundMessageId,
       },
     });
   }

@@ -1415,7 +1415,8 @@ export async function runReplyAgent(params: {
     requesterSenderUsername: followupRun.run.senderUsername,
     requesterSenderE164: followupRun.run.senderE164,
   });
-  const compactionNoticeMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  const compactionNoticeMessageId =
+    sessionCtx.CurrentMessageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   const sendDirectCompactionNotice = shouldNotifyUserAboutCompaction(cfg)
     ? async (phase: CompactionNoticePhase) => {
         if (!opts?.onBlockReply) {
@@ -2070,7 +2071,8 @@ export async function runReplyAgent(params: {
     if (opts?.sourceReplyDeliveryMode === "message_tool_only" && committedSourceReplyDelivery) {
       await opts.onObservedReplyDelivery?.();
     }
-    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+    const currentMessageId =
+      sessionCtx.CurrentMessageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     // A terminal fallback is built separately after normal payload filtering.
     // Share this state across deliverable lanes so replyToMode=first still threads
     // at most one visible payload without hidden reasoning/commentary consuming it.

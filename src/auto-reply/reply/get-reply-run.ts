@@ -1473,6 +1473,8 @@ export async function runPreparedReply(
     queuedLifecycle: opts?.queuedFollowupLifecycle,
     onFollowupAdmissionWaitChange: opts?.onFollowupAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    currentMessageId:
+      sessionCtx.CurrentMessageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
     images: currentTurnImages.images,

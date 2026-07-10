@@ -77,6 +77,8 @@ export type FollowupRun = {
   onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
+  /** Native provider message targeted by reply threading and current-message tools. */
+  currentMessageId?: string;
   summaryLine?: string;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;

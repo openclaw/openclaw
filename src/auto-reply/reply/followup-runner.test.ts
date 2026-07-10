@@ -741,6 +741,38 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
   });
 
+  it("passes the native current message to queued embedded runs", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const storePath = "/tmp/openclaw-followup-current-message.json";
+    const sessionEntry: SessionEntry = { sessionId: "session-current-message", updatedAt: 1 };
+    registerFollowupTestSessionStore(storePath, { main: sessionEntry });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        messageId: "action-ts",
+        currentMessageId: "control-message-ts",
+        run: {
+          sessionId: "session-current-message",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.currentMessageId).toBe("control-message-ts");
+  });
+
   it("awaits queued-owner admission before model execution", async () => {
     const events: string[] = [];
     let releaseAdmission!: () => void;

@@ -34,4 +34,35 @@ describe("followup delivery context", () => {
       resolveFollowupDeliveryContextKey(second),
     );
   });
+
+  it("groups distinct interaction events by their shared native reply anchor", () => {
+    const first = createQueueTestRun({ prompt: "first click" });
+    Object.assign(first, {
+      messageId: "action-1",
+      currentMessageId: "control-1",
+      originatingChannel: "slack",
+      originatingReplyToMode: "first",
+    });
+    const second = createQueueTestRun({ prompt: "second click" });
+    Object.assign(second, {
+      messageId: "action-2",
+      currentMessageId: "control-1",
+      originatingChannel: "slack",
+      originatingReplyToMode: "first",
+    });
+    const otherControl = createQueueTestRun({ prompt: "other control" });
+    Object.assign(otherControl, {
+      messageId: "action-3",
+      currentMessageId: "control-2",
+      originatingChannel: "slack",
+      originatingReplyToMode: "first",
+    });
+
+    expect(resolveFollowupDeliveryContextKey(first)).toBe(
+      resolveFollowupDeliveryContextKey(second),
+    );
+    expect(resolveFollowupDeliveryContextKey(first)).not.toBe(
+      resolveFollowupDeliveryContextKey(otherControl),
+    );
+  });
 });

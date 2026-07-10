@@ -1623,7 +1623,10 @@ async function runAgentTurnWithFallbackInternal(
       logVerbose(`execution phase typing signal failed: ${String(err)}`);
     });
   };
-  const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+  const currentMessageId =
+    params.sessionCtx.CurrentMessageId ??
+    params.sessionCtx.MessageSidFull ??
+    params.sessionCtx.MessageSid;
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
     const deliver = params.opts?.onBlockReply ?? params.onCompactionNoticePayload;
@@ -1838,7 +1841,10 @@ async function runAgentTurnWithFallbackInternal(
       const blockReplyHandler = params.opts?.onBlockReply
         ? createBlockReplyDeliveryHandler({
             onBlockReply: params.opts.onBlockReply,
-            currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            currentMessageId:
+              params.sessionCtx.CurrentMessageId ??
+              params.sessionCtx.MessageSidFull ??
+              params.sessionCtx.MessageSid,
             replyThreading: params.replyThreading,
             normalizeStreamingText,
             applyReplyToMode: params.applyReplyToMode,
@@ -2041,7 +2047,9 @@ async function runAgentTurnWithFallbackInternal(
                 params.sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
               const cliCurrentMessageId = isRestartSentinelContinuation
                 ? params.sessionCtx.ReplyToId
-                : (params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid);
+                : (params.sessionCtx.CurrentMessageId ??
+                  params.sessionCtx.MessageSidFull ??
+                  params.sessionCtx.MessageSid);
               const cliToolSummaryTracker = createCliToolSummaryTracker({
                 detailMode: params.toolProgressDetail,
                 shouldEmitToolResult: params.shouldEmitToolResult,

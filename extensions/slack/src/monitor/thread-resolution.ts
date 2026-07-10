@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatSlackError } from "../errors.js";
-import type { SlackMessageEvent } from "../types.js";
+import type { SlackMessageEvent, SlackMessageSource } from "../types.js";
 
 type ThreadTsCacheEntry = {
   threadTs: string | null;
@@ -102,7 +102,7 @@ export function createSlackThreadTsResolver(params: {
   return {
     resolve: async (request: {
       message: SlackMessageEvent;
-      source: "message" | "app_mention";
+      source: SlackMessageSource;
     }): Promise<SlackMessageEvent> => {
       const { message } = request;
       if (!message.parent_user_id || message.thread_ts || !message.ts) {

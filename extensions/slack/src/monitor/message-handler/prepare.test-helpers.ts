@@ -20,6 +20,7 @@ export function createInboundSlackTestContext(params: {
   channelsConfig?: SlackChannelConfigEntries;
   threadRequireExplicitMention?: boolean;
   dmHistoryLimit?: number;
+  historyLimit?: number;
   groupDmEnabled?: boolean;
   channelRuntime?: ChannelRuntimeSurface;
 }) {
@@ -34,7 +35,7 @@ export function createInboundSlackTestContext(params: {
     botId: "B1",
     teamId: "T1",
     apiAppId: "A1",
-    historyLimit: 0,
+    historyLimit: params.historyLimit ?? 0,
     dmHistoryLimit: params.dmHistoryLimit,
     sessionScope: "per-sender",
     mainKey: "main",

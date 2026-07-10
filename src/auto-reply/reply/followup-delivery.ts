@@ -32,6 +32,7 @@ export function resolveFollowupDeliveryPayloads(params: {
   originatingAccountId?: string;
   originatingChannel?: string;
   originatingChatType?: string | null;
+  currentMessageId?: string;
   originatingReplyToMode?: ReplyToMode;
   originatingTo?: string;
   originatingThreadId?: string | number;
@@ -89,6 +90,7 @@ export function resolveFollowupDeliveryPayloads(params: {
     payloads: sanitizedPayloads,
     replyToMode,
     replyToChannel,
+    currentMessageId: params.currentMessageId,
   }).map((payload) =>
     setReplyPayloadMetadata(payload, {
       replyDelivery,

@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Slack reply controls:** dispatch persisted button and select clicks as durable inbound reply turns keyed by Slack's per-action timestamp, preserve source-message thread delivery and session-conflict retry, and keep unsupported ephemeral controls private with visible guidance instead of relying on heartbeat wakes. (#102380) Thanks @rodja.
 - **Codex runtime switching:** accept the bundled Codex runtime for both `codex/*` and `openai/*` model routes while keeping unsupported provider/runtime pairs rejected. (#103762)
 - **Agent abort cleanup:** serialize prompt lock reacquisition with terminal cleanup so canceled embedded runs do not self-contend on session locks for up to 60 seconds.
 - **Chutes OAuth deadlines:** bound token exchange, profile lookup, and refresh requests, and keep issued tokens when optional userinfo enrichment stalls. (#102026) Thanks @Alix-007.

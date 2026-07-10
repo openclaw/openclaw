@@ -227,7 +227,9 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
   // Slack standalone turns have no parent reply id, but enabled reply policies
   // still need the message id so collect groups cannot cross independent roots.
   // A routed thread already owns that boundary and remains collectable across turns.
-  return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
+  return hasRoutedThread
+    ? undefined
+    : normalizeOptionalString(run.currentMessageId ?? run.messageId);
 }
 
 function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[][] {
@@ -880,6 +882,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
     messageId: source.messageId,
+    currentMessageId: source.currentMessageId,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
     originatingChannel: source.originatingChannel,
@@ -948,6 +951,7 @@ async function runSyntheticOverflowSummary(params: {
     queueAbortSignal: params.source.queueAbortSignal,
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
+    currentMessageId: params.source.currentMessageId,
     userTurnTranscriptRecorder,
     run: params.source.run,
     enqueuedAt: Date.now(),
@@ -1266,6 +1270,9 @@ export function scheduleFollowupDrain(
                 run,
                 messageId:
                   groupSource?.messageId ??
+                  (groupSource ? resolveFollowupReplyAnchor(groupSource) : undefined),
+                currentMessageId:
+                  groupSource?.currentMessageId ??
                   (groupSource ? resolveFollowupReplyAnchor(groupSource) : undefined),
                 enqueuedAt: Date.now(),
                 ...routing,

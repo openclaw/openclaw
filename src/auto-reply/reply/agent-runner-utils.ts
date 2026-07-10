@@ -124,7 +124,7 @@ export function buildThreadingToolContext(params: {
     sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
   const currentMessageId = isRestartSentinelContinuation
     ? sessionCtx.ReplyToId
-    : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
+    : (sessionCtx.CurrentMessageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,

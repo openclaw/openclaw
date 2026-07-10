@@ -78,6 +78,25 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "", mediaUrl: "/tmp/image.png" }]);
   });
 
+  it.each([
+    { replyToMode: "off" as const, expectedReplyToId: undefined },
+    { replyToMode: "first" as const, expectedReplyToId: "control-message-ts" },
+    { replyToMode: "all" as const, expectedReplyToId: "control-message-ts" },
+  ])(
+    "uses the native current message for queued replyToMode=$replyToMode delivery",
+    ({ replyToMode, expectedReplyToId }) => {
+      const [resolved] = resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "queued reply" }],
+        currentMessageId: "control-message-ts",
+        originatingChannel: "slack",
+        originatingReplyToMode: replyToMode,
+      });
+
+      expect(resolved?.replyToId).toBe(expectedReplyToId);
+    },
+  );
+
   it("preserves transcript ownership when stripping heartbeat text", () => {
     const payload = setReplyPayloadMetadata(
       { text: "HEARTBEAT_OK still working" },

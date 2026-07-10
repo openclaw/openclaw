@@ -11,7 +11,11 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackSendIdentity } from "../send.js";
-import type { SlackMessageEvent } from "../types.js";
+import type {
+  SlackMessageEvent,
+  SlackMessageSource,
+  SlackVerifiedInteractionAuthorization,
+} from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
@@ -29,17 +33,33 @@ const loadSlackMessagePipeline = createLazyRuntimeModule(
   () => import("./message-handler/pipeline.runtime.js"),
 );
 
+type SlackMessageHandlerOptionsBase = {
+  wasMentioned?: boolean;
+  relayIdentity?: SlackSendIdentity;
+  /** Non-serializable listener scope for a validated enterprise event. */
+  eventScope?: SlackEventScope;
+  /** Unique turn id when the source message and inbound event have different Slack timestamps. */
+  messageIdOverride?: string;
+  /** Wait until any inbound debounce flush and dispatch has completed. */
+  awaitDispatch?: boolean;
+};
+
+export type SlackMessageHandlerOptions = SlackMessageHandlerOptionsBase &
+  (
+    | {
+        source: Exclude<SlackMessageSource, "interaction">;
+        interactionAuthorization?: never;
+      }
+    | {
+        source: "interaction";
+        messageIdOverride: string;
+        interactionAuthorization: SlackVerifiedInteractionAuthorization;
+      }
+  );
+
 export type SlackMessageHandler = (
   message: SlackMessageEvent,
-  opts: {
-    source: "message" | "app_mention";
-    wasMentioned?: boolean;
-    relayIdentity?: SlackSendIdentity;
-    /** Non-serializable listener scope for a validated enterprise event. */
-    eventScope?: SlackEventScope;
-    /** Wait until any inbound debounce flush and dispatch has completed. */
-    awaitDispatch?: boolean;
-  },
+  opts: SlackMessageHandlerOptions,
 ) => Promise<void>;
 
 type SlackDispatchCompletion = {
@@ -87,7 +107,15 @@ function isRetryableSlackInboundError(error: unknown): boolean {
   );
 }
 
-function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonitorContext["cfg"]) {
+function shouldDebounceSlackMessage(
+  message: SlackMessageEvent,
+  cfg: SlackMonitorContext["cfg"],
+  source: SlackMessageSource,
+) {
+  // Each interaction has its own action_ts identity; merging clicks would lose that boundary.
+  if (source === "interaction") {
+    return false;
+  }
   const text = message.text ?? "";
   const textForCommandDetection = stripSlackMentionsForCommandDetection(text);
   return shouldDebounceTextInbound({
@@ -108,6 +136,21 @@ function buildSeenMessageKey(
   return `${teamId ? `${teamId}:` : ""}${channelId}:${ts}`;
 }
 
+function resolveSlackInboundMessageId(
+  message: SlackMessageEvent,
+  opts: Pick<IngressSlackMessageOptions, "messageIdOverride">,
+): string | undefined {
+  return opts.messageIdOverride ?? message.ts;
+}
+
+function toSlackDeliveryStateMessage(
+  message: SlackMessageEvent,
+  opts: Pick<IngressSlackMessageOptions, "messageIdOverride">,
+): SlackMessageEvent {
+  const messageId = resolveSlackInboundMessageId(message, opts);
+  return messageId === message.ts ? message : { ...message, ts: messageId };
+}
+
 export function createSlackMessageHandler(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -124,7 +167,8 @@ export function createSlackMessageHandler(params: {
     buildKey: (entry) =>
       buildSlackDebounceKey(entry.message, ctx.accountId, entry.opts.eventScope?.teamId),
     shouldDebounce: (entry) =>
-      !entry.opts.eventScope && shouldDebounceSlackMessage(entry.message, ctx.cfg),
+      !entry.opts.eventScope &&
+      shouldDebounceSlackMessage(entry.message, ctx.cfg, entry.opts.source),
     onFlush: async (entries) => {
       const retryEntries = (sourceError: unknown): boolean => {
         if (
@@ -208,7 +252,7 @@ export function createSlackMessageHandler(params: {
           };
           const seenMessageKey = buildSeenMessageKey(
             last.message.channel,
-            last.message.ts,
+            resolveSlackInboundMessageId(last.message, last.opts),
             last.opts.eventScope?.teamId,
           );
           try {
@@ -272,7 +316,9 @@ export function createSlackMessageHandler(params: {
               return;
             }
             if (entries.length > 1) {
-              const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
+              const ids = entries
+                .map((entry) => resolveSlackInboundMessageId(entry.message, entry.opts))
+                .filter(Boolean) as string[];
               if (ids.length > 0) {
                 prepared.ctxPayload.MessageSids = ids;
                 prepared.ctxPayload.MessageSidFirst = ids[0];
@@ -284,14 +330,18 @@ export function createSlackMessageHandler(params: {
               await recordSlackInboundMessageDeliveries({
                 accountId: ctx.accountId,
                 ...(last.opts.eventScope ? { teamId: last.opts.eventScope.teamId } : {}),
-                messages: entries.map((entry) => entry.message),
+                messages: entries.map((entry) =>
+                  toSlackDeliveryStateMessage(entry.message, entry.opts),
+                ),
               });
             } catch (error) {
               if (!isRetryableSlackInboundError(error)) {
                 await recordSlackInboundMessageDeliveries({
                   accountId: ctx.accountId,
                   ...(last.opts.eventScope ? { teamId: last.opts.eventScope.teamId } : {}),
-                  messages: entries.map((entry) => entry.message),
+                  messages: entries.map((entry) =>
+                    toSlackDeliveryStateMessage(entry.message, entry.opts),
+                  ),
                 });
               }
               throw error;
@@ -303,7 +353,7 @@ export function createSlackMessageHandler(params: {
               for (const entry of entries) {
                 const entrySeenKey = buildSeenMessageKey(
                   entry.message.channel,
-                  entry.message.ts,
+                  resolveSlackInboundMessageId(entry.message, entry.opts),
                   entry.opts.eventScope?.teamId,
                 );
                 if (entrySeenKey) {
@@ -311,7 +361,7 @@ export function createSlackMessageHandler(params: {
                 }
                 ctx.releaseSeenMessage(
                   entry.message.channel,
-                  entry.message.ts,
+                  resolveSlackInboundMessageId(entry.message, entry.opts),
                   entry.opts.eventScope,
                 );
               }
@@ -408,7 +458,7 @@ export function createSlackMessageHandler(params: {
     ctx.rememberSlackChannelType(message.channel, message.channel_type, opts.eventScope);
     const seenMessageKey = buildSeenMessageKey(
       message.channel,
-      message.ts,
+      resolveSlackInboundMessageId(message, opts),
       opts.eventScope?.teamId,
     );
     if (
@@ -416,14 +466,18 @@ export function createSlackMessageHandler(params: {
       (await hasSlackInboundMessageDelivery({
         accountId: ctx.accountId,
         channelId: message.channel,
-        ts: message.ts,
+        ts: resolveSlackInboundMessageId(message, opts),
         ...(opts.eventScope ? { teamId: opts.eventScope.teamId } : {}),
       }))
     ) {
       return undefined;
     }
     const wasSeen = seenMessageKey
-      ? ctx.markMessageSeen(message.channel, message.ts, opts.eventScope)
+      ? ctx.markMessageSeen(
+          message.channel,
+          resolveSlackInboundMessageId(message, opts),
+          opts.eventScope,
+        )
       : false;
     if (seenMessageKey && opts.source === "message" && !wasSeen) {
       // Prime exactly one fallback app_mention allowance immediately so a near-simultaneous
@@ -451,7 +505,9 @@ export function createSlackMessageHandler(params: {
       teamId,
     );
     const canDebounce =
-      !opts.eventScope && debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg);
+      !opts.eventScope &&
+      debounceMs > 0 &&
+      shouldDebounceSlackMessage(resolvedMessage, ctx.cfg, opts.source);
     if (!canDebounce && conversationKey) {
       const pendingKeys = pendingTopLevelDebounceKeys.get(conversationKey);
       if (pendingKeys && pendingKeys.size > 0) {

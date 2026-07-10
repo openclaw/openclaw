@@ -133,6 +133,8 @@ export type MsgContext = {
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;
+  /** Native provider message targeted by current-message actions when it differs from this turn's id. */
+  CurrentMessageId?: string;
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;

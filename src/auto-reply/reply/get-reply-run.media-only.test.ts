@@ -346,6 +346,22 @@ describe("runPreparedReply media-only handling", () => {
     expect(storeRuntimeLoads).not.toHaveBeenCalled();
   });
 
+  it("keeps queued event identity separate from the native current message target", async () => {
+    await runPreparedReply(
+      baseParams({
+        sessionCtx: {
+          ...baseParams().sessionCtx,
+          MessageSid: "action-ts",
+          CurrentMessageId: "control-message-ts",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.followupRun.messageId).toBe("action-ts");
+    expect(call.followupRun.currentMessageId).toBe("control-message-ts");
+  });
+
   it("passes approved elevated defaults to the runner", async () => {
     await runPreparedReply(
       baseParams({

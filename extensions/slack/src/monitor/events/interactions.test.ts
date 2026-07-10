@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
+const handleSlackMessageMock = vi.hoisted(() => vi.fn(async () => undefined));
 type DispatchPluginInteractiveHandlerResult = {
   matched: boolean;
   handled: boolean;
@@ -23,7 +24,16 @@ const resolveApprovalOverGatewayMock = vi.hoisted(() =>
   vi.fn<(arg: unknown) => Promise<void>>(async () => undefined),
 );
 
-let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
+let registerSlackInteractionEventsImpl: typeof import("./interactions.js").registerSlackInteractionEvents;
+
+function registerSlackInteractionEvents(
+  params: Omit<Parameters<typeof registerSlackInteractionEventsImpl>[0], "handleSlackMessage">,
+) {
+  return registerSlackInteractionEventsImpl({
+    ...params,
+    handleSlackMessage: handleSlackMessageMock,
+  });
+}
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
@@ -398,13 +408,15 @@ function inputByActionId(
 
 describe("registerSlackInteractionEvents", () => {
   beforeAll(async () => {
-    ({ registerSlackInteractionEvents } = await import("./interactions.js"));
+    ({ registerSlackInteractionEvents: registerSlackInteractionEventsImpl } =
+      await import("./interactions.js"));
   });
 
   beforeEach(() => {
     enqueueSystemEventMock.mockReset();
     enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatMock.mockClear();
+    handleSlackMessageMock.mockClear();
     dispatchPluginInteractiveHandlerMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockResolvedValue({ status: "expired" });
@@ -894,7 +906,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(requireRecord(registrationCtx.auth, "registration auth").isAuthorizedSender).toBe(true);
   });
 
-  it("treats Slack reply buttons as plain interaction events instead of plugin dispatch", async () => {
+  it("dispatches Slack reply buttons as inbound turns instead of heartbeat events", async () => {
     const { ctx, app, getHandler, resolveSessionKey } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
 
@@ -922,6 +934,7 @@ describe("registerSlackInteractionEvents", () => {
       action: {
         type: "button",
         action_id: "openclaw:reply_button",
+        action_ts: "100.300",
         block_id: "reply_actions",
         value: "codex",
         text: { type: "plain_text", text: "codex" },
@@ -930,38 +943,137 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
-    const eventText = mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent");
-    expect(eventText).toContain('"actionId":"openclaw:reply_button"');
-    expectRecordFields(
-      requireRecord(
-        mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1),
-        "event options",
-      ),
+    expect(handleSlackMessageMock).toHaveBeenCalledWith(
       {
-        contextKey: "slack:interaction:C1:100.200:openclaw:reply_button",
-        deliveryContext: {
-          accountId: "default",
-          channel: "slack",
-          threadId: "100.100",
-          to: "channel:C1",
+        type: "message",
+        channel: "C1",
+        channel_type: "channel",
+        user: "U123",
+        text: "User selected: codex",
+        ts: "100.200",
+        event_ts: "100.300",
+        thread_ts: "100.100",
+      },
+      {
+        interactionAuthorization: {
+          kind: "verified-block-action",
+          senderId: "U123",
+          sourceMessageId: "100.200",
         },
-        sessionKey: "agent:ops:slack:channel:C1",
+        messageIdOverride: "100.300",
+        source: "interaction",
+        wasMentioned: true,
       },
     );
-    expect(resolveSessionKey).toHaveBeenCalledWith({
-      channelId: "C1",
-      channelType: "channel",
-      senderId: "U123",
-      threadTs: "100.100",
-    });
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: "hook:slack-interaction",
-      sessionKey: "agent:ops:slack:channel:C1",
-      heartbeat: { target: "last" },
-    });
+    expect(resolveSessionKey).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves select labels and values and anchors top-level controls to their message", async () => {
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    await getHandler()({
+      ack: vi.fn().mockResolvedValue(undefined),
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200" },
+        message: { ts: "100.200", text: "fallback", blocks: [] },
+      },
+      action: {
+        type: "static_select",
+        action_id: "openclaw:reply_select",
+        action_ts: "100.301",
+        block_id: "reply_actions",
+        selected_option: {
+          text: { type: "plain_text", text: "Use Codex" },
+          value: "codex",
+        },
+      },
+    });
+
+    expect(handleSlackMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "User selected: Use Codex (codex)",
+        ts: "100.200",
+        event_ts: "100.301",
+        thread_ts: undefined,
+      }),
+      {
+        interactionAuthorization: {
+          kind: "verified-block-action",
+          senderId: "U123",
+          sourceMessageId: "100.200",
+        },
+        messageIdOverride: "100.301",
+        source: "interaction",
+        wasMentioned: true,
+      },
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps default-ephemeral slash reply controls from becoming public turns", async () => {
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const respond = vi.fn(async () => undefined);
+
+    await getHandler()({
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond,
+      // Slack sends container.is_ephemeral, but Bolt 4.7.3 omits it from this payload type.
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: {
+          channel_id: "C1",
+          message_ts: "100.400",
+          is_ephemeral: true,
+        },
+        message: {
+          ts: "100.400",
+          text: "Choose",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [
+                {
+                  type: "button",
+                  action_id: "openclaw:reply_button",
+                  text: { type: "plain_text", text: "Continue" },
+                  value: "continue",
+                },
+              ],
+            },
+          ],
+        },
+      } as never,
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        action_ts: "100.401",
+        block_id: "reply_actions",
+        text: { type: "plain_text", text: "Continue" },
+        value: "continue",
+      },
+    });
+
+    expect(handleSlackMessageMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replace_original: true,
+        response_type: "ephemeral",
+        text: expect.stringContaining(
+          "Reply controls in ephemeral Slack messages cannot start an agent turn",
+        ),
+      }),
+    );
+    expect(app.client.chat.update).not.toHaveBeenCalled();
   });
 
   it("uses unique interaction ids for repeated Slack actions on the same message", async () => {
@@ -1110,6 +1222,7 @@ describe("registerSlackInteractionEvents", () => {
       text: "Binding updated.",
       response_type: "ephemeral",
     });
+    expect(handleSlackMessageMock).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
@@ -1173,6 +1286,7 @@ describe("registerSlackInteractionEvents", () => {
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(handleSlackMessageMock).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expectRecordFields(chatUpdateCall(app), {
       channel: "C1",
@@ -2080,6 +2194,7 @@ describe("registerSlackInteractionEvents", () => {
       action: {
         type: "button",
         action_id: "openclaw:reply_button",
+        action_ts: "333.555",
         block_id: "reply_actions",
         value: "continue",
         text: { type: "plain_text", text: "Continue" },
@@ -2087,28 +2202,28 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    expect(resolveSessionKey).toHaveBeenCalledWith({
-      channelId: "C333",
-      channelType: "channel",
-      senderId: "U333",
-      threadTs: "333.111",
-    });
-    expectRecordFields(slackInteractionPayload(), {
-      channelId: "C333",
-      messageTs: "333.444",
-      threadTs: "333.111",
-      teamId: "T333",
-    });
-    const eventOptions = requireRecord(
-      mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1),
-      "event options",
+    expect(handleSlackMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C333",
+        text: "User selected: Continue (continue)",
+        ts: "333.444",
+        event_ts: "333.555",
+        thread_ts: "333.111",
+      }),
+      {
+        interactionAuthorization: {
+          kind: "verified-block-action",
+          senderId: "U333",
+          sourceMessageId: "333.444",
+        },
+        messageIdOverride: "333.555",
+        source: "interaction",
+        wasMentioned: true,
+      },
     );
-    expectRecordFields(requireRecord(eventOptions.deliveryContext, "delivery context"), {
-      channel: "slack",
-      to: "channel:C333",
-      accountId: "default",
-      threadId: "333.111",
-    });
+    expect(resolveSessionKey).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("summarizes multi-select confirmations in updated message rows", async () => {

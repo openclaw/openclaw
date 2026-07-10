@@ -209,12 +209,13 @@ describe("slack prepareSlackMessage inbound contract", () => {
     ctx: SlackMonitorContext,
     account: ResolvedSlackAccount,
     message: SlackMessageEvent,
+    opts: Parameters<typeof prepareSlackMessage>[0]["opts"] = { source: "message" },
   ) {
     return prepareSlackMessage({
       ctx,
       account,
       message,
-      opts: { source: "message" },
+      opts,
     });
   }
 
@@ -886,6 +887,251 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.ReplyToId).toBeUndefined();
     expect(prepared?.ackReactionMessageTs).toBeUndefined();
     expect(prepared?.ackReactionPromise).toBeNull();
+  });
+
+  it("does not react to synthetic interaction timestamps", async () => {
+    const addReaction = vi.fn().mockResolvedValue({ ok: true });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        agents: { defaults: { envelopeTimezone: "utc" } },
+        messages: {
+          ackReaction: "eyes",
+          ackReactionScope: "all",
+          statusReactions: { enabled: true },
+        },
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      appClient: { reactions: { add: addReaction } } as unknown as App["client"],
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      {
+        channel: "D123",
+        channel_type: "im",
+        user: "U1",
+        text: "User selected: Continue (continue)",
+        ts: "1.500",
+        event_ts: "2.000",
+        thread_ts: "1.000",
+      } as SlackMessageEvent,
+      {
+        interactionAuthorization: {
+          kind: "verified-block-action",
+          senderId: "U1",
+          sourceMessageId: "1.500",
+        },
+        messageIdOverride: "2.000",
+        source: "interaction",
+        wasMentioned: true,
+      },
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.MessageSid).toBe("2.000");
+    expect(prepared.ctxPayload.MessageSidFull).toBeUndefined();
+    expect(prepared.ctxPayload.CurrentMessageId).toBe("1.500");
+    expect(prepared.ctxPayload.Timestamp).toBe(2000);
+    expect(prepared.ctxPayload.Body).toContain("1970-01-01T00:00:02Z");
+    expect(prepared.ctxPayload.Body).not.toContain("1970-01-01T00:00:01Z");
+    expect(prepared.ctxPayload.BodyForAgent).toContain("User selected: Continue (continue)");
+    expect(prepared.ackReactionMessageTs).toBeUndefined();
+    expect(prepared.ackReactionPromise).toBeNull();
+    expect(addReaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { replyToMode: "off" as const, expectedThreadId: undefined },
+    { replyToMode: "first" as const, expectedThreadId: undefined },
+    { replyToMode: "all" as const, expectedThreadId: "10.000" },
+  ])(
+    "keeps top-level interaction routing on the channel session with replyToMode=$replyToMode",
+    async ({ replyToMode, expectedThreadId }) => {
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          channels: { slack: { enabled: true, groupPolicy: "open", replyToMode } },
+        } as OpenClawConfig,
+        defaultRequireMention: false,
+        historyLimit: 10,
+        replyToMode,
+      });
+      slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+      slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount({ replyToMode }),
+        {
+          type: "message",
+          channel: "C123",
+          channel_type: "channel",
+          user: "U1",
+          text: "User selected: Continue (continue)",
+          ts: "10.000",
+          event_ts: "20.000",
+        },
+        {
+          interactionAuthorization: {
+            kind: "verified-block-action",
+            senderId: "U1",
+            sourceMessageId: "10.000",
+          },
+          messageIdOverride: "20.000",
+          source: "interaction",
+          wasMentioned: true,
+        },
+      );
+
+      assertPrepared(prepared);
+      expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:channel:c123");
+      expect(prepared.ctxPayload.MessageThreadId).toBe(expectedThreadId);
+      expect(prepared.ctxPayload.ReplyToId).toBeUndefined();
+      expect(prepared.ctxPayload.MessageSid).toBe("20.000");
+      expect(prepared.ctxPayload.MessageSidFull).toBeUndefined();
+      expect(prepared.ctxPayload.CurrentMessageId).toBe("10.000");
+      expect(prepared.replyToMode).toBe(replyToMode);
+      expect(Array.from(slackCtx.channelHistories.values()).flat()).toMatchObject([
+        { messageId: "20.000", timestamp: 20_000 },
+      ]);
+    },
+  );
+
+  it("keeps interaction turns in their existing Slack thread", async () => {
+    const replies = vi.fn().mockResolvedValue({ messages: [], response_metadata: {} });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, groupPolicy: "open", replyToMode: "off" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "off",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "off" }),
+      {
+        type: "message",
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "User selected: Continue (continue)",
+        ts: "10.200",
+        event_ts: "20.000",
+        thread_ts: "10.000",
+      },
+      {
+        interactionAuthorization: {
+          kind: "verified-block-action",
+          senderId: "U1",
+          sourceMessageId: "10.200",
+        },
+        messageIdOverride: "20.000",
+        source: "interaction",
+        wasMentioned: true,
+      },
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:channel:c123:thread:10.000");
+    expect(prepared.ctxPayload.MessageThreadId).toBe("10.000");
+    expect(prepared.ctxPayload.ReplyToId).toBe("10.000");
+    expect(prepared.ctxPayload.MessageSid).toBe("20.000");
+    expect(prepared.ctxPayload.MessageSidFull).toBeUndefined();
+    expect(prepared.ctxPayload.CurrentMessageId).toBe("10.200");
+  });
+
+  it("preserves verified interactive owner authorization across channel user gates", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true, groupPolicy: "open" } } } as OpenClawConfig,
+      channelsConfig: { C123: { requireMention: true, users: ["U_MEMBER"] } },
+      defaultRequireMention: true,
+    });
+    slackCtx.allowFrom = ["U_OWNER"];
+    slackCtx.resolveUserName = async () => ({ name: "Owner" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "ops", type: "channel" });
+    const message = {
+      type: "message",
+      channel: "C123",
+      channel_type: "channel",
+      user: "U_OWNER",
+      text: "User selected: Continue (continue)",
+      ts: "10.200",
+      event_ts: "20.000",
+    } satisfies SlackMessageEvent;
+
+    const ordinary = await prepareMessageWith(slackCtx, createSlackAccount(), message, {
+      source: "message",
+      wasMentioned: true,
+    });
+    const interaction = await prepareMessageWith(slackCtx, createSlackAccount(), message, {
+      interactionAuthorization: {
+        kind: "verified-block-action",
+        senderId: "U_OWNER",
+        sourceMessageId: "10.200",
+      },
+      messageIdOverride: "20.000",
+      source: "interaction",
+      wasMentioned: true,
+    });
+    const mismatched = await prepareMessageWith(slackCtx, createSlackAccount(), message, {
+      interactionAuthorization: {
+        kind: "verified-block-action",
+        senderId: "U_OTHER",
+        sourceMessageId: "10.200",
+      },
+      messageIdOverride: "20.001",
+      source: "interaction",
+      wasMentioned: true,
+    });
+
+    expect(ordinary).toBeNull();
+    assertPrepared(interaction);
+    expect(interaction.ctxPayload.MessageSid).toBe("20.000");
+    expect(interaction.ctxPayload.CurrentMessageId).toBe("10.200");
+    expect(mismatched).toBeNull();
+  });
+
+  it("rechecks DM pairing policy for verified interactions", async () => {
+    const postMessage = vi.fn().mockResolvedValue({ ok: true, ts: "30.000" });
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      appClient: { chat: { postMessage } } as unknown as App["client"],
+    });
+    slackCtx.allowFrom = [];
+    slackCtx.dmPolicy = "pairing";
+    slackCtx.resolveUserName = async () => ({ name: "Unpaired" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      {
+        type: "message",
+        channel: "D123",
+        channel_type: "im",
+        user: "U_UNPAIRED",
+        text: "User selected: Continue (continue)",
+        ts: "10.300",
+        event_ts: "20.300",
+      },
+      {
+        interactionAuthorization: {
+          kind: "verified-block-action",
+          senderId: "U_UNPAIRED",
+          sourceMessageId: "10.300",
+        },
+        messageIdOverride: "20.300",
+        source: "interaction",
+        wasMentioned: true,
+      },
+    );
+
+    expect(prepared).toBeNull();
+    expect(postMessage).toHaveBeenCalledOnce();
   });
 
   it("does not coerce malformed Slack timestamps into inbound event times", async () => {

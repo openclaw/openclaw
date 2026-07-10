@@ -65,6 +65,7 @@ export type BuildChannelInboundEventContextParams = {
   surface?: string;
   messageId?: string;
   messageIdFull?: string;
+  currentMessageId?: string;
   timestamp?: number;
   from: string;
   sender: SenderFacts;
@@ -492,6 +493,7 @@ export function buildChannelInboundEventContext(
     ModelParentSessionKey: params.route.modelParentSessionKey,
     MessageSid: params.messageId,
     MessageSidFull: params.messageIdFull,
+    CurrentMessageId: params.currentMessageId,
     ReplyToId: params.reply.replyToId,
     ReplyToIdFull: params.reply.replyToIdFull,
     ChatType: params.conversation.kind,

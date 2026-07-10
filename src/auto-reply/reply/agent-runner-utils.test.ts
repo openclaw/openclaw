@@ -445,6 +445,22 @@ describe("agent-runner-utils", () => {
     expect(context.currentMessageId).toBe("msg-9");
   });
 
+  it("prefers an explicit native current message over the inbound event id", () => {
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "slack",
+        To: "channel:C123",
+        MessageSid: "action-ts",
+        MessageSidFull: "action-ts-full",
+        CurrentMessageId: "control-message-ts",
+      },
+      config: {},
+      hasRepliedRef: undefined,
+    });
+
+    expect(context.currentMessageId).toBe("control-message-ts");
+  });
+
   it("does not expose restart-sentinel synthetic ids as message-tool reply targets", () => {
     hoisted.getChannelPluginMock.mockReturnValue({
       threading: {
