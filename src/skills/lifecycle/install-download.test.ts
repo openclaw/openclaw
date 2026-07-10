@@ -378,11 +378,17 @@ describe("installDownloadSpec download byte limit (#103236)", () => {
       timeoutMs: 30_000,
     });
 
-    // Small download should complete (ok depends on extract/copy steps,
-    // but it must NOT be aborted by the size limit).
+    // Small download must complete successfully — the file should be
+    // written to disk and the response must be released.
+    expect(result.ok).toBe(true);
     expect(result.message ?? "").not.toContain("exceeds");
     expect(result.message ?? "").not.toContain(`${LIMIT_MIB}`);
     expect(released).toBe(true);
+    expect(
+      await fileExists(
+        path.join(resolveSkillToolsRootDir(entry), "small.bin"),
+      ),
+    ).toBe(true);
   }, 15_000);
 });
 
