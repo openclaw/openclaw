@@ -289,9 +289,9 @@ class ChatControllerOutboxTest {
           text = "active session",
           thinkingLevel = "high",
           createdAtMs = now,
-          status = ChatOutboxStatus.Queued,
+          status = ChatOutboxStatus.Failed,
           retryCount = 0,
-          lastError = null,
+          lastError = "retry manually",
         ),
       )
       outbox.seed(
@@ -495,6 +495,37 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
       assertEquals(listOf(ambiguous.id, ambiguous.id), gateway.sentIdempotencyKeys)
       assertTrue(restarted.outboxItems.value.isEmpty())
+    }
+
+  @Test
+  fun migratedAmbiguousRowNeverSendsUntilExplicitRetry() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      outbox.seed(
+        ChatOutboxItem(
+          id = "migrated-ambiguous",
+          sessionKey = "main",
+          text = "possibly delivered before upgrade",
+          thinkingLevel = "off",
+          createdAtMs = System.currentTimeMillis(),
+          status = ChatOutboxStatus.Failed,
+          retryCount = 0,
+          lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+        ),
+      )
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertEquals(ChatOutboxStatus.Failed, chat.outboxItems.value.single().status)
+
+      chat.retryOutboxCommand("migrated-ambiguous")
+      advanceUntilIdle()
+      assertEquals(listOf("migrated-ambiguous"), gateway.sentIdempotencyKeys)
+      assertTrue(chat.outboxItems.value.isEmpty())
     }
 
   @Test

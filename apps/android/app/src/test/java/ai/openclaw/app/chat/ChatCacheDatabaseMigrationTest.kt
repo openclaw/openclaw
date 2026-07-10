@@ -1,26 +1,19 @@
 package ai.openclaw.app.chat
 
 import android.database.sqlite.SQLiteDatabase
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import java.util.UUID
 
-@OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 class ChatCacheDatabaseMigrationTest {
   @Test
-  fun v2AmbiguousRowsMigrateToManualOnlyAndNeverReplay() =
+  fun v2AmbiguousRowsMigrateToManualOnlyAndPreservePristineQueue() =
     runTest {
       val context = RuntimeEnvironment.getApplication()
       val databaseName = "chat-cache-migration-${UUID.randomUUID()}.db"
@@ -56,46 +49,6 @@ class ChatCacheDatabaseMigrationTest {
             .single()
             .displayName,
         )
-
-        val json = Json { ignoreUnknownKeys = true }
-        val sentKeys = mutableListOf<String>()
-        val controller =
-          ChatController(
-            scope = this,
-            json = json,
-            requestGateway = { method, paramsJson ->
-              when (method) {
-                "chat.send" -> {
-                  val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
-                  val key = (params.getValue("idempotencyKey") as JsonPrimitive).content
-                  sentKeys += key
-                  """{"runId":"$key","status":"started"}"""
-                }
-                "chat.metadata" -> """{"commands":[],"models":[]}"""
-                "chat.history" -> """{"sessionId":"session-1","messages":[]}"""
-                else -> "{}"
-              }
-            },
-            cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
-            commandOutbox = outbox,
-          )
-        advanceUntilIdle()
-
-        controller.handleGatewayEvent("health", null)
-        advanceUntilIdle()
-        // The pristine offline row sends, but neither migrated ambiguous row may replay.
-        assertEquals(listOf("pristine"), sentKeys)
-        assertEquals(
-          setOf("legacy-queued-error", "interrupted-send", "already-failed"),
-          controller.outboxItems.value
-            .map { it.id }
-            .toSet(),
-        )
-
-        controller.retryOutboxCommand("legacy-queued-error")
-        advanceUntilIdle()
-        assertEquals(listOf("pristine", "legacy-queued-error"), sentKeys)
-        assertTrue(controller.outboxItems.value.none { it.id == "legacy-queued-error" })
       } finally {
         database.close()
         context.deleteDatabase(databaseName)

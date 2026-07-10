@@ -22,7 +22,11 @@ internal data class ChatSendAck(
   constructor(runId: String?, status: String) : this(runId, ChatSendAckStatus.Value(status))
 
   val normalizedStatus: String
-    get() = (status as? ChatSendAckStatus.Value)?.raw?.trim()?.lowercase().orEmpty()
+    get() =
+      when (val value = status) {
+        is ChatSendAckStatus.Value -> value.raw.trim().lowercase()
+        ChatSendAckStatus.Malformed, ChatSendAckStatus.Missing -> ""
+      }
 
   val isStatusMissing: Boolean
     get() = status == ChatSendAckStatus.Missing
