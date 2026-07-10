@@ -470,14 +470,20 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   // announce was delivered — the incident class is the requester mis-tracking
   // outstanding children across turns — and any undelivered required
   // completion needs it because the requester never heard the result at all.
+  // These two exits decline to wake for a wave that has fully drained, so its
+  // ledgered rows can never join a later wake batch (a child spawned after
+  // the drain cannot lifetime-overlap rows that already ended) — release them
+  // now instead of holding child-result snapshots for the TTL.
   const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
   if (requiredSettled.length === 0) {
+    clearSettledRunLedgerEntries(requesterSessionKey, settledBatch);
     return false;
   }
   const hasUndeliveredRequiredCompletion = requiredSettled.some(
     (entry) => entry.delivery?.status !== "delivered",
   );
   if (requiredSettled.length < 2 && !hasUndeliveredRequiredCompletion) {
+    clearSettledRunLedgerEntries(requesterSessionKey, settledBatch);
     return false;
   }
 

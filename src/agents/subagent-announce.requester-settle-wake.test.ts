@@ -530,6 +530,56 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(deliverSpy).toHaveBeenCalledTimes(1);
     });
 
+    it("releases a drained single-delivered row instead of retaining its snapshot", async () => {
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([]);
+      const deliveredSolo = makeSettledChild({
+        runId: "run-d",
+        cleanup: "delete",
+        completion: { required: true, resultText: "large delivered output" },
+      });
+      // Drained wave, single delivered completion: intentionally no wake —
+      // and the ledgered snapshot must be released, not held for the TTL.
+      expect(await settleRetired(deliveredSolo)).toBe(false);
+      expect(deliverSpy).not.toHaveBeenCalled();
+
+      // A later undelivered settle wakes with only itself: run-d is gone.
+      const undelivered = makeSettledChild({
+        runId: "run-e",
+        cleanup: "delete",
+        delivery: { status: "suspended", suspendedAt: 4_000 },
+        completion: { required: true, resultText: "orphaned findings" },
+      });
+      expect(await settleRetired(undelivered)).toBe(true);
+      expect(deliveredCallArg().directIdempotencyKey).toBe(
+        `announce:requester-settle:${REQUESTER}:run-e`,
+      );
+    });
+
+    it("releases a drained fire-and-forget batch instead of retaining it", async () => {
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([]);
+      for (const runId of ["run-a", "run-b"]) {
+        const fireAndForget = makeSettledChild({
+          runId,
+          cleanup: "delete",
+          expectsCompletionMessage: false,
+          delivery: { status: "not_required" },
+        });
+        expect(await settleRetired(fireAndForget)).toBe(false);
+      }
+      expect(deliverSpy).not.toHaveBeenCalled();
+
+      const required = makeSettledChild({
+        runId: "run-c",
+        cleanup: "delete",
+        delivery: { status: "suspended", suspendedAt: 4_000 },
+        completion: { required: true, resultText: "late findings" },
+      });
+      expect(await settleRetired(required)).toBe(true);
+      expect(deliveredCallArg().directIdempotencyKey).toBe(
+        `announce:requester-settle:${REQUESTER}:run-c`,
+      );
+    });
+
     it("expires ledgered rows after the retention window", async () => {
       registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([]);
       const childA = makeSettledChild({ runId: "run-a", cleanup: "delete" });
