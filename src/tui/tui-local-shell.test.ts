@@ -347,4 +347,35 @@ describe("createLocalShellRunner", () => {
       harness.messages.some((m) => m.includes("not saved to session history: disk full")),
     ).toBe(true);
   });
+
+  it("persists only once when a failed spawn emits both error and close", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const emitter = new EventEmitter();
+    const spawnCommand = vi.fn(() => ({
+      stdout,
+      stderr,
+      on: (event: string, callback: (...args: unknown[]) => void) => {
+        emitter.on(event, callback);
+      },
+    }));
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "main" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!does-not-exist");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledTimes(1));
+
+    emitter.emit("error", new Error("ENOENT"));
+    emitter.emit("close", null, null);
+    await run;
+
+    expect(injectBashExecution).toHaveBeenCalledTimes(1);
+    expect(harness.messages.filter((m) => m.startsWith("[local] error:"))).toHaveLength(1);
+    expect(harness.messages.some((m) => m.startsWith("[local] exit"))).toBe(false);
+  });
 });

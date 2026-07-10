@@ -179,7 +179,15 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         stderr = appendWithCap(stderr, buf.toString("utf8"));
       });
 
+      // A failed spawn emits both 'error' and a subsequent 'close'; guard so
+      // only the first terminal event persists/resolves the run.
+      let settled = false;
+
       const handleClose = async (code: number | null, signal: NodeJS.Signals | null) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         // Keep the tail (consistent with the streaming appendWithCap above) so a
         // large stdout cannot evict stderr: the failure reason (FATAL etc.) at the
         // end is what the operator needs most when output overflows the cap.
@@ -203,6 +211,10 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       };
 
       const handleError = async (err: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         deps.chatLog.addSystem(`[local] error: ${String(err)}`);
         deps.tui.requestRender();
         await persistResult({
