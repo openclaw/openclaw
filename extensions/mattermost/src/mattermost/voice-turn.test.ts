@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 import { buildMonoWav } from "./voice-audio.js";
-import { processMattermostVoiceTurn } from "./voice-turn.js";
+import { generateMattermostVoiceReply, processMattermostVoiceTurn } from "./voice-turn.js";
 
 const cfg = {} as OpenClawConfig;
 const runtime = {} as RuntimeEnv;
@@ -63,6 +63,65 @@ describe("Mattermost voice turn", () => {
       text: "It is half past three.",
     });
     expect(result).toEqual({ audioPath: "/tmp/reply.mp3" });
+  });
+
+  it("passes abort signals to hidden agent voice turns", async () => {
+    const controller = new AbortController();
+    const runAgent = vi.fn(async () => ({ payloads: [{ text: "Sure." }] }));
+    const synthesize = vi.fn(async () => ({ success: true, audioPath: "/tmp/reply.mp3" }));
+    await generateMattermostVoiceReply(
+      {
+        accountId: "default",
+        agentId: "main",
+        abortSignal: controller.signal,
+        cfg,
+        channelId: "dm-channel",
+        message: "hello",
+        runtime,
+        sessionKey: "agent:main:main",
+        userId: "human-user",
+      },
+      {
+        runAgent,
+        synthesize,
+      },
+    );
+
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: controller.signal,
+        message: "hello",
+      }),
+      runtime,
+    );
+  });
+
+  it("does not synthesize an error reply when the hidden agent voice turn is aborted", async () => {
+    const controller = new AbortController();
+    const synthesize = vi.fn();
+    const result = await generateMattermostVoiceReply(
+      {
+        accountId: "default",
+        agentId: "main",
+        abortSignal: controller.signal,
+        cfg,
+        channelId: "dm-channel",
+        message: "hello",
+        runtime,
+        sessionKey: "agent:main:main",
+        userId: "human-user",
+      },
+      {
+        runAgent: async () => {
+          controller.abort();
+          throw new Error("aborted");
+        },
+        synthesize,
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(synthesize).not.toHaveBeenCalled();
   });
 
   it("strips markdown formatting before synthesizing voice replies", async () => {

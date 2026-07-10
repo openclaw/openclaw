@@ -145,26 +145,87 @@ export async function processMattermostVoiceTurn(
     cfg: OpenClawConfig;
     channelId: string;
     runtime: RuntimeEnv;
+    abortSignal?: AbortSignal;
+    message?: string;
     samples: Int16Array;
     sessionKey: string;
     userId: string;
   },
   dependencies: VoiceTurnDependencies = defaultDependencies,
 ): Promise<MattermostVoiceReplyAudio | undefined> {
-  const transcript = await dependencies.withAudioFile(
-    params.samples,
-    async (filePath) =>
-      await dependencies.transcribe({
-        agentId: params.agentId,
-        cfg: params.cfg,
-        filePath,
-      }),
+  const message = normalizeOptionalString(
+    params.message ??
+      (await transcribeMattermostVoiceTurn(
+        {
+          agentId: params.agentId,
+          cfg: params.cfg,
+          samples: params.samples,
+        },
+        dependencies,
+      )),
   );
-  const message = normalizeOptionalString(transcript);
   if (!message) {
     return undefined;
   }
 
+  return await generateMattermostVoiceReply(
+    {
+      accountId: params.accountId,
+      agentId: params.agentId,
+      abortSignal: params.abortSignal,
+      cfg: params.cfg,
+      channelId: params.channelId,
+      message,
+      runtime: params.runtime,
+      sessionKey: params.sessionKey,
+      userId: params.userId,
+    },
+    dependencies,
+  );
+}
+
+export async function transcribeMattermostVoiceTurn(
+  params: {
+    agentId: string;
+    cfg: OpenClawConfig;
+    samples: Int16Array;
+  },
+  dependencies: Pick<VoiceTurnDependencies, "withAudioFile" | "transcribe"> = defaultDependencies,
+): Promise<string | undefined> {
+  return normalizeOptionalString(
+    await dependencies.withAudioFile(
+      params.samples,
+      async (filePath) =>
+        await dependencies.transcribe({
+          agentId: params.agentId,
+          cfg: params.cfg,
+          filePath,
+        }),
+    ),
+  );
+}
+
+export async function generateMattermostVoiceReply(
+  params: {
+    accountId: string;
+    agentId: string;
+    abortSignal?: AbortSignal;
+    cfg: OpenClawConfig;
+    channelId: string;
+    message: string;
+    runtime: RuntimeEnv;
+    sessionKey: string;
+    userId: string;
+  },
+  dependencies: Pick<VoiceTurnDependencies, "runAgent" | "synthesize"> = defaultDependencies,
+): Promise<MattermostVoiceReplyAudio | undefined> {
+  const message = normalizeOptionalString(params.message);
+  if (!message) {
+    return undefined;
+  }
+  if (params.abortSignal?.aborted) {
+    return undefined;
+  }
   let result: AgentTurnResult | undefined;
   try {
     result = await dependencies.runAgent(
@@ -172,6 +233,7 @@ export async function processMattermostVoiceTurn(
         accountId: params.accountId,
         agentId: params.agentId,
         allowModelOverride: false,
+        abortSignal: params.abortSignal,
         deliver: false,
         disableMessageTool: true,
         extraSystemPrompt: MATTERMOST_VOICE_SYSTEM_PROMPT,
@@ -192,8 +254,14 @@ export async function processMattermostVoiceTurn(
       params.runtime,
     );
   } catch (error) {
+    if (params.abortSignal?.aborted) {
+      return undefined;
+    }
     params.runtime.error?.(`mattermost voice agent turn failed: ${String(error)}`);
     result = { meta: { error } };
+  }
+  if (params.abortSignal?.aborted) {
+    return undefined;
   }
   const replyText = selectMattermostVoiceReplyText(result);
   if (!replyText) {

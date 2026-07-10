@@ -8,10 +8,10 @@ const AUDIO_CHANNELS = 2;
 const FFMPEG_ERROR_BYTES = 8_192;
 
 type VoiceCapture = {
+  clearInactivePreRoll: () => void;
   push: (frame: Int16Array) => void;
-  start: () => void;
+  start: () => boolean;
   stop: () => Int16Array;
-  setSuppressed: (suppressed: boolean) => void;
 };
 
 function joinFrames(frames: readonly Int16Array[]): Int16Array {
@@ -33,11 +33,15 @@ export function createVoiceCapture(params: {
   let speech: Int16Array[] = [];
   let speechSamples = 0;
   let active = false;
-  let suppressed = false;
 
   return {
+    clearInactivePreRoll() {
+      if (!active) {
+        preRoll.length = 0;
+      }
+    },
     push(frame) {
-      if (suppressed || frame.length === 0) {
+      if (frame.length === 0) {
         return;
       }
       const copy = Int16Array.from(frame);
@@ -58,15 +62,16 @@ export function createVoiceCapture(params: {
     },
     start() {
       if (active) {
-        return;
+        return false;
       }
       active = true;
-      speech = suppressed ? [] : preRoll.splice(0);
+      speech = preRoll.splice(0);
       speechSamples = speech.reduce((total, frame) => total + frame.length, 0);
       while (speechSamples > params.maxSpeechSamples) {
         const removed = speech.shift();
         speechSamples -= removed?.length ?? 0;
       }
+      return true;
     },
     stop() {
       if (!active) {
@@ -77,14 +82,6 @@ export function createVoiceCapture(params: {
       speech = [];
       speechSamples = 0;
       return audio;
-    },
-    setSuppressed(nextSuppressed) {
-      suppressed = nextSuppressed;
-      if (suppressed) {
-        preRoll.length = 0;
-        speech = [];
-        speechSamples = 0;
-      }
     },
   };
 }

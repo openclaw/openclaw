@@ -24,19 +24,6 @@ describe("Mattermost voice audio", () => {
     expect(capture.stop()).toHaveLength(0);
   });
 
-  it("does not capture the bot's own playback", () => {
-    const capture = createVoiceCapture({ maxSpeechSamples: 100, preRollFrames: 2 });
-
-    capture.push(frame(1));
-    capture.setSuppressed(true);
-    capture.start();
-    capture.push(frame(2));
-    capture.setSuppressed(false);
-    capture.push(frame(3));
-
-    expect(Array.from(capture.stop())).toEqual([3, 3]);
-  });
-
   it("keeps the current utterance when speaking-on is repeated", () => {
     const capture = createVoiceCapture({ maxSpeechSamples: 100, preRollFrames: 2 });
 
