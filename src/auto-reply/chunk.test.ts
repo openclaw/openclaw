@@ -6,6 +6,7 @@ import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
+  chunkByParagraph,
   chunkMarkdownText,
   chunkMarkdownTextWithMode,
   chunkText,
@@ -228,6 +229,17 @@ describe("chunkText", () => {
   runChunkCases(chunkText, [
     expectDefined(parentheticalCases[0], "parentheticalCases[0] test invariant"),
   ]);
+});
+
+describe("chunkByParagraph Unicode line/paragraph separators", () => {
+  it("treats U+2028 and U+2029 as paragraph boundaries like a blank line", () => {
+    // Model output can carry LINE SEPARATOR / PARAGRAPH SEPARATOR instead of \n\n.
+    const unicode = chunkByParagraph("paragraph one line\u2028\u2029paragraph two starts here", 40);
+    const newlines = chunkByParagraph("paragraph one line\n\nparagraph two starts here", 40);
+
+    expect(unicode).toEqual(["paragraph one line", "paragraph two starts here"]);
+    expect(unicode).toEqual(newlines);
+  });
 });
 
 describe("resolveTextChunkLimit", () => {

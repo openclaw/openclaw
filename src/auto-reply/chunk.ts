@@ -207,8 +207,9 @@ export function chunkByParagraph(
   }
   const splitLongParagraphs = opts?.splitLongParagraphs !== false;
 
-  // Normalize to \n so blank line detection is consistent.
-  const normalized = text.replace(/\r\n?/g, "\n");
+  // Normalize CR/CRLF and Unicode line/paragraph separators (U+2028/U+2029) to
+  // \n so blank-line paragraph detection is consistent for all line endings.
+  const normalized = text.replace(/\r\n?|[\u2028\u2029]/g, "\n");
 
   // Fast-path: if there are no blank-line paragraph separators, do not split.
   // (We *do not* early-return based on `limit` — newline mode is about paragraph
