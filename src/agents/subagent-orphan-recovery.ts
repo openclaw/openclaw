@@ -195,6 +195,8 @@ export async function recoverOrphanedSubagentSessions(params: {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
   /** Persisted across retries so already-resumed sessions are not resumed again. */
   resumedSessionKeys?: Set<string>;
+  /** Exact stale generations whose terminal transition must retry without session state. */
+  pendingStaleFinalizations?: Map<string, string>;
 }): Promise<{
   recovered: number;
   failed: number;
@@ -208,6 +210,7 @@ export async function recoverOrphanedSubagentSessions(params: {
     failedRuns: [] as Array<{ runId: string; childSessionKey: string; error?: string }>,
   };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
+  const pendingStaleFinalizations = params.pendingStaleFinalizations ?? new Map<string, string>();
   const configChangePattern = /openclaw\.json|openclaw gateway restart|config\.patch/i;
 
   try {
@@ -218,13 +221,19 @@ export async function recoverOrphanedSubagentSessions(params: {
 
     let cfg: ReturnType<typeof getRuntimeConfig> | undefined;
     const storeCache = new Map<string, Record<string, SessionEntry>>();
+    const scanNow = Date.now();
+    const runEntries = [...activeRuns.entries()].sort(([, left], [, right]) => {
+      const leftIsStale = isStaleUnendedSubagentRun(left, scanNow);
+      const rightIsStale = isStaleUnendedSubagentRun(right, scanNow);
+      return Number(rightIsStale) - Number(leftIsStale);
+    });
 
-    for (const [runId, runRecord] of activeRuns.entries()) {
+    for (const [runId, runRecord] of runEntries) {
       const childSessionKey = runRecord.childSessionKey?.trim();
       if (!childSessionKey) {
         continue;
       }
-      const now = Date.now();
+      const now = scanNow;
       if (
         runRecord.terminalOwner === "interrupted-recovery" &&
         Number.isFinite(runRecord.endedAt) &&
@@ -246,6 +255,7 @@ export async function recoverOrphanedSubagentSessions(params: {
             result.failed++;
             result.failedRuns.push({ runId, childSessionKey, error: recoveryError });
           } else {
+            pendingStaleFinalizations.delete(runId);
             result.skipped++;
           }
         } catch (err: unknown) {
@@ -256,11 +266,32 @@ export async function recoverOrphanedSubagentSessions(params: {
         }
         continue;
       }
+      const pendingStaleError = pendingStaleFinalizations.get(runId);
+      if (pendingStaleError) {
+        try {
+          const updated = await finalizeInterruptedSubagentRun({
+            runId,
+            error: pendingStaleError,
+          });
+          if (updated === 0) {
+            result.failed++;
+            result.failedRuns.push({ runId, childSessionKey, error: pendingStaleError });
+          } else {
+            pendingStaleFinalizations.delete(runId);
+            result.skipped++;
+          }
+        } catch (err: unknown) {
+          const error = formatErrorMessage(err);
+          log.warn(`retry stale terminal ${runId}: ${error}`);
+          result.failed++;
+          result.failedRuns.push({ runId, childSessionKey, error });
+        }
+        continue;
+      }
       if (resumedSessionKeys.has(childSessionKey)) {
         result.skipped++;
         continue;
       }
-
       try {
         cfg ??= getRuntimeConfig();
         const agentId = resolveAgentIdFromSessionKey(childSessionKey);
@@ -290,7 +321,6 @@ export async function recoverOrphanedSubagentSessions(params: {
           continue;
         }
 
-        // Check if this session was aborted by the restart
         if (!entry.abortedLastRun) {
           result.skipped++;
           continue;
@@ -309,6 +339,7 @@ export async function recoverOrphanedSubagentSessions(params: {
               error: staleError,
             });
             if (updated === 0) {
+              pendingStaleFinalizations.set(runId, staleError);
               result.failed++;
               result.failedRuns.push({
                 runId,
@@ -316,11 +347,13 @@ export async function recoverOrphanedSubagentSessions(params: {
                 error: staleError,
               });
             } else {
+              pendingStaleFinalizations.delete(runId);
               result.skipped++;
             }
           } catch (err: unknown) {
             const error = formatErrorMessage(err);
             log.warn(`finalize stale run ${runId}: ${error}`);
+            pendingStaleFinalizations.set(runId, staleError);
             result.failed++;
             result.failedRuns.push({
               runId,
@@ -537,6 +570,7 @@ export function scheduleOrphanRecovery(params: {
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
 
   const resumedSessionKeys = new Set<string>();
+  const pendingStaleFinalizations = new Map<string, string>();
   const attemptRecovery = (attempt: number, delay: number) => {
     setTimeout(() => {
       // Every delayed/retry scan owns a fresh root lease. Keep terminal
@@ -545,6 +579,7 @@ export function scheduleOrphanRecovery(params: {
         const result = await recoverOrphanedSubagentSessions({
           ...params,
           resumedSessionKeys,
+          pendingStaleFinalizations,
         });
         if (result.failed > 0 && attempt < maxRetries) {
           const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
