@@ -1041,7 +1041,12 @@ export async function captureRuntimeParityCell(
     ...scanGatewayLogSentinels(gatewayLogs),
     ...scanDirectReplyTranscriptSentinels(transcriptBytes),
   ];
-  const scenarioErrorClass = classifyScenarioError(params.scenarioResult.details);
+  // Retry passes retain first-attempt diagnostics; only terminal failures may
+  // classify that historical text as the cell's runtime error.
+  const scenarioErrorClass =
+    params.scenarioResult.status === "fail"
+      ? classifyScenarioError(params.scenarioResult.details)
+      : undefined;
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
   return {
     runtime: params.runtime,
