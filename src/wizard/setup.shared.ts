@@ -64,9 +64,13 @@ export async function writeWizardConfigFile(
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
   if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
     const migrationBaseConfig = opts.migrationBaseConfig;
-    if (migrationBaseConfig && hasPendingPluginInstallRecords(migrationBaseConfig)) {
+    if (!migrationBaseConfig) {
+      throw new Error("Wizard config writes with pending plugin installs require a migration base.");
+    }
+    if (hasPendingPluginInstallRecords(migrationBaseConfig)) {
       await commitConfigWriteWithPendingPluginInstalls({
         nextConfig: migrationBaseConfig,
+        sourceConfig: migrationBaseConfig,
         writeOptions: { allowConfigSizeDrop: true },
         commit: async (nextConfig, writeOptions) => {
           return await replaceConfigFile({
