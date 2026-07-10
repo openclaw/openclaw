@@ -10,11 +10,11 @@ import {
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionsDir,
   HEARTBEAT_PROMPT,
-  HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,
   isExecCompletionEvent,
+  isHeartbeatOkResponse,
   isHeartbeatUserMessage,
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
@@ -664,11 +664,15 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
   if (isSilentReplyPayloadText(normalized)) {
     return null;
   }
-  // Assistant-side machinery acks: HEARTBEAT_OK is the canonical "all clear,
-  // nothing to do" reply to a heartbeat tick. Drop on the assistant side
-  // directly so we do not have to rely on cross-message coupling with the
-  // preceding user message (which a real user could spoof).
-  if (role === "assistant" && normalized === HEARTBEAT_TOKEN) {
+  // Assistant-side heartbeat acks: reuse the robust isHeartbeatOkResponse
+  // filter instead of an exact "HEARTBEAT_OK" string match. The shared helper
+  // also catches token-bearing acks wrapped in markup (e.g. **HEARTBEAT_OK**)
+  // or followed by a short status tail within the ackMaxChars budget, so they
+  // no longer leak into the dreaming session corpus as low-confidence
+  // snippets. Drops are decided on the assistant side directly so we do not
+  // rely on cross-message coupling with the preceding user message (which a
+  // real user could spoof). See openclaw/openclaw#103720.
+  if (role === "assistant" && isHeartbeatOkResponse({ role, content: normalized })) {
     return null;
   }
   const withoutSystemEnvelope = normalized.replace(GENERATED_SYSTEM_MESSAGE_RE, "").trim();

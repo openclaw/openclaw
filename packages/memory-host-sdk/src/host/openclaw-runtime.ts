@@ -24,7 +24,10 @@ export {
 } from "../../../../src/agents/memory-search.js";
 
 // Session and reply helpers.
-export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
+export {
+  isHeartbeatOkResponse,
+  isHeartbeatUserMessage,
+} from "../../../../src/auto-reply/heartbeat-filter.js";
 export { HEARTBEAT_PROMPT } from "../../../../src/auto-reply/heartbeat.js";
 export { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 export {
