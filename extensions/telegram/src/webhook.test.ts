@@ -12,6 +12,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createTelegramSpooledReplayDeferredParticipant,
+  type TelegramSpooledReplayDeferredParticipant,
+  type TelegramSpooledReplaySettlementHold,
+} from "./bot-processing-outcome.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import { TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS } from "./spooled-update-retry-policy.js";
@@ -921,6 +926,59 @@ describe("startTelegramWebhook", () => {
         finishFirstUpdate?.();
         await vi.waitFor(() => expect(seenUpdateIds).toEqual([40, 41]));
       } finally {
+        await started.stop();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds buffered timeout settlement behind durable webhook adoption", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const update = { update_id: 42, message: { chat: { id: 123 }, text: "held adoption" } };
+      await writeTelegramSpooledUpdate({
+        spoolDir: requireWebhookSpoolDir(),
+        update,
+      });
+      let participant: TelegramSpooledReplayDeferredParticipant | undefined;
+      let settlementHold: TelegramSpooledReplaySettlementHold | undefined;
+      handleUpdateSpy.mockImplementationOnce(async () => {
+        participant =
+          createTelegramSpooledReplayDeferredParticipant("test:webhook-adoption-hold") ?? undefined;
+        settlementHold = participant?.beginSettlementHold();
+      });
+
+      const started = await startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        port: 0,
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        spoolDir: requireWebhookSpoolDir(),
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+      try {
+        await vi.waitFor(() => expect(participant).toBeDefined());
+        await vi.advanceTimersByTimeAsync(25 * 60_000 + 10_000);
+        await yieldWebhookTask();
+
+        expect(participant?.abortSignal.aborted).toBe(false);
+        expect(
+          (await listTelegramSpooledUpdateClaims({ spoolDir: requireWebhookSpoolDir() })).map(
+            (claim) => claim.updateId,
+          ),
+        ).toEqual([42]);
+
+        settlementHold?.release("discard-pending");
+        participant?.settle({ kind: "completed" });
+        await vi.waitFor(async () =>
+          expect(
+            await listTelegramSpooledUpdateClaims({ spoolDir: requireWebhookSpoolDir() }),
+          ).toEqual([]),
+        );
+      } finally {
+        settlementHold?.release("replay-pending");
+        participant?.settle({ kind: "skipped" });
         await started.stop();
       }
     } finally {

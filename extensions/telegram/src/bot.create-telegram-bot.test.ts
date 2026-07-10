@@ -1360,19 +1360,24 @@ describe("createTelegramBot", () => {
       const queuedTurn = runQueuedTurn?.();
       await commitStarted;
       const timeoutError = new Error("spooled replay timed out during durable adoption");
-      firstParticipant.settle({ kind: "failed-retryable", error: timeoutError });
-      await expect(firstParticipant.task).resolves.toEqual({
-        kind: "failed-retryable",
-        error: timeoutError,
+      let firstParticipantSettled = false;
+      void firstParticipant.task.then(() => {
+        firstParticipantSettled = true;
       });
+      firstParticipant.settle({ kind: "failed-retryable", error: timeoutError });
       await flushTelegramTestMicrotasks();
+      expect(firstParticipantSettled).toBe(false);
+      expect(firstParticipant.abortSignal.aborted).toBe(false);
       expect(releaseSpy).not.toHaveBeenCalled();
 
       releaseCommit?.();
       await queuedTurn;
       expect(modelTurnRan).toBe(true);
       expect(queuedAbortSignal?.aborted).toBe(false);
-      await expect(secondParticipant.task).resolves.toEqual({ kind: "completed" });
+      await expect(Promise.all([firstParticipant.task, secondParticipant.task])).resolves.toEqual([
+        { kind: "completed" },
+        { kind: "completed" },
+      ]);
       expect(commitSpy).toHaveBeenCalledTimes(1);
       expect(releaseSpy).not.toHaveBeenCalled();
     } finally {

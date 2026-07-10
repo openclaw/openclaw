@@ -1,6 +1,7 @@
 // Telegram plugin module implements message dispatch dedupe behavior.
 import path from "node:path";
 import type { Message } from "grammy/types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -158,9 +159,8 @@ export async function commitTelegramMessageDispatchReplay(params: {
   // can race rollback and recreate a key after it was forgotten.
   for (const [index, key] of keys.entries()) {
     let diskError: unknown;
-    let recorded = false;
     try {
-      recorded = await params.guard.commit(
+      const recorded = await params.guard.commit(
         key,
         params.requirePersistent === true
           ? {
@@ -172,7 +172,12 @@ export async function commitTelegramMessageDispatchReplay(params: {
           : { namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE },
       );
       if (params.requirePersistent === true && diskError !== undefined) {
-        throw diskError;
+        throw diskError instanceof Error
+          ? diskError
+          : new Error(formatErrorMessage(diskError), { cause: diskError });
+      }
+      if (recorded) {
+        committedKeys.push(key);
       }
     } catch (error) {
       for (const pendingKey of keys.slice(index + 1)) {
@@ -214,9 +219,6 @@ export async function commitTelegramMessageDispatchReplay(params: {
         throw new TelegramMessageDispatchReplayForgetError(failures);
       }
       throw error;
-    }
-    if (recorded) {
-      committedKeys.push(key);
     }
   }
 }

@@ -757,7 +757,6 @@ export class TelegramPollingSession {
       // Pre-adoption only: once the deferred participant settles at adoption,
       // this timer is cleared. A fire means ingress never adopted the turn.
       state.timedOutMessage = `Telegram isolated polling spool pre-adoption timed out behind update ${params.update.updateId} on lane ${params.laneKey} after ${age}; marking the update failed (handler-timeout) and keeping the claim out of retry.`;
-      state.stopClaimRefresh();
       params.deferredWork.settle({
         kind: "failed-retryable",
         error: new Error(state.timedOutMessage),

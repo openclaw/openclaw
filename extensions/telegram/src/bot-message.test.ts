@@ -1,10 +1,7 @@
 // Telegram tests cover bot message plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import type {
-  TelegramMessageProcessingResult,
-  TelegramSpooledReplayDeferredParticipant,
-} from "./bot-processing-outcome.js";
+import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
