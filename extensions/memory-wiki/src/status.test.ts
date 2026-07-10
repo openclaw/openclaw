@@ -188,6 +188,67 @@ describe("resolveMemoryWikiStatus", () => {
     expect(status.bridgePublicArtifactCount).toBe(2);
   });
 
+  it("scopes global-vault status metadata when called by an agent tool", async () => {
+    const config = resolveMemoryWikiConfig(
+      {
+        vaultMode: "bridge",
+        bridge: { enabled: true, readMemoryArtifacts: true },
+      },
+      { homedir: "/Users/tester" },
+    );
+    const artifacts: MemoryPluginPublicArtifact[] = [
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/support",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/support/MEMORY.md",
+        agentIds: ["support"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/marketing",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/marketing/MEMORY.md",
+        agentIds: ["marketing"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir: "/tmp/shared",
+        relativePath: "memory/2026-07-09.md",
+        absolutePath: "/tmp/shared/memory/2026-07-09.md",
+        agentIds: ["support", "marketing"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/legacy",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/legacy/MEMORY.md",
+        agentIds: [],
+        contentType: "markdown",
+      },
+    ];
+    const deps = {
+      appConfig: {} as OpenClawConfig,
+      listPublicArtifacts: async () => artifacts,
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    };
+
+    const agentStatus = await resolveMemoryWikiStatus(config, {
+      ...deps,
+      callerAgentId: " SUPPORT ",
+    });
+    const operatorStatus = await resolveMemoryWikiStatus(config, deps);
+
+    expect(agentStatus.vaultScope).toBe("global");
+    expect(agentStatus.agentId).toBeNull();
+    expect(agentStatus.bridgePublicArtifactCount).toBe(2);
+    expect(operatorStatus.bridgePublicArtifactCount).toBe(4);
+  });
+
   it("rejects status for an unresolved agent-scoped config", async () => {
     const config = resolveMemoryWikiConfig(
       { vault: { scope: "agent", path: "/tmp/wiki/support" } },

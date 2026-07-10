@@ -69,7 +69,11 @@ export default definePluginEntry({
     api.registerTool(
       (ctx) => {
         const resolved = resolveToolContext(ctx.agentId);
-        return resolved ? createWikiStatusTool(resolved.config, resolved.appConfig) : null;
+        return resolved
+          ? createWikiStatusTool(resolved.config, resolved.appConfig, {
+              agentId: resolved.config.agentId ?? ctx.agentId,
+            })
+          : null;
       },
       { name: "wiki_status" },
     );

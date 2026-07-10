@@ -61,8 +61,13 @@ export function resolveMemoryWikiVaultAgentId(
 export function filterMemoryWikiBridgeArtifacts(params: {
   config: Pick<ResolvedMemoryWikiConfig, "agentId" | "vault">;
   artifacts: MemoryPluginPublicArtifact[];
+  callerAgentId?: string;
 }): MemoryPluginPublicArtifact[] {
-  const agentId = resolveMemoryWikiVaultAgentId(params.config);
+  const vaultAgentId = resolveMemoryWikiVaultAgentId(params.config);
+  const callerAgentId = params.callerAgentId?.trim();
+  // Agent-scoped vault ownership is authoritative. Global vaults remain shared,
+  // but agent tools still scope diagnostic metadata to their calling agent.
+  const agentId = vaultAgentId ?? (callerAgentId ? normalizeAgentId(callerAgentId) : null);
   if (!agentId) {
     return params.artifacts;
   }

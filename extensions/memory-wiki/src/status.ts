@@ -65,6 +65,7 @@ export type MemoryWikiDoctorReport = {
 
 type ResolveMemoryWikiStatusDeps = {
   appConfig?: OpenClawConfig;
+  callerAgentId?: string;
   pathExists?: (inputPath: string) => Promise<boolean>;
   listPublicArtifacts?: typeof listActiveMemoryPublicArtifacts;
   resolveCommand?: (command: string) => Promise<string | null>;
@@ -221,6 +222,7 @@ export async function resolveMemoryWikiStatus(
     config.bridge.readMemoryArtifacts
       ? filterMemoryWikiBridgeArtifacts({
           config,
+          callerAgentId: deps.callerAgentId,
           artifacts: await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
             cfg: deps.appConfig,
           }),

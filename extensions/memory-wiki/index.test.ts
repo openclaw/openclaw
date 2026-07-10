@@ -6,7 +6,12 @@ import plugin from "./index.js";
 import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
 const toolMocks = vi.hoisted(() => {
-  const createTool = (name: string) => vi.fn((config: unknown) => ({ name, testConfig: config }));
+  const createTool = (name: string) =>
+    vi.fn((config: unknown, _appConfig?: unknown, memoryContext?: unknown) => ({
+      name,
+      testConfig: config,
+      testMemoryContext: memoryContext,
+    }));
   return {
     createWikiApplyTool: createTool("wiki_apply"),
     createWikiGetTool: createTool("wiki_get"),
@@ -120,6 +125,10 @@ describe("memory-wiki plugin", () => {
           vault: { scope: "agent", path: path.join(rootDir, "marketing") },
         },
       });
+      if (registration.name === "wiki_status") {
+        expect(supportTool).toMatchObject({ testMemoryContext: { agentId: "support" } });
+        expect(marketingTool).toMatchObject({ testMemoryContext: { agentId: "marketing" } });
+      }
       expect(() => factory({ agentId: "finance" })).toThrow("Unknown memory-wiki agentId: finance");
     }
   });
