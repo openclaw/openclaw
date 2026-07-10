@@ -1847,9 +1847,6 @@ jobs:
           "$swift_tools_dir/swiftformat" --version
           "$swift_tools_dir/swiftlint" version
 
-      - name: Prepare shared mobile core
-        run: ./scripts/prepare-mobile-core.sh
-
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
         run: |
@@ -1872,7 +1869,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: apps/macos/.build
-          key: ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/android/mobile-core/**', 'apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
+          key: ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
           restore-keys: |
             ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-
 

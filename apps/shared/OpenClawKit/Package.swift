@@ -24,9 +24,6 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-markdown", exact: "0.8.0"),
     ],
     targets: [
-        .binaryTarget(
-            name: "OpenClawMobileCore",
-            path: "../../android/mobile-core/build/XCFrameworks/release/OpenClawMobileCore.xcframework"),
         .target(
             name: "OpenClawProtocol",
             path: "Sources/OpenClawProtocol",
@@ -37,7 +34,6 @@ let package = Package(
             name: "OpenClawKit",
             dependencies: [
                 "OpenClawProtocol",
-                "OpenClawMobileCore",
                 .product(
                     name: "ElevenLabsKit",
                     package: "ElevenLabsKit",

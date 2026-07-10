@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawMobileCore
 import OpenClawProtocol
 
 public enum GatewayDeviceAuthPayload {
@@ -47,15 +46,19 @@ public enum GatewayDeviceAuthPayload {
         // Managed gateways deployed before v3 metadata payload support still
         // verify v2 signatures. Swift connect signers temporarily omit signed
         // metadata until managed and supported self-managed gateways verify v3.
-        OpenClawMobileCore.DeviceAuthPayload.shared.buildV2(
-            deviceId: fields.deviceId,
-            clientId: fields.client.id,
-            clientMode: fields.client.mode,
-            role: fields.role,
-            scopes: fields.scopes,
-            signedAtMs: fields.signedAtMs,
-            token: fields.token,
-            nonce: fields.nonce)
+        let scopeString = fields.scopes.joined(separator: ",")
+        let authToken = fields.token ?? ""
+        return [
+            "v2",
+            fields.deviceId,
+            fields.client.id,
+            fields.client.mode,
+            fields.role,
+            scopeString,
+            String(fields.signedAtMs),
+            authToken,
+            fields.nonce,
+        ].joined(separator: "|")
     }
 
     /// Keeps the flat overload source-compatible while `Fields` owns canonical serialization.
@@ -84,17 +87,23 @@ public enum GatewayDeviceAuthPayload {
         platform: String?,
         deviceFamily: String?) -> String
     {
-        OpenClawMobileCore.DeviceAuthPayload.shared.buildV3(
-            deviceId: fields.deviceId,
-            clientId: fields.client.id,
-            clientMode: fields.client.mode,
-            role: fields.role,
-            scopes: fields.scopes,
-            signedAtMs: fields.signedAtMs,
-            token: fields.token,
-            nonce: fields.nonce,
-            platform: platform,
-            deviceFamily: deviceFamily)
+        let scopeString = fields.scopes.joined(separator: ",")
+        let authToken = fields.token ?? ""
+        let normalizedPlatform = self.normalizeMetadataField(platform)
+        let normalizedDeviceFamily = self.normalizeMetadataField(deviceFamily)
+        return [
+            "v3",
+            fields.deviceId,
+            fields.client.id,
+            fields.client.mode,
+            fields.role,
+            scopeString,
+            String(fields.signedAtMs),
+            authToken,
+            fields.nonce,
+            normalizedPlatform,
+            normalizedDeviceFamily,
+        ].joined(separator: "|")
     }
 
     /// Keeps the flat overload source-compatible while `Fields` owns canonical serialization.
@@ -124,7 +133,24 @@ public enum GatewayDeviceAuthPayload {
     }
 
     static func normalizeMetadataField(_ value: String?) -> String {
-        OpenClawMobileCore.DeviceAuthPayload.shared.normalizeMetadataField(value: value)
+        guard let value else { return "" }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return ""
+        }
+        // Keep cross-runtime normalization deterministic (TS/Swift/Kotlin):
+        // lowercase ASCII A-Z only for auth payload metadata fields.
+        var output = String()
+        output.reserveCapacity(trimmed.count)
+        for scalar in trimmed.unicodeScalars {
+            let codePoint = scalar.value
+            if codePoint >= 65, codePoint <= 90, let lowered = UnicodeScalar(codePoint + 32) {
+                output.unicodeScalars.append(lowered)
+            } else {
+                output.unicodeScalars.append(scalar)
+            }
+        }
+        return output
     }
 
     public static func signedDeviceDictionary(

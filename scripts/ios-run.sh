@@ -109,7 +109,6 @@ if [[ "${simulator_proof_secret_env}" != "OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET" 
 fi
 
 "${ROOT_DIR}/scripts/ios-configure-signing.sh"
-"${ROOT_DIR}/scripts/prepare-mobile-core.sh"
 "${ROOT_DIR}/scripts/ios-write-version-xcconfig.sh"
 node "${ROOT_DIR}/scripts/ios-write-swift-filelist.mjs"
 

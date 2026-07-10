@@ -195,13 +195,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "apps/ios/**"
-          - "apps/android/mobile-core/**"
           - "docs/platforms/ios.md"
 "app: macos":
   - changed-files:
       - any-glob-to-any-file:
           - "apps/macos/**"
-          - "apps/android/mobile-core/**"
           - "docs/platforms/macos.md"
           - "docs/platforms/mac/**"
 "app: web-ui":

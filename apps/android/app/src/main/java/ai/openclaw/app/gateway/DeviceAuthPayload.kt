@@ -1,7 +1,5 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.mobile.core.DeviceAuthPayload as SharedDeviceAuthPayload
-
 /**
  * Canonical device-auth payload builder shared with gateway verification rules.
  */
@@ -18,20 +16,42 @@ internal object DeviceAuthPayload {
     nonce: String,
     platform: String?,
     deviceFamily: String?,
-  ): String =
-    SharedDeviceAuthPayload.buildV3(
+  ): String {
+    val scopeString = scopes.joinToString(",")
+    val authToken = token.orEmpty()
+    val platformNorm = normalizeMetadataField(platform)
+    val deviceFamilyNorm = normalizeMetadataField(deviceFamily)
+    return listOf(
+      "v3",
       deviceId,
       clientId,
       clientMode,
       role,
-      scopes,
-      signedAtMs,
-      token,
+      scopeString,
+      signedAtMs.toString(),
+      authToken,
       nonce,
-      platform,
-      deviceFamily,
-    )
+      platformNorm,
+      deviceFamilyNorm,
+    ).joinToString("|")
+  }
 
   /** Normalizes signed metadata fields without locale-sensitive lowercasing. */
-  internal fun normalizeMetadataField(value: String?): String = SharedDeviceAuthPayload.normalizeMetadataField(value)
+  internal fun normalizeMetadataField(value: String?): String {
+    val trimmed = value?.trim().orEmpty()
+    if (trimmed.isEmpty()) {
+      return ""
+    }
+    // Keep cross-runtime normalization deterministic (TS/Swift/Kotlin):
+    // lowercase ASCII A-Z only for auth payload metadata fields.
+    val out = StringBuilder(trimmed.length)
+    for (ch in trimmed) {
+      if (ch in 'A'..'Z') {
+        out.append((ch.code + 32).toChar())
+      } else {
+        out.append(ch)
+      }
+    }
+    return out.toString()
+  }
 }

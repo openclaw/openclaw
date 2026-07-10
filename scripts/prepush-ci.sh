@@ -97,7 +97,6 @@ run_macos_ci_mirror() {
 
   run_step pnpm lint:swift
   run_step pnpm format:swift
-  run_step scripts/prepare-mobile-core.sh
   run_step swift build --package-path apps/macos --configuration release
   run_step swift test --package-path apps/macos --parallel
 }

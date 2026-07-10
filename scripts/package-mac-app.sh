@@ -209,8 +209,6 @@ fi
 
 cd "$ROOT_DIR/apps/macos"
 
-"${ROOT_DIR}/scripts/prepare-mobile-core.sh"
-
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"

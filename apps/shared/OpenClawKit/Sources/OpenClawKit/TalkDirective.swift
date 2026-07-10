@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawMobileCore
 
 public struct TalkDirective: Equatable, Sendable {
     public var voiceId: String?
@@ -64,30 +63,159 @@ public struct TalkDirectiveParseResult: Equatable, Sendable {
 
 public enum TalkDirectiveParser {
     public static func parse(_ text: String) -> TalkDirectiveParseResult {
-        let parsed = MobileCoreBridge.shared.parseTalkDirectiveForApple(text: text)
-        return TalkDirectiveParseResult(
-            directive: parsed.directive.map(TalkDirective.init(core:)),
-            stripped: parsed.stripped,
-            unknownKeys: parsed.unknownKeys)
-    }
-}
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        var lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
+        guard !lines.isEmpty else { return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: []) }
 
-private extension TalkDirective {
-    init(core: OpenClawMobileCore.TalkDirective) {
-        self.init(
-            voiceId: core.voiceId,
-            modelId: core.modelId,
-            speed: core.speed,
-            rateWPM: core.rateWpm,
-            stability: core.stability,
-            similarity: core.similarity,
-            style: core.style,
-            speakerBoost: core.speakerBoost,
-            seed: core.seed.flatMap(Int.init(exactly:)),
-            normalize: core.normalize,
-            language: core.language,
-            outputFormat: core.outputFormat,
-            latencyTier: core.latencyTier,
-            once: core.once)
+        guard let firstNonEmptyIndex =
+            lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        else {
+            return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
+        }
+
+        var firstNonEmpty = firstNonEmptyIndex
+        if firstNonEmpty > 0 {
+            lines.removeSubrange(0..<firstNonEmpty)
+            firstNonEmpty = 0
+        }
+
+        let head = lines[firstNonEmpty].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard head.hasPrefix("{"), head.hasSuffix("}") else {
+            return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
+        }
+
+        guard let data = head.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
+        }
+
+        let speakerBoost = self.boolValue(json, keys: ["speaker_boost", "speakerBoost"])
+            ?? self.boolValue(json, keys: ["no_speaker_boost", "noSpeakerBoost"]).map { !$0 }
+
+        let directive = TalkDirective(
+            voiceId: stringValue(json, keys: ["voice", "voice_id", "voiceId"]),
+            modelId: stringValue(json, keys: ["model", "model_id", "modelId"]),
+            speed: doubleValue(json, keys: ["speed"]),
+            rateWPM: intValue(json, keys: ["rate", "wpm"]),
+            stability: doubleValue(json, keys: ["stability"]),
+            similarity: doubleValue(json, keys: ["similarity", "similarity_boost", "similarityBoost"]),
+            style: doubleValue(json, keys: ["style"]),
+            speakerBoost: speakerBoost,
+            seed: intValue(json, keys: ["seed"]),
+            normalize: stringValue(json, keys: ["normalize", "apply_text_normalization"]),
+            language: stringValue(json, keys: ["lang", "language_code", "language"]),
+            outputFormat: stringValue(json, keys: ["output_format", "format"]),
+            latencyTier: intValue(json, keys: ["latency", "latency_tier", "latencyTier"]),
+            once: boolValue(json, keys: ["once"]))
+
+        let hasDirective = [
+            directive.voiceId,
+            directive.modelId,
+            directive.speed.map { "\($0)" },
+            directive.rateWPM.map { "\($0)" },
+            directive.stability.map { "\($0)" },
+            directive.similarity.map { "\($0)" },
+            directive.style.map { "\($0)" },
+            directive.speakerBoost.map { "\($0)" },
+            directive.seed.map { "\($0)" },
+            directive.normalize,
+            directive.language,
+            directive.outputFormat,
+            directive.latencyTier.map { "\($0)" },
+            directive.once.map { "\($0)" },
+        ].contains { $0 != nil }
+
+        guard hasDirective else {
+            return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
+        }
+
+        let knownKeys = Set([
+            "voice", "voice_id", "voiceid",
+            "model", "model_id", "modelid",
+            "speed", "rate", "wpm",
+            "stability", "similarity", "similarity_boost", "similarityboost",
+            "style",
+            "speaker_boost", "speakerboost",
+            "no_speaker_boost", "nospeakerboost",
+            "seed",
+            "normalize", "apply_text_normalization",
+            "lang", "language_code", "language",
+            "output_format", "format",
+            "latency", "latency_tier", "latencytier",
+            "once",
+        ])
+        let unknownKeys = json.keys.filter { !knownKeys.contains($0.lowercased()) }.sorted()
+
+        lines.remove(at: firstNonEmpty)
+        if firstNonEmpty < lines.count {
+            let next = lines[firstNonEmpty].trimmingCharacters(in: .whitespacesAndNewlines)
+            if next.isEmpty {
+                lines.remove(at: firstNonEmpty)
+            }
+        }
+
+        let stripped = lines.joined(separator: "\n")
+        return TalkDirectiveParseResult(directive: directive, stripped: stripped, unknownKeys: unknownKeys)
+    }
+
+    private static func stringValue(_ dict: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let value = dict[key] as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return trimmed
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func doubleValue(_ dict: [String: Any], keys: [String]) -> Double? {
+        for key in keys {
+            if let value = dict[key] as? Double {
+                return value
+            }
+            if let value = dict[key] as? Int {
+                return Double(value)
+            }
+            if let value = dict[key] as? String, let parsed = Double(value) {
+                return parsed
+            }
+        }
+        return nil
+    }
+
+    private static func intValue(_ dict: [String: Any], keys: [String]) -> Int? {
+        for key in keys {
+            if let value = dict[key] as? Int {
+                return value
+            }
+            if let value = dict[key] as? Double {
+                return Int(value)
+            }
+            if let value = dict[key] as? String, let parsed = Int(value) {
+                return parsed
+            }
+        }
+        return nil
+    }
+
+    private static func boolValue(_ dict: [String: Any], keys: [String]) -> Bool? {
+        for key in keys {
+            if let value = dict[key] as? Bool {
+                return value
+            }
+            if let value = dict[key] as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if ["true", "yes", "1"].contains(trimmed) {
+                    return true
+                }
+                if ["false", "no", "0"].contains(trimmed) {
+                    return false
+                }
+            }
+        }
+        return nil
     }
 }

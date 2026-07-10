@@ -36,11 +36,11 @@ const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.ym
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
 const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
 const MACOS_NATIVE_RE =
-  /^(apps\/android\/mobile-core\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
+  /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
 const MACOS_SCRIPT_SCOPE_RE =
-  /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|lint-swift|notarize-mac-artifact|package-mac-app|package-mac-dist|prepare-mobile-core)\.sh|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts)$/;
+  /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|lint-swift|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts)$/;
 const IOS_BUILD_RE =
-  /^(apps\/android\/mobile-core\/|apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|lint-swift|prepare-mobile-core)\.sh$|scripts\/(?:ios-(?:configure-signing|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.mjs|ios-version\.ts)$|scripts\/lib\/(?:ios-version\.ts|npm-publish-plan\.mjs|version-script-args\.ts)$)/;
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.mjs|ios-version\.ts)$|scripts\/lib\/(?:ios-version\.ts|npm-publish-plan\.mjs|version-script-args\.ts)$)/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
