@@ -354,9 +354,7 @@ public final class OpenClawChatViewModel {
         self.eventTask = Task { [weak self, transport] in
             let stream = transport.events()
             for await evt in stream {
-                if Task.isCancelled {
-                    return
-                }
+                if Task.isCancelled { return }
                 await MainActor.run { [weak self] in
                     self?.handleTransportEvent(evt)
                 }
@@ -1085,9 +1083,7 @@ extension OpenClawChatViewModel {
         var preservesOverlappingModelPatch = false
         while true {
             await self.waitForPendingModelPatches(for: target)
-            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) {
-                return
-            }
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             let metadataGeneration = self.sessionMetadataGeneration
             let modelPatchRevision = self.modelPatchRevisionsByTarget[target, default: 0]
             let res: OpenClawChatSessionsListResponse
@@ -1099,9 +1095,7 @@ extension OpenClawChatViewModel {
                 }
                 return
             }
-            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) {
-                return
-            }
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             guard sessionsFetchRequestID > self.latestAppliedSessionsFetchRequestID else { return }
             // A list that straddles a patch or reconnect is stale. Retry in this
             // owner so bootstrap cannot discard its only authoritative refresh.
@@ -1156,9 +1150,7 @@ extension OpenClawChatViewModel {
     private func fetchModels(sessionSnapshot: SessionSnapshot? = nil) async {
         do {
             let modelChoices = try await transport.listModels()
-            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) {
-                return
-            }
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.modelChoices = modelChoices
             self.syncSelectedModel()
             syncThinkingLevelOptions()

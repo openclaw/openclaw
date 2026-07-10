@@ -249,23 +249,17 @@ extension OpenClawChatViewModel {
 
     private func handleLocalSlashCommandIfNeeded(_ command: String, draftInput: String) async -> Bool {
         if command == "/new" {
-            if self.input == draftInput {
-                self.input = ""
-            }
+            if self.input == draftInput { self.input = "" }
             await self.performStartNewSession(worktree: false)
             return true
         }
         if Self.resetTriggers.contains(command) {
-            if self.input == draftInput {
-                self.input = ""
-            }
+            if self.input == draftInput { self.input = "" }
             await self.performReset()
             return true
         }
         if Self.compactTriggers.contains(command) {
-            if self.input == draftInput {
-                self.input = ""
-            }
+            if self.input == draftInput { self.input = "" }
             await self.performCompact()
             return true
         }
