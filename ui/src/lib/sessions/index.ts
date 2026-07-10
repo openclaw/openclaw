@@ -112,6 +112,8 @@ export type SessionDeleteOutcome = {
 type SessionDeleteBatchResult = {
   deleted: string[];
   errors: string[];
+  /** Dirty/unpushed checkouts kept by the gateway during this batch. */
+  preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
 };
 
 type SessionCompactResult = {
@@ -1050,20 +1052,24 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   ): Promise<SessionDeleteBatchResult> => {
     const scope = captureConnection();
     if (!scope || targets.length === 0) {
-      return { deleted: [], errors: [] };
+      return { deleted: [], errors: [], preservedWorktrees: [] };
     }
     const deleted: string[] = [];
     const errors: string[] = [];
+    const preservedWorktrees: SessionDeleteBatchResult["preservedWorktrees"] = [];
     for (const target of targets) {
       if (!isCurrentConnection(scope)) {
         break;
       }
       try {
-        await requestSessionDelete(scope.client, target.key, target);
+        const response = await requestSessionDelete(scope.client, target.key, target);
         if (!isCurrentConnection(scope)) {
           break;
         }
         deleted.push(target.key);
+        if (response.worktreePreserved) {
+          preservedWorktrees.push(response.worktreePreserved);
+        }
       } catch (error) {
         errors.push(String(error));
       }
@@ -1078,7 +1084,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       await refresh({ force: true });
     }
-    return isCurrentConnection(scope) ? { deleted, errors } : { deleted: [], errors: [] };
+    return isCurrentConnection(scope)
+      ? { deleted, errors, preservedWorktrees }
+      : { deleted: [], errors: [], preservedWorktrees: [] };
   };
 
   const reset = async (

@@ -223,6 +223,8 @@ export const fa: TranslationMap = {
     createFailed: "نمی‌توان جلسه را ایجاد کرد.",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
       "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "نشست‌ها",

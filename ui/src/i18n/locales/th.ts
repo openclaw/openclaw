@@ -220,6 +220,8 @@ export const th: TranslationMap = {
     createFailed: "ไม่สามารถสร้างเซสชันได้",
   },
   sessionsView: {
+    deletePreservedWorktrees:
+      "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
       "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "เซสชัน",

@@ -26,7 +26,7 @@ function createSessionCapability(client: GatewayBrowserClient): SessionCapabilit
     patch: (key: string, patch: SessionPatch, options: { agentId?: string | null } = {}) =>
       request("sessions.patch", { key, ...options, ...patch }),
     delete: async () => false,
-    deleteMany: async () => ({ deleted: [], errors: [] }),
+    deleteMany: async () => ({ deleted: [], errors: [], preservedWorktrees: [] }),
     reset: async () => true,
     compact: (key: string, options: { agentId?: string | null } = {}) =>
       request("sessions.compact", { key, ...options }),
