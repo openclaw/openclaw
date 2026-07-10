@@ -51,7 +51,7 @@ const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
   ".wma",
 ]);
 
-export type SaveMessageResourceResult = {
+type SaveMessageResourceResult = {
   saved: SavedMedia;
   contentType?: string;
   fileName?: string;
@@ -398,11 +398,11 @@ export async function saveMessageResourceFeishu(params: {
   }
 }
 
-export type UploadImageResult = {
+type UploadImageResult = {
   imageKey: string;
 };
 
-export type UploadFileResult = {
+type UploadFileResult = {
   fileKey: string;
 };
 

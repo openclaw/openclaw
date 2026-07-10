@@ -1,5 +1,9 @@
-Improves Android gateway setup with localized onboarding, QR pairing fixes, and support for local mDNS gateway hosts.
+Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.
 
-Adds clearer recovery guidance for TLS fingerprint timeouts, mobile protocol mismatches, and gateway auth states.
+Upgrades chat with offline recovery, session search and groups, model and agent pickers, voice notes, actions, link previews, code and math rendering.
 
-Refreshes native Android localization coverage, including Swedish app naming and localized gateway trust flows.
+Adds workspace files, Cron details, terminal access, and Listen playback.
+
+Improves onboarding, reconnects, keyboards, notification filtering, location, canvas safety, and voice reliability.
+
+Thanks @IWhatsskill, @ioridev, and @narcissus0702.

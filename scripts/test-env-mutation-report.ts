@@ -10,7 +10,7 @@ import { collectFilesSync, isCodeFile, toPosixPath } from "./check-file-utils.js
 
 type EnvMutationOperation = "assign" | "delete" | "replace" | "stubEnv";
 
-export type TestEnvMutationFinding = {
+type TestEnvMutationFinding = {
   allowed: boolean;
   allowReason?: string;
   excerpt: string;

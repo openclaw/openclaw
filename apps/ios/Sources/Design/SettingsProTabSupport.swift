@@ -1,10 +1,12 @@
 import Darwin
 import OpenClawKit
 import SwiftUI
+import UIKit
 import UserNotifications
 
 enum SettingsRoute: Hashable {
     case gateway
+    case appleWatch
     case approvals
     case permissions
     case channels
@@ -43,6 +45,155 @@ struct SettingsDetailRow: View {
             Text(self.label)
                 .font(OpenClawType.body)
         }
+    }
+}
+
+struct SettingsBuildMetadataStrip: View {
+    let metadata: ArtifactBuildInfo
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private struct Field: Identifiable {
+        enum ID: String {
+            case version
+            case commit
+            case built
+        }
+
+        let id: ID
+        let title: LocalizedStringKey
+        let value: String?
+        let forceLeftToRight: Bool
+    }
+
+    private var fields: [Field] {
+        [
+            Field(id: .version, title: "Version", value: self.metadata.versionDisplay, forceLeftToRight: true),
+            Field(id: .commit, title: "Commit", value: self.metadata.shortCommit, forceLeftToRight: true),
+            Field(id: .built, title: "Built", value: self.metadata.localizedBuildDate(), forceLeftToRight: false),
+        ]
+    }
+
+    var body: some View {
+        Group {
+            if self.dynamicTypeSize.isAccessibilitySize {
+                self.metadataColumn
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    self.metadataRow
+                    self.metadataColumn
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(self.metadataAccessibilityLabel)
+        .accessibilityActions {
+            if self.metadata.gitCommit != nil {
+                Button("Copy full commit hash") {
+                    self.copyCommit()
+                }
+            }
+            Button("Copy build info") {
+                self.copyBuildInfo()
+            }
+        }
+        .contextMenu {
+            if self.metadata.gitCommit != nil {
+                Button {
+                    self.copyCommit()
+                } label: {
+                    Label {
+                        Text("Copy Commit")
+                            .font(OpenClawType.subheadSemiBold)
+                    } icon: {
+                        Image(systemName: "number")
+                    }
+                }
+            }
+            Button {
+                self.copyBuildInfo()
+            } label: {
+                Label {
+                    Text("Copy Build Info")
+                        .font(OpenClawType.subheadSemiBold)
+                } icon: {
+                    Image(systemName: "doc.on.doc")
+                }
+            }
+        }
+    }
+
+    private var metadataRow: some View {
+        HStack(alignment: .center, spacing: 0) {
+            ForEach(Array(self.fields.enumerated()), id: \.element.id) { index, field in
+                if index > 0 {
+                    Divider()
+                        .frame(height: 30)
+                }
+                self.metadataField(field, alignment: .center)
+                    .frame(minWidth: 72, maxWidth: .infinity)
+                    .padding(.horizontal, 4)
+            }
+        }
+        .frame(minWidth: 240)
+    }
+
+    private var metadataColumn: some View {
+        VStack(alignment: .center, spacing: 8) {
+            ForEach(self.fields) { field in
+                self.metadataField(field, alignment: .center)
+            }
+        }
+    }
+
+    private func metadataField(_ field: Field, alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 1) {
+            Text(field.title)
+                .font(OpenClawType.caption2SemiBold)
+                .textCase(.uppercase)
+            Group {
+                if let value = field.value {
+                    Text(verbatim: value)
+                } else {
+                    Text("Unavailable")
+                }
+            }
+            .font(OpenClawType.monoSmall)
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+            .environment(
+                \.layoutDirection,
+                field.forceLeftToRight ? .leftToRight : self.layoutDirection)
+        }
+    }
+
+    private var metadataAccessibilityLabel: Text {
+        let version = self.metadata.versionDisplay
+        let commit = self.metadata.spokenCommit
+        let timestamp = self.metadata.buildTimestamp
+        let built = self.metadata.localizedBuildDate() ?? timestamp
+        if let commit, let timestamp, let built {
+            return Text("Version \(version), commit \(commit), built \(built), timestamp \(timestamp)")
+        }
+        if let commit {
+            return Text("Version \(version), commit \(commit), build date unavailable")
+        }
+        if let timestamp, let built {
+            return Text("Version \(version), commit unavailable, built \(built), timestamp \(timestamp)")
+        }
+        return Text("Version \(version), commit unavailable, build date unavailable")
+    }
+
+    private func copyCommit() {
+        guard let gitCommit = self.metadata.gitCommit else { return }
+        UIPasteboard.general.string = gitCommit
+    }
+
+    private func copyBuildInfo() {
+        UIPasteboard.general.string = self.metadata.copyText
     }
 }
 
@@ -112,64 +263,68 @@ enum SettingsNotificationStatus: Equatable {
         }
     }
 
+    var allowsNotifications: Bool {
+        self == .allowed
+    }
+}
+
+enum SettingsNotificationPresentation: Equatable {
+    case checking
+    case enabled
+    case off
+    case setup
+    case denied
+    case notSet
+    case unknown
+
     var text: String {
         switch self {
         case .checking: "Checking"
-        case .allowed: "Enabled"
-        case .notAllowed: "Denied"
+        case .enabled: "Enabled"
+        case .off: "Off"
+        case .setup: "Setup"
+        case .denied: "Denied"
         case .notSet: "Not Enabled"
         case .unknown: "Unknown"
         }
     }
 
-    var actionTitle: String {
+    var detail: String {
         switch self {
-        case .notSet:
-            "Enable Notifications"
         case .checking:
-            "Checking"
-        case .allowed:
-            "Manage in iOS Settings"
-        case .notAllowed, .unknown:
-            "Open iOS Settings"
-        }
-    }
-
-    var actionIcon: String {
-        switch self {
-        case .allowed:
-            "gear"
-        case .notAllowed, .unknown:
-            "gear.badge"
-        case .checking:
-            "hourglass"
+            "Checking iOS notification permission."
+        case .enabled:
+            "OpenClaw can show approval prompts and event alerts when the app is not active."
+        case .off:
+            "OpenClaw notifications are off."
+        case .setup:
+            "Finish notification setup to receive alerts when the app is not active."
+        case .denied:
+            "Notifications have been denied. Enable them in iOS Settings."
         case .notSet:
-            "bell.badge"
+            "Enable notifications to receive approval prompts and event alerts outside the app."
+        case .unknown:
+            "OpenClaw cannot determine the current notification permission state."
         }
     }
 
     var color: Color {
         switch self {
-        case .allowed:
+        case .enabled:
             OpenClawBrand.ok
-        case .notAllowed, .unknown:
+        case .denied, .setup, .unknown:
             OpenClawBrand.warn
-        case .checking, .notSet:
+        case .checking, .notSet, .off:
             .secondary
         }
     }
 
-    var shouldOpenNotificationSettings: Bool {
-        switch self {
-        case .allowed, .notAllowed, .unknown:
-            true
-        case .checking, .notSet:
-            false
-        }
+    var isActive: Bool {
+        self == .enabled
     }
 
-    var allowsNotifications: Bool {
-        self == .allowed
+    var needsAttention: Bool {
+        self != .checking && self != .enabled
     }
 }
 
@@ -188,10 +343,18 @@ enum SettingsDiagnostics {
         notificationsAllowed: Bool) -> [SettingsDiagnosticIssue]
     {
         var issues: [SettingsDiagnosticIssue] = []
-        if !gatewayConnected { issues.append(.gatewayOffline) }
-        if discoveredGatewayCount == 0 { issues.append(.discoveryUnavailable) }
-        if gatewayConnected, !talkConfigLoaded { issues.append(.talkConfigMissing) }
-        if !notificationsAllowed { issues.append(.notificationsUnavailable) }
+        if !gatewayConnected {
+            issues.append(.gatewayOffline)
+        }
+        if discoveredGatewayCount == 0 {
+            issues.append(.discoveryUnavailable)
+        }
+        if gatewayConnected, !talkConfigLoaded {
+            issues.append(.talkConfigMissing)
+        }
+        if !notificationsAllowed {
+            issues.append(.notificationsUnavailable)
+        }
         return issues
     }
 
@@ -224,7 +387,9 @@ extension SettingsProTab {
             let isLoopback = (flags & IFF_LOOPBACK) != 0
             guard let addrPtr = ptr.pointee.ifa_addr else { continue }
             let family = addrPtr.pointee.sa_family
-            if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
+            if !isUp || isLoopback || family != UInt8(AF_INET) {
+                continue
+            }
             var addr = addrPtr.pointee
             var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             let result = getnameinfo(
@@ -238,14 +403,18 @@ extension SettingsProTab {
             guard result == 0 else { continue }
             let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
             guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
-            if self.isTailnetIPv4(ip) { return true }
+            if self.isTailnetIPv4(ip) {
+                return true
+            }
         }
         return false
     }
 
     static func isTailnetHostOrIP(_ host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.") { return true }
+        if trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.") {
+            return true
+        }
         return self.isTailnetIPv4(trimmed)
     }
 

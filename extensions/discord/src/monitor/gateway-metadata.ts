@@ -28,7 +28,7 @@ export type DiscordGatewayFetch = (
   input: string,
   init?: DiscordGatewayFetchInit,
 ) => Promise<DiscordGatewayMetadataResponse>;
-export type DiscordGatewayMetadataFetchOptions = {
+type DiscordGatewayMetadataFetchOptions = {
   capture?: false | { flowId: string; meta: Record<string, unknown> };
   proxyUrl?: string;
 };

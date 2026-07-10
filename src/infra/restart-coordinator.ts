@@ -3,10 +3,11 @@ import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-s
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
+import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import {
-  getInspectableActiveTaskRestartBlockers,
   type ActiveTaskRestartBlocker,
-} from "../tasks/task-registry.maintenance.js";
+  formatActiveTaskRestartBlocker,
+} from "../tasks/task-restart-blocker.js";
 import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
 
 // Safe restart coordination checks active local work before scheduling SIGUSR1
@@ -61,19 +62,6 @@ const defaultInspectors: SafeRestartInspectors = {
 
 function normalizeCount(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
-function formatTaskBlocker(task: ActiveTaskRestartBlocker): string {
-  return [
-    `taskId=${task.taskId}`,
-    task.runId ? `runId=${task.runId}` : null,
-    `status=${task.status}`,
-    `runtime=${task.runtime}`,
-    task.label ? `label=${task.label}` : null,
-    task.title ? `title=${task.title.slice(0, 80)}` : null,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" ");
 }
 
 function createFallbackTaskBlocker(count: number): SafeGatewayRestartBlocker {
@@ -143,7 +131,7 @@ export function createSafeGatewayRestartPreflight(
         blockers.push({
           kind: "task",
           count: 1,
-          message: formatTaskBlocker(task),
+          message: formatActiveTaskRestartBlocker(task),
           task,
         });
       }

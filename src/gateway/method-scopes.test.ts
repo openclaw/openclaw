@@ -44,6 +44,10 @@ describe("method scope resolution", () => {
     ["tasks.list", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["tasks.get", ["operator.read"]],
+    ["taskSuggestions.list", ["operator.read"]],
+    ["taskSuggestions.create", ["operator.write"]],
+    ["taskSuggestions.accept", ["operator.admin"]],
+    ["taskSuggestions.dismiss", ["operator.write"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
@@ -203,6 +207,24 @@ describe("method scope resolution", () => {
       }),
     ).toEqual(["operator.write"]);
     expect(isGatewayMethodClassified("sessions.patch")).toBe(true);
+  });
+
+  it("requires admin only when sessions.create targets an explicit cwd", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { worktree: true }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        worktree: true,
+        cwd: "/other/repo",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
+        worktree: true,
+        cwd: "/other/repo",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
   it.each([

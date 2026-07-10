@@ -817,6 +817,57 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]?.messageId).toBe("message-adapter-1");
   });
 
+  it("rejects provider-blocked deferred delivery before queue creation or platform work", async () => {
+    const admitDeferredDelivery = vi.fn(() => ({
+      status: "permanent_rejection" as const,
+      reason: "unsupported_enterprise_slack_delivery",
+    }));
+    const messageSendText = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            id: "matrix",
+            message: {
+              id: "matrix",
+              durableFinal: { admitDeferredDelivery },
+              send: { text: messageSendText },
+            },
+          },
+        },
+      ]),
+    );
+
+    const request = {
+      cfg: {},
+      channel: "matrix" as const,
+      to: "!room:example",
+      accountId: "enterprise",
+      payloads: [{ text: "blocked" }],
+    };
+    await expect(deliverOutboundPayloads(request)).rejects.toThrow(
+      "unsupported_enterprise_slack_delivery",
+    );
+    await expect(deliverOutboundPayloads({ ...request, skipQueue: true })).rejects.toThrow(
+      "unsupported_enterprise_slack_delivery",
+    );
+
+    expect(admitDeferredDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "enterprise",
+        channel: "matrix",
+        phase: "live",
+        to: "!room:example",
+      }),
+    );
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(admitDeferredDelivery).toHaveBeenCalledTimes(2);
+    expect(messageSendText).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
+  });
+
   it("continues best-effort sends when the precise dispatch timestamp cannot be refreshed", async () => {
     queueMocks.markDeliveryPlatformSendDispatched.mockRejectedValueOnce(
       new Error("dispatch state unavailable"),

@@ -122,7 +122,10 @@ function createServiceContext(): Parameters<NonNullable<Registered["service"]>["
   } as Parameters<NonNullable<Registered["service"]>["start"]>[0];
 }
 
-function setup(config: Record<string, unknown>): Registered {
+function setup(
+  config: Record<string, unknown>,
+  toolContext: Record<string, unknown> = {},
+): Registered {
   const methods = new Map<string, unknown>();
   const methodScopes = new Map<string, string | undefined>();
   const tools: unknown[] = [];
@@ -141,7 +144,12 @@ function setup(config: Record<string, unknown>): Registered {
       methods.set(method, handler);
       methodScopes.set(method, opts?.scope);
     },
-    registerTool: (tool: unknown) => tools.push(tool),
+    registerTool: (tool: unknown) =>
+      tools.push(
+        typeof tool === "function"
+          ? (tool as (context: Record<string, unknown>) => unknown)(toolContext)
+          : tool,
+      ),
     registerCli: () => {},
     registerService: (registeredService) => {
       service = registeredService;
@@ -492,6 +500,47 @@ describe("voice-call plugin", () => {
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
+  it("accepts per-call agent routing only from plugin runtime", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          client?: { internal?: { pluginRuntimeOwnerId?: string } };
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({
+      params: { to: "+15550001234", agentId: "support" },
+      client: { internal: { pluginRuntimeOwnerId: "google-meet" } },
+      respond,
+    });
+
+    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith(
+      "+15550001234",
+      undefined,
+      expect.objectContaining({ agentId: "support" }),
+    );
+    expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("rejects external per-call agent routing", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { to: "+15550001234", agentId: "spoofed" }, respond });
+
+    expect(runtimeStub.manager["initiateCall"]).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)[2]?.code).toBe("INVALID_REQUEST");
+  });
+
   it("returns redacted call status", async () => {
     const call = createCallRecord({
       metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
@@ -713,6 +762,25 @@ describe("voice-call plugin", () => {
     expect(runtimeConfig?.streaming?.provider).toBe("openai");
     expect(runtimeConfig?.streaming?.providers?.openai?.apiKey).toBe("sk-test");
     expectWarningIncludes('Run "openclaw doctor --fix"');
+  });
+
+  it("freezes the invoking agent on tool-created calls", async () => {
+    const { tools } = setup({ provider: "mock" }, { agentId: "support" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+
+    await tool.execute("id", {
+      action: "initiate_call",
+      to: "+15550001234",
+      message: "Hello",
+    });
+
+    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith(
+      "+15550001234",
+      undefined,
+      expect.objectContaining({ agentId: "support", message: "Hello" }),
+    );
   });
 
   it("tool get_status returns json payload", async () => {

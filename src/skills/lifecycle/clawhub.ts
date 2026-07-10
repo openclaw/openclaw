@@ -466,21 +466,6 @@ function buildDownloadedArtifactLock(
   };
 }
 
-function buildInstallTelemetrySkills(
-  skills: ClawHubSkillsLockfile["skills"],
-): Record<string, { version: string; installedAt: number; registry?: string }> {
-  return Object.fromEntries(
-    Object.entries(skills).map(([slug, entry]) => [
-      slug,
-      {
-        version: entry.version,
-        installedAt: entry.installedAt,
-        ...(entry.registry ? { registry: entry.registry } : {}),
-      },
-    ]),
-  );
-}
-
 function snapshotClawHubSkillVerification(
   verification: ClawHubSkillVerificationResponse,
 ): ClawHubSkillVerificationLock {
@@ -1508,8 +1493,9 @@ async function performClawHubSkillInstall(
       await writeClawHubSkillsLockfile(params.workspaceDir, lock);
       await reportClawHubSkillInstallTelemetry({
         baseUrl: params.baseUrl,
-        root: params.workspaceDir,
-        skills: buildInstallTelemetrySkills(lock.skills),
+        slug: params.slug,
+        ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+        version,
       }).catch(() => undefined);
 
       return {

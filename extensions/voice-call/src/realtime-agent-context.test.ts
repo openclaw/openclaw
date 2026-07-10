@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
-import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { CoreAgentDeps } from "./core-bridge.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
@@ -64,7 +65,7 @@ describe("buildRealtimeVoiceInstructions", () => {
     await writeFile(path.join(workspaceDir, "IDENTITY.md"), "Name: Claw Voice\nVibe: snappy\n");
     await writeFile(path.join(workspaceDir, "SECRET.md"), "do not include\n");
 
-    const coreConfig = { agents: { list: [{ id: "voice" }] } } as CoreConfig;
+    const coreConfig = { agents: { list: [{ id: "voice" }] } } as OpenClawConfig;
 
     const instructions = await buildRealtimeVoiceInstructions({
       baseInstructions: "Base voice instructions.",
@@ -111,7 +112,7 @@ describe("buildRealtimeVoiceInstructions", () => {
     const instructions = await buildRealtimeVoiceInstructions({
       baseInstructions: "Base voice instructions.",
       config,
-      coreConfig: { agents: { list: [{ id: agentId }] } } as CoreConfig,
+      coreConfig: { agents: { list: [{ id: agentId }] } } as OpenClawConfig,
       agentRuntime: createAgentRuntime("/unused"),
     });
 

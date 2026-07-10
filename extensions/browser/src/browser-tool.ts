@@ -6,6 +6,14 @@
  */
 import crypto from "node:crypto";
 import {
+  BROWSER_PROXY_ERROR_ENVELOPE,
+  parseBrowserProxyFailure,
+  type BrowserProxyEnvelope,
+  type BrowserProxyFile,
+  type BrowserProxySuccess,
+} from "./browser-proxy-envelope.js";
+import { describeBrowserTool } from "./browser-tool-description.js";
+import {
   executeActAction,
   executeConsoleAction,
   executeDownloadAction,
@@ -55,7 +63,9 @@ import {
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
+import { BrowserServiceError } from "./browser/client-fetch.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
 import { wrapExternalContent } from "./sdk-security-runtime.js";
@@ -162,10 +172,11 @@ function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
 }
 
 function readTargetUrlParam(params: Record<string, unknown>) {
-  return (
+  const targetUrl =
     readStringParam(params, "targetUrl") ??
-    readStringParam(params, "url", { required: true, label: "targetUrl" })
-  );
+    readStringParam(params, "url", { required: true, label: "targetUrl" });
+  parseBrowserNavigationUrl(targetUrl);
+  return targetUrl;
 }
 
 function formatScreenshotShareHint(filePath: string): string {
@@ -245,17 +256,6 @@ function readActRequestParam(params: Record<string, unknown>) {
   }
   return request as Parameters<typeof browserAct>[1];
 }
-
-type BrowserProxyFile = {
-  path: string;
-  base64: string;
-  mimeType?: string;
-};
-
-type BrowserProxyResult = {
-  result: unknown;
-  files?: BrowserProxyFile[];
-};
 
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
@@ -357,7 +357,7 @@ async function callBrowserProxy(params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
-}): Promise<BrowserProxyResult> {
+}): Promise<BrowserProxySuccess> {
   const proxyTimeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? Math.max(1, Math.floor(params.timeoutMs))
@@ -376,27 +376,35 @@ async function callBrowserProxy(params: {
         body: params.body,
         timeoutMs: proxyTimeoutMs,
         profile: params.profile,
+        errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
       },
       idempotencyKey: crypto.randomUUID(),
     },
     { scopes: ["operator.admin"] },
   );
   const parsed = unwrapBrowserProxyPayload(payload);
+  const failure = parseBrowserProxyFailure(parsed);
+  if (failure) {
+    const { status, body } = failure.error;
+    throw new BrowserServiceError(body.error, "reason" in body ? body : undefined, status);
+  }
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
     throw new Error("browser proxy failed");
   }
   return parsed;
 }
 
-function unwrapBrowserProxyPayload(payload: { payload?: unknown; payloadJSON?: unknown } | null) {
+function unwrapBrowserProxyPayload(
+  payload: { payload?: unknown; payloadJSON?: unknown } | null,
+): BrowserProxyEnvelope | null {
   if (payload?.payload !== undefined) {
-    return payload.payload;
+    return payload.payload as BrowserProxyEnvelope;
   }
   if (typeof payload?.payloadJSON !== "string" || !payload.payloadJSON.trim()) {
     return null;
   }
   try {
-    return JSON.parse(payload.payloadJSON) as BrowserProxyResult;
+    return JSON.parse(payload.payloadJSON) as BrowserProxyEnvelope;
   } catch {
     return null;
   }
@@ -514,20 +522,7 @@ export function createBrowserTool(opts?: {
   return {
     label: "Browser",
     name: "browser",
-    description: [
-      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
-      'For the logged-in user browser, use profile="user". A supported Chromium-based browser (v144+) must be running on the selected host or browser node. Use only when existing logins/cookies matter and the user is present.',
-      'For profile="user" or other existing-session profiles, omit timeoutMs on act:type, evaluate, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.',
-      'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
-      "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
-      'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
-      "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
-      "For file chooser uploads, pass the trigger ref with paths in the same upload call when available; use paths-only arming only when a later trigger is intentional. Use inputRef or element to set a file input directly.",
-      `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
-      hostHint,
-    ].join(" "),
+    description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

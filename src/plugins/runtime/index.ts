@@ -49,6 +49,22 @@ const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
 const loadModelAuthRuntime = createLazyRuntimeModule(
   () => import("./runtime-model-auth.runtime.js"),
 );
+const loadGatewayPluginRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/server-plugins.js"),
+);
+
+function createRuntimeGateway(): PluginRuntime["gateway"] {
+  return {
+    isAvailable: async () => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.hasInProcessGatewayContext();
+    },
+    request: async (method, params, options) => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
+    },
+  };
+}
 
 function createRuntimeTts(): PluginRuntime["tts"] {
   const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
@@ -253,6 +269,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    gateway: createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),
     subagent: createLateBindingSubagent(

@@ -2345,6 +2345,38 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("advertises explicit duration buckets on the openclaw run/harness/context histograms", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    const priorSdkBoundaries = [
+      0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000,
+    ];
+    try {
+      await service.start(ctx);
+
+      const runDurationOptions = histogramCreateOptions("openclaw.run.duration_ms");
+      expect(runDurationOptions?.unit).toBe("ms");
+      const runBoundaries = runDurationOptions?.advice?.explicitBucketBoundaries;
+      expect(runBoundaries).toEqual(expect.arrayContaining(priorSdkBoundaries));
+      for (const boundary of [60000, 3_600_000]) {
+        expect(runBoundaries).toContain(boundary);
+      }
+
+      const harnessDurationOptions = histogramCreateOptions("openclaw.harness.duration_ms");
+      const harnessBoundaries = harnessDurationOptions?.advice?.explicitBucketBoundaries;
+      expect(harnessBoundaries).toEqual(runBoundaries);
+
+      const contextOptions = histogramCreateOptions("openclaw.context.tokens");
+      const contextBoundaries = contextOptions?.advice?.explicitBucketBoundaries;
+      expect(contextBoundaries).toEqual(expect.arrayContaining(priorSdkBoundaries));
+      for (const boundary of [128000, 1_000_000]) {
+        expect(contextBoundaries).toContain(boundary);
+      }
+    } finally {
+      await service.stop?.(ctx);
+    }
+  });
+
   test("bounds agent identifiers on model usage metric attributes", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });

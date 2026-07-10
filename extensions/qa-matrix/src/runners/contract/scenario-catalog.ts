@@ -116,7 +116,7 @@ export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
 export const MATRIX_QA_BOT_DM_ROOM_KEY = "bot-dm";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
 export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
-export const MATRIX_QA_E2EE_ROOM_KEY = "e2ee";
+const MATRIX_QA_E2EE_ROOM_KEY = "e2ee";
 export const MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY = "e2ee-verification-dm";
 export const MATRIX_QA_HOMESERVER_ROOM_KEY = "homeserver";
 const MATRIX_QA_MAIN_ROOM_KEY = "main";
@@ -1052,7 +1052,7 @@ export const MATRIX_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScena
   scenarios: MATRIX_QA_SCENARIOS,
 });
 
-export const MATRIX_QA_PROFILE_NAMES: readonly MatrixQaProfile[] = [
+const MATRIX_QA_PROFILE_NAMES: readonly MatrixQaProfile[] = [
   "all",
   "fast",
   "transport",

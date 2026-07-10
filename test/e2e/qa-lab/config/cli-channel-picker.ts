@@ -244,7 +244,7 @@ function createEvidenceWriter(options: ProducerOptions) {
   });
 }
 
-export async function runCliChannelPickerProducer(options: ProducerOptions) {
+async function runCliChannelPickerProducer(options: ProducerOptions) {
   const startedAt = Date.now();
   const writer = createEvidenceWriter(options);
   const workDir = path.join(options.artifactBase, ".work");

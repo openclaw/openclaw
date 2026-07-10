@@ -19,6 +19,7 @@ import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-ext
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { applySecretRefHeaderSentinels } from "../model-auth.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
@@ -177,7 +178,10 @@ async function runPdfPrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
+      const model = applySecretRefHeaderSentinels(
+        resolveModelFromRegistry({ modelRegistry, provider, modelId }),
+        effectiveCfg,
+      );
       const apiKey = await resolveModelRuntimeApiKey({
         model,
         cfg: effectiveCfg,

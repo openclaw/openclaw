@@ -345,7 +345,7 @@ export function resolveProviderAuthLookupMaps(
 }
 
 /** Resolves env vars used by setup, default SecretRefs, and broad secret scrubbing. */
-export function resolveProviderEnvVars(
+function resolveProviderEnvVars(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
   return {

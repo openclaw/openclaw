@@ -1,5 +1,5 @@
 // Control UI component renders exec approval.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import type {
@@ -9,6 +9,7 @@ import type {
 } from "../app/exec-approval.ts";
 import "./modal-dialog.ts";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -16,7 +17,7 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
 
-export type ExecApprovalProps = {
+type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
   busy: boolean;
   error: string | null;
@@ -224,17 +225,8 @@ function renderExecApprovalPrompt(props: ExecApprovalProps) {
   `;
 }
 
-export class ExecApproval extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class ExecApproval extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ExecApprovalProps;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-  }
 
   override render() {
     return this.props ? renderExecApprovalPrompt(this.props) : nothing;

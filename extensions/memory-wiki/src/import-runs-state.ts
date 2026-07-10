@@ -7,7 +7,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 
-export type ChatGptImportRunEntry = {
+type ChatGptImportRunEntry = {
   path: string;
   snapshotPath?: string;
 };

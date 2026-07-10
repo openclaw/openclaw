@@ -15,8 +15,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeTextAtomic } from "../infra/json-files.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
-import { shortenHomePath } from "../utils.js";
+import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
 const SESSION_SNAPSHOTS_CHECK_ID = "core/doctor/session-snapshots";
 
@@ -40,6 +41,34 @@ type StaleSessionSnapshotPathFinding = {
 export type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
   storePath: string;
 };
+
+export function resolveSessionSnapshotBundledSkillsDir(params?: {
+  bundledSkillsDir?: string;
+  argv1?: string;
+  moduleUrl?: string;
+  cwd?: string;
+  execPath?: string;
+}): string | undefined {
+  const explicit = params?.bundledSkillsDir?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const resolved = resolveBundledSkillsDir({
+    argv1: params?.argv1,
+    moduleUrl: params?.moduleUrl,
+    cwd: params?.cwd,
+    execPath: params?.execPath,
+  });
+  if (resolved) {
+    return resolved;
+  }
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1: params?.argv1 ?? process.argv[1],
+    moduleUrl: params?.moduleUrl ?? import.meta.url,
+    cwd: params?.cwd ?? process.cwd(),
+  });
+  return packageRoot ? path.join(packageRoot, "skills") : undefined;
+}
 
 function decodeXmlText(value: string): string {
   return value
@@ -198,14 +227,37 @@ function resolveExpectedBundledSkillPath(params: {
   if (!isAbsolutePathLike(expandedCachedPath)) {
     return undefined;
   }
-  if (isInsidePath(params.bundledSkillsDir, expandedCachedPath)) {
-    return undefined;
-  }
   const relativeSegments = extractBundledSkillRelativeSegments(expandedCachedPath);
   if (!relativeSegments) {
     return undefined;
   }
+  const movedPath = resolveMovedBundledSkillPath({
+    relativeSegments,
+    pathExists: params.pathExists,
+    env: params.env,
+  });
+  if (movedPath) {
+    return movedPath;
+  }
+  if (isInsidePath(params.bundledSkillsDir, expandedCachedPath)) {
+    return undefined;
+  }
   const expectedPath = joinPathForRoot(params.bundledSkillsDir, ...relativeSegments);
+  if (params.pathExists(expectedPath)) {
+    return expectedPath;
+  }
+  return undefined;
+}
+
+function resolveMovedBundledSkillPath(params: {
+  relativeSegments: readonly string[];
+  pathExists: (filePath: string) => boolean;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  if (params.relativeSegments.join("/") !== "imsg/SKILL.md") {
+    return undefined;
+  }
+  const expectedPath = path.join(resolveConfigDir(params.env), "plugin-skills", "imsg", "SKILL.md");
   return params.pathExists(expectedPath) ? expectedPath : undefined;
 }
 
@@ -299,7 +351,9 @@ export async function detectSessionSnapshotHealthIssues(params?: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<SessionSnapshotHealthIssue[]> {
-  const bundledSkillsDir = params?.bundledSkillsDir ?? resolveBundledSkillsDir();
+  const bundledSkillsDir = resolveSessionSnapshotBundledSkillsDir({
+    bundledSkillsDir: params?.bundledSkillsDir,
+  });
   if (!bundledSkillsDir) {
     return [];
   }
@@ -397,7 +451,9 @@ export async function noteSessionSnapshotHealth(params?: {
   env?: NodeJS.ProcessEnv;
   shouldRepair?: boolean;
 }) {
-  const bundledSkillsDir = params?.bundledSkillsDir ?? resolveBundledSkillsDir();
+  const bundledSkillsDir = resolveSessionSnapshotBundledSkillsDir({
+    bundledSkillsDir: params?.bundledSkillsDir,
+  });
   if (!bundledSkillsDir) {
     return;
   }

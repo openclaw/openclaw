@@ -217,6 +217,7 @@ function writeInstalledNpmPlugin(params: {
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
   declaredDependency?: { name: string; version: string };
+  emptyDependency?: { name: string; version: string };
   declaredMissingOptionalDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
   openclaw?: Record<string, unknown>;
@@ -233,7 +234,7 @@ function writeInstalledNpmPlugin(params: {
       name: params.packageName,
       version: params.version,
       openclaw: params.openclaw ?? { extensions: ["./dist/index.js"] },
-      ...(params.dependency || params.declaredDependency
+      ...(params.dependency || params.declaredDependency || params.emptyDependency
         ? {
             dependencies: {
               ...(params.dependency ? { [params.dependency.name]: params.dependency.version } : {}),
@@ -242,6 +243,9 @@ function writeInstalledNpmPlugin(params: {
               // paired with hoistedDependency = resolvable from the npm root).
               ...(params.declaredDependency
                 ? { [params.declaredDependency.name]: params.declaredDependency.version }
+                : {}),
+              ...(params.emptyDependency
+                ? { [params.emptyDependency.name]: params.emptyDependency.version }
                 : {}),
             },
           }
@@ -289,6 +293,11 @@ function writeInstalledNpmPlugin(params: {
       "utf-8",
     );
   }
+  if (params.emptyDependency) {
+    fs.mkdirSync(path.join(pluginDir, "node_modules", ...params.emptyDependency.name.split("/")), {
+      recursive: true,
+    });
+  }
   if (params.hoistedDependency) {
     const depDir = path.join(params.npmRoot, "node_modules", params.hoistedDependency.name);
     fs.mkdirSync(depDir, { recursive: true });
@@ -317,6 +326,7 @@ type MockNpmPackage = {
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
   declaredDependency?: { name: string; version: string };
+  emptyDependency?: { name: string; version: string };
   declaredMissingOptionalDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
   openclaw?: Record<string, unknown>;
@@ -950,6 +960,31 @@ describe("installPluginFromNpmSpec", () => {
 
     if (result.ok) {
       throw new Error("expected hollow dependency tree install to fail");
+    }
+    expect(result.error).toContain("@example/required-runtime");
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
+  });
+
+  it("rejects npm installs with empty required dependency directories", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/empty-deps";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: "empty-deps",
+      npmRoot,
+      emptyDependency: { name: "@example/required-runtime", version: "1.0.0" },
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    if (result.ok) {
+      throw new Error("expected empty required dependency directory to fail");
     }
     expect(result.error).toContain("@example/required-runtime");
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);

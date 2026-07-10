@@ -9,7 +9,7 @@ import { createSlackWebClient } from "./client.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
-export type SlackConversationInfo = {
+type SlackConversationInfo = {
   type: "channel" | "group" | "dm" | "unknown";
   user?: string;
 };

@@ -1,7 +1,5 @@
 // Gateway session listing and projection helpers.
 // Normalizes persisted session stores into UI/RPC rows without mutating state.
-import fs from "node:fs";
-import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -26,6 +24,7 @@ import {
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
+import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import {
   findModelCatalogEntry,
   modelSupportsInput,
@@ -38,9 +37,12 @@ import {
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
-  resolvePersistedSelectedModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import {
+  resolveSessionModelIdentityRef,
+  resolveSessionModelRef,
+} from "../agents/session-model-ref.js";
 import {
   buildSubagentRunReadIndex,
   countActiveDescendantRuns,
@@ -74,7 +76,6 @@ import {
 } from "../config/sessions.js";
 import { listSessionEntries as listAccessorSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
@@ -84,15 +85,8 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import {
-  AVATAR_MAX_BYTES,
-  isAvatarDataUrl,
-  isAvatarHttpUrl,
-  isPathWithinRoot,
-  isWorkspaceRelativeAvatarPath,
-  resolveAvatarMime,
-} from "../shared/avatar-policy.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -154,66 +148,12 @@ export type {
   SessionsPreviewEntry,
   SessionsPreviewResult,
 } from "./session-utils.types.js";
+export {
+  resolveSessionModelIdentityRef,
+  resolveSessionModelRef,
+} from "../agents/session-model-ref.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
-
-function tryResolveExistingPath(value: string): string | null {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return null;
-  }
-}
-
-function resolveIdentityAvatarUrl(
-  cfg: OpenClawConfig,
-  agentId: string,
-  avatar: string | undefined,
-): string | undefined {
-  if (!avatar) {
-    return undefined;
-  }
-  const trimmed = normalizeOptionalString(avatar) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  if (isAvatarDataUrl(trimmed) || isAvatarHttpUrl(trimmed)) {
-    return trimmed;
-  }
-  if (!isWorkspaceRelativeAvatarPath(trimmed)) {
-    return undefined;
-  }
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const workspaceRoot = tryResolveExistingPath(workspaceDir) ?? path.resolve(workspaceDir);
-  const resolvedCandidate = path.resolve(workspaceRoot, trimmed);
-  if (!isPathWithinRoot(workspaceRoot, resolvedCandidate)) {
-    return undefined;
-  }
-  try {
-    // Avatars can be workspace-relative, but projection must keep the file
-    // read inside the agent workspace and cap bytes before encoding.
-    const opened = openRootFileSync({
-      absolutePath: resolvedCandidate,
-      rootPath: workspaceRoot,
-      rootRealPath: workspaceRoot,
-      boundaryLabel: "workspace root",
-      maxBytes: AVATAR_MAX_BYTES,
-      skipLexicalRootCheck: true,
-    });
-    if (!opened.ok) {
-      return undefined;
-    }
-    try {
-      const buffer = fs.readFileSync(opened.fd);
-      const mime = resolveAvatarMime(resolvedCandidate);
-      return `data:${mime};base64,${buffer.toString("base64")}`;
-    } finally {
-      fs.closeSync(opened.fd);
-    }
-  } catch {
-    return undefined;
-  }
-}
 
 function formatSessionIdPrefix(sessionId: string, updatedAt?: number | null): string {
   const prefix = sessionId.slice(0, 8);
@@ -229,7 +169,7 @@ function truncateTitle(text: string, maxLen: number): string {
   if (text.length <= maxLen) {
     return text;
   }
-  const cut = text.slice(0, maxLen - 1);
+  const cut = truncateUtf16Safe(text, maxLen - 1);
   const lastSpace = cut.lastIndexOf(" ");
   if (lastSpace > maxLen * 0.6) {
     return cut.slice(0, lastSpace) + "…";
@@ -1045,7 +985,7 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
   };
 }
 
-export function resolveFreshestSessionStoreMatchFromStoreKeys(
+function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
@@ -1255,21 +1195,20 @@ export function listAgentsForGateway(
     if (!entry?.id) {
       continue;
     }
+    const agentId = normalizeAgentId(entry.id);
     const configuredName = normalizeOptionalString(entry.name);
+    const avatar = normalizeOptionalString(entry.identity?.avatar);
+    const avatarUrl = resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),
           theme: normalizeOptionalString(entry.identity.theme),
           emoji: normalizeOptionalString(entry.identity.emoji),
-          avatar: normalizeOptionalString(entry.identity.avatar),
-          avatarUrl: resolveIdentityAvatarUrl(
-            cfg,
-            normalizeAgentId(entry.id),
-            normalizeOptionalString(entry.identity.avatar),
-          ),
+          avatar,
+          avatarUrl,
         }
       : undefined;
-    configuredById.set(normalizeAgentId(entry.id), {
+    configuredById.set(agentId, {
       name: configuredName ?? identity?.name,
       identity,
     });
@@ -1570,7 +1509,7 @@ export function resolveGatewaySessionStoreTarget(params: {
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
-export function resolveGatewaySessionThinkingDefault(params: {
+function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
@@ -1620,59 +1559,6 @@ export function getSessionDefaults(
       modelCatalog,
     }),
   };
-}
-
-export function resolveSessionModelRef(
-  cfg: OpenClawConfig,
-  entry?:
-    | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
-  agentId?: string,
-  options?: { allowPluginNormalization?: boolean },
-): { provider: string; model: string } {
-  const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: entry?.providerOverride,
-    modelOverride: entry?.modelOverride,
-  });
-  if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
-    return resolvePersistedSelectedModelRef({
-      defaultProvider: normalizedOverride.providerOverride,
-      overrideProvider: normalizedOverride.providerOverride,
-      overrideModel: normalizedOverride.modelOverride,
-      allowPluginNormalization: options?.allowPluginNormalization,
-    })!;
-  }
-  const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
-  const runtimeModel = normalizeOptionalString(entry?.model);
-  if (runtimeProvider && runtimeModel) {
-    return { provider: runtimeProvider, model: runtimeModel };
-  }
-
-  const resolved = agentId
-    ? resolveDefaultModelForAgent({
-        cfg,
-        agentId,
-        allowPluginNormalization: options?.allowPluginNormalization,
-      })
-    : resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-        allowPluginNormalization: options?.allowPluginNormalization,
-      });
-
-  const persisted = resolvePersistedSelectedModelRef({
-    defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-    runtimeProvider,
-    runtimeModel,
-    overrideProvider: normalizedOverride.providerOverride,
-    overrideModel: normalizedOverride.modelOverride,
-    allowPluginNormalization: options?.allowPluginNormalization,
-  });
-  if (persisted) {
-    return persisted;
-  }
-  return resolved;
 }
 
 export async function resolveGatewayModelSupportsImages(params: {
@@ -1746,62 +1632,6 @@ export async function resolveGatewayModelSupportsImages(params: {
   } catch {
     return false;
   }
-}
-
-export function resolveSessionModelIdentityRef(
-  cfg: OpenClawConfig,
-  entry?:
-    | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
-  agentId?: string,
-  fallbackModelRef?: string,
-  options?: { allowPluginNormalization?: boolean },
-): { provider?: string; model: string } {
-  const runtimeModel = entry?.model?.trim();
-  const runtimeProvider = entry?.modelProvider?.trim();
-  if (runtimeModel) {
-    if (runtimeProvider) {
-      return { provider: runtimeProvider, model: runtimeModel };
-    }
-    const inferredProvider = inferUniqueProviderFromConfiguredModels({
-      cfg,
-      model: runtimeModel,
-    });
-    if (inferredProvider) {
-      return { provider: inferredProvider, model: runtimeModel };
-    }
-    if (runtimeModel.includes("/")) {
-      const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER, {
-        allowPluginNormalization: options?.allowPluginNormalization,
-      });
-      if (parsedRuntime) {
-        return { provider: parsedRuntime.provider, model: parsedRuntime.model };
-      }
-      return { model: runtimeModel };
-    }
-    return { model: runtimeModel };
-  }
-  const fallbackRef = fallbackModelRef?.trim();
-  if (fallbackRef) {
-    const parsedFallback = parseModelRef(fallbackRef, DEFAULT_PROVIDER, {
-      allowPluginNormalization: options?.allowPluginNormalization,
-    });
-    if (parsedFallback) {
-      return { provider: parsedFallback.provider, model: parsedFallback.model };
-    }
-    const inferredProvider = inferUniqueProviderFromConfiguredModels({
-      cfg,
-      model: fallbackRef,
-    });
-    if (inferredProvider) {
-      return { provider: inferredProvider, model: fallbackRef };
-    }
-    return { model: fallbackRef };
-  }
-  const resolved = resolveSessionModelRef(cfg, entry, agentId, {
-    allowPluginNormalization: options?.allowPluginNormalization,
-  });
-  return { provider: resolved.provider, model: resolved.model };
 }
 
 function resolveSessionDisplayModelIdentityRefCached(params: {

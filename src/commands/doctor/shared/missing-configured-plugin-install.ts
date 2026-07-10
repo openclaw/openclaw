@@ -1555,10 +1555,18 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     ...missingRequiredDependencyPluginIds,
     ...staleVersionBoundRuntimePluginIds,
   ]);
+  // Missing-dependency records are repaired through the persisted updater even
+  // when their configured id maps to an official package. Keep detection on
+  // that same route so a mismatched official candidate cannot suppress it.
+  const officialReplacementRepairablePluginIds = new Set(
+    [...repairableInstalledPluginIds].filter(
+      (pluginId) => !missingRequiredDependencyPluginIds.has(pluginId),
+    ),
+  );
   const officialReplacementInstallCandidates = collectOfficialReplacementInstallCandidates({
     cfg: params.cfg,
     env,
-    repairablePluginIds: repairableInstalledPluginIds,
+    repairablePluginIds: officialReplacementRepairablePluginIds,
     configuredPluginIds: pluginIds,
     configuredChannelIds: channelIds,
     configuredChannelOwnerPluginIds,
@@ -2026,10 +2034,18 @@ async function repairMissingPluginInstalls(params: {
     ...installedPluginIdsWithMissingRequiredDependencies,
     ...installedPluginIdsWithStaleVersionBoundRuntimePackages,
   ]);
+  // Missing-dependency repairs must retain the active npm tree before update so
+  // the installer creates a fresh activation generation. Route them through the
+  // persisted-record updater below instead of the direct official replacement.
+  const officialReplacementRepairablePluginIds = new Set(
+    [...installedPluginIdsWithRepairablePackages].filter(
+      (pluginId) => !installedPluginIdsWithMissingRequiredDependencies.has(pluginId),
+    ),
+  );
   const officialReplacementInstallCandidates = collectOfficialReplacementInstallCandidates({
     cfg: params.cfg,
     env,
-    repairablePluginIds: installedPluginIdsWithRepairablePackages,
+    repairablePluginIds: officialReplacementRepairablePluginIds,
     configuredPluginIds: params.pluginIds,
     configuredChannelIds: params.channelIds,
     configuredChannelOwnerPluginIds,
@@ -2110,6 +2126,7 @@ async function repairMissingPluginInstalls(params: {
       }
     };
 
+    const preparedMissingRecordedPluginIds: string[] = [];
     for (const pluginId of missingRecordedPluginIds) {
       const record = nextRecords[pluginId];
       if (!record) {
@@ -2117,22 +2134,30 @@ async function repairMissingPluginInstalls(params: {
       }
       if (installedPluginIdsWithMissingRequiredDependencies.has(pluginId)) {
         const installPath = resolveRecordInstallPath(record, env);
-        if (installPath) {
-          try {
-            if (
-              await markRetainedManagedNpmInstall({
-                packageDir: installPath,
-                pluginId,
-                reason: "doctor-missing-required-dependencies",
-              })
-            ) {
-              retainedDependencyRepairInstallPaths.set(pluginId, installPath);
-            }
-          } catch (error) {
+        if (!installPath) {
+          warnings.push(
+            `Failed to prepare a fresh dependency-repair generation for "${pluginId}": no active install path is recorded.`,
+          );
+          continue;
+        }
+        try {
+          const retained = await markRetainedManagedNpmInstall({
+            packageDir: installPath,
+            pluginId,
+            reason: "doctor-missing-required-dependencies",
+          });
+          if (!retained) {
             warnings.push(
-              `Failed to prepare a fresh dependency-repair generation for "${pluginId}" at ${installPath}: ${String(error)}`,
+              `Failed to prepare a fresh dependency-repair generation for "${pluginId}" at ${installPath}: retention marker was not created.`,
             );
+            continue;
           }
+          retainedDependencyRepairInstallPaths.set(pluginId, installPath);
+        } catch (error) {
+          warnings.push(
+            `Failed to prepare a fresh dependency-repair generation for "${pluginId}" at ${installPath}: ${String(error)}`,
+          );
+          continue;
         }
       }
       const forced = forceNpmInstallRecordRepair(record);
@@ -2142,70 +2167,76 @@ async function repairMissingPluginInstalls(params: {
         }
         nextRecords[pluginId] = forced;
       }
+      preparedMissingRecordedPluginIds.push(pluginId);
     }
-    let updateResult: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
-    try {
-      updateResult = await updateNpmInstalledPlugins({
-        config: {
-          ...params.cfg,
-          plugins: {
-            ...params.cfg.plugins,
-            installs: nextRecords,
+    if (preparedMissingRecordedPluginIds.length > 0) {
+      let updateResult: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
+      try {
+        updateResult = await updateNpmInstalledPlugins({
+          config: {
+            ...params.cfg,
+            plugins: {
+              ...params.cfg.plugins,
+              installs: nextRecords,
+            },
           },
-        },
-        pluginIds: missingRecordedPluginIds,
-        updateChannel,
-        coreVersion: resolveCompatibilityHostVersion(env),
-        logger: {
-          terminalLinks: false,
-          warn: (message) => {
-            if (isClawHubReviewNotice(message)) {
-              notices.push(stripAnsi(message));
-              return;
-            }
-            warnings.push(message);
+          pluginIds: preparedMissingRecordedPluginIds,
+          updateChannel,
+          coreVersion: resolveCompatibilityHostVersion(env),
+          logger: {
+            terminalLinks: false,
+            warn: (message) => {
+              if (isClawHubReviewNotice(message)) {
+                notices.push(stripAnsi(message));
+                return;
+              }
+              warnings.push(message);
+            },
+            error: (message) => warnings.push(message),
           },
-          error: (message) => warnings.push(message),
-        },
-        ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-        ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
-      });
-    } catch (error) {
-      await clearDependencyRepairRetention(retainedDependencyRepairInstallPaths.keys());
-      throw error;
-    }
-    const completedDependencyRepairPluginIds = new Set<string>();
-    for (const outcome of updateResult.outcomes) {
-      if (outcome.status === "updated" || outcome.status === "unchanged") {
-        completedDependencyRepairPluginIds.add(outcome.pluginId);
-        repairedPluginIds.add(outcome.pluginId);
-        changes.push(
-          installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
-            ? `Refreshed stale configured plugin "${outcome.pluginId}".`
-            : installedPluginIdsWithRepairablePackageDiagnostics.has(outcome.pluginId) ||
-                installedPluginIdsWithMissingRequiredDependencies.has(outcome.pluginId)
-              ? `Repaired broken installed plugin "${outcome.pluginId}".`
-              : `Repaired missing configured plugin "${outcome.pluginId}".`,
-        );
-      } else if (outcome.status === "error") {
-        warnings.push(outcome.message);
-        failedPluginIds.add(outcome.pluginId);
-      } else if (isActionableClawHubSkippedOutcome(outcome)) {
-        warnings.push(
-          appendClawHubRiskAcknowledgementGuidance({
-            message: outcome.message,
-            spec: recordClawHubInstallSpec(nextRecords[outcome.pluginId]),
-          }),
-        );
-        failedPluginIds.add(outcome.pluginId);
+          ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+          ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+        });
+      } catch (error) {
+        await clearDependencyRepairRetention(retainedDependencyRepairInstallPaths.keys());
+        throw error;
       }
+      const completedDependencyRepairPluginIds = new Set<string>();
+      for (const outcome of updateResult.outcomes) {
+        if (outcome.status === "updated" || outcome.status === "unchanged") {
+          completedDependencyRepairPluginIds.add(outcome.pluginId);
+          repairedPluginIds.add(outcome.pluginId);
+          changes.push(
+            installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
+              ? `Refreshed stale configured plugin "${outcome.pluginId}".`
+              : installedPluginIdsWithRepairablePackageDiagnostics.has(outcome.pluginId) ||
+                  installedPluginIdsWithMissingRequiredDependencies.has(outcome.pluginId)
+                ? `Repaired broken installed plugin "${outcome.pluginId}".`
+                : `Repaired missing configured plugin "${outcome.pluginId}".`,
+          );
+        } else if (outcome.status === "error") {
+          warnings.push(outcome.message);
+          failedPluginIds.add(outcome.pluginId);
+        } else if (isActionableClawHubSkippedOutcome(outcome)) {
+          warnings.push(
+            appendClawHubRiskAcknowledgementGuidance({
+              message: outcome.message,
+              spec: recordClawHubInstallSpec(nextRecords[outcome.pluginId]),
+            }),
+          );
+          failedPluginIds.add(outcome.pluginId);
+        } else {
+          warnings.push(outcome.message);
+          failedPluginIds.add(outcome.pluginId);
+        }
+      }
+      await clearDependencyRepairRetention(
+        [...retainedDependencyRepairInstallPaths.keys()].filter(
+          (pluginId) => !completedDependencyRepairPluginIds.has(pluginId),
+        ),
+      );
+      nextRecords = updateResult.config.plugins?.installs ?? nextRecords;
     }
-    await clearDependencyRepairRetention(
-      [...retainedDependencyRepairInstallPaths.keys()].filter(
-        (pluginId) => !completedDependencyRepairPluginIds.has(pluginId),
-      ),
-    );
-    nextRecords = updateResult.config.plugins?.installs ?? nextRecords;
   }
 
   const missingPluginIds = new Set(

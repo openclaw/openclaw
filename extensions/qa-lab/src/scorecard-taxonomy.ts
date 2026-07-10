@@ -456,7 +456,7 @@ function formatZodIssuePath(pathLocal: PropertyKey[]) {
   return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
 }
 
-export function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
+function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
   const parsed = qaMaturityTaxonomySchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -467,7 +467,7 @@ export function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXO
   throw new Error(`${label}: ${issues}`);
 }
 
-export function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
+function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
   const parsed = qaMaturityScoresSchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -574,7 +574,7 @@ export function activeQaMaturityTaxonomySurfaces(taxonomy: QaMaturityTaxonomy) {
   return taxonomy.surfaces.filter((surface) => !surface.archived);
 }
 
-export function buildQaMaturityTaxonomyCategoryIndex(
+function buildQaMaturityTaxonomyCategoryIndex(
   taxonomy: QaMaturityTaxonomy,
 ): QaMaturityTaxonomyCategoryIndex {
   const active = activeQaMaturityTaxonomySurfaces(taxonomy);
@@ -639,7 +639,7 @@ function expectedMaturitySurfaceLtsStatus(supportedCategories: number, totalCate
   return supportedCategories === totalCategories ? "full" : "partial";
 }
 
-export function validateQaMaturityScoresAgainstTaxonomy(params: {
+function validateQaMaturityScoresAgainstTaxonomy(params: {
   coverageScores?: QaMaturityCoverageScores;
   scores: QaMaturityScores;
   taxonomy: QaMaturityTaxonomy;

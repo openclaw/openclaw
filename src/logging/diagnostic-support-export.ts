@@ -6,6 +6,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseConfigJson5 } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
+import { buildConfigSchema } from "../config/schema.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { VERSION } from "../version.js";
 import {
@@ -291,7 +292,10 @@ function sanitizeConfigShape(
 }
 
 function sanitizeConfigDetails(parsed: unknown, redaction: SupportRedactionContext): unknown {
-  return sanitizeSupportConfigValue(redactConfigObject(parsed), redaction);
+  return sanitizeSupportConfigValue(
+    redactConfigObject(parsed, buildConfigSchema().uiHints),
+    redaction,
+  );
 }
 
 function configShapeReadFailure(params: {
@@ -670,7 +674,7 @@ function resolveOutputPath(options: {
   return resolved;
 }
 
-export async function buildDiagnosticSupportExport(
+async function buildDiagnosticSupportExport(
   options: DiagnosticSupportExportOptions = {},
 ): Promise<DiagnosticSupportExportArtifact> {
   const env = options.env ?? process.env;

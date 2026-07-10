@@ -16,7 +16,7 @@ type LogbookSnapshotParams = {
   quality?: number;
 };
 
-export type LogbookSnapshotPayload = { format: "jpeg"; base64: string } | { error: string };
+type LogbookSnapshotPayload = { format: "jpeg"; base64: string } | { error: string };
 
 function readParams(value: unknown): LogbookSnapshotParams {
   if (!value || typeof value !== "object") {

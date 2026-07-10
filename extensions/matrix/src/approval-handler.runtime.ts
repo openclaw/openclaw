@@ -129,7 +129,7 @@ type MatrixPrepareTargetParams = {
 const MATRIX_APPROVAL_DELIVERY_ATTEMPTS = 3;
 const MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS = 250;
 
-export type MatrixApprovalHandlerDeps = {
+type MatrixApprovalHandlerDeps = {
   nowMs?: () => number;
   sendMessage?: typeof sendMessageMatrix;
   sendSingleTextMessage?: typeof sendSingleTextMessageMatrix;
