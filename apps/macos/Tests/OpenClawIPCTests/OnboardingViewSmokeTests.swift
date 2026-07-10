@@ -1,6 +1,7 @@
 import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
+import OpenClawKit
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -223,7 +224,7 @@ struct OnboardingViewSmokeTests {
         }
     }
 
-    @Test func `manual remote endpoint edit clears stale discovery identity`() {
+    @Test func `manual remote endpoint edit clears stale discovery identity`() throws {
         let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
         let previousPending = UserDefaults.standard.object(forKey: onboardingCrestodianPendingKey)
         defer {
@@ -240,8 +241,20 @@ struct OnboardingViewSmokeTests {
         state.connectionMode = .remote
         state.remoteTransport = .direct
         state.remoteUrl = "wss://gateway-a.example.test"
-        let view = OnboardingView(state: state)
+        let gatewaySession = GatewayTestWebSocketSession()
+        let gatewayURL = try #require(URL(string: "wss://gateway-a.example.test"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: gatewayURL, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: gatewaySession))
+        let view = OnboardingView(state: state, aiSetupGateway: gateway)
         view.preferredGatewayID = "gateway-a"
+        view.aiSetup.manualKey = "route-a-secret"
+        view.aiSetup.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
+        view.aiSetup.acceptVerifiedPendingInference(modelRef: "openai/gpt-5.5")
+        let priorChat = view.crestodianState.chat
+        view.crestodianState.isPresented = true
+        view.remoteProbeState = .ok(RemoteGatewayProbeSuccess(authSource: .sharedToken))
+        view.remoteAuthIssue = .tokenMismatch
 
         view.updateManualRemoteURL("wss://gateway-b.example.test")
 
@@ -254,6 +267,14 @@ struct OnboardingViewSmokeTests {
         #expect(editedRouteIdentity != "remote:id:gateway-a")
         #expect(OnboardingCrestodianResumeStore.isPending(for: "remote:id:gateway-a"))
         #expect(!OnboardingCrestodianResumeStore.isPending(for: editedRouteIdentity))
+        #expect(view.aiSetup.phase == .idle)
+        #expect(!view.aiSetup.connected)
+        #expect(view.aiSetup.manualKey.isEmpty)
+        #expect(!view.crestodianState.isPresented)
+        #expect(view.crestodianState.chat !== priorChat)
+        #expect(view.remoteProbeState == .idle)
+        #expect(view.remoteAuthIssue == nil)
+        #expect(gatewaySession.snapshotMakeCount() == 0)
     }
 
     @Test func `same persisted remote selection preserves pending gateway setup state`() async {

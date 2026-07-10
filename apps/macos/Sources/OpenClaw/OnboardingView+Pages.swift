@@ -145,6 +145,8 @@ extension OnboardingView {
             }
         }
         .onChange(of: self.state.connectionMode) { _, newValue in
+            // The root view's mode observer calls handleConnectionModeChange(), which
+            // retires route-owned AI/Crestodian state. This nested observer owns probe copy only.
             guard Self.shouldResetRemoteProbeFeedback(
                 for: newValue,
                 suppressReset: self.suppressRemoteProbeReset)
@@ -152,19 +154,19 @@ extension OnboardingView {
             self.resetRemoteProbeFeedback()
         }
         .onChange(of: self.state.remoteTransport) { _, _ in
-            self.resetRemoteProbeFeedback()
+            self.retireGatewayStateForRemoteEndpointEdit()
         }
         .onChange(of: self.state.remoteTarget) { _, _ in
-            self.resetRemoteProbeFeedback()
+            self.retireGatewayStateForRemoteEndpointEdit()
         }
         .onChange(of: self.state.remoteUrl) { _, _ in
-            self.resetRemoteProbeFeedback()
+            self.retireGatewayStateForRemoteEndpointEdit()
         }
         .onChange(of: self.state.remoteToken) { _, _ in
-            self.resetRemoteProbeFeedback()
+            self.retireGatewayStateForRemoteEndpointEdit()
         }
         .onChange(of: self.state.remoteIdentity) { _, _ in
-            self.resetRemoteProbeFeedback()
+            self.retireGatewayStateForRemoteEndpointEdit()
         }
     }
 
@@ -352,20 +354,30 @@ extension OnboardingView {
 
     func updateManualRemoteTransport(_ value: AppState.RemoteTransport) {
         guard value != self.state.remoteTransport else { return }
+        self.retireGatewayStateForRemoteEndpointEdit()
         self.clearPreferredGatewayForManualEndpointEdit()
         self.state.remoteTransport = value
     }
 
     func updateManualRemoteURL(_ value: String) {
         guard value != self.state.remoteUrl else { return }
+        self.retireGatewayStateForRemoteEndpointEdit()
         self.clearPreferredGatewayForManualEndpointEdit()
         self.state.remoteUrl = value
     }
 
     func updateManualRemoteTarget(_ value: String) {
         guard value != self.state.remoteTarget else { return }
+        self.retireGatewayStateForRemoteEndpointEdit()
         self.clearPreferredGatewayForManualEndpointEdit()
         self.state.remoteTarget = value
+    }
+
+    func retireGatewayStateForRemoteEndpointEdit() {
+        self.resetRemoteProbeFeedback()
+        // Editing only retires work owned by the old route. The durable lease
+        // survives, and Check connection / the AI page probes the finished value.
+        self.resetGatewayBoundAIState()
     }
 
     private func clearPreferredGatewayForManualEndpointEdit() {
@@ -582,10 +594,9 @@ extension OnboardingView {
         }
     }
 
-    private func resetRemoteProbeFeedback() {
+    func resetRemoteProbeFeedback() {
         self.remoteProbeState = .idle
         self.remoteAuthIssue = nil
-        self.restartGatewayBoundAISetup()
     }
 
     static func remoteAuthPromptStyle(

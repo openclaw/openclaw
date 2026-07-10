@@ -124,21 +124,6 @@ extension OnboardingView {
         self.crestodianState.resetForGatewayChange()
     }
 
-    func restartGatewayBoundAISetup(updatePageMonitoring: ((Int) -> Void)? = nil) {
-        self.resetGatewayBoundAIState()
-        self.returnToInferenceSetupIfNeeded()
-        if let updatePageMonitoring {
-            updatePageMonitoring(self.activePageIndex)
-            self.probeConfiguredGatewayForDashboard(
-                startAISetupWhenMissing: self.activePageIndex == self.aiPageIndex)
-            return
-        }
-        // A route edit can leave the page cursor unchanged, so explicitly restart its work.
-        self.updateMonitoring(for: self.activePageIndex)
-        self.probeConfiguredGatewayForDashboard(
-            startAISetupWhenMissing: self.activePageIndex == self.aiPageIndex)
-    }
-
     @discardableResult
     func probeConfiguredGatewayForDashboard(
         startAISetupWhenMissing: Bool = false,

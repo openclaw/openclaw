@@ -37,6 +37,7 @@ extension OnboardingView {
             // The mode can remain `.remote` while the selected Gateway changes,
             // so its onChange hook alone cannot retire route-bound state.
             self.resetGatewayBoundAIState()
+            self.resetRemoteProbeFeedback()
         }
         self.defaultsToLocalGateway = false
         self.preferredGatewayID = gateway.stableID
