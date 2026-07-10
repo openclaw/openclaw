@@ -1,71 +1,11 @@
 {
-<<<<<<< HEAD
-  "fallbackKeys": [
-    "chat.runControls.newSessionDisconnected",
-    "chat.sidebar.chats",
-    "chat.sidebar.workSessions",
-    "newSession.baseBranch",
-    "newSession.createFailed",
-    "newSession.draftRow",
-    "newSession.folder",
-    "newSession.folderPlaceholder",
-    "newSession.gateway",
-    "newSession.hint",
-    "newSession.messagePlaceholder",
-    "newSession.start",
-    "newSession.starting",
-    "newSession.title",
-    "newSession.where",
-    "newSession.worktree",
-    "newSession.worktreeName",
-    "newSession.worktreeNameInvalid",
-    "newSession.worktreeNamePlaceholder",
-    "newSession.worktreeUnavailable"
-  ],
-  "generatedAt": "2026-07-10T16:19:28.415Z",
-||||||| parent of 19a47310100 (fix(ui): translate new sidebar/session strings and refresh docs map)
-  "fallbackKeys": [
-    "chat.runControls.newSessionDisconnected",
-    "chat.sidebar.chats",
-    "chat.sidebar.workSessions",
-    "newSession.baseBranch",
-    "newSession.createFailed",
-    "newSession.draftRow",
-    "newSession.folder",
-    "newSession.folderPlaceholder",
-    "newSession.gateway",
-    "newSession.hint",
-    "newSession.messagePlaceholder",
-    "newSession.start",
-    "newSession.starting",
-    "newSession.title",
-    "newSession.where",
-    "newSession.worktree",
-    "newSession.worktreeName",
-    "newSession.worktreeNameInvalid",
-    "newSession.worktreeNamePlaceholder",
-    "newSession.worktreeUnavailable"
-  ],
-  "generatedAt": "2026-07-10T15:02:21.138Z",
-=======
   "fallbackKeys": [],
   "generatedAt": "2026-07-10T15:20:54.200Z",
->>>>>>> 19a47310100 (fix(ui): translate new sidebar/session strings and refresh docs map)
   "locale": "ja-JP",
   "model": "gpt-5.5",
   "provider": "openai",
-<<<<<<< HEAD
-  "sourceHash": "35a12c3cc0db3f1f7d922165798bb48ee37176e86bf63de09844b095c3f046e8",
-  "totalKeys": 1936,
-  "translatedKeys": 1916,
-||||||| parent of 19a47310100 (fix(ui): translate new sidebar/session strings and refresh docs map)
-  "sourceHash": "3eb549be4493eaa6b713a6d78ef8e29ed5bcf81fc01a20116a56a0c2c4158009",
-  "totalKeys": 1925,
-  "translatedKeys": 1905,
-=======
   "sourceHash": "3eb549be4493eaa6b713a6d78ef8e29ed5bcf81fc01a20116a56a0c2c4158009",
   "totalKeys": 1925,
   "translatedKeys": 1925,
->>>>>>> 19a47310100 (fix(ui): translate new sidebar/session strings and refresh docs map)
   "workflow": 1
 }
