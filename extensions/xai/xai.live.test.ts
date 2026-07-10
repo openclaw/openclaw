@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
+import type { OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -96,6 +98,20 @@ const registerXaiPlugin = () =>
     name: "xAI Provider",
   });
 
+function registerXaiToolFactories(): Map<string, OpenClawPluginToolFactory> {
+  const factories = new Map<string, OpenClawPluginToolFactory>();
+  plugin.register(
+    createTestPluginApi({
+      registerTool(tool, options) {
+        if (typeof tool === "function" && options?.name) {
+          factories.set(options.name, tool);
+        }
+      },
+    }),
+  );
+  return factories;
+}
+
 async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<void> {
   try {
     await run();
@@ -114,6 +130,76 @@ function isRealtimeOpenBillingDrift(error: Error): boolean {
 }
 
 describeLive("xai plugin live", () => {
+  it("gates registered billed tools and honors explicit cross-provider consent", async () => {
+    await runXaiLiveCase("billed-tool-policy", async () => {
+      const codeExecutionFactory = registerXaiToolFactories().get("code_execution");
+      if (!codeExecutionFactory) {
+        throw new Error("expected code_execution factory to be registered");
+      }
+      const baseConfig = {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: { apiKey: XAI_API_KEY },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const explicitConfig = {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: { apiKey: XAI_API_KEY },
+                codeExecution: { enabled: true, maxTurns: 1, timeoutSeconds: 90 },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        codeExecutionFactory({
+          config: baseConfig,
+          activeModel: { provider: "xai", modelId: "grok-4.3" },
+        }),
+      ).not.toBeNull();
+      expect(
+        codeExecutionFactory({
+          config: baseConfig,
+          activeModel: { provider: "openai", modelId: "gpt-5.4" },
+        }),
+      ).toBeNull();
+      expect(
+        codeExecutionFactory({
+          config: explicitConfig,
+        }),
+      ).toBeNull();
+
+      const explicitCrossProviderTool = codeExecutionFactory({
+        config: explicitConfig,
+        activeModel: { provider: "openai", modelId: "gpt-5.4" },
+      });
+      if (!explicitCrossProviderTool || Array.isArray(explicitCrossProviderTool)) {
+        throw new Error("expected explicit cross-provider code_execution tool");
+      }
+      const result = await explicitCrossProviderTool.execute("code-execution:cross-provider-live", {
+        task: "Use the code interpreter to calculate 6 multiplied by 7.",
+      });
+      const details = (result.details ?? {}) as {
+        content?: string;
+        model?: string;
+        usedCodeExecution?: boolean;
+      };
+
+      expect(details.model).toBe("grok-4.3");
+      expect(details.usedCodeExecution).toBe(true);
+      expect(details.content).toContain("42");
+    });
+  }, 120_000);
+
   it("runs remote code execution with the current default model", async () => {
     await runXaiLiveCase("code-execution", async () => {
       const tool = createCodeExecutionTool({
