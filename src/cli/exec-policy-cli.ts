@@ -16,6 +16,7 @@ import {
   normalizeExecSecurity,
   normalizeExecTarget,
   readExecApprovalsSnapshot,
+  resolveExecApprovalsFromFile,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
   type ExecApprovalsFile,
@@ -26,6 +27,9 @@ import {
 import { defaultRuntime } from "../runtime.js";
 
 type ExecPolicyPresetName = "yolo" | "cautious" | "deny-all";
+
+const EXEC_SECURITY_PERMISSIVENESS = { deny: 0, allowlist: 1, full: 2 } as const;
+const EXEC_ASK_PERMISSIVENESS = { always: 0, "on-miss": 1, off: 2 } as const;
 
 type ExecPolicyResolved = {
   host?: ExecTarget;
@@ -207,6 +211,45 @@ function applyApprovalsDefaults(
   return next;
 }
 
+function buildExecPolicyApprovalsRollback(params: {
+  current: ExecApprovalsFile;
+  original: ExecApprovalsFile;
+  written: ExecApprovalsFile;
+  policy: ExecPolicyResolved;
+}): ExecApprovalsFile | null {
+  // Whole-file restore can lose to an unrelated concurrent edit. Revert only
+  // matching fields, and never loosen ambiguous same-value concurrent writes.
+  const fields = [
+    ["security", params.policy.security],
+    ["ask", params.policy.ask],
+    ["askFallback", params.policy.askFallback],
+  ] as const;
+  const originalDefaults = resolveExecApprovalsFromFile({ file: params.original }).defaults;
+  const currentDefaults = resolveExecApprovalsFromFile({ file: params.current }).defaults;
+  const next = structuredClone(params.current);
+  let changed = false;
+  for (const [field, appliedValue] of fields) {
+    const currentValue = params.current.defaults?.[field];
+    const originalValue = params.original.defaults?.[field];
+    const rollbackDoesNotLoosen =
+      field === "ask"
+        ? EXEC_ASK_PERMISSIVENESS[originalDefaults.ask] <=
+          EXEC_ASK_PERMISSIVENESS[currentDefaults.ask]
+        : EXEC_SECURITY_PERMISSIVENESS[originalDefaults[field]] <=
+          EXEC_SECURITY_PERMISSIVENESS[currentDefaults[field]];
+    if (
+      appliedValue !== undefined &&
+      currentValue === params.written.defaults?.[field] &&
+      currentValue !== originalValue &&
+      rollbackDoesNotLoosen
+    ) {
+      next.defaults = { ...next.defaults, [field]: originalValue };
+      changed = true;
+    }
+  }
+  return changed ? next : null;
+}
+
 function buildNextExecPolicyConfig(
   config: OpenClawConfig,
   policy: ExecPolicyResolved,
@@ -352,7 +395,24 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
       nextConfig,
     });
   } catch (err) {
-    await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash);
+    try {
+      if (!(await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash))) {
+        await updateExecApprovals({
+          update: (current) =>
+            buildExecPolicyApprovalsRollback({
+              current,
+              original: approvalsSnapshot.file,
+              written: writtenApprovals.file,
+              policy,
+            }),
+        });
+      }
+    } catch (rollbackError) {
+      throw new Error(
+        `Config update failed: ${formatExecPolicyError(err)}; exec approvals rollback failed: ${formatExecPolicyError(rollbackError)}`,
+        { cause: rollbackError },
+      );
+    }
     throw err;
   }
   return await buildLocalExecPolicyShowPayload();
