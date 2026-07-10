@@ -47,6 +47,8 @@ import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citati
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
   INTERNAL_MESSAGE_CHANNEL,
   type GatewayClientMode,
   type GatewayClientName,
@@ -92,7 +94,12 @@ import {
   resolveEffectiveMessageToolsConfig,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
-import { executePollAction, executeSendAction } from "./outbound-send-service.js";
+import {
+  executePollAction,
+  executeSendAction,
+  hasCorePresentationDelivery,
+  materializeMessagePresentationFallback,
+} from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
@@ -202,9 +209,9 @@ async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
+  const { callGateway, callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
-  return await callGatewayLeastPrivilege<T>({
+  const callParams = {
     url: gateway.url,
     token: gateway.token,
     method: "message.action",
@@ -213,6 +220,26 @@ async function callGatewayMessageAction<T>(params: {
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
+  };
+  const isTrustedBackendBridge =
+    gateway.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    gateway.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  const requesterAccountId = normalizeOptionalString(params.actionParams.requesterAccountId);
+  const requesterSenderId = normalizeOptionalString(params.actionParams.requesterSenderId);
+  const carriesTrustedRequester =
+    isTrustedBackendBridge &&
+    (requesterAccountId !== undefined ||
+      requesterSenderId !== undefined ||
+      params.actionParams.senderIsOwner !== undefined);
+  if (!carriesTrustedRequester) {
+    return await callGatewayLeastPrivilege<T>(callParams);
+  }
+  // Trusted requester fields come from inbound server context. The RPC needs
+  // admin scope to prove provenance; the Gateway recognizes this backend bridge
+  // and keeps channel-handler authorization at message.action least privilege.
+  return await callGateway<T>({
+    ...callParams,
+    scopes: ["operator.admin"],
   });
 }
 
@@ -489,7 +516,13 @@ function applySendPayloadPartsToActionParams(
   actionParams: Record<string, unknown>,
   parts: SendPayloadParts,
 ) {
-  actionParams.message = parts.message;
+  if (parts.message || !parts.payload.presentation) {
+    actionParams.message = parts.message;
+  } else {
+    // Presentation-only gateway handlers distinguish an omitted body from an
+    // explicit empty body when deciding whether to render semantic fallback.
+    delete actionParams.message;
+  }
   actionParams.media = parts.mediaUrl;
   actionParams.mediaUrl = parts.mediaUrl;
   actionParams.mediaUrls = parts.mediaUrls;
@@ -954,7 +987,11 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.push(...normalizedMediaUrls);
 
   message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text));
-  actionParams.message = message;
+  if (message || !hasPresentation) {
+    actionParams.message = message;
+  } else {
+    delete actionParams.message;
+  }
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
   }
@@ -990,7 +1027,11 @@ async function buildSendPayloadParts(params: {
   ) {
     throw new Error("send requires text or media");
   }
-  actionParams.message = message;
+  if (message || !hasPresentation) {
+    actionParams.message = message;
+  } else {
+    delete actionParams.message;
+  }
   const gifPlayback = readBooleanParam(actionParams, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(actionParams, "forceDocument") ??
@@ -1155,6 +1196,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     requesterSenderE164: input.requesterSenderE164,
   });
 
+  // Gateway action ownership wins even when this process has a render-capable
+  // outbound adapter; credentials and account selection may exist only remotely.
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
     params,
@@ -1177,6 +1220,23 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
   if (gatewayPluginAction) {
     return gatewayPluginAction;
+  }
+
+  const useCorePresentationDelivery = Boolean(
+    sendPayload.payload.presentation &&
+    hasCorePresentationDelivery(resolveOutboundChannelPlugin({ channel, cfg })?.outbound),
+  );
+  if (sendPayload.payload.presentation && !useCorePresentationDelivery) {
+    const fallbackMessage = materializeMessagePresentationFallback({
+      payload: sendPayload.payload,
+      text: sendPayload.message,
+    });
+    sendPayload = {
+      ...sendPayload,
+      message: fallbackMessage,
+      payload: { ...sendPayload.payload, text: fallbackMessage },
+    };
+    applySendPayloadPartsToActionParams(params, sendPayload);
   }
 
   const send = await executeSendAction({

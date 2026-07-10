@@ -38,6 +38,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "talk.event": [READ_SCOPE],
   "talk.mode": [WRITE_SCOPE],
   task: [READ_SCOPE],
+  "task.suggestion": [READ_SCOPE],
   "update.available": [],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],

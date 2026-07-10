@@ -928,6 +928,50 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("does not split a surrogate pair at the MCP metadata text limit", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-utf16-metadata-"));
+    const serverPath = path.join(tempDir, "utf16-metadata.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const safePrefix = "x".repeat(1_199);
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "utf16_tool",
+          description: `${safePrefix}🚀tail`,
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-utf16-metadata",
+      sessionKey: "agent:test:session-utf16-metadata",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            metadata: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools).toHaveLength(1);
+      expect(catalog.tools[0]?.description).toBe(`${safePrefix}...`);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects adversarial MCP tool filters without regex backtracking", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-linear-filter-"));
     const serverPath = path.join(tempDir, "linear-filter.mjs");
@@ -2512,11 +2556,10 @@ async function handle(message) {
     };
     if (await isFirstConnect()) {
       log("slow first initialize");
-      setTimeout(() => send(response), 600);
-    } else {
-      log("fast retry initialize");
-      send(response);
+      return;
     }
+    log("fast retry initialize");
+    send(response);
     return;
   }
   if (message.method === "tools/list") {
@@ -2582,11 +2625,29 @@ process.on("SIGINT", shutdown);`,
           LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
         );
 
-        const secondCatalog = await runtime.getCatalog();
-        await firstCatalog;
+        const secondCatalogPromise = runtime.getCatalog();
+        const [firstCatalogResult, secondCatalog] = await Promise.all([
+          firstCatalog,
+          secondCatalogPromise,
+        ]);
 
+        const firstSlowDiagnostic = firstCatalogResult.diagnostics?.find(
+          (diag) => diag.serverName === "slow",
+        );
+        expect(firstSlowDiagnostic?.message).toContain("timed out");
+        expect(firstCatalogResult.servers.slow).toBeUndefined();
         expect(secondCatalog.servers.trigger).toBeDefined();
-        expect(secondCatalog.diagnostics?.some((diag) => diag.serverName === "slow")).toBe(true);
+        const secondSlowDiagnostic = secondCatalog.diagnostics?.find(
+          (diag) => diag.serverName === "slow",
+        );
+        // A loaded runner can let generation one retire the timed-out client before
+        // generation two adopts it. Both the shared timeout and fast replacement are valid.
+        if (secondSlowDiagnostic) {
+          expect(secondSlowDiagnostic.message).toContain("timed out");
+          expect(secondCatalog.servers.slow).toBeUndefined();
+        } else {
+          expect(secondCatalog.servers.slow).toBeDefined();
+        }
         await waitForFileText(
           slowLogPath,
           "slow first initialize",
@@ -2610,9 +2671,7 @@ process.on("SIGINT", shutdown);`,
 
         const retriedCatalog = await runtime.getCatalog();
 
-        expect(retriedCatalog.diagnostics?.some((diag) => diag.serverName === "slow")).not.toBe(
-          true,
-        );
+        expect(retriedCatalog.diagnostics ?? []).toEqual([]);
         expect(retriedCatalog.servers.slow).toBeDefined();
         expect(retriedCatalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
           "poke",

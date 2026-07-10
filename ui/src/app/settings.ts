@@ -1,6 +1,9 @@
 // Control UI module implements storage behavior.
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
+export const NAV_WIDTH_MIN = 240;
+export const NAV_WIDTH_MAX = 400;
+export const NAV_WIDTH_DEFAULT = 258;
 const CURRENT_GATEWAY_SELECTION_KEY_PREFIX = "openclaw.control.currentGateway.v1:";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
@@ -42,9 +45,6 @@ import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
-export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
-export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
-
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 
@@ -64,19 +64,6 @@ export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
   return CHAT_SEND_SHORTCUTS.includes(value as ChatSendShortcut)
     ? (value as ChatSendShortcut)
     : "enter";
-}
-
-function snapBorderRadius(value: number): BorderRadiusStop {
-  let best: BorderRadiusStop = BORDER_RADIUS_STOPS[0];
-  let bestDist = Math.abs(value - best);
-  for (const stop of BORDER_RADIUS_STOPS) {
-    const dist = Math.abs(value - stop);
-    if (dist < bestDist) {
-      best = stop;
-      bestDist = dist;
-    }
-  }
-  return best;
 }
 
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
@@ -114,10 +101,10 @@ export type UiSettings = {
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
   sidebarMoreExpanded: boolean; // Whether the sidebar "More" section is expanded
-  borderRadius: number; // Corner roundness (0–100, default 50)
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
   locale?: string;
+  lobsterPetVisits?: boolean; // Whether the sidebar lobster pet drops by (default true)
 };
 
 type LastActiveSessionHost = {
@@ -150,6 +137,7 @@ type ApplicationStartupSettings = {
   password: string | null;
   pendingGatewayUrl: string | null;
   pendingGatewayToken: string | null;
+  pendingBootstrapToken: string | null;
   queryTokenUsed: boolean;
   location: ApplicationStartupLocation;
   changed: boolean;
@@ -170,6 +158,7 @@ export function resolveApplicationStartupSettings(
   let password: string | null = null;
   let pendingGatewayUrl: string | null = null;
   let pendingGatewayToken: string | null = null;
+  let pendingBootstrapToken: string | null = null;
   let queryTokenUsed = false;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
@@ -210,6 +199,7 @@ export function resolveApplicationStartupSettings(
       password,
       pendingGatewayUrl,
       pendingGatewayToken,
+      pendingBootstrapToken,
       queryTokenUsed,
       location,
       changed,
@@ -229,6 +219,8 @@ export function resolveApplicationStartupSettings(
   const hashToken = hashParams.get("token");
   const hasTokenParam = hashToken != null || queryToken != null;
   const token = normalizeOptionalString(hashToken ?? queryToken);
+  const hasBootstrapTokenParam = hashParams.has("bootstrapToken");
+  const bootstrapToken = normalizeOptionalString(hashParams.get("bootstrapToken"));
   const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
   const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
   let shouldCleanUrl = false;
@@ -251,6 +243,12 @@ export function resolveApplicationStartupSettings(
       updateSettings({ token });
     }
     hashParams.delete("token");
+    shouldCleanUrl = true;
+  }
+
+  if (hasBootstrapTokenParam) {
+    pendingBootstrapToken = bootstrapToken ?? null;
+    hashParams.delete("bootstrapToken");
     shouldCleanUrl = true;
   }
 
@@ -278,6 +276,8 @@ export function resolveApplicationStartupSettings(
     pendingGatewayUrl = gatewayUrlChanged ? nextGatewayUrl : null;
     if (!gatewayUrlChanged) {
       pendingGatewayToken = null;
+    } else if (pendingBootstrapToken) {
+      pendingGatewayToken = null;
     }
     params.delete("gatewayUrl");
     hashParams.delete("gatewayUrl");
@@ -295,6 +295,7 @@ export function resolveApplicationStartupSettings(
     password,
     pendingGatewayUrl,
     pendingGatewayToken,
+    pendingBootstrapToken,
     queryTokenUsed,
     location: shouldCleanUrl
       ? {
@@ -532,10 +533,9 @@ export function loadSettings(): UiSettings {
     chatSendShortcut: "enter",
     splitRatio: 0.6,
     navCollapsed: false,
-    navWidth: 220,
+    navWidth: NAV_WIDTH_DEFAULT,
     sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
     sidebarMoreExpanded: false,
-    borderRadius: 50,
     textScale: 100,
   };
 
@@ -599,7 +599,9 @@ export function loadSettings(): UiSettings {
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
-        typeof parsed.navWidth === "number" && parsed.navWidth >= 200 && parsed.navWidth <= 400
+        typeof parsed.navWidth === "number" &&
+        parsed.navWidth >= NAV_WIDTH_MIN &&
+        parsed.navWidth <= NAV_WIDTH_MAX
           ? parsed.navWidth
           : defaults.navWidth,
       sidebarPinnedRoutes:
@@ -608,15 +610,10 @@ export function loadSettings(): UiSettings {
         typeof parsed.sidebarMoreExpanded === "boolean"
           ? parsed.sidebarMoreExpanded
           : defaults.sidebarMoreExpanded,
-      borderRadius:
-        typeof parsed.borderRadius === "number" &&
-        parsed.borderRadius >= 0 &&
-        parsed.borderRadius <= 100
-          ? snapBorderRadius(parsed.borderRadius)
-          : defaults.borderRadius,
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
+      ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
     };
     if (source.legacy || "token" in parsed) {
       persistSettings(settings, { selectGateway: true });
@@ -699,11 +696,12 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,
     sidebarMoreExpanded: next.sidebarMoreExpanded,
-    borderRadius: next.borderRadius,
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
+    // Visits default on; only an explicit opt-out persists.
+    ...(next.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
   };
   const serialized = JSON.stringify(persisted);
   try {

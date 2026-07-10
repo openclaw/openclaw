@@ -323,6 +323,29 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  it("passes resolved agent context to compacted system prompt rebuilds", async () => {
+    resolveSessionAgentIdsMock.mockReturnValue({
+      defaultAgentId: "main",
+      sessionAgentId: "marketing-agent",
+    });
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:marketing-agent:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeInfo: expect.objectContaining({
+          agentId: "marketing-agent",
+          sessionKey: "agent:marketing-agent:session-1",
+        }),
+      }),
+    );
+  });
+
   it("keeps the embedded compaction system prompt after active tool selection", async () => {
     buildEmbeddedSystemPromptMock.mockReturnValueOnce("compaction system prompt");
 

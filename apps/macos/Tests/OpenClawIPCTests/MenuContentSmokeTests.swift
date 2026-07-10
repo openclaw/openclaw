@@ -80,4 +80,52 @@ struct MenuContentSmokeTests {
         #expect(shouldUseDefaultHandling)
         #expect(!didOpenDashboard)
     }
+
+    @Test func `connected configured gateway with inference opens dashboard instead of onboarding`() {
+        for mode in [AppState.ConnectionMode.local, .remote] {
+            let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
+                connectionMode: mode,
+                onboardingSeen: false,
+                hasStoredConnectionMode: false,
+                gatewayConnected: true,
+                configuredInferenceModel: " openai/gpt-5.5 ")
+
+            #expect(shouldOpen)
+        }
+    }
+
+    @Test func `connected configured gateway without inference keeps onboarding`() {
+        for model in [String?.none, "", "   "] {
+            let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
+                connectionMode: .remote,
+                onboardingSeen: false,
+                hasStoredConnectionMode: false,
+                gatewayConnected: true,
+                configuredInferenceModel: model)
+
+            #expect(!shouldOpen)
+        }
+    }
+
+    @Test func `disconnected configured gateway keeps onboarding recovery`() {
+        let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
+            connectionMode: .remote,
+            onboardingSeen: false,
+            hasStoredConnectionMode: false,
+            gatewayConnected: false,
+            configuredInferenceModel: "openai/gpt-5.5")
+
+        #expect(!shouldOpen)
+    }
+
+    @Test func `connected gateway from interrupted onboarding keeps onboarding`() {
+        let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
+            connectionMode: .local,
+            onboardingSeen: false,
+            hasStoredConnectionMode: true,
+            gatewayConnected: true,
+            configuredInferenceModel: "openai/gpt-5.5")
+
+        #expect(!shouldOpen)
+    }
 }
