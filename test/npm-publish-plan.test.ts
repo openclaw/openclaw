@@ -2,11 +2,152 @@
 import { describe, expect, it } from "vitest";
 import {
   collectReleaseVersionFloorErrors,
+  fetchNpmRegistryPackumentWithRetry,
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolvePublishedNpmVersionRoute,
   shouldRequireNpmDistTagMirrorAuth,
 } from "../scripts/lib/npm-publish-plan.mjs";
+
+function registryResponse(params: {
+  status?: number;
+  body?: string;
+  bodyError?: Error;
+  cancel?: () => void;
+}): Response {
+  const status = params.status ?? 200;
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    body: {
+      cancel: async () => {
+        params.cancel?.();
+      },
+    },
+    text: async () => {
+      if (params.bodyError) {
+        throw params.bodyError;
+      }
+      return params.body ?? "{}";
+    },
+  } as unknown as Response;
+}
+
+describe("fetchNpmRegistryPackumentWithRetry", () => {
+  it("retries a failed response body before returning the parsed packument", async () => {
+    const waits: number[] = [];
+    let fetchCalls = 0;
+    let cancelCalls = 0;
+    const packument = { versions: { "2026.7.1-beta.3": {} } };
+
+    const result = await fetchNpmRegistryPackumentWithRetry({
+      packageName: "@openclaw/meta-provider",
+      packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return registryResponse(
+          fetchCalls === 1
+            ? {
+                bodyError: new TypeError("terminated"),
+                cancel: () => {
+                  cancelCalls += 1;
+                },
+              }
+            : { body: JSON.stringify(packument) },
+        );
+      },
+      sleep: async (delayMs) => {
+        waits.push(delayMs);
+      },
+      createSignal: () => new AbortController().signal,
+    });
+
+    expect(result).toEqual({ status: 200, ok: true, packument });
+    expect(fetchCalls).toBe(2);
+    expect(cancelCalls).toBe(1);
+    expect(waits).toEqual([1000]);
+  });
+
+  it("keeps response body failures within the bounded retry budget", async () => {
+    const waits: number[] = [];
+    let fetchCalls = 0;
+    let cancelCalls = 0;
+
+    await expect(
+      fetchNpmRegistryPackumentWithRetry({
+        packageName: "@openclaw/meta-provider",
+        packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          return registryResponse({
+            bodyError: new DOMException("timed out", "AbortError"),
+            cancel: () => {
+              cancelCalls += 1;
+            },
+          });
+        },
+        sleep: async (delayMs) => {
+          waits.push(delayMs);
+        },
+        createSignal: () => new AbortController().signal,
+      }),
+    ).rejects.toThrow("npm publication-route probe did not return a stable response");
+
+    expect(fetchCalls).toBe(3);
+    expect(cancelCalls).toBe(3);
+    expect(waits).toEqual([1000, 2000]);
+  });
+
+  it("rejects stable malformed JSON without spending the retry budget", async () => {
+    let fetchCalls = 0;
+    const waits: number[] = [];
+
+    await expect(
+      fetchNpmRegistryPackumentWithRetry({
+        packageName: "@openclaw/meta-provider",
+        packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          return registryResponse({ body: "{" });
+        },
+        sleep: async (delayMs) => {
+          waits.push(delayMs);
+        },
+        createSignal: () => new AbortController().signal,
+      }),
+    ).rejects.toThrow("npm publication-route probe returned invalid JSON");
+
+    expect(fetchCalls).toBe(1);
+    expect(waits).toEqual([]);
+  });
+
+  it("returns a stable missing-package status without retrying", async () => {
+    let fetchCalls = 0;
+    let cancelCalls = 0;
+
+    const result = await fetchNpmRegistryPackumentWithRetry({
+      packageName: "@openclaw/meta-provider",
+      packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return registryResponse({
+          status: 404,
+          cancel: () => {
+            cancelCalls += 1;
+          },
+        });
+      },
+      sleep: async () => {
+        throw new Error("stable 404 must not sleep");
+      },
+      createSignal: () => new AbortController().signal,
+    });
+
+    expect(result).toEqual({ status: 404, ok: false, packument: null });
+    expect(fetchCalls).toBe(1);
+    expect(cancelCalls).toBe(1);
+  });
+});
 
 describe("collectReleaseVersionFloorErrors", () => {
   it("blocks June 2026 stable and beta release trains below the published beta floor", () => {

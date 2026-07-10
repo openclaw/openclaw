@@ -47,6 +47,102 @@ const JUNE_2026_PATCH_FLOOR = 5;
  */
 
 /**
+ * @typedef {object} NpmRegistryPackumentResult
+ * @property {number} status
+ * @property {boolean} ok
+ * @property {unknown | null} packument
+ */
+
+/**
+ * @param {Response} response
+ * @returns {Promise<void>}
+ */
+async function cancelNpmRegistryResponseBody(response) {
+  await response.body?.cancel().catch(() => undefined);
+}
+
+/**
+ * Fetches and consumes an npm packument within one timeout per attempt. Keeping
+ * body transfer inside the retry loop prevents a headers-only success from
+ * bypassing the retry budget when the registry stream stalls or truncates.
+ *
+ * @param {{
+ *   packageName: string;
+ *   packageUrl: string;
+ *   attempts?: number;
+ *   timeoutMs?: number;
+ *   fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
+ *   sleep?: (delayMs: number) => Promise<void>;
+ *   createSignal?: (timeoutMs: number) => AbortSignal;
+ * }} params
+ * @returns {Promise<NpmRegistryPackumentResult>}
+ */
+export async function fetchNpmRegistryPackumentWithRetry(params) {
+  const attempts = params.attempts ?? 3;
+  const timeoutMs = params.timeoutMs ?? 20_000;
+  const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+  const sleep =
+    params.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
+  const createSignal = params.createSignal ?? ((delayMs) => AbortSignal.timeout(delayMs));
+  let lastError;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let response;
+    try {
+      response = await fetchImpl(params.packageUrl, {
+        headers: { accept: "application/vnd.npm.install-v1+json" },
+        signal: createSignal(timeoutMs),
+      });
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (response) {
+      if (response.status === 429 || response.status >= 500) {
+        await cancelNpmRegistryResponseBody(response);
+        lastError = new Error(`HTTP ${response.status}`);
+      } else if (!response.ok) {
+        await cancelNpmRegistryResponseBody(response);
+        return { status: response.status, ok: false, packument: null };
+      } else {
+        let body;
+        try {
+          body = await response.text();
+        } catch (error) {
+          await cancelNpmRegistryResponseBody(response);
+          lastError = error;
+          body = undefined;
+        }
+        if (body !== undefined) {
+          try {
+            return {
+              status: response.status,
+              ok: true,
+              packument: JSON.parse(body),
+            };
+          } catch (error) {
+            await cancelNpmRegistryResponseBody(response);
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(
+              `${params.packageName}: npm publication-route probe returned invalid JSON: ${message}.`,
+            );
+          }
+        }
+      }
+    }
+
+    if (attempt < attempts) {
+      await sleep(attempt * 1000);
+    }
+  }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(
+    `${params.packageName}: npm publication-route probe did not return a stable response: ${message}.`,
+  );
+}
+
+/**
  * @param {string} version
  * @param {Record<string, string | undefined>} groups
  * @param {"stable" | "alpha" | "beta"} channel

@@ -804,6 +804,7 @@ jobs:
           set -euo pipefail
           node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
           import {
+            fetchNpmRegistryPackumentWithRetry,
             resolveNpmPublishPlan,
             resolvePublishedNpmVersionRoute,
           } from "./scripts/lib/npm-publish-plan.mjs";
@@ -822,42 +823,22 @@ jobs:
           const packageUrl = `https://registry.npmjs.org/${encodeURIComponent(packageName)}`;
           const requestAttempts = 3;
           const requestTimeoutMs = 20_000;
-          async function fetchRegistryWithRetry() {
-            let lastError;
-            for (let requestAttempt = 1; requestAttempt <= requestAttempts; requestAttempt += 1) {
-              try {
-                const signal = AbortSignal.timeout(requestTimeoutMs);
-                const response = await fetch(packageUrl, {
-                  headers: { accept: "application/vnd.npm.install-v1+json" },
-                  signal,
-                });
-                if (response.status !== 429 && response.status < 500) {
-                  return { response, signal };
-                }
-                await response.body?.cancel().catch(() => undefined);
-                lastError = new Error(`HTTP ${response.status}`);
-              } catch (error) {
-                lastError = error;
-              }
-              if (requestAttempt < requestAttempts) {
-                await new Promise((resolve) => setTimeout(resolve, requestAttempt * 1000));
-              }
-            }
-            const message = lastError instanceof Error ? lastError.message : String(lastError);
-            throw new Error(
-              `${packageName}: npm publication-route probe did not return a stable response: ${message}.`,
-            );
-          }
 
           const observations = [];
           for (let attempt = 1; attempt <= 3; attempt += 1) {
-            const registryFetch = await fetchRegistryWithRetry();
-            const response = registryFetch.response;
-            if (response.status === 404) {
-              await response.body?.cancel().catch(() => undefined);
+            const registryFetch = await fetchNpmRegistryPackumentWithRetry({
+              packageName,
+              packageUrl,
+              attempts: requestAttempts,
+              timeoutMs: requestTimeoutMs,
+            });
+            if (registryFetch.status === 404) {
               observations.push("npm-token-bootstrap");
-            } else if (response.ok) {
-              const packument = await response.json();
+            } else if (registryFetch.ok) {
+              const packument = registryFetch.packument;
+              if (!packument || typeof packument !== "object" || Array.isArray(packument)) {
+                throw new Error(`${packageName}: npm registry packument is not an object.`);
+              }
               const versions = Object.keys(packument.versions ?? {});
               const targetPublished = versions.includes(packageVersion);
               const priorVersions = versions.filter((version) => version !== packageVersion);
@@ -898,9 +879,8 @@ jobs:
                 );
               }
             } else {
-              await response.body?.cancel().catch(() => undefined);
               throw new Error(
-                `${packageName}: npm publication-route probe returned HTTP ${response.status}.`,
+                `${packageName}: npm publication-route probe returned HTTP ${registryFetch.status}.`,
               );
             }
             if (attempt !== 3) {

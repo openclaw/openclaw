@@ -225,14 +225,14 @@ describe("plugin npm extended-stable workflow", () => {
       EXPECTED_NPM_SHASUM: "${{ steps.publication_artifact.outputs.npm_shasum }}",
     });
     expect(route.run).toContain("encodeURIComponent(packageName)");
+    expect(route.run).toContain("fetchNpmRegistryPackumentWithRetry");
     expect(route.run).toContain("resolvePublishedNpmVersionRoute");
     expect(route.run).toContain('distTags: packument["dist-tags"] ?? {}');
     expect(route.run).toContain("const requestAttempts = 3");
     expect(route.run).toContain("const requestTimeoutMs = 20_000");
-    expect(route.run).toContain("AbortSignal.timeout(requestTimeoutMs)");
-    expect(route.run).toContain("response.status !== 429 && response.status < 500");
-    expect(route.run).toContain("await response.body?.cancel().catch(() => undefined)");
-    expect(route.run).toContain("npm publication-route probe did not return a stable response");
+    expect(route.run).toContain("attempts: requestAttempts");
+    expect(route.run).toContain("timeoutMs: requestTimeoutMs");
+    expect(route.run).not.toContain("response.json()");
     expect(route.run).toContain("packument.versions?.[packageVersion]?.dist");
     expect(route.run).toContain("targetDist?.integrity !== expectedIntegrity");
     expect(route.run).toContain("targetDist?.shasum !== expectedShasum");
