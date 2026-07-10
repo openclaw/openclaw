@@ -1000,3 +1000,61 @@ describe("saveMessageResourceFeishu", () => {
     });
   });
 });
+
+describe("resolveFeishuOutboundMediaKind case-insensitive MIME", () => {
+  // MIME types are case-insensitive (RFC 2045); a relay may emit a mixed-case
+  // Content-Type header. resolveFeishuOutboundMediaKind must route by the
+  // lowercased value so audio/video/image are not misrouted to "file".
+  let resolveFeishuOutboundMediaKind: typeof import("./media.js").resolveFeishuOutboundMediaKind;
+  beforeAll(async () => {
+    ({ resolveFeishuOutboundMediaKind } = await import("./media.js"));
+  });
+
+  it("routes mixed-case audio MIME to audio", () => {
+    expect(resolveFeishuOutboundMediaKind({ fileName: "voice", contentType: "Audio/OGG" })).toEqual(
+      {
+        fileType: "opus",
+        msgType: "audio",
+      },
+    );
+    expect(
+      resolveFeishuOutboundMediaKind({ fileName: "voice", contentType: "Audio/Opus" }),
+    ).toEqual({ fileType: "opus", msgType: "audio" });
+  });
+
+  it("routes mixed-case video MIME to media", () => {
+    expect(resolveFeishuOutboundMediaKind({ fileName: "clip", contentType: "Video/MP4" })).toEqual({
+      fileType: "mp4",
+      msgType: "media",
+    });
+    expect(
+      resolveFeishuOutboundMediaKind({ fileName: "clip", contentType: "Video/QuickTime" }),
+    ).toEqual({ fileType: "mp4", msgType: "media" });
+  });
+
+  it("routes mixed-case image MIME to image", () => {
+    expect(resolveFeishuOutboundMediaKind({ fileName: "pic", contentType: "Image/PNG" })).toEqual({
+      msgType: "image",
+    });
+  });
+
+  it("still routes lowercase MIME correctly (regression)", () => {
+    expect(resolveFeishuOutboundMediaKind({ fileName: "voice", contentType: "audio/ogg" })).toEqual(
+      {
+        fileType: "opus",
+        msgType: "audio",
+      },
+    );
+    expect(resolveFeishuOutboundMediaKind({ fileName: "pic", contentType: "image/png" })).toEqual({
+      msgType: "image",
+    });
+  });
+
+  it("routes a non-media pdf to file (regression)", () => {
+    const result = resolveFeishuOutboundMediaKind({
+      fileName: "doc",
+      contentType: "Application/PDF",
+    });
+    expect(result.msgType).toBe("file");
+  });
+});

@@ -653,11 +653,20 @@ function detectFileType(
   }
 }
 
-function resolveFeishuOutboundMediaKind(params: { fileName: string; contentType?: string }): {
+/** @internal Exported for tests asserting case-insensitive MIME routing. */
+export function resolveFeishuOutboundMediaKind(params: {
+  fileName: string;
+  contentType?: string;
+}): {
   fileType?: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
   msgType: "image" | "file" | "audio" | "media";
 } {
-  const { fileName, contentType } = params;
+  const { fileName } = params;
+  // MIME types are case-insensitive (RFC 2045) and the contentType arrives from
+  // a remote URL's Content-Type header, which relays may emit mixed-case. Lowercase
+  // once so every comparison below (and mediaKindFromMime) matches consistently;
+  // the sibling isFeishuNativeVoiceAudio already lowercases the same way.
+  const contentType = normalizeLowercaseStringOrEmpty(params.contentType);
   const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
   const mimeKind = mediaKindFromMime(contentType);
 
