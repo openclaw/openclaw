@@ -493,6 +493,15 @@ export function resolveMattermostThreadSessionContext(params: {
   };
 }
 
+export function resolveMattermostPendingHistoryKey(params: {
+  kind: ChatType;
+  sessionKey: string;
+}): string | null {
+  // DMs always dispatch immediately, so they do not need the pending-room
+  // history window. Keeping them out also avoids one empty bucket per DM thread.
+  return params.kind === "direct" ? null : params.sessionKey;
+}
+
 export function resolveMattermostReactionChannelId(
   payload: Pick<MattermostEventPayload, "broadcast" | "data">,
 ): string | undefined {
@@ -1465,8 +1474,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           threadRootId,
         });
         const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
-        // Flat DMs use one rolling session; threaded DMs keep thread-local history.
-        const historyKey = kind === "direct" && !effectiveReplyToId ? null : sessionKey;
+        const historyKey = resolveMattermostPendingHistoryKey({ kind, sessionKey });
 
         const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
         const wasMentioned =

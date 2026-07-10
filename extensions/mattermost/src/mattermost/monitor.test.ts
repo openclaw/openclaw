@@ -15,6 +15,7 @@ import {
   processMattermostReplayGuardedPost,
   resolveMattermostReactionChannelId,
   resolveMattermostEffectiveReplyToId,
+  resolveMattermostPendingHistoryKey,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
   shouldSuppressMattermostDefaultToolProgressMessages,
@@ -920,6 +921,26 @@ describe("resolveMattermostThreadSessionContext", () => {
       sessionKey: "agent:main:mattermost:default:user-1",
       parentSessionKey: undefined,
     });
+  });
+});
+
+describe("resolveMattermostPendingHistoryKey", () => {
+  it("does not retain pending history buckets for thread-scoped direct messages", () => {
+    expect(
+      resolveMattermostPendingHistoryKey({
+        kind: "direct",
+        sessionKey: "agent:main:mattermost:direct:user-1:thread:post-123",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps pending room history scoped to the active session", () => {
+    expect(
+      resolveMattermostPendingHistoryKey({
+        kind: "channel",
+        sessionKey: "agent:main:mattermost:channel:chan-1:thread:post-123",
+      }),
+    ).toBe("agent:main:mattermost:channel:chan-1:thread:post-123");
   });
 });
 
