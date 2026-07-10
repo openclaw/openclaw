@@ -19,7 +19,6 @@ import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createCodeExecutionTool } from "./code-execution.js";
 import plugin from "./index.js";
-import { XAI_DEFAULT_STT_MODEL } from "./stt.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_XAI_IMAGE_MODEL?.trim() || "grok-imagine-image";
@@ -306,12 +305,11 @@ describeLive("xai plugin live", () => {
         mime: "audio/mpeg",
         apiKey: XAI_API_KEY,
         baseUrl: "https://api.x.ai/v1",
-        model: XAI_DEFAULT_STT_MODEL,
         timeoutMs: 90_000,
       });
 
       const normalized = transcript?.text.toLowerCase() ?? "";
-      expect(transcript?.model).toBe(XAI_DEFAULT_STT_MODEL);
+      expect(transcript?.model).toBeUndefined();
       expectOpenClawLiveTranscriptMarker(normalized);
       expect(normalized).toContain("speech");
       expect(normalized).toContain("text");

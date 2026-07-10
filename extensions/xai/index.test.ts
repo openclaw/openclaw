@@ -488,7 +488,7 @@ describe("xai provider plugin", () => {
 
     const mediaProvider = requireEntry(mediaProviders, "xai");
     expect(mediaProvider.capabilities).toEqual(["audio"]);
-    expect(mediaProvider.defaultModels).toEqual({ audio: "grok-stt" });
+    expect(mediaProvider.defaultModels).toBeUndefined();
     const realtimeProvider = requireEntry(realtimeTranscriptionProviders, "xai");
     expect(realtimeProvider.label).toBe("xAI Realtime Transcription");
     expect(realtimeProvider.aliases).toContain("xai-realtime");

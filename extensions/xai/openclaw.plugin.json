@@ -195,9 +195,6 @@
   "mediaUnderstandingProviderMetadata": {
     "xai": {
       "capabilities": ["audio"],
-      "defaultModels": {
-        "audio": "grok-stt"
-      },
       "autoPriority": {
         "audio": 25
       }
