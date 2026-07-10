@@ -793,8 +793,9 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
   });
 
   it("keeps sending when trusted-contact token JID lookup is between reconnects", async () => {
+    const keysGet = vi.fn(async () => ({}));
     const keys = {
-      get: vi.fn(async () => ({})),
+      get: keysGet,
       set: vi.fn(async () => undefined),
       isInTransaction: () => false,
       transaction: vi.fn(async (exec: () => Promise<unknown>) => await exec()),
@@ -814,7 +815,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     await api.sendMessage("+14445550002", "hello");
 
     expect(sendMessage).toHaveBeenCalledWith("14445550002@s.whatsapp.net", { text: "hello" });
-    expect(keys.get).not.toHaveBeenCalled();
+    expect(keysGet).not.toHaveBeenCalled();
   });
 
   it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
