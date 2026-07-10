@@ -536,7 +536,7 @@ export async function createQaGatewayProcessBoundaryController(params: {
           launcherPath: params.launcherPath,
           identityFilePath,
         });
-        return;
+        return undefined;
       } catch (error) {
         lastError = error;
       }
@@ -877,7 +877,7 @@ export async function shouldRetainQaGatewayCredentialLease(env: NodeJS.ProcessEn
   }
 }
 
-export const __testing = {
+const testing = {
   commandLineBytes,
   normalizeEnvKeys,
   parseQaGatewayProcessHandoff,
@@ -885,3 +885,5 @@ export const __testing = {
   parseQaGatewayProcessSandboxProof,
   parseQaGatewayProcStat,
 };
+
+export { testing as __testing };

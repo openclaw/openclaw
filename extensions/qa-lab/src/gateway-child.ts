@@ -1099,10 +1099,12 @@ export async function startQaGatewayChild(params: {
           }
         }
         if (cleanupErrors.length > 0) {
-          throw new AggregateError(
+          const cleanupFailure = new AggregateError(
             [error, ...cleanupErrors],
             "qa gateway failed before verified process cleanup completed",
+            { cause: error },
           );
+          throw cleanupFailure;
         }
         throw error;
       }

@@ -1816,6 +1816,7 @@ jobs:
           OPENCLAW_QA_TELEGRAM_SUT_UID: ${{ steps.create_sut.outputs.uid }}
           SUT_RUNTIME_ROOT: ${{ steps.create_sut.outputs.runtime_root }}
           SUT_UID: ${{ steps.create_sut.outputs.uid }}
+          TARGET_SHA: ${{ inputs.target_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1836,7 +1837,7 @@ jobs:
           trap 'exit 143' TERM
           {
             printf 'trusted_harness_sha=%s\n' "${{ needs.trusted_identity.outputs.workflow_sha }}"
-            printf 'candidate_runtime_plugin_sha=%s\n' "${{ inputs.target_sha }}"
+            printf 'candidate_runtime_plugin_sha=%s\n' "$TARGET_SHA"
             printf 'trusted_scenario_source=oidc.job_workflow_sha\n'
           } >"${output_dir}/source-attestation.txt"
           echo "output_dir=$output_dir" >>"$GITHUB_OUTPUT"
