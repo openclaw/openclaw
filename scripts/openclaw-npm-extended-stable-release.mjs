@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
 
@@ -229,7 +229,7 @@ export function validateFullReleaseValidationManifest({
   return manifest;
 }
 
-export function parsePriorExtendedStableSelector(stdout) {
+function parseDistTags(stdout) {
   let tags;
   try {
     tags = JSON.parse(stdout);
@@ -242,21 +242,43 @@ export function parsePriorExtendedStableSelector(stdout) {
   if (tags === null || typeof tags !== "object" || Array.isArray(tags)) {
     throw new Error("npm dist-tags query did not return a JSON object.");
   }
-  if (!Object.hasOwn(tags, "extended-stable")) {
-    return "absent";
-  }
-  if (typeof tags["extended-stable"] !== "string" || tags["extended-stable"].trim() === "") {
-    throw new Error("npm extended-stable dist-tag was not a non-empty version string.");
-  }
-  return tags["extended-stable"];
+  return tags;
 }
 
-export function capturePriorExtendedStableSelector({ query }) {
+export function parseExtendedStableSelectorBaseline(stdout, { version, sourceSha }) {
+  const tags = parseDistTags(stdout);
+  const previousExtendedStable = Object.hasOwn(tags, "extended-stable")
+    ? tags["extended-stable"]
+    : "absent";
+  if (typeof previousExtendedStable !== "string" || previousExtendedStable.trim() === "") {
+    throw new Error("npm extended-stable dist-tag was not a non-empty version string.");
+  }
+  const latest = tags.latest;
+  if (typeof latest !== "string" || latest.trim() === "") {
+    throw new Error("npm latest dist-tag was not a non-empty version string.");
+  }
+  const parsed = parseReleaseVersion(version);
+  if (parsed === null || parsed.channel !== "stable" || parsed.correctionNumber !== undefined) {
+    throw new Error("Extended-stable selector baseline requires an exact final YYYY.M.P version.");
+  }
+  if (!/^[0-9a-f]{40}$/iu.test(sourceSha)) {
+    throw new Error("Extended-stable selector baseline requires a full 40-character source SHA.");
+  }
+  return {
+    schemaVersion: 1,
+    version,
+    sourceSha: sourceSha.toLowerCase(),
+    previousExtendedStable,
+    latest,
+  };
+}
+
+export function capturePriorExtendedStableSelector({ query, version, sourceSha }) {
   const result = query();
   if (result.status !== 0) {
     throw new Error(`npm dist-tags query failed with exit code ${result.status ?? "unknown"}.`);
   }
-  return parsePriorExtendedStableSelector(result.stdout);
+  return parseExtendedStableSelectorBaseline(result.stdout, { version, sourceSha });
 }
 
 export async function verifyExtendedStableRegistryReadback({
@@ -293,6 +315,12 @@ export function extendedStableSelectorRepairCommand(expectedVersion) {
     throw new Error("Extended-stable selector repair requires an exact final YYYY.M.P version.");
   }
   return `npm dist-tag add openclaw@${parsed.version} extended-stable`;
+}
+
+export function extendedStableSelectorRepairCommands(expectedVersion) {
+  const coreCommand = extendedStableSelectorRepairCommand(expectedVersion);
+  const version = (expectedVersion ?? "").replace(/^v/u, "");
+  return [coreCommand, `npm dist-tag add @openclaw/ai@${version} extended-stable`];
 }
 
 function git(args) {
@@ -486,11 +514,19 @@ async function main() {
     return;
   }
   if (command === "capture-selector") {
-    const previous = capturePriorExtendedStableSelector({
+    const baseline = capturePriorExtendedStableSelector({
       query: () =>
         spawnSync("npm", ["view", "openclaw", "dist-tags", "--json"], { encoding: "utf8" }),
+      version: (process.env.EXPECTED_VERSION ?? "").replace(/^v/u, ""),
+      sourceSha: process.env.EXPECTED_RELEASE_SHA ?? "",
     });
-    appendOutput({ previous });
+    const baselineFile = process.env.BASELINE_FILE ?? "extended-stable-selector-baseline.json";
+    writeFileSync(baselineFile, `${JSON.stringify(baseline, null, 2)}\n`);
+    appendOutput({
+      previous: baseline.previousExtendedStable,
+      latest: baseline.latest,
+      baseline_file: baselineFile,
+    });
     return;
   }
   if (command === "verify-readback") {
@@ -510,7 +546,7 @@ async function main() {
     return;
   }
   if (command === "repair-command") {
-    console.log(extendedStableSelectorRepairCommand(process.env.EXPECTED_VERSION));
+    console.log(extendedStableSelectorRepairCommands(process.env.EXPECTED_VERSION).join("\n"));
     return;
   }
   throw new Error(`Unknown extended-stable npm release command: ${command ?? "<missing>"}.`);

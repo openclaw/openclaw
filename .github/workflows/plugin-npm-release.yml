@@ -211,6 +211,14 @@ jobs:
           echo "Already published / skipped:"
           jq -r '.skippedPublished[]? | "- \(.packageName)@\(.version)"' .local/plugin-npm-release-plan.json
 
+      - name: Upload frozen extended-stable plugin plan
+        if: github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag == 'extended-stable'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plugin-npm-release-plan-${{ steps.ref.outputs.sha }}
+          path: .local/plugin-npm-release-plan.json
+          if-no-files-found: error
+
       - name: Validate Tideclaw alpha plugin channels
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
         run: |

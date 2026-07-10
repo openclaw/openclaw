@@ -891,7 +891,19 @@ jobs:
       - name: Capture previous extended-stable selector
         id: previous_extended_stable
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
+        env:
+          BASELINE_FILE: extended-stable-selector-baseline.json
+          EXPECTED_RELEASE_SHA: ${{ github.sha }}
+          EXPECTED_VERSION: ${{ inputs.tag }}
         run: node scripts/openclaw-npm-extended-stable-release.mjs capture-selector
+
+      - name: Upload extended-stable selector baseline
+        if: ${{ inputs.npm_dist_tag == 'extended-stable' && steps.previous_extended_stable.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-npm-extended-stable-baseline-${{ inputs.tag }}
+          path: ${{ steps.previous_extended_stable.outputs.baseline_file }}
+          if-no-files-found: error
 
       - name: Publish
         id: publish
@@ -944,6 +956,7 @@ jobs:
           TARBALL_SHA256: ${{ steps.preflight_provenance.outputs.tarball_sha256 }}
           SELECTOR_CAPTURE_OUTCOME: ${{ steps.previous_extended_stable.outcome }}
           PREVIOUS_EXTENDED_STABLE: ${{ steps.previous_extended_stable.outputs.previous }}
+          PREVIOUS_LATEST: ${{ steps.previous_extended_stable.outputs.latest }}
           PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
           EXACT_READBACK: ${{ steps.extended_stable_readback.outputs.exact_version }}
           SELECTOR_READBACK: ${{ steps.extended_stable_readback.outputs.extended_stable_selector }}
@@ -963,6 +976,7 @@ jobs:
             echo "- Tarball: ${TARBALL_NAME:-unavailable}"
             echo "- Tarball SHA-256: ${TARBALL_SHA256:-unavailable}"
             echo "- Previous openclaw@extended-stable: ${PREVIOUS_EXTENDED_STABLE:-unavailable}"
+            echo "- Preserved openclaw@latest baseline: ${PREVIOUS_LATEST:-unavailable}"
             echo "- npm publish outcome: ${PUBLISH_OUTCOME}"
             echo "- Exact-version readback: ${EXACT_READBACK:-unavailable}"
             echo "- Extended-stable selector readback: ${SELECTOR_READBACK:-unavailable}"
@@ -970,7 +984,9 @@ jobs:
             if [[ "$SELECTOR_CAPTURE_OUTCOME" != "success" ]]; then
               echo "- Selector capture failed; npm publish did not run and no repair is required because npm was unchanged."
             else
-              repair_command="$(EXPECTED_VERSION="$RELEASE_TAG" node scripts/openclaw-npm-extended-stable-release.mjs repair-command)"
-              echo "- Repair command: \`${repair_command}\`"
+              echo "- Repair commands (run only for selectors that are stale):"
+              while IFS= read -r repair_command; do
+                echo "  - \`${repair_command}\`"
+              done < <(EXPECTED_VERSION="$RELEASE_TAG" node scripts/openclaw-npm-extended-stable-release.mjs repair-command)
             fi
           } >> "$GITHUB_STEP_SUMMARY"

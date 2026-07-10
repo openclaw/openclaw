@@ -7,16 +7,16 @@ read_when:
   - Looking for version naming and cadence
 ---
 
-OpenClaw currently exposes three user-facing update channels:
+OpenClaw exposes four user-facing update channels:
 
-- stable: the existing promoted release channel, which still resolves through npm `latest` until the separate CLI/channel milestone lands
+- stable: the existing promoted release channel, which resolves through npm `latest`
+- extended-stable: the supported trailing-month npm line; core and every npm-publishable official plugin ship at one exact version
 - beta: prerelease tags that publish to npm `beta`
 - dev: the moving head of `main`
 
-Separately, release operators can publish the trailing completed month's core
-package to npm `extended-stable`, beginning at patch `33`. The current-month
-regular final line continues on npm `latest`; this operator-side publication
-split does not by itself change CLI update-channel resolution.
+`extended-stable` is additive and npm-only, beginning at patch `33`. It does
+not rename or replace the existing `stable` channel. The current-month regular
+final line continues on npm `latest`.
 
 Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `alpha`), covered under [NPM workflow inputs](#npm-workflow-inputs) and [Release test boxes](#release-test-boxes).
 
@@ -98,10 +98,10 @@ gh workflow run plugin-npm-release.yml \
 
 The workflow uses the regular prepared `all-publishable` package inventory,
 including packages whose source did not change. It verifies every exact package
-and every plugin `extended-stable` tag before succeeding. If a partial run
-fails, rerun the same command: already-published packages are reused, missing
-or stale plugin tags are reconciled under the npm release environment, and the
-final readback still covers the complete package set.
+and every plugin `extended-stable` tag before succeeding. A retry can reuse
+immutable packages and publish missing packages. If an already-published
+plugin has a stale selector, the workflow fails closed; use the
+credential-isolated selector-repair process and repeat the complete readback.
 
 After the plugin workflow succeeds and the npm release environment is ready,
 publish the exact core preflight tarball. Core publication verifies that the
@@ -130,20 +130,44 @@ equality, referenced run and manifest identity, tarball provenance,
 environment approval, registry readback, or selector repair evidence.
 
 The publish workflow verifies the referenced preflight, validation, and plugin
-run identities, the prepared tarball digest, and the core registry selectors.
-Independently confirm the result after the workflow succeeds:
+run identities, the prepared tarball digest, and the initial core registry
+selector. Publication is followed by a separate read-only closeout. Save the
+core publish run ID, then dispatch closeout with the exact five-run contract:
 
 ```bash
-npm view openclaw@YYYY.M.P version --userconfig "$(mktemp)"
-npm view openclaw@extended-stable version --userconfig "$(mktemp)"
+gh workflow run openclaw-npm-extended-stable-closeout.yml \
+  --ref extended-stable/YYYY.M.33 \
+  -f tag=vYYYY.M.P \
+  -f preflight_run_id=<npm-preflight-run-id> \
+  -f plugin_npm_run_id=<plugin-npm-run-id> \
+  -f core_npm_run_id=<core-npm-run-id> \
+  -f full_release_validation_run_id=<full-validation-run-id>
 ```
 
-Both commands must return `YYYY.M.P`. If publish succeeds but selector
-readback fails, do not republish the immutable package version. Use the
-single `npm dist-tag add openclaw@YYYY.M.P extended-stable` repair command
-printed in the failed workflow's always-run summary, then repeat both
-independent readbacks. Rollback to the prior selector is a separate operator
-decision, not the readback repair path.
+Closeout has read-only repository and Actions permissions, no npm credential,
+no OIDC publish permission, and no release environment. It verifies the exact
+package and `extended-stable` selector for `openclaw`, `@openclaw/ai`, and
+every package in the canonical `all-publishable` plan. It also proves
+`openclaw@latest` is unchanged from the prepublication baseline and remains a
+later-month regular release. Success uploads exactly one artifact named
+`extended-stable-registry-snapshot-vYYYY.M.P`, containing
+`extended-stable-registry-snapshot.json`. Attach that artifact through the
+`openclaw/releases` `OpenClaw Release Evidence` workflow in
+`extended-stable-closeout` mode so it is stored beside the existing Full
+Release Validation evidence without replacing it.
+
+If publish succeeds but either core-owned selector is stale, do not republish
+the immutable package version. Run only the applicable credential-isolated
+repair commands printed by the workflow, then rerun the read-only closeout:
+
+```bash
+npm dist-tag add openclaw@YYYY.M.P extended-stable
+npm dist-tag add @openclaw/ai@YYYY.M.P extended-stable
+```
+
+Automated protected selector repair is deferred; these commands are an
+operator recovery path, not part of the read-only closeout. Rollback to the
+prior selector is a separate operator decision.
 
 Public support documentation initially designates Slack, Discord, and Codex as
 covered extended-stable plugin surfaces. That list is a support statement, not

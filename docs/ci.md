@@ -142,14 +142,19 @@ gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_andro
 gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 ```
 
-The monthly npm-only extended-stable path is the exception: dispatch both `OpenClaw NPM
-Release` preflight and `Full Release Validation` from the exact
-`extended-stable/YYYY.M.33` branch, preserve their run IDs, and pass both IDs to the
-direct npm publish run. See [Monthly npm-only extended-stable
-publication](/reference/RELEASING#monthly-npm-only-extended-stable-publication) for
-the commands, exact identity requirements, registry readback, and selector
-repair procedure. This path does not dispatch plugin, macOS, Windows, GitHub
-Release, private dist-tag, or other platform publication.
+The monthly npm-only extended-stable path is the exception: dispatch `OpenClaw
+NPM Release` preflight and `Full Release Validation` from the exact
+`extended-stable/YYYY.M.33` branch, publish and verify the canonical
+`all-publishable` plugin set, then pass all three run IDs to direct OIDC core
+publication. A separate five-input, read-only closeout verifies final core and
+plugin registry state plus the preserved `latest` selector and emits the
+registry snapshot consumed by the releases evidence ledger. See [Monthly
+npm-only extended-stable
+publication](/reference/RELEASING#monthly-npm-only-extended-stable-publication)
+for the commands, exact identity requirements, closeout, and repair procedure.
+This path does not dispatch ClawHub/plugin-bootstrap, macOS, Windows, GitHub
+Release, private dist-tag, Docker, mobile, website, or other platform
+publication.
 
 ## Runners
 

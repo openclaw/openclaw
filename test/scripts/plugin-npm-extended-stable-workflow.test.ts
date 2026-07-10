@@ -4,7 +4,14 @@ import { parse } from "yaml";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 
-type Step = { env?: Record<string, string>; name?: string; run?: string };
+type Step = {
+  env?: Record<string, string>;
+  if?: string;
+  name?: string;
+  run?: string;
+  uses?: string;
+  with?: Record<string, string>;
+};
 type Job = {
   environment?: string;
   if?: string;
@@ -105,5 +112,19 @@ describe("plugin npm extended-stable workflow", () => {
     expect(readback.run).toContain('npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version');
     expect(readback.run).toContain('npm view "${PACKAGE_NAME}@extended-stable" version');
     expect(readback.run).toContain("OIDC-only source workflow does not mutate tags");
+  });
+
+  it("uploads the source-bound plugin plan for read-only closeout", () => {
+    const upload = step(
+      workflow().jobs?.preview_plugins_npm,
+      "Upload frozen extended-stable plugin plan",
+    );
+    expect(upload.if).toContain("inputs.npm_dist_tag == 'extended-stable'");
+    expect(upload.uses).toContain("actions/upload-artifact@");
+    expect(upload.with).toMatchObject({
+      name: "plugin-npm-release-plan-${{ steps.ref.outputs.sha }}",
+      path: ".local/plugin-npm-release-plan.json",
+      "if-no-files-found": "error",
+    });
   });
 });

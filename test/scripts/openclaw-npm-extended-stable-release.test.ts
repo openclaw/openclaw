@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   capturePriorExtendedStableSelector,
   extendedStableSelectorRepairCommand,
+  extendedStableSelectorRepairCommands,
   parseExtendedStableGuardBypass,
-  parsePriorExtendedStableSelector,
+  parseExtendedStableSelectorBaseline,
   validateFullReleaseValidationManifest,
   validateNpmPublishBoundary,
   validateExtendedStableNpmReleaseRequest,
@@ -413,18 +414,64 @@ describe("Full Validation manifest identity", () => {
 
 describe("extended-stable selector capture", () => {
   it("distinguishes bootstrap absence from an existing selector", () => {
-    expect(parsePriorExtendedStableSelector('{"latest":"2026.7.1"}')).toBe("absent");
-    expect(parsePriorExtendedStableSelector('{"extended-stable":"2026.6.33"}')).toBe("2026.6.33");
+    expect(
+      parseExtendedStableSelectorBaseline('{"latest":"2026.7.1"}', {
+        version: "2026.6.33",
+        sourceSha: sha,
+      }).previousExtendedStable,
+    ).toBe("absent");
+    expect(
+      parseExtendedStableSelectorBaseline('{"latest":"2026.7.1","extended-stable":"2026.6.33"}', {
+        version: "2026.6.33",
+        sourceSha: sha,
+      }).previousExtendedStable,
+    ).toBe("2026.6.33");
   });
 
   it.each(["not json", "null", "[]", '"2026.6.33"'])("rejects invalid result %s", (value) => {
-    expect(() => parsePriorExtendedStableSelector(value)).toThrow();
+    expect(() =>
+      parseExtendedStableSelectorBaseline(value, { version: "2026.6.33", sourceSha: sha }),
+    ).toThrow();
   });
 
   it("rejects command failure rather than treating it as bootstrap", () => {
     expect(() =>
-      capturePriorExtendedStableSelector({ query: () => ({ status: 1, stdout: "" }) }),
+      capturePriorExtendedStableSelector({
+        query: () => ({ status: 1, stdout: "" }),
+        version: "2026.6.33",
+        sourceSha: sha,
+      }),
     ).toThrow(/query failed/u);
+  });
+
+  it("captures an immutable latest and release identity baseline", () => {
+    expect(
+      parseExtendedStableSelectorBaseline('{"latest":"2026.7.2-1","extended-stable":"2026.6.33"}', {
+        version: "2026.6.33",
+        sourceSha: sha,
+      }),
+    ).toEqual({
+      schemaVersion: 1,
+      version: "2026.6.33",
+      sourceSha: sha,
+      previousExtendedStable: "2026.6.33",
+      latest: "2026.7.2-1",
+    });
+  });
+
+  it("fails baseline capture when latest or release identity is invalid", () => {
+    expect(() =>
+      parseExtendedStableSelectorBaseline('{"extended-stable":"2026.6.33"}', {
+        version: "2026.6.33",
+        sourceSha: sha,
+      }),
+    ).toThrow(/latest/u);
+    expect(() =>
+      parseExtendedStableSelectorBaseline('{"latest":"2026.7.2"}', {
+        version: "2026.6.33-1",
+        sourceSha: sha,
+      }),
+    ).toThrow(/exact final/u);
   });
 });
 
@@ -468,6 +515,13 @@ describe("extended-stable selector repair", () => {
     expect(extendedStableSelectorRepairCommand("v2026.6.33")).toBe(
       "npm dist-tag add openclaw@2026.6.33 extended-stable",
     );
+  });
+
+  it("prints credential-isolated repair commands for both core-owned packages", () => {
+    expect(extendedStableSelectorRepairCommands("v2026.6.33")).toEqual([
+      "npm dist-tag add openclaw@2026.6.33 extended-stable",
+      "npm dist-tag add @openclaw/ai@2026.6.33 extended-stable",
+    ]);
   });
 
   it.each([undefined, "absent", "2026.6.33-beta.1", "2026.6.33-1"])(
