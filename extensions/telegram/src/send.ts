@@ -835,7 +835,7 @@ function createTelegramNonIdempotentRequestWithDiag(params: {
   });
 }
 
-export function sendMessageTelegram(
+export async function sendMessageTelegram(
   to: string,
   text: string,
   opts: TelegramSendOpts,
@@ -1576,7 +1576,10 @@ async function sendMessageTelegramWithContext(
   return textResult;
 }
 
-export function sendTypingTelegram(to: string, opts: TelegramTypingOpts): Promise<{ ok: true }> {
+export async function sendTypingTelegram(
+  to: string,
+  opts: TelegramTypingOpts,
+): Promise<{ ok: true }> {
   const context = resolveTelegramApiContext({
     ...opts,
     holdClientOptionsLease: true,
@@ -1619,7 +1622,7 @@ async function sendTypingTelegramWithContext(
   return { ok: true };
 }
 
-export function reactMessageTelegram(
+export async function reactMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   emoji: string,
@@ -1695,7 +1698,7 @@ type TelegramDeleteOpts = {
   gatewayClientScopes?: readonly string[];
 };
 
-export function deleteMessageTelegram(
+export async function deleteMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   opts: TelegramDeleteOpts,
@@ -1754,7 +1757,7 @@ async function deleteMessageTelegramWithContext(
   return { ok: true };
 }
 
-export function pinMessageTelegram(
+export async function pinMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   opts: TelegramDeleteOpts,
@@ -1804,7 +1807,7 @@ async function pinMessageTelegramWithContext(
   return { ok: true, messageId: String(messageId), chatId };
 }
 
-export function unpinMessageTelegram(
+export async function unpinMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number | undefined,
   opts: TelegramDeleteOpts,
@@ -1859,32 +1862,10 @@ type TelegramEditForumTopicOpts = TelegramDeleteOpts & {
   iconCustomEmojiId?: string;
 };
 
-export function editForumTopicTelegram(
+export async function editForumTopicTelegram(
   chatIdInput: string | number,
   messageThreadIdInput: string | number,
   opts: TelegramEditForumTopicOpts,
-): Promise<{
-  ok: true;
-  chatId: string;
-  messageThreadId: number;
-  name?: string;
-  iconCustomEmojiId?: string;
-}> {
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
-  return withTelegramApiContextLease(
-    context,
-    editForumTopicTelegramWithContext(chatIdInput, messageThreadIdInput, opts, context),
-  );
-}
-
-async function editForumTopicTelegramWithContext(
-  chatIdInput: string | number,
-  messageThreadIdInput: string | number,
-  opts: TelegramEditForumTopicOpts,
-  context: TelegramApiContext,
 ): Promise<{
   ok: true;
   chatId: string;
@@ -1909,6 +1890,30 @@ async function editForumTopicTelegramWithContext(
     throw new Error("Telegram forum topic update requires a name or iconCustomEmojiId");
   }
 
+  const context = resolveTelegramApiContext({
+    ...opts,
+    holdClientOptionsLease: true,
+  });
+  return withTelegramApiContextLease(
+    context,
+    editForumTopicTelegramWithContext(chatIdInput, messageThreadIdInput, opts, context),
+  );
+}
+
+async function editForumTopicTelegramWithContext(
+  chatIdInput: string | number,
+  messageThreadIdInput: string | number,
+  opts: TelegramEditForumTopicOpts,
+  context: TelegramApiContext,
+): Promise<{
+  ok: true;
+  chatId: string;
+  messageThreadId: number;
+  name?: string;
+  iconCustomEmojiId?: string;
+}> {
+  const trimmedName = opts.name?.trim();
+  const trimmedIconCustomEmojiId = opts.iconCustomEmojiId?.trim();
   const { cfg, account, api, leaseClientOptions } = context;
   const rawTarget = String(chatIdInput);
   const target = parseTelegramTarget(rawTarget);
@@ -1995,7 +2000,7 @@ type TelegramEditReplyMarkupOpts = {
   cfg: OpenClawConfig;
 };
 
-export function editMessageReplyMarkupTelegram(
+export async function editMessageReplyMarkupTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   buttons: TelegramInlineButtons,
@@ -2054,7 +2059,7 @@ async function editMessageReplyMarkupTelegramWithContext(
   return { ok: true, messageId: String(messageId), chatId };
 }
 
-export function editMessageTelegram(
+export async function editMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   text: string,
@@ -2297,11 +2302,15 @@ type TelegramStickerOpts = {
  * @param fileId - Telegram file_id of the sticker to send
  * @param opts - Optional configuration
  */
-export function sendStickerTelegram(
+export async function sendStickerTelegram(
   to: string,
   fileId: string,
   opts: TelegramStickerOpts,
 ): Promise<TelegramSendResult> {
+  if (!fileId?.trim()) {
+    throw new Error("Telegram sticker file_id is required");
+  }
+
   const context = resolveTelegramApiContext({
     ...opts,
     holdClientOptionsLease: true,
@@ -2318,10 +2327,6 @@ async function sendStickerTelegramWithContext(
   opts: TelegramStickerOpts,
   context: TelegramApiContext,
 ): Promise<TelegramSendResult> {
-  if (!fileId?.trim()) {
-    throw new Error("Telegram sticker file_id is required");
-  }
-
   const { cfg, account, api, leaseClientOptions } = context;
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
@@ -2400,7 +2405,7 @@ type TelegramPollOpts = {
  * @param poll - Poll input with question, options, maxSelections, and optional durationHours
  * @param opts - Optional configuration
  */
-export function sendPollTelegram(
+export async function sendPollTelegram(
   to: string,
   poll: PollInput,
   opts: TelegramPollOpts,
@@ -2528,11 +2533,19 @@ type TelegramCreateForumTopicResult = {
  * @param name - Topic name (1-128 characters)
  * @param opts - Optional configuration
  */
-export function createForumTopicTelegram(
+export async function createForumTopicTelegram(
   chatId: string,
   name: string,
   opts: TelegramCreateForumTopicOpts,
 ): Promise<TelegramCreateForumTopicResult> {
+  if (!name?.trim()) {
+    throw new Error("Forum topic name is required");
+  }
+  const trimmedName = name.trim();
+  if (trimmedName.length > 128) {
+    throw new Error("Forum topic name must be 128 characters or fewer");
+  }
+
   const context = resolveTelegramApiContext({
     ...opts,
     holdClientOptionsLease: true,
@@ -2549,14 +2562,7 @@ async function createForumTopicTelegramWithContext(
   opts: TelegramCreateForumTopicOpts,
   context: TelegramApiContext,
 ): Promise<TelegramCreateForumTopicResult> {
-  if (!name?.trim()) {
-    throw new Error("Forum topic name is required");
-  }
   const trimmedName = name.trim();
-  if (trimmedName.length > 128) {
-    throw new Error("Forum topic name must be 128 characters or fewer");
-  }
-
   const { cfg, account, api, leaseClientOptions } = context;
   // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
   // but createForumTopic must always target the base supergroup chat id.
