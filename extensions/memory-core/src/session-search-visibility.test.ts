@@ -202,6 +202,62 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toEqual([hit]);
   });
 
+  it("keeps same-agent session hits under the default tree visibility (#103732)", async () => {
+    // corpus=sessions recall previously returned 0 hits: the "tree" default
+    // forbade every same-agent transcript that was not spawned by the current
+    // session, even though the keys were already scoped to the agent.
+    combinedSessionStore = {
+      "agent:main:historic": {
+        sessionId: "w1",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/w1.jsonl",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/w1.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    // No tools.sessions.visibility configured: the "tree" default applies.
+    const cfg = asOpenClawConfig({});
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+    expect(filtered).toEqual([hit]);
+  });
+
+  it("keeps the strict guard for sandboxed runs under the default tree visibility", async () => {
+    combinedSessionStore = {
+      "agent:main:historic": {
+        sessionId: "w1",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/w1.jsonl",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/w1.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({});
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: true,
+      hits: [hit],
+    });
+    expect(filtered).toStrictEqual([]);
+  });
+
   it("keeps global-scope session hits for non-default agents", async () => {
     combinedSessionStore = {
       global: {

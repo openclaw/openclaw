@@ -109,8 +109,9 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       if (keys.length === 0) {
         continue;
       }
-      const allowed = keys.some((key) => guard.check(key).allowed);
-      if (!allowed) {
+      if (
+        !isMemoryRecallAllowed({ keys, guard, sandboxed: params.sandboxed, authoritative: true })
+      ) {
         continue;
       }
       next.push(hit);
@@ -166,11 +167,31 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     if (keys.length === 0) {
       continue;
     }
-    const allowed = keys.some((key) => guard.check(key).allowed);
-    if (!allowed) {
+    // Slug-fallback key resolution is lossy: a QMD slug can map to the wrong
+    // transcript, so those hits must still pass the strict visibility guard.
+    const authoritative = liveKeys.length > 0 || !isQmdSessionHit;
+    if (!isMemoryRecallAllowed({ keys, guard, sandboxed: params.sandboxed, authoritative })) {
       continue;
     }
     next.push(hit);
   }
   return next;
+}
+
+// Memory recall over the requester's own agent transcripts must not be gated
+// by cross-session "tree" history visibility: every key reaching this check is
+// already scoped to the requester's agent (filterSessionKeysByScopedAgent),
+// and the tree default forbids all non-descendant sessions, which returned 0
+// hits for corpus=sessions (#103732). Sandboxed runs keep the strict guard so
+// the spawned-subtree clamp still holds.
+function isMemoryRecallAllowed(params: {
+  keys: string[];
+  guard: { check: (key: string) => { allowed: boolean } };
+  sandboxed: boolean;
+  authoritative: boolean;
+}): boolean {
+  if (!params.sandboxed && params.authoritative) {
+    return params.keys.length > 0;
+  }
+  return params.keys.some((key) => params.guard.check(key).allowed);
 }
