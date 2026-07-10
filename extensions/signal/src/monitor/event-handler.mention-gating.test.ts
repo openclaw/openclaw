@@ -42,10 +42,12 @@ const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
   { renderSignalMentions },
+  { clearSignalReplyAuthorsForTest, resolveSignalReplyAuthorWithPersistence },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
   import("./mentions.js"),
+  import("../reply-authors.js"),
 ]);
 
 type GroupEventOpts = {
@@ -121,8 +123,9 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
 }
 
 describe("signal mention gating", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     capturedCtx = undefined;
+    await clearSignalReplyAuthorsForTest();
   });
 
   it("drops group messages without mention when requireMention is configured", async () => {
@@ -179,6 +182,48 @@ describe("signal mention gating", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].sender).toBe("Alice");
     expect(entries[0].body).toBe("hello from alice");
+  });
+
+  it("records reply authors for skipped group messages", async () => {
+    const { handler } = createMentionGatedHistoryHandler();
+
+    await handler(makeGroupEvent({ message: "hello from alice" }));
+
+    await expect(
+      resolveSignalReplyAuthorWithPersistence({
+        accountId: "default",
+        to: "group:g1",
+        replyToId: "1700000000000",
+      }),
+    ).resolves.toBe("+15550001111");
+  });
+
+  it("records edited target reply authors for skipped group messages", async () => {
+    const { handler } = createMentionGatedHistoryHandler();
+
+    await handler(
+      createSignalReceiveEvent({
+        timestamp: 1700000000999,
+        editMessage: {
+          targetSentTimestamp: 1700000000000,
+          dataMessage: {
+            timestamp: 1700000000999,
+            message: "edited without mention",
+            attachments: [],
+            groupInfo: { groupId: "g1", groupName: "Test Group" },
+          },
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeUndefined();
+    await expect(
+      resolveSignalReplyAuthorWithPersistence({
+        accountId: "default",
+        to: "group:g1",
+        replyToId: "1700000000000",
+      }),
+    ).resolves.toBe("+15550001111");
   });
 
   it("records attachment placeholder in pending history for skipped attachment-only group messages", async () => {
