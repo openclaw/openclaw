@@ -303,6 +303,23 @@ describe("bundled plugin build entries", () => {
     expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/whatsapp/");
   });
 
+  it("preserves known package-less bundled Docker plugin selections", () => {
+    const baselineEnv = { ...process.env };
+    delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
+    const baselineEntries = listBundledPluginBuildEntries({ env: baselineEnv });
+    const selectedEntries = listBundledPluginBuildEntries({
+      env: {
+        ...baselineEnv,
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "active-memory",
+      },
+    });
+
+    expect(selectedEntries).toEqual(baselineEntries);
+    expect(selectedEntries["extensions/active-memory/index"]).toBe(
+      "extensions/active-memory/index.ts",
+    );
+  });
+
   it("rejects unknown and invalid Docker plugin selections", () => {
     for (const [selection, message] of [
       [

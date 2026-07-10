@@ -30,6 +30,7 @@ FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 # Copy package.json files for workspace packages used by the install layer.
+# Manifest-only bundled plugins remain valid selections but need no workspace metadata.
 RUN --mount=type=bind,source=packages,target=/tmp/packages,readonly \
     --mount=type=bind,source=${OPENCLAW_BUNDLED_PLUGIN_DIR},target=/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR},readonly \
     mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
@@ -48,12 +49,15 @@ RUN --mount=type=bind,source=packages,target=/tmp/packages,readonly \
       case "$ext" in \
         *[!a-z0-9-]*) echo "ERROR: invalid OPENCLAW_EXTENSIONS plugin id: $ext" >&2; exit 1 ;; \
       esac; \
-      if [ ! -f "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then \
+      ext_dir="/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"; \
+      if [ ! -f "$ext_dir/openclaw.plugin.json" ] && [ ! -f "$ext_dir/package.json" ]; then \
         echo "ERROR: unknown OPENCLAW_EXTENSIONS plugin id: $ext" >&2; \
         exit 1; \
       fi; \
-      mkdir -p "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext" && \
-      cp "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json"; \
+      if [ -f "$ext_dir/package.json" ]; then \
+        mkdir -p "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext" && \
+        cp "$ext_dir/package.json" "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json"; \
+      fi; \
     done
 
 # ── Stage 2: Build ──────────────────────────────────────────────

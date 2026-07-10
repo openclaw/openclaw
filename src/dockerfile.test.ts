@@ -151,15 +151,14 @@ describe("Dockerfile", () => {
     expect(packageManifestIndex).toBeGreaterThan(-1);
     expect(extensionManifestIndex).toBeGreaterThan(-1);
     expect(dockerfile).toContain("for manifest in /tmp/packages/*/package.json");
+    expect(dockerfile).toContain(`ext_dir="/tmp/\${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"`);
     expect(dockerfile).toContain(
-      `if [ ! -f "/tmp/\${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then`,
+      `if [ ! -f "$ext_dir/openclaw.plugin.json" ] && [ ! -f "$ext_dir/package.json" ]; then`,
     );
+    expect(dockerfile).toContain(`if [ -f "$ext_dir/package.json" ]; then`);
     expect(dockerfile).toContain("LC_ALL=C sort -u");
     expect(dockerfile).toContain("invalid OPENCLAW_EXTENSIONS plugin id: $ext");
     expect(dockerfile).toContain("unknown OPENCLAW_EXTENSIONS plugin id: $ext");
-    expect(dockerfile).not.toContain(
-      `if [ -f "/tmp/\${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then`,
-    );
     expect(postinstallIndex).toBeLessThan(installIndex);
     expect(prepareIndex).toBeLessThan(installIndex);
     expect(distImportHelperIndex).toBeLessThan(installIndex);
