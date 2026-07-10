@@ -27,6 +27,7 @@ type NostrOutboundAdapter = Pick<
   "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sanitizeText" | "sendText"
 > & {
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
+  sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
 };
 
 const activeBuses = new Map<string, NostrBusHandle>();

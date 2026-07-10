@@ -8,12 +8,12 @@ describe("nostr outbound sanitizeText", () => {
   it("strips internal tool-trace banners before outbound delivery", () => {
     const text = "Done.\n⚠️ 🛠️ `search repos (agent)` failed";
 
-    expect(nostrPlugin.outbound?.sanitizeText?.({ text, payload: { text } })).toBe("Done.");
+    expect(nostrPlugin.outbound?.sanitizeText({ text, payload: { text } })).toBe("Done.");
   });
 
   it("preserves ordinary assistant prose while sanitizing", () => {
     const text = "The pipeline has 3 open deals.";
 
-    expect(nostrPlugin.outbound?.sanitizeText?.({ text, payload: { text } })).toBe(text);
+    expect(nostrPlugin.outbound?.sanitizeText({ text, payload: { text } })).toBe(text);
   });
 });
