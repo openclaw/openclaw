@@ -33,6 +33,7 @@ function startWriterLockChild(databasePath: string, holdMs: number): WriterLockC
   const child = spawn(
     process.execPath,
     [
+      "--no-warnings",
       "--input-type=module",
       "-e",
       `
