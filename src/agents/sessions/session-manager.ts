@@ -489,7 +489,12 @@ function loadEntriesFromFileWithSnapshot(filePath: string): {
     if (cached && isSameSessionFileSnapshot(cached.snapshot, beforeReadSnapshot)) {
       const afterCacheSnapshot = readSessionFileSnapshotIfExists(resolvedPath);
       if (afterCacheSnapshot && isSameSessionFileSnapshot(beforeReadSnapshot, afterCacheSnapshot)) {
-        return { entries: copyFileEntries(cached.entries), snapshot: afterCacheSnapshot };
+        // SessionManager is the cache's sole producer. Keep the cache module a
+        // leaf by storing opaque rows, then recover the owned type at this boundary.
+        return {
+          entries: copyFileEntries(cached.entries as readonly FileEntry[]),
+          snapshot: afterCacheSnapshot,
+        };
       }
       continue;
     }

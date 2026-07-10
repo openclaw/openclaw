@@ -1,7 +1,6 @@
 /** Internal metadata-keyed cache shared by session loading and transcript rotation. */
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import type { FileEntry } from "./session-manager.js";
 
 export interface SessionFileSnapshot {
   dev: bigint;
@@ -13,7 +12,7 @@ export interface SessionFileSnapshot {
 
 export interface CachedSessionEntries {
   snapshot: SessionFileSnapshot;
-  entries: FileEntry[];
+  entries: unknown[];
   endsWithNewline: boolean;
 }
 
@@ -52,7 +51,7 @@ export function isSameSessionFileSnapshot(
 }
 
 /** Return parsed rows only when a complete cache entry still matches the file. */
-export function tryReadCachedSessionEntries(filePath: string): readonly FileEntry[] | undefined {
+export function tryReadCachedSessionEntries(filePath: string): readonly unknown[] | undefined {
   const resolvedPath = resolve(filePath);
   const cached = sessionEntriesCache.get(resolvedPath);
   // Misses are common for external context engines. Avoid filesystem polling
