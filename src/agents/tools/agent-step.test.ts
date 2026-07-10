@@ -138,6 +138,7 @@ describe("runAgentStep", () => {
       payloads: [
         {
           text: "⚠️ Agent couldn't generate a response. Please try again.",
+          mediaUrl: null,
           isError: true,
         },
       ],
@@ -176,7 +177,7 @@ describe("runAgentStep", () => {
     const presentation =
       "The read-only lookup completed successfully.\n\n⚠️ Agent couldn't generate a response. Please try again.";
     const agentCommandFromIngress = vi.fn(async () => ({
-      payloads: [{ text: presentation, isError: true }],
+      payloads: [{ text: presentation, mediaUrl: null, isError: true }],
       meta: {
         durationMs: 1,
         error: {
