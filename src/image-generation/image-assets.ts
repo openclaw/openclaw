@@ -28,6 +28,7 @@ export type OpenAiCompatibleImageResponseEntry = {
 
 export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
+  usage?: unknown;
 };
 
 export function resolveInlineImageJsonResponseMaxBytes(

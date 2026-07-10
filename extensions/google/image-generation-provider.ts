@@ -292,6 +292,9 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         return {
           images,
           model,
+          ...(isRecord(payload) && payload.usageMetadata !== undefined
+            ? { metadata: { usageMetadata: payload.usageMetadata } }
+            : {}),
         };
       } finally {
         await release();

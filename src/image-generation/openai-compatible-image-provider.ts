@@ -18,6 +18,7 @@ import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
 } from "./image-assets.js";
+import type { OpenAiCompatibleImageResponsePayload } from "./image-assets.js";
 import type {
   ImageGenerationProvider,
   ImageGenerationProviderCapabilities,
@@ -284,12 +285,16 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const payload = await readProviderJsonResponse(response, `${options.id}.image-generation`, {
-          maxBytes: resolveInlineImageJsonResponseMaxBytes(
-            resolveResponseMaxImages({ count, mode, options }),
-            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
-          ),
-        });
+        const payload = await readProviderJsonResponse<OpenAiCompatibleImageResponsePayload>(
+          response,
+          `${options.id}.image-generation`,
+          {
+            maxBytes: resolveInlineImageJsonResponseMaxBytes(
+              resolveResponseMaxImages({ count, mode, options }),
+              resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+            ),
+          },
+        );
         const images = parseOpenAiCompatibleImageResponse(payload, {
           ...options.response,
           malformedResponseError:
@@ -305,7 +310,11 @@ export function createOpenAiCompatibleImageGenerationProvider(
                 : `${options.label} image generation response missing image data`),
           );
         }
-        return { images, model };
+        return {
+          images,
+          model,
+          ...(payload.usage !== undefined ? { metadata: { usage: payload.usage } } : {}),
+        };
       } finally {
         await release();
       }

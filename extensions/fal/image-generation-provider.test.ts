@@ -95,6 +95,8 @@ describe("fal image-generation provider", () => {
               },
             ],
             prompt: "draw a cat",
+            timings: { inference: 1.23 },
+            seed: 12345,
           }),
           {
             status: 200,
@@ -144,7 +146,13 @@ describe("fal image-generation provider", () => {
         },
       ],
       model: "fal-ai/flux/dev",
-      metadata: { prompt: "draw a cat" },
+      metadata: {
+        prompt: "draw a cat",
+        response: {
+          timings: { inference: 1.23 },
+          seed: 12345,
+        },
+      },
     });
   });
 
