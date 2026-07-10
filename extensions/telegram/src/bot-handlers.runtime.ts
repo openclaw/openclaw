@@ -98,6 +98,7 @@ import {
   recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
   type TelegramSpooledReplayDeferredParticipant,
+  type TelegramSpooledReplaySettlementHold,
 } from "./bot-processing-outcome.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
@@ -436,6 +437,31 @@ export const registerTelegramHandlers = ({
     for (const participant of new Set(participants)) {
       participant.settle(result);
     }
+  };
+  const beginSpooledReplaySettlementHolds = (
+    participants: readonly TelegramSpooledReplayDeferredParticipant[],
+  ) => {
+    const holds: TelegramSpooledReplaySettlementHold[] = [];
+    for (const participant of new Set(participants)) {
+      const hold = participant.beginSettlementHold();
+      if (!hold) {
+        for (const acquired of holds) {
+          acquired.release("replay-pending");
+        }
+        const reason = participant.abortSignal.reason;
+        throw reason instanceof Error
+          ? reason
+          : new Error(
+              `telegram spooled replay participant ${participant.key} settled before durable adoption`,
+            );
+      }
+      holds.push(hold);
+    }
+    return (mode: Parameters<TelegramSpooledReplaySettlementHold["release"]>[0]) => {
+      for (const hold of holds) {
+        hold.release(mode);
+      }
+    };
   };
   const createSpooledReplayParticipantForBufferedWork = (
     key: string,
@@ -1506,8 +1532,6 @@ export const registerTelegramHandlers = ({
     let dispatchDedupeCommitted = false;
     let spooledReplayFinalResult: TelegramMessageProcessingResult | undefined;
     let spooledReplayFinalization: Promise<TelegramMessageProcessingResult> | undefined;
-    let spooledReplayAdoptionCommitInFlight = false;
-    let deferredProcessingCancellation: TelegramMessageProcessingResult | undefined;
     // Callback-submit retries also set options.spooledReplay without durable ingress.
     // Media aborts retry only when the update frame or a buffered participant owns replay.
     const durableMediaReplay =
@@ -1525,6 +1549,10 @@ export const registerTelegramHandlers = ({
           ) ??
           undefined)
         : undefined;
+    const ingressSpooledReplayParticipants = [
+      ...explicitParticipants,
+      ...(frameParticipant ? [frameParticipant] : []),
+    ];
     const processingParticipant =
       explicitParticipants.length > 0
         ? createTelegramSpooledReplayParticipant(
@@ -1534,18 +1562,13 @@ export const registerTelegramHandlers = ({
     if (processingParticipant && explicitParticipants.length > 0) {
       for (const participant of explicitParticipants) {
         void participant.task.then((result) => {
-          if (spooledReplayAdoptionCommitInFlight && result.kind !== "completed") {
-            deferredProcessingCancellation ??= result;
-            return;
-          }
           processingParticipant.settle(result);
         });
       }
     }
     const spooledReplayParticipants = [
       ...new Set([
-        ...explicitParticipants,
-        ...(frameParticipant ? [frameParticipant] : []),
+        ...ingressSpooledReplayParticipants,
         ...(processingParticipant ? [processingParticipant] : []),
       ]),
     ];
@@ -1563,20 +1586,18 @@ export const registerTelegramHandlers = ({
         if (result.kind === "completed") {
           // Do not cache or settle a durable-adoption failure. Deferred queue
           // ownership retries this callback with the same spool participants.
-          spooledReplayAdoptionCommitInFlight = true;
+          const releaseSettlementHolds = beginSpooledReplaySettlementHolds(
+            ingressSpooledReplayParticipants,
+          );
           try {
             await commitDispatchDedupeKeys(params.dispatchDedupeKeys ?? [], {
               requirePersistent: true,
             });
           } catch (error) {
-            spooledReplayAdoptionCommitInFlight = false;
-            if (deferredProcessingCancellation) {
-              processingParticipant?.settle(deferredProcessingCancellation);
-            }
+            releaseSettlementHolds("replay-pending");
             throw error;
           }
-          spooledReplayAdoptionCommitInFlight = false;
-          deferredProcessingCancellation = undefined;
+          releaseSettlementHolds("discard-pending");
           dispatchDedupeCommitted = true;
         } else {
           releaseDispatchDedupeKeys(

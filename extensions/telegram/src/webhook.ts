@@ -528,31 +528,34 @@ async function waitForWebhookSpooledDeferredWork(params: {
   log: (line: string) => void;
   update: ClaimedTelegramSpooledUpdate;
 }): Promise<WebhookSpooledDeferredWorkResult> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<WebhookSpooledDeferredWorkResult>((resolve) => {
-    timer = setTimeout(() => {
-      const age = formatDurationPrecise(TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
-      const message = `Telegram webhook spool buffered processing timed out behind update ${params.update.updateId} on lane ${params.laneKey} after ${age}; marking the update failed.`;
-      params.log(`[telegram] ${message}`);
-      params.deferredWork.settle({
-        kind: "failed-retryable",
-        error: new Error(message),
-      });
-      resolve({ kind: "failed-retryable", error: new Error(message), timedOut: true });
-    }, TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
-    timer.unref?.();
-  });
+  let timeoutError: Error | undefined;
+  const timer = setTimeout(() => {
+    const age = formatDurationPrecise(TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
+    const message = `Telegram webhook spool buffered processing timed out behind update ${params.update.updateId} on lane ${params.laneKey} after ${age}; marking the update failed.`;
+    params.log(`[telegram] ${message}`);
+    timeoutError = new Error(message);
+    params.deferredWork.settle({
+      kind: "failed-retryable",
+      error: timeoutError,
+    });
+  }, TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
+  timer.unref?.();
   try {
-    return await Promise.race([
-      params.deferredWork.task.catch((err: unknown): TelegramMessageProcessingResult => {
-        return { kind: "failed-retryable", error: err };
+    const result = await params.deferredWork.task.catch(
+      (err: unknown): TelegramMessageProcessingResult => ({
+        kind: "failed-retryable",
+        error: err,
       }),
-      timeout,
-    ]);
+    );
+    // A durable-adoption hold can discard the timeout and settle completed.
+    // Only the exact timeout result owns the handler-timeout failure path.
+    return timeoutError !== undefined &&
+      result.kind === "failed-retryable" &&
+      result.error === timeoutError
+      ? { ...result, timedOut: true }
+      : result;
   } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    clearTimeout(timer);
   }
 }
 

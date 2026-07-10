@@ -80,6 +80,8 @@ type TelegramMessageProcessingResult =
   import("./bot-processing-outcome.js").TelegramMessageProcessingResult;
 type TelegramSpooledReplayDeferredParticipant =
   import("./bot-processing-outcome.js").TelegramSpooledReplayDeferredParticipant;
+type TelegramSpooledReplaySettlementHold =
+  import("./bot-processing-outcome.js").TelegramSpooledReplaySettlementHold;
 let beginTelegramReplyFence: typeof import("./telegram-reply-fence.js").beginTelegramReplyFence;
 let buildTelegramReplyFenceLaneKey: typeof import("./telegram-reply-fence.js").buildTelegramReplyFenceLaneKey;
 let endTelegramReplyFence: typeof import("./telegram-reply-fence.js").endTelegramReplyFence;
@@ -2210,6 +2212,73 @@ describe("TelegramPollingSession", () => {
       abort.abort();
       stopWorker();
       await runPromise;
+    });
+  });
+
+  it("keeps refreshing a buffered claim while timeout settlement waits for adoption", async () => {
+    const refreshHarness = installSpooledClaimRefreshHarness();
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      let participant: TelegramSpooledReplayDeferredParticipant | undefined;
+      let settlementHold: TelegramSpooledReplaySettlementHold | undefined;
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "held adoption")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        spooledUpdateHandlerTimeoutMs: 20,
+        handleUpdate: async (update) => {
+          const createdParticipant = createTelegramSpooledReplayDeferredParticipant(
+            `test-held-adoption:${update.update_id}`,
+          );
+          if (!createdParticipant) {
+            throw new Error("expected spooled replay participant");
+          }
+          participant = createdParticipant;
+          settlementHold = createdParticipant.beginSettlementHold();
+          if (!settlementHold) {
+            throw new Error("expected spooled replay settlement hold");
+          }
+        },
+      });
+
+      try {
+        await vi.waitFor(() => expect(participant).toBeDefined());
+        const before = await claimedAtForUpdate(tempDir, 42);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 50);
+        });
+
+        expect(participant?.abortSignal.aborted).toBe(false);
+        expect(
+          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
+            (claim) => claim.updateId,
+          ),
+        ).toEqual([42]);
+
+        refreshHarness.triggerRefresh();
+        await vi.waitFor(async () =>
+          expect(await claimedAtForUpdate(tempDir, 42)).toBeGreaterThan(before),
+        );
+
+        settlementHold?.release("discard-pending");
+        participant?.settle({ kind: "completed" });
+        await vi.waitFor(async () =>
+          expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
+        );
+        expect(await failedUpdateIds(tempDir)).toEqual([]);
+        expectLogExcludes(log, "pre-adoption timed out behind update 42");
+      } finally {
+        settlementHold?.release("replay-pending");
+        participant?.settle({ kind: "skipped" });
+        abort.abort();
+        stopWorker();
+        refreshHarness.restore();
+        await runPromise;
+      }
     });
   });
 
