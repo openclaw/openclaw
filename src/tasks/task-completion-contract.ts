@@ -17,6 +17,15 @@ const BARE_PROGRESS_ONLY_PATTERN =
 const FOLLOW_UP_PLANNING_PREFIX_PATTERN =
   /^(?:after(?:wards|\s+that)?|from\s+there|next|once\s+(?:done|that(?:'|\u2019)?s\s+done|that\s+is\s+done)|then)[,.\s]+/i;
 
+const STRUCTURED_BLOCKED_COMPLETION_PATTERN =
+  /(?:^|[\r\n])\s*(?:[-*]\s*)?(?:state|status|terminal[_\s-]*outcome)\s*:\s*(?:blocked|waiting[_\s-]*human)\b/i;
+
+const HUMAN_ACTION_REQUIRED_PATTERN =
+  /(?:^|[\r\n])\s*(?:[-*]\s*)?human[_\s-]*action[_\s-]*required\s*:\s*true\b/i;
+
+const BLOCKER_NEXT_ACTION_PATTERN =
+  /(?:^|[\r\n])\s*(?:[-*]\s*)?(?:\*\*)?blocker(?:s)?(?:\/next action|\s+next action)?\s*:\s*(?:\*\*)?/i;
+
 function normalizeCompletionText(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -62,6 +71,26 @@ function isProgressOnlyCompletionText(value: string | null | undefined): boolean
   return matchesProgressOnlyPrefix(normalized);
 }
 
+function isBlockedCompletionText(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  return (
+    STRUCTURED_BLOCKED_COMPLETION_PATTERN.test(value) ||
+    HUMAN_ACTION_REQUIRED_PATTERN.test(value) ||
+    BLOCKER_NEXT_ACTION_PATTERN.test(value)
+  );
+}
+
+function formatBlockedCompletionSummary(value: string): string {
+  const reason = normalizeCompletionFailureReason(value);
+  if (!reason) {
+    return "Required completion reported a blocker or human action is needed.";
+  }
+  const suffix = /[.!?]$/u.test(reason) ? "" : ".";
+  return `Required completion reported a blocker: ${reason}${suffix}`;
+}
+
 export function resolveRequiredCompletionTerminalResult(
   resultText: string | null | undefined,
 ): RequiredCompletionTerminalResult {
@@ -77,6 +106,12 @@ export function resolveRequiredCompletionTerminalResult(
       terminalOutcome: "blocked",
       terminalSummary:
         "Required completion ended with progress-only text, not a final deliverable.",
+    };
+  }
+  if (isBlockedCompletionText(resultText)) {
+    return {
+      terminalOutcome: "blocked",
+      terminalSummary: formatBlockedCompletionSummary(normalized),
     };
   }
   return {};

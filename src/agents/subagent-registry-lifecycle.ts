@@ -6,6 +6,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
+import { recordDurableSubagentAnnounceDelivery } from "../durable/subagent.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
@@ -1312,6 +1313,20 @@ export function createSubagentRegistryLifecycleController(params: {
             return;
           }
           recordAnnounceDeliveryResult(entry, delivery);
+          recordDurableSubagentAnnounceDelivery({
+            runId: pendingPayload.childRunId,
+            childSessionKey: pendingPayload.childSessionKey,
+            directIdempotencyKey: buildAnnounceIdempotencyKey(
+              buildAnnounceIdFromChildRun({
+                childSessionKey: pendingPayload.childSessionKey,
+                childRunId: pendingPayload.childRunId,
+              }),
+            ),
+            delivered: delivery.delivered,
+            path: delivery.path,
+            error: delivery.delivered ? undefined : formatAnnounceDeliveryError(delivery),
+            reason: delivery.reason,
+          });
           if (delivery.delivered) {
             const deliveryState = ensureDeliveryState(entry);
             if (deliveryState.lastError !== undefined) {

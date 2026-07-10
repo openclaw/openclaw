@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resolveDurableRuntimeSqlitePath } from "./config.js";
 import { DURABLE_INTAKE_ENVELOPE_SCHEMA } from "./intake-envelope.js";
 import {
   reconcileDurableChatSendsOnGatewayStartup,
@@ -12,6 +13,7 @@ import {
   reconcileStaleDurableChatSends,
   reconcileStaleDurableAgentTurns,
   reconcileStaleDurableSubagentRuns,
+  startDurableRecoveryWorker,
 } from "./recovery.js";
 import {
   DURABLE_AGENT_TURN_OPERATION_KIND,
@@ -21,6 +23,30 @@ import {
 import { openDurableRuntimeSqliteStore } from "./sqlite-store.js";
 
 describe("durable runtime recovery", () => {
+  it("does not start the recovery worker unless the worker flag is explicit", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-recovery-worker-"));
+    const env = {
+      OPENCLAW_DURABLE_RUNTIME: "1",
+      OPENCLAW_DURABLE_RECOVERY_INTERVAL_MS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+
+    vi.useFakeTimers();
+    try {
+      const stop = startDurableRecoveryWorker({
+        processInstanceId: "process-disabled-worker",
+        env,
+      });
+      vi.advanceTimersByTime(10);
+      stop();
+
+      expect(fs.existsSync(resolveDurableRuntimeSqlitePath(env))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("marks running agent turns lost on gateway startup without touching waiting turns", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-recovery-"));
     const store = openDurableRuntimeSqliteStore({

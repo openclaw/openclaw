@@ -126,4 +126,35 @@ describe("durable gateway methods", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("rejects invalid coordination params before opening durable state", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-invalid-"));
+    const previousEnabled = process.env.OPENCLAW_DURABLE_RUNTIME;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_DURABLE_RUNTIME = "1";
+    process.env.OPENCLAW_STATE_DIR = dir;
+    try {
+      const calls: unknown[][] = [];
+      durableHandlers["durable.coordination.get"]?.({
+        params: { runtimeRunId: "", includeSteps: true },
+        respond: (...args: unknown[]) => calls.push(args),
+      } as never);
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toBe(false);
+      expect(fs.existsSync(path.join(dir, "state", "openclaw.sqlite"))).toBe(false);
+    } finally {
+      if (previousEnabled === undefined) {
+        delete process.env.OPENCLAW_DURABLE_RUNTIME;
+      } else {
+        process.env.OPENCLAW_DURABLE_RUNTIME = previousEnabled;
+      }
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

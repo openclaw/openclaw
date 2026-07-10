@@ -514,9 +514,17 @@ export function createGatewayTool(opts?: {
             },
           },
         });
+        const noContinuationWarning =
+          sessionKey && !payload.continuation
+            ? "No continuationMessage was provided; the restart notice will be delivered, but no internal post-restart agent turn was queued."
+            : undefined;
         return jsonResult({
           ...scheduled,
-          ...(payload.continuation ? { continuationQueued: scheduled.emitHooksQueued } : {}),
+          ...(payload.continuation
+            ? { continuationQueued: scheduled.emitHooksQueued }
+            : noContinuationWarning
+              ? { continuationQueued: false, warning: noContinuationWarning }
+              : {}),
         });
       }
 

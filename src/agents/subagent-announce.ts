@@ -15,6 +15,7 @@ import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { resolveRequiredCompletionTerminalResult } from "../tasks/task-completion-contract.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -484,19 +485,25 @@ export async function runSubagentAnnounceFlow(params: {
       outcome = { status: "unknown" };
     }
 
-    // Build status label
-    const statusLabel =
-      outcome.status === "ok"
-        ? "completed; ready for parent review"
-        : outcome.status === "timeout"
-          ? "timed out"
-          : outcome.status === "error"
-            ? `failed: ${outcome.error || "unknown error"}`
-            : "finished with unknown status";
-
     const taskLabel = params.label || params.task || "task";
     const announceSessionId = childSessionId || "unknown";
     const findings = childCompletionFindings || reply || "(no output)";
+    const terminalResult =
+      expectsCompletionMessage && outcome.status === "ok"
+        ? resolveRequiredCompletionTerminalResult(findings)
+        : {};
+
+    // Build status label
+    const statusLabel =
+      terminalResult.terminalOutcome === "blocked"
+        ? `blocked: ${terminalResult.terminalSummary || "needs follow-up"}`
+        : outcome.status === "ok"
+          ? "completed; ready for parent review"
+          : outcome.status === "timeout"
+            ? "timed out"
+            : outcome.status === "error"
+              ? `failed: ${outcome.error || "unknown error"}`
+              : "finished with unknown status";
 
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {

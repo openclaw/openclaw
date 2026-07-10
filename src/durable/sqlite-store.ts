@@ -339,7 +339,7 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnDefinition: str
   }
 }
 
-function ensureDurableRuntimeSchema(db: DatabaseSync): void {
+function ensureDurableSchemaMigrationTable(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS durable_schema_migrations (
       schema_name TEXT NOT NULL PRIMARY KEY,
@@ -347,7 +347,13 @@ function ensureDurableRuntimeSchema(db: DatabaseSync): void {
       applied_at INTEGER NOT NULL,
       metadata_json TEXT
     );
+  `);
+}
 
+function ensureDurableRuntimeSchema(db: DatabaseSync): void {
+  ensureDurableSchemaMigrationTable(db);
+  assertDurableRuntimeSchemaVersionSupported(db);
+  db.exec(`
     CREATE TABLE IF NOT EXISTS durable_runtime_runs (
       runtime_run_id TEXT NOT NULL PRIMARY KEY,
       operation_kind TEXT NOT NULL,
@@ -544,17 +550,30 @@ function ensureDurableRuntimeSchema(db: DatabaseSync): void {
   ensureDurableRuntimeSchemaVersion(db);
 }
 
-function ensureDurableRuntimeSchemaVersion(db: DatabaseSync): void {
-  const now = Date.now();
+function readDurableRuntimeSchemaMigration(
+  db: DatabaseSync,
+): DurableSchemaMigrationRow | undefined {
   const row = db
     .prepare("SELECT * FROM durable_schema_migrations WHERE schema_name = ?")
     .get(DURABLE_RUNTIME_SQLITE_SCHEMA_NAME) as DurableSchemaMigrationRow | undefined;
+  return row;
+}
+
+function assertDurableRuntimeSchemaVersionSupported(db: DatabaseSync): void {
+  const row = readDurableRuntimeSchemaMigration(db);
   const currentVersion = Number(row?.version ?? 0);
   if (currentVersion > DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION) {
     throw new Error(
       `Durable runtime schema version ${currentVersion} is newer than supported version ${DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION}`,
     );
   }
+}
+
+function ensureDurableRuntimeSchemaVersion(db: DatabaseSync): void {
+  const now = Date.now();
+  const row = readDurableRuntimeSchemaMigration(db);
+  const currentVersion = Number(row?.version ?? 0);
+  assertDurableRuntimeSchemaVersionSupported(db);
   if (currentVersion === DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION) {
     return;
   }
