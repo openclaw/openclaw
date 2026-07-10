@@ -223,6 +223,7 @@ function runGeneratedPublisherScenario(
         FAKE_PR_STATE: prState,
         FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
         GENERATED_PATHS: "generated",
+        CONTENTS_TOKEN: "contents-token",
         GH_TOKEN: "test-token",
         GITHUB_REPOSITORY: "openclaw/openclaw",
         GITHUB_REPOSITORY_OWNER: "openclaw",
@@ -234,6 +235,14 @@ function runGeneratedPublisherScenario(
         RUNNER_TEMP: runnerTemp,
       },
     });
+    const authHeader = spawnSync(
+      "git",
+      ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
+      { cwd: worktree, encoding: "utf8" },
+    );
+    if (authHeader.status !== 1 || authHeader.stdout.trim() !== "") {
+      throw new Error("generated publisher left its Git authorization header configured");
+    }
 
     const branchRef = "refs/heads/automation/locale";
     const branchExists =
@@ -414,42 +423,63 @@ describe("ci workflow guards", () => {
 
     const publishAction = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
     const primaryTokenStep = publishAction.runs.steps.find(
-      (step: { name?: string }) => step.name === "Create generated PR app token",
+      (step: { name?: string }) => step.name === "Create generated branch app token",
     );
     const fallbackTokenStep = publishAction.runs.steps.find(
-      (step: { name?: string }) => step.name === "Create generated PR fallback app token",
+      (step: { name?: string }) => step.name === "Create generated branch fallback app token",
+    );
+    const pullRequestTokenStep = publishAction.runs.steps.find(
+      (step: { name?: string }) => step.name === "Create generated PR app token",
     );
     const actionPublishStep = publishAction.runs.steps.find(
       (step: { name?: string }) => step.name === "Publish generated pull request",
     );
 
     expect(primaryTokenStep).toMatchObject({
-      id: "app-token",
+      id: "contents-token",
       "continue-on-error": true,
       uses: CREATE_GITHUB_APP_TOKEN_V3,
       with: {
         "app-id": "2729701",
         "private-key": "${{ inputs.primary-private-key }}",
         "permission-contents": "write",
-        "permission-pull-requests": "write",
       },
     });
     expect(fallbackTokenStep).toMatchObject({
-      id: "app-token-fallback",
-      if: "steps.app-token.outcome == 'failure'",
+      id: "contents-token-fallback",
+      if: "steps.contents-token.outcome == 'failure'",
       uses: CREATE_GITHUB_APP_TOKEN_V3,
       with: {
         "app-id": "2971289",
         "private-key": "${{ inputs.fallback-private-key }}",
         "permission-contents": "write",
+      },
+    });
+    expect(pullRequestTokenStep).toMatchObject({
+      id: "pull-request-token",
+      uses: CREATE_GITHUB_APP_TOKEN_V3,
+      with: {
+        "app-id": "${{ inputs.pull-request-app-id }}",
+        "private-key": "${{ inputs.pull-request-private-key }}",
+        owner: "${{ github.repository_owner }}",
+        repositories: "${{ github.event.repository.name }}",
         "permission-pull-requests": "write",
       },
     });
-    expect(actionPublishStep.env.GH_TOKEN).toBe(
-      "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
+    expect(actionPublishStep.env.CONTENTS_TOKEN).toBe(
+      "${{ steps.contents-token.outputs.token || steps.contents-token-fallback.outputs.token }}",
     );
+    expect(actionPublishStep.env.GH_TOKEN).toBe("${{ steps.pull-request-token.outputs.token }}");
     expect(actionPublishStep.run).toContain("GIT_TERMINAL_PROMPT=0");
-    expect(actionPublishStep.run).toContain("gh auth setup-git");
+    expect(actionPublishStep.run).toContain(
+      'git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${git_auth}"',
+    );
+    expect(actionPublishStep.run).toContain("printf '::add-mask::%s\\n' \"${git_auth}\"");
+    expect(actionPublishStep.run).toContain(
+      "git config --local --unset-all http.https://github.com/.extraheader",
+    );
+    expect(actionPublishStep.run).toContain("trap cleanup_git_auth EXIT");
+    expect(actionPublishStep.run).not.toContain("gh auth setup-git");
     expect(actionPublishStep.run).toContain("timeout --signal=TERM --kill-after=10s 120s");
     expect(actionPublishStep.run).toContain("--force-with-lease=refs/heads/");
     expect(actionPublishStep.run).toContain(
@@ -564,6 +594,8 @@ describe("ci workflow guards", () => {
       expect(publishStep.with).toMatchObject({
         "primary-private-key": "${{ secrets.GH_APP_PRIVATE_KEY }}",
         "fallback-private-key": "${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}",
+        "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
         "base-branch": "${{ github.event.repository.default_branch }}",
         "head-branch": automationBranch,
         "commit-message": commitMessage,

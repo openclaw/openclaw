@@ -8,6 +8,12 @@ inputs:
   fallback-private-key:
     description: Fallback OpenClaw GitHub App private key.
     required: true
+  pull-request-app-id:
+    description: GitHub App id with pull-request write access.
+    required: true
+  pull-request-private-key:
+    description: GitHub App private key with pull-request write access.
+    required: true
   base-branch:
     description: Target branch for the generated pull request.
     required: true
@@ -30,30 +36,39 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Create generated PR app token
-      id: app-token
+    - name: Create generated branch app token
+      id: contents-token
       continue-on-error: true
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
       with:
         app-id: "2729701"
         private-key: ${{ inputs.primary-private-key }}
         permission-contents: write
-        permission-pull-requests: write
 
-    - name: Create generated PR fallback app token
-      id: app-token-fallback
-      if: steps.app-token.outcome == 'failure'
+    - name: Create generated branch fallback app token
+      id: contents-token-fallback
+      if: steps.contents-token.outcome == 'failure'
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
       with:
         app-id: "2971289"
         private-key: ${{ inputs.fallback-private-key }}
         permission-contents: write
+
+    - name: Create generated PR app token
+      id: pull-request-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      with:
+        app-id: ${{ inputs.pull-request-app-id }}
+        private-key: ${{ inputs.pull-request-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
         permission-pull-requests: write
 
     - name: Publish generated pull request
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+        CONTENTS_TOKEN: ${{ steps.contents-token.outputs.token || steps.contents-token-fallback.outputs.token }}
+        GH_TOKEN: ${{ steps.pull-request-token.outputs.token }}
         BASE_BRANCH: ${{ inputs.base-branch }}
         HEAD_BRANCH: ${{ inputs.head-branch }}
         COMMIT_MESSAGE: ${{ inputs.commit-message }}
@@ -68,8 +83,12 @@ runs:
         export GIT_SEQUENCE_EDITOR=true
         export GIT_TERMINAL_PROMPT=0
 
+        if [[ -z "${CONTENTS_TOKEN:-}" ]]; then
+          echo "Generated branch publication requires an OpenClaw contents-write App token." >&2
+          exit 1
+        fi
         if [[ -z "${GH_TOKEN:-}" ]]; then
-          echo "Generated PR publication requires an OpenClaw GitHub App token." >&2
+          echo "Generated PR publication requires a pull-request-write App token." >&2
           exit 1
         fi
 
@@ -265,7 +284,16 @@ runs:
         source_commit="$(git rev-parse HEAD)"
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        timeout --signal=TERM --kill-after=10s 30s gh auth setup-git
+        # Keep branch transport and PR mutations on separate least-privilege App identities.
+        # App-authored branch pushes preserve pull_request synchronize workflow events.
+        git_auth="$(printf 'x-access-token:%s' "${CONTENTS_TOKEN}" | base64 | tr -d '\n')"
+        printf '::add-mask::%s\n' "${git_auth}"
+        git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${git_auth}"
+        unset git_auth
+        cleanup_git_auth() {
+          git config --local --unset-all http.https://github.com/.extraheader || true
+        }
+        trap cleanup_git_auth EXIT
         git add -A -- "${generated_paths[@]}"
         if git diff --cached --quiet -- "${generated_paths[@]}"; then
           echo "No generated changes."

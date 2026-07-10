@@ -242,6 +242,8 @@ jobs:
         with:
           primary-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           fallback-private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           base-branch: ${{ github.event.repository.default_branch }}
           head-branch: automation/native-app-locale-refresh
           commit-message: "chore(i18n): refresh native locales"
