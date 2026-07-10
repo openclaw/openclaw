@@ -85,7 +85,8 @@ vi.mock("./streaming-card.js", () => {
       update = vi.fn(async () => {});
       close = vi.fn(async (text?: string) => {
         this.active = false;
-        return Boolean(text?.trim());
+        const visible = Boolean(text?.trim());
+        return { contentVisible: visible, requestedContentVisible: visible };
       });
       discard = vi.fn(async () => {
         this.active = false;
@@ -118,6 +119,10 @@ afterAll(() => {
 
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
+  type RuntimeLoggerStub = ReplyDispatcherArgs["runtime"] & {
+    log: ReturnType<typeof vi.fn>;
+    error: ReturnType<typeof vi.fn>;
+  };
   type TypingDispatcherOptions = {
     onReplyStart?: () => Promise<void> | void;
     onIdle?: () => Promise<void> | void;
@@ -220,8 +225,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     return firstMockArg(createReplyDispatcherWithTypingMock, "reply dispatcher options");
   }
 
-  function createRuntimeLogger() {
-    return { log: vi.fn(), error: vi.fn() } as never;
+  function createRuntimeLogger(): RuntimeLoggerStub {
+    return { log: vi.fn(), error: vi.fn() } as unknown as RuntimeLoggerStub;
   }
 
   function createDispatcherHarness(overrides: Partial<ReplyDispatcherArgs> = {}) {
@@ -1340,6 +1345,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledWith("caption from stream", {
       note: "Agent: agent",
     });
+    expect(streamingInstances[0].close.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0],
+    );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
@@ -1448,86 +1456,97 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("closes streaming final text before sending regular media attachments", async () => {
-    const { result, options } = createDispatcherHarness({
-      runtime: createRuntimeLogger(),
-    });
+    const { options } = createDispatcherHarness();
 
     await options.deliver(
-      {
-        text: "final report\n\nSee the attached image.",
-        mediaUrls: ["https://example.com/report.png"],
-      },
+      { text: "final report", mediaUrl: "https://example.com/report.png" },
       { kind: "final" },
     );
 
-    expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith(
-      "final report\n\nSee the attached image.",
-      { note: "Agent: agent" },
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("final report", {
+      note: "Agent: agent",
+    });
+    expect(streamingInstances[0].close.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0],
     );
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
-    expectMockArgFields(sendMediaFeishuMock, "media send params", {
-      mediaUrl: "https://example.com/report.png",
-    });
-
-    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(result.getVisibleReplyState()).toEqual({
-      visibleReplySent: true,
-      skippedFinalReason: null,
-    });
   });
 
-  it("falls back to plain final text when streaming close accepts no content before media", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: true,
-      },
-    });
-    const { result, options } = createDispatcherHarness({
-      runtime: createRuntimeLogger(),
-    });
+  it("falls back to plain final text when streaming close misses the requested content", async () => {
+    const { result, options } = createDispatcherHarness();
 
-    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "prior preview" });
     streamingInstances[0].close = vi.fn(async () => {
       streamingInstances[0].active = false;
-      return false;
+      return { contentVisible: true, requestedContentVisible: false };
     });
 
     await options.deliver(
-      {
-        text: "final report\n\nSee the attached image.",
-        mediaUrls: ["https://example.com/report.png"],
-      },
+      { text: "final report", mediaUrl: "https://example.com/report.png" },
       { kind: "final" },
     );
 
-    expect(streamingInstances[0].close).toHaveBeenCalledWith(
-      "final report\n\nSee the attached image.",
-      { note: "Agent: agent" },
+    expectMockArgFields(sendMessageFeishuMock, "message send params", { text: "final report" });
+    expect(streamingInstances[0].close.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessageFeishuMock.mock.invocationCallOrder[0],
     );
-    expectMockArgFields(sendMessageFeishuMock, "message send params", {
-      text: "final report\n\nSee the attached image.",
-    });
-    expectMockArgFields(sendMediaFeishuMock, "media send params", {
-      mediaUrl: "https://example.com/report.png",
-    });
     expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
       sendMediaFeishuMock.mock.invocationCallOrder[0],
     );
 
-    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(result.getVisibleReplyState()).toEqual({
-      visibleReplySent: true,
-      skippedFinalReason: null,
+  });
+
+  it("falls back to text and media when streaming close rejects", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+
+    result.replyOptions.onPartialReply?.({ text: "prior preview" });
+    streamingInstances[0].close = vi.fn(async () => {
+      streamingInstances[0].active = false;
+      throw new Error("close failed");
     });
+
+    await options.deliver(
+      { text: "final report", mediaUrl: "https://example.com/report.png" },
+      { kind: "final" },
+    );
+
+    expect(streamingInstances[0].close.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessageFeishuMock.mock.invocationCallOrder[0],
+    );
+    expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0],
+    );
+    expectMockArgFields(sendMessageFeishuMock, "message send params", { text: "final report" });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("close failed"));
+  });
+
+  it("still sends media when the close-false text fallback rejects", async () => {
+    const { result, options } = createDispatcherHarness();
+
+    result.replyOptions.onPartialReply?.({ text: "prior preview" });
+    streamingInstances[0].close = vi.fn(async () => {
+      streamingInstances[0].active = false;
+      return { contentVisible: false, requestedContentVisible: false };
+    });
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("text failed"));
+
+    await expect(
+      options.deliver(
+        { text: "final report", mediaUrl: "https://example.com/report.png" },
+        { kind: "final" },
+      ),
+    ).rejects.toThrow("text failed");
+
+    expect(streamingInstances[0].close.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessageFeishuMock.mock.invocationCallOrder[0],
+    );
+    expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0],
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
   });
 
   it("sends attachments after streaming final markdown replies", async () => {
@@ -2079,7 +2098,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "```md\nvisible answer\n```" }, { kind: "final" });
     streamingInstances[0].close = vi.fn(async () => {
       streamingInstances[0].active = false;
-      return false;
+      return { contentVisible: false, requestedContentVisible: false };
     });
 
     await options.onIdle?.();
@@ -2111,7 +2130,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         releaseClose = resolve;
       });
       streamingSession.active = false;
-      return true;
+      return { contentVisible: true, requestedContentVisible: true };
     });
     streamingSession.close = closeMock;
 

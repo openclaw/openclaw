@@ -224,9 +224,14 @@ describe("FeishuStreamingSession", () => {
     replaceBodies: string[] = [],
     failedContentUpdateStatuses: ReadonlyMap<number, number> = new Map<number, number>(),
     failedReplaceStatuses: ReadonlyMap<number, number> = new Map<number, number>(),
+    businessErrorCodes?: {
+      update?: ReadonlyMap<number, number>;
+      replace?: ReadonlyMap<number, number>;
+    },
   ): StreamingFetchDeps {
     return createMemoryFetch((url, body) => {
       let status = 200;
+      let code = 0;
       if (url.pathname.includes("/auth/")) {
         return jsonResponse({
           code: 0,
@@ -245,6 +250,7 @@ describe("FeishuStreamingSession", () => {
         if (failedStatus !== undefined) {
           status = failedStatus;
         }
+        code = businessErrorCodes?.update?.get(updateIndex) ?? 0;
       } else if (url.pathname.includes("/elements/content")) {
         const replaceIndex = replaceBodies.length;
         replaceBodies.push(body);
@@ -252,8 +258,9 @@ describe("FeishuStreamingSession", () => {
         if (failedStatus !== undefined) {
           status = failedStatus;
         }
+        code = businessErrorCodes?.replace?.get(replaceIndex) ?? 0;
       }
-      return jsonResponse({ code: 0, msg: "ok" }, status);
+      return jsonResponse({ code, msg: code === 0 ? "ok" : "rejected" }, status);
     });
   }
 
@@ -588,7 +595,10 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await session.close("final answer");
+    await expect(session.close("final answer")).resolves.toEqual({
+      contentVisible: true,
+      requestedContentVisible: true,
+    });
 
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(1);
@@ -706,7 +716,10 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await session.close("final answer");
+    await expect(session.close("final answer")).resolves.toEqual({
+      contentVisible: true,
+      requestedContentVisible: false,
+    });
 
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(1);
@@ -744,7 +757,10 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await expect(session.close("final answer")).resolves.toBe(false);
+    await expect(session.close("final answer")).resolves.toEqual({
+      contentVisible: false,
+      requestedContentVisible: false,
+    });
 
     expect(updateBodies).toHaveLength(1);
     expect(replaceBodies).toHaveLength(0);
@@ -752,6 +768,66 @@ describe("FeishuStreamingSession", () => {
       "Final update failed: Error: Update card content failed with HTTP 500",
     );
   });
+
+  it.each([
+    {
+      name: "update",
+      stateText: "",
+      businessErrorCodes: { update: new Map([[0, 300317]]) },
+      contentVisible: false,
+    },
+    {
+      name: "replace",
+      stateText: "prior preview",
+      businessErrorCodes: { replace: new Map([[0, 300317]]) },
+      contentVisible: true,
+    },
+  ])(
+    "does not accept a 200 response with a CardKit $name error",
+    async ({ name, stateText, businessErrorCodes, contentVisible }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(4_900);
+      const updateBodies: string[] = [];
+      const replaceBodies: string[] = [];
+      const deps = mockFetches(
+        updateBodies,
+        new Set<number>(),
+        replaceBodies,
+        new Map<number, number>(),
+        new Map<number, number>(),
+        businessErrorCodes,
+      );
+      const log = vi.fn();
+      const session = new FeishuStreamingSession(
+        {} as never,
+        { appId: `app_final_${name}_business_error`, appSecret: "secret" },
+        log,
+        deps,
+      );
+      setStreamingSessionInternals(session, {
+        state: {
+          cardId: `card_${name}_business_error`,
+          messageId: `om_${name}_business_error`,
+          sequence: 1,
+          currentText: stateText,
+          sentText: stateText,
+          hasNote: false,
+        },
+        lastUpdateTime: 3_000,
+      });
+
+      await expect(session.close("final answer")).resolves.toEqual({
+        contentVisible,
+        requestedContentVisible: false,
+      });
+
+      expect(updateBodies).toHaveLength(name === "update" ? 1 : 0);
+      expect(replaceBodies).toHaveLength(name === "replace" ? 1 : 0);
+      expect(log).toHaveBeenCalledWith(
+        `Final ${name} failed: Error: ${name === "update" ? "Update" : "Replace"} card content failed: rejected`,
+      );
+    },
+  );
 
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
     vi.useFakeTimers();

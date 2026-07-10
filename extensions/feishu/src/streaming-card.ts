@@ -102,6 +102,20 @@ function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
   return ["open.feishu.cn"];
 }
 
+async function assertCardKitMutationAccepted(
+  response: Response,
+  label: string,
+  action: string,
+): Promise<void> {
+  if (!response.ok) {
+    throw new Error(`${action} failed with HTTP ${response.status}`);
+  }
+  const result = await readFeishuJsonResponse<{ code?: number; msg?: string }>(response, label);
+  if (result.code !== 0) {
+    throw new Error(`${action} failed: ${result.msg || `code ${String(result.code)}`}`);
+  }
+}
+
 async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise<string> {
   const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
   const cached = tokenCache.get(key);
@@ -419,10 +433,14 @@ export class FeishuStreamingSession {
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.update",
       });
-      await release();
-      if (!response.ok) {
-        onError?.(new Error(`Update card content failed with HTTP ${response.status}`));
-        return false;
+      try {
+        await assertCardKitMutationAccepted(
+          response,
+          "feishu.streaming-card.update",
+          "Update card content",
+        );
+      } finally {
+        await release();
       }
       return true;
     } catch (error) {
@@ -464,10 +482,14 @@ export class FeishuStreamingSession {
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.replace",
       });
-      await release();
-      if (!response.ok) {
-        onError?.(new Error(`Replace card content failed with HTTP ${response.status}`));
-        return false;
+      try {
+        await assertCardKitMutationAccepted(
+          response,
+          "feishu.streaming-card.replace",
+          "Replace card content",
+        );
+      } finally {
+        await release();
       }
       return true;
     } catch (error) {
@@ -578,9 +600,12 @@ export class FeishuStreamingSession {
       .catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
-  async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
+  async close(
+    finalText?: string,
+    options?: { note?: string },
+  ): Promise<{ contentVisible: boolean; requestedContentVisible: boolean }> {
     if (!this.state || this.closed) {
-      return false;
+      return { contentVisible: false, requestedContentVisible: false };
     }
     this.closed = true;
     this.clearFlushTimer();
@@ -589,7 +614,10 @@ export class FeishuStreamingSession {
     const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
     const text = finalText ?? pendingMerged;
     const apiBase = resolveApiBase(this.creds.domain);
-    let visibleContentSent = Boolean(this.state.sentText.trim());
+    // A prior preview can be visible even when the requested final replacement fails.
+    // Callers need both facts so they can restore the final answer without a false duplicate.
+    let contentVisible = Boolean(this.state.sentText.trim());
+    let requestedContentVisible = text === this.state.sentText && Boolean(text.trim());
 
     // Only send final update if content differs from what's already displayed.
     // An explicit empty final text clears a transient preview before closeout.
@@ -602,7 +630,8 @@ export class FeishuStreamingSession {
       this.state.currentText = text;
       if (sent) {
         this.state.sentText = text;
-        visibleContentSent = Boolean(text.trim());
+        contentVisible = Boolean(text.trim());
+        requestedContentVisible = contentVisible;
       }
     }
 
@@ -647,7 +676,7 @@ export class FeishuStreamingSession {
     this.pendingText = null;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
-    return visibleContentSent;
+    return { contentVisible, requestedContentVisible };
   }
 
   async discard(): Promise<void> {
