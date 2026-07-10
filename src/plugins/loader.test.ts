@@ -9727,4 +9727,40 @@ export const runtimeValue = helperValue;`,
       platformSpy.mockRestore();
     }
   });
+  it("skips openclaw-hybrid-memory when OPENCLAW_SKIP_HYBRID_MEMORY_CLI is enabled", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "openclaw-hybrid-memory",
+      body: 'module.exports = { id: "openclaw-hybrid-memory", kind: "memory", register() { throw new Error("should not load"); } };',
+      dir: path.join(bundledDir, "openclaw-hybrid-memory"),
+      filename: "index.cjs",
+    });
+    writePlugin({
+      id: "other-memory",
+      body: 'module.exports = { id: "other-memory", kind: "memory", register() {} };',
+      dir: path.join(bundledDir, "other-memory"),
+      filename: "index.cjs",
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir: bundledDir,
+      cache: false,
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+        OPENCLAW_SKIP_HYBRID_MEMORY_CLI: "1",
+      },
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["openclaw-hybrid-memory", "other-memory"],
+          slots: { memory: "any" },
+        },
+      },
+    });
+
+    expect(registry.plugins.some((plugin) => plugin.id === "openclaw-hybrid-memory")).toBe(false);
+    expect(registry.plugins.some((plugin) => plugin.id === "other-memory")).toBe(true);
+  });
 });
