@@ -166,6 +166,7 @@ export function createReleasePrepareSteps(
 
 export function runReleasePrepareSteps(params: {
   cwd: string;
+  json?: boolean;
   mode: ReleasePrepareMode;
   runStep?: (step: ReleasePrepareStep, cwd: string) => number;
   steps: ReleasePrepareStep[];
@@ -174,7 +175,10 @@ export function runReleasePrepareSteps(params: {
     return params.steps.map((step) => ({ ...step, durationMs: 0, status: "planned" }));
   }
 
-  const runStep = params.runStep ?? runReleasePrepareStep;
+  const runStep =
+    params.runStep ??
+    ((step: ReleasePrepareStep, cwd: string) =>
+      runReleasePrepareStep(step, cwd, { json: params.json ?? false }));
   const results: ReleasePrepareStepResult[] = [];
   let blocked = false;
   for (const step of params.steps) {
@@ -236,6 +240,7 @@ export function main(argv = process.argv.slice(2)): number {
   const before = readWorktreeState(args.rootDir);
   const results = runReleasePrepareSteps({
     cwd: args.rootDir,
+    json: args.json,
     mode: args.mode,
     steps,
   });
@@ -265,15 +270,30 @@ export function main(argv = process.argv.slice(2)): number {
   return manifest.status === "failed" ? 1 : 0;
 }
 
-function runReleasePrepareStep(step: ReleasePrepareStep, cwd: string): number {
-  process.stdout.write(`\n[release-prepare] ${step.name}\n`);
+export function runReleasePrepareStep(
+  step: ReleasePrepareStep,
+  cwd: string,
+  options: { json?: boolean } = {},
+): number {
+  const json = options.json ?? false;
+  const progressStream = json ? process.stderr : process.stdout;
+  progressStream.write(`\n[release-prepare] ${step.name}\n`);
   const result = spawnSync(step.command, step.args, {
     cwd,
+    encoding: json ? "utf8" : undefined,
     env: process.env,
-    stdio: "inherit",
+    stdio: json ? ["ignore", "pipe", "pipe"] : "inherit",
   });
   if (result.error) {
     throw result.error;
+  }
+  if (json) {
+    if (typeof result.stdout === "string" && result.stdout) {
+      process.stderr.write(result.stdout);
+    }
+    if (typeof result.stderr === "string" && result.stderr) {
+      process.stderr.write(result.stderr);
+    }
   }
   return result.status ?? 1;
 }

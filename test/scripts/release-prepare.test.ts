@@ -1,9 +1,10 @@
 // Release prepare tests cover shadow planning, cutover commands, and candidate manifests.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildReleasePreparationManifest,
   createReleasePrepareSteps,
   parseReleasePrepareArgs,
+  runReleasePrepareStep,
   runReleasePrepareSteps,
 } from "../../scripts/release-prepare.ts";
 
@@ -116,6 +117,43 @@ describe("release preparation plan", () => {
     });
 
     expect(results.map((result) => result.status)).toEqual(["failed", "skipped"]);
+  });
+
+  it("keeps JSON mode child output off stdout", () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdout.push(String(chunk));
+      return true;
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      stderr.push(String(chunk));
+      return true;
+    });
+    try {
+      const status = runReleasePrepareStep(
+        {
+          args: [
+            "-e",
+            'process.stdout.write("child stdout\\n"); process.stderr.write("child stderr\\n");',
+          ],
+          command: process.execPath,
+          id: "release-version",
+          name: "JSON child",
+        },
+        process.cwd(),
+        { json: true },
+      );
+
+      expect(status).toBe(0);
+      expect(stdout.join("")).toBe("");
+      expect(stderr.join("")).toContain("[release-prepare] JSON child");
+      expect(stderr.join("")).toContain("child stdout");
+      expect(stderr.join("")).toContain("child stderr");
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
   });
 });
 
