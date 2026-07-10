@@ -9,7 +9,7 @@ import { isPathInside } from "../infra/path-guards.js";
  */
 
 /** Maximum avatar payload size accepted by local file and gateway upload paths. */
-export const AVATAR_MAX_BYTES = 256 * 1024;
+export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
 // Local avatar serving intentionally excludes formats handled only as MIME fallbacks:
 // callers may recognize BMP/TIFF MIME types, but local inline serving stays on
