@@ -77,6 +77,11 @@ export type MattermostAccountConfig = {
     /** Enable message reaction actions. Default: true. */
     reactions?: boolean;
   };
+  /** Voice call integration. Disabled by default. */
+  voice?: {
+    /** Automatically join direct-message calls and answer with STT/agent/TTS. */
+    enabled?: boolean;
+  };
   /** Native slash command configuration. */
   commands?: {
     /** Enable native slash commands. "auto" resolves to false (opt-in). */

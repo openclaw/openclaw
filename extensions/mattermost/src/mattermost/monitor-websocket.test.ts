@@ -227,6 +227,43 @@ describe("mattermost websocket monitor", () => {
     expect(countMatching(patches, (patch) => patch.connected === false)).toBe(2);
   });
 
+  it("forwards Calls events before message-specific filtering", async () => {
+    const socket = new FakeWebSocket();
+    const onEvent = vi.fn(async () => undefined);
+    const onPosted = vi.fn(async () => undefined);
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onEvent,
+      onPosted,
+      webSocketFactory: () => socket,
+    });
+    const running = connectOnce();
+    socket.emitOpen();
+    socket.emitMessage(
+      Buffer.from(
+        JSON.stringify({
+          event: "custom_com.mattermost.calls_call_start",
+          data: { channelID: "dm-channel", id: "call-1" },
+          broadcast: { channel_id: "dm-channel" },
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(onEvent).toHaveBeenCalledTimes(1));
+
+    expect(onEvent).toHaveBeenCalledWith({
+      event: "custom_com.mattermost.calls_call_start",
+      data: { channelID: "dm-channel", id: "call-1" },
+      broadcast: { channel_id: "dm-channel" },
+    });
+    expect(onPosted).not.toHaveBeenCalled();
+
+    socket.emitClose(1000);
+    await running;
+  });
+
   it("accepts large valid post envelopes and rejects oversized websocket payloads", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await once(server, "listening");

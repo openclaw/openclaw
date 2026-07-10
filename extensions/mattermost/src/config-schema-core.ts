@@ -84,6 +84,13 @@ const MattermostNetworkSchema = z
   .strict()
   .optional();
 
+const MattermostVoiceSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const MattermostStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
 const MattermostStreamingProgressSchema = z
   .object({
@@ -154,6 +161,7 @@ const MattermostAccountSchemaBase = z
         reactions: z.boolean().optional(),
       })
       .optional(),
+    voice: MattermostVoiceSchema,
     commands: MattermostSlashCommandsSchema,
     interactions: z
       .object({

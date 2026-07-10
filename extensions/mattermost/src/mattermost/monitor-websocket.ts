@@ -23,6 +23,11 @@ export type MattermostEventPayload = {
     channel_type?: string;
     sender_name?: string;
     team_id?: string;
+    channelID?: string;
+    id?: string;
+    userID?: string;
+    user_id?: string;
+    session_id?: string;
   };
   broadcast?: {
     channel_id?: string;
@@ -67,6 +72,11 @@ const MattermostEventPayloadSchema = z.object({
       channel_type: z.string().optional(),
       sender_name: z.string().optional(),
       team_id: z.string().optional(),
+      channelID: z.string().optional(),
+      id: z.string().optional(),
+      userID: z.string().optional(),
+      user_id: z.string().optional(),
+      session_id: z.string().optional(),
     })
     .optional(),
   broadcast: z
@@ -107,6 +117,7 @@ type CreateMattermostConnectOnceOpts = {
   runtime: RuntimeEnv;
   nextSeq: () => number;
   onPosted: (rawEvent: string) => Promise<void>;
+  onEvent?: (payload: MattermostEventPayload) => Promise<void>;
   onReaction?: (payload: MattermostEventPayload) => Promise<void>;
   webSocketFactory?: MattermostWebSocketFactory;
   /**
@@ -342,6 +353,14 @@ export function createMattermostConnectOnce(
           const payload = parseMattermostEventPayload(raw);
           if (!payload) {
             return;
+          }
+
+          if (opts.onEvent) {
+            try {
+              await opts.onEvent(payload);
+            } catch (err) {
+              opts.runtime.error?.(`mattermost event handler failed: ${String(err)}`);
+            }
           }
 
           if (payload.event === "reaction_added" || payload.event === "reaction_removed") {

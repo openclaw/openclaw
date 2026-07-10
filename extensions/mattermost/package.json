@@ -8,6 +8,8 @@
   },
   "type": "module",
   "dependencies": {
+    "@msgpack/msgpack": "3.1.3",
+    "@roamhq/wrtc": "0.10.0",
     "ws": "8.21.0",
     "zod": "4.4.3"
   },
@@ -70,6 +72,7 @@
       "bundledDist": false
     },
     "release": {
+      "bundleRuntimeDependencies": false,
       "publishToClawHub": true,
       "publishToNpm": true
     }

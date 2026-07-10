@@ -8,6 +8,8 @@
       "name": "@openclaw/mattermost",
       "version": "2026.7.2",
       "dependencies": {
+        "@msgpack/msgpack": "3.1.3",
+        "@roamhq/wrtc": "0.10.0",
         "ws": "8.21.0",
         "zod": "4.4.3"
       },
@@ -18,6 +20,117 @@
         "openclaw": {
           "optional": true
         }
+      }
+    },
+    "node_modules/@msgpack/msgpack": {
+      "version": "3.1.3",
+      "resolved": "https://registry.npmjs.org/@msgpack/msgpack/-/msgpack-3.1.3.tgz",
+      "integrity": "sha512-47XIizs9XZXvuJgoaJUIE2lFoID8ugvc0jzSHP+Ptfk8nTbnR8g788wv48N03Kx0UkAv559HWRQ3yzOgzlRNUA==",
+      "license": "ISC",
+      "engines": {
+        "node": ">= 18"
+      }
+    },
+    "node_modules/@roamhq/wrtc": {
+      "version": "0.10.0",
+      "resolved": "https://registry.npmjs.org/@roamhq/wrtc/-/wrtc-0.10.0.tgz",
+      "integrity": "sha512-yFqQQ0EV1ZUHaphh3tmjoxPi2wzhW2vjmzoAVNRRLUjXYd2e1nvwi9TKfE2w4WNvNws/hBkouvOt23Xo9FkXkQ==",
+      "license": "BSD-2-Clause",
+      "optionalDependencies": {
+        "@roamhq/wrtc-darwin-arm64": "0.10.0",
+        "@roamhq/wrtc-darwin-x64": "0.10.0",
+        "@roamhq/wrtc-linux-arm64": "0.10.0",
+        "@roamhq/wrtc-linux-x64": "0.10.0",
+        "@roamhq/wrtc-win32-x64": "0.10.0",
+        "domexception": "^4.0.0"
+      }
+    },
+    "node_modules/@roamhq/wrtc-darwin-arm64": {
+      "version": "0.10.0",
+      "resolved": "https://registry.npmjs.org/@roamhq/wrtc-darwin-arm64/-/wrtc-darwin-arm64-0.10.0.tgz",
+      "integrity": "sha512-vFdi79jWuPHcnUcnuOjTvyKtmY/RI2xRQo9Y6RsIjIlYePN/7LTy00c+Ivrz4prYAPbp0oHscl7PDV64VUqGTQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "license": "BSD-2-Clause",
+      "optional": true,
+      "os": [
+        "darwin"
+      ]
+    },
+    "node_modules/@roamhq/wrtc-darwin-x64": {
+      "version": "0.10.0",
+      "resolved": "https://registry.npmjs.org/@roamhq/wrtc-darwin-x64/-/wrtc-darwin-x64-0.10.0.tgz",
+      "integrity": "sha512-H6852g2xYCuaR+/TrthpdMafs4bMfAUEpvRDhsIguzrK7Dz+MKpNI8MkwdqJN8W65J+7w7k+YqXIkTHe7Fz/cg==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "BSD-2-Clause",
+      "optional": true,
+      "os": [
+        "darwin"
+      ]
+    },
+    "node_modules/@roamhq/wrtc-linux-arm64": {
+      "version": "0.10.0",
+      "resolved": "https://registry.npmjs.org/@roamhq/wrtc-linux-arm64/-/wrtc-linux-arm64-0.10.0.tgz",
+      "integrity": "sha512-fEuJbNjprxQG6QlFd2iqBW9x028RDSho6izVg7gyt8irdPiXWOxzOxNnYMs/B2fohBTd1wD4Qxfivl07/dCR8A==",
+      "cpu": [
+        "arm64"
+      ],
+      "license": "BSD-2-Clause",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@roamhq/wrtc-linux-x64": {
+      "version": "0.10.0",
+      "resolved": "https://registry.npmjs.org/@roamhq/wrtc-linux-x64/-/wrtc-linux-x64-0.10.0.tgz",
+      "integrity": "sha512-H32lK2eFg3sVb/9nkHIX5HIisxFoS82Gpesuea+zqAyRpRzSd5NpFXx28bVy9wQyRrNtj8k0bTUgEzWRzSbYCA==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "BSD-2-Clause",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@roamhq/wrtc-win32-x64": {
+      "version": "0.10.0",
+      "resolved": "https://registry.npmjs.org/@roamhq/wrtc-win32-x64/-/wrtc-win32-x64-0.10.0.tgz",
+      "integrity": "sha512-wEVXMvLrBizdLyrd+Zc7zb7zpwUuHUBXwrdIvI69e3i/AA8YsVYI2xo/sxk6GoQ+o8a14ONc4SStDS35TCjg+w==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "BSD-2-Clause",
+      "optional": true,
+      "os": [
+        "win32"
+      ]
+    },
+    "node_modules/domexception": {
+      "version": "4.0.0",
+      "resolved": "https://registry.npmjs.org/domexception/-/domexception-4.0.0.tgz",
+      "integrity": "sha512-A2is4PLG+eeSfoTMA95/s4pvAoSo2mKtiM5jlHkAVewmiO8ISFTFKZjH7UAM1Atli/OT/7JHOrJRJiMKUZKYBw==",
+      "license": "MIT",
+      "optional": true,
+      "dependencies": {
+        "webidl-conversions": "^7.0.0"
+      },
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/webidl-conversions": {
+      "version": "7.0.0",
+      "resolved": "https://registry.npmjs.org/webidl-conversions/-/webidl-conversions-7.0.0.tgz",
+      "integrity": "sha512-VwddBukDzu71offAQR975unBIGqfKZpM+8ZX6ySk8nYhVoo5CYaZyzt3YBvYtRtO+aoGlqxPg/B87NGVZ/fu6g==",
+      "license": "BSD-2-Clause",
+      "optional": true,
+      "engines": {
+        "node": ">=12"
       }
     },
     "node_modules/ws": {
