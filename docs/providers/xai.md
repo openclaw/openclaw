@@ -194,6 +194,15 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
 ## Features
 
+<Warning>
+  `x_search` and `code_execution` run on xAI's servers. xAI bills $5 per 1,000
+  tool calls, plus the model's input and output tokens. With each tool's
+  `enabled` setting omitted, OpenClaw exposes it only for an active xAI model.
+  A known non-xAI model provider requires an explicit per-tool `enabled: true`;
+  a missing or unresolved provider fails closed. xAI auth is always required,
+  and `enabled: false` disables the tool for every provider.
+</Warning>
+
 <AccordionGroup>
   <Accordion title="Web search">
     The bundled `grok` web-search provider prefers xAI OAuth, then falls back
@@ -429,15 +438,15 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
     Config path: `plugins.entries.xai.config.xSearch`
 
-    | Key               | Type    | Default                       | Description                          |
-    | ----------------- | ------- | ------------------------------ | ------------------------------------- |
-    | `enabled`         | boolean | `true` (if key available)     | Enable or disable x_search           |
-    | `model`           | string  | `grok-4.3`                    | Model used for x_search requests     |
-    | `baseUrl`         | string  | -                              | xAI Responses base URL override      |
-    | `inlineCitations` | boolean | -                              | Include inline citations in results  |
-    | `maxTurns`        | number  | -                              | Maximum conversation turns            |
-    | `timeoutSeconds`  | number  | `30`                           | Request timeout in seconds            |
-    | `cacheTtlMinutes` | number  | `15`                           | Cache time-to-live in minutes         |
+    | Key               | Type    | Default                   | Description                                      |
+    | ----------------- | ------- | ------------------------- | ------------------------------------------------ |
+    | `enabled`         | boolean | Automatic for xAI models  | Disable, or opt in for a known non-xAI provider |
+    | `model`           | string  | `grok-4.3`                | Model used for x_search requests                 |
+    | `baseUrl`         | string  | -                         | xAI Responses base URL override                  |
+    | `inlineCitations` | boolean | -                         | Include inline citations in results              |
+    | `maxTurns`        | number  | -                         | Maximum conversation turns                       |
+    | `timeoutSeconds`  | number  | `30`                      | Request timeout in seconds                       |
+    | `cacheTtlMinutes` | number  | `15`                      | Cache time-to-live in minutes                    |
 
     ```json5
     {
@@ -466,12 +475,12 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
     Config path: `plugins.entries.xai.config.codeExecution`
 
-    | Key              | Type    | Default                  | Description                            |
-    | ---------------- | ------- | -------------------------- | ---------------------------------------- |
-    | `enabled`        | boolean | `true` (if key available) | Enable or disable code execution        |
-    | `model`          | string  | `grok-4.3`                | Model used for code execution requests  |
-    | `maxTurns`       | number  | -                           | Maximum conversation turns              |
-    | `timeoutSeconds` | number  | `30`                        | Request timeout in seconds              |
+    | Key              | Type    | Default                  | Description                                      |
+    | ---------------- | ------- | ------------------------ | ------------------------------------------------ |
+    | `enabled`        | boolean | Automatic for xAI models | Disable, or opt in for a known non-xAI provider |
+    | `model`          | string  | `grok-4.3`               | Model used for code execution requests           |
+    | `maxTurns`       | number  | -                        | Maximum conversation turns                       |
+    | `timeoutSeconds` | number  | `30`                     | Request timeout in seconds                       |
 
     <Note>
     This is remote xAI sandbox execution, not local [`exec`](/tools/exec).
