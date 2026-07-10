@@ -60,7 +60,7 @@ export async function collectIncludePathsRecursive(params: {
         includePath,
         resolvedPath,
         rootRealDir,
-        onResolvedPath: (resolvedPath) => includedPaths.add(resolvedPath),
+        onResolvedPath: (resolvedIncludePath) => includedPaths.add(resolvedIncludePath),
       }),
     parseJson: parseJsonWithJson5Fallback,
   };
