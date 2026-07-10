@@ -1398,7 +1398,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/mobile-reauth.sh", ["test/scripts/auth-monitor.test.ts"]],
   ["scripts/committer", ["test/scripts/committer.test.ts"]],
   ["scripts/gh-read", ["test/scripts/gh-read.test.ts"]],
-  ["scripts/pr", ["test/scripts/pr-wrappers.test.ts"]],
+  ["scripts/pr", ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"]],
+  ["scripts/pr-lib/operation-lock.sh", ["test/scripts/pr-operation-lock.test.ts"]],
+  ["scripts/pr-lib/process-group-runner.mjs", ["test/scripts/pr-operation-lock.test.ts"]],
   ["scripts/pr-merge", ["test/scripts/pr-wrappers.test.ts"]],
   ["scripts/pr-prepare", ["test/scripts/pr-wrappers.test.ts"]],
   ["scripts/pr-review", ["test/scripts/pr-wrappers.test.ts"]],
@@ -2058,6 +2060,7 @@ const TOOLING_TEST_TARGETS = new Map([
     "test/scripts/plugin-prerelease-test-plan.test.ts",
     ["test/scripts/plugin-prerelease-test-plan.test.ts"],
   ],
+  ["test/scripts/pr-operation-lock.test.ts", ["test/scripts/pr-operation-lock.test.ts"]],
   ["test/scripts/pr-wrappers.test.ts", ["test/scripts/pr-wrappers.test.ts"]],
   ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
   [
