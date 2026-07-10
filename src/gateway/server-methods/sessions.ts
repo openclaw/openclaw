@@ -42,6 +42,7 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { reconcilePersistedRunningSession } from "../../agents/session-running-reconciliation.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
@@ -146,6 +147,58 @@ import { assertValidParams } from "./validation.js";
 const log = createSubsystemLogger("gateway/sessions");
 
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
+
+async function clearPersistedNoActiveRunSessionState(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  storePath: string;
+  agentId?: string;
+}): Promise<boolean> {
+  if (!params.storePath) {
+    return false;
+  }
+  let candidateSessionKeys: string[] = [];
+  let primarySessionKey: string | undefined;
+  const target = await applySessionPatchProjection({
+    storePath: params.storePath,
+    resolveTarget: ({ entries }) => {
+      const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+      const resolvedTarget = resolveGatewaySessionStoreTarget({
+        cfg: params.cfg,
+        key: params.key,
+        store,
+        agentId: params.agentId,
+      });
+      const targetEntry = resolveFreshestSessionEntryFromStoreKeys(store, resolvedTarget.storeKeys);
+      if (!targetEntry) {
+        return { primaryKey: resolvedTarget.canonicalKey, candidateKeys: resolvedTarget.storeKeys };
+      }
+      const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg: params.cfg,
+        key: params.key,
+        store,
+        agentId: params.agentId,
+      });
+      candidateSessionKeys = migratedTarget.storeKeys;
+      primarySessionKey = primaryKey;
+      return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+    },
+    project: ({ existingEntry }) =>
+      existingEntry ? { ok: true, entry: existingEntry } : { ok: false },
+  });
+  if (!target.ok || !primarySessionKey) {
+    return false;
+  }
+  const result = await reconcilePersistedRunningSession({
+    storePath: params.storePath,
+    sessionKey: primarySessionKey,
+    candidateSessionKeys,
+    activeRunPresent: false,
+    reason: "sessions_abort_no_active_run",
+    safeFallbackDelivered: false,
+  });
+  return result.changed;
+}
 
 function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
@@ -1886,7 +1939,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedGlobalAgentId = requestedGlobalAgent.agentId;
-    const { canonicalKey } = loadSessionEntry(key, { agentId: requestedGlobalAgentId });
+    const { canonicalKey, storePath } = loadSessionEntry(key, { agentId: requestedGlobalAgentId });
     const requestedKeyAliases =
       requestedKey &&
       requestedKey !== key &&
@@ -1981,6 +2034,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ...(canonicalKey === "global" && abortAgentId ? { agentId: abortAgentId } : {}),
         reason: "abort",
       });
+    } else {
+      const clearedStaleSessionState = await clearPersistedNoActiveRunSessionState({
+        cfg,
+        key: canonicalKey,
+        storePath,
+        agentId: requestedGlobalAgentId,
+      });
+      if (clearedStaleSessionState) {
+        emitSessionsChanged(context, {
+          sessionKey: canonicalKey,
+          ...(canonicalKey === "global" && abortAgentId ? { agentId: abortAgentId } : {}),
+          reason: "abort",
+        });
+      }
     }
   },
   "sessions.patch": async ({ params, respond, context, client, isWebchatConnect }) => {

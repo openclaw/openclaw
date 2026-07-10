@@ -45,6 +45,7 @@ import {
   listActiveEmbeddedRunSessionKeys,
 } from "./embedded-agent-runner/run-state.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
+import { reconcilePersistedRunningSessionsInStore } from "./session-running-reconciliation.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
@@ -916,27 +917,48 @@ export async function recoverStartupOrphanedMainSessions(
     updatedBeforeMs?: number;
     resumedSessionKeys?: Set<string>;
   } = {},
-): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
+): Promise<{
+  marked: number;
+  recovered: number;
+  failed: number;
+  skipped: number;
+  reconciledStale: number;
+}> {
   const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
+  const activeSessionIds = [...(params.activeSessionIds ?? listActiveEmbeddedRunSessionIds())];
+  const activeSessionKeys = [...(params.activeSessionKeys ?? listActiveEmbeddedRunSessionKeys())];
   const marked = await markStartupOrphanedMainSessionsForRecovery({
     cfg: params.cfg,
     stateDir: params.stateDir,
-    activeSessionIds: params.activeSessionIds,
-    activeSessionKeys: params.activeSessionKeys,
+    activeSessionIds,
+    activeSessionKeys,
     updatedBeforeMs: startupRecoveryCutoffMs,
   });
   const recovered = await recoverRestartAbortedMainSessions({
     cfg: params.cfg,
     stateDir: params.stateDir,
     resumedSessionKeys: params.resumedSessionKeys,
-    activeSessionIds: params.activeSessionIds,
-    activeSessionKeys: params.activeSessionKeys,
+    activeSessionIds,
+    activeSessionKeys,
   });
+  let reconciledStale = 0;
+  for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
+    const staleResult = await reconcilePersistedRunningSessionsInStore({
+      storePath,
+      activeSessionIds,
+      activeSessionKeys,
+      updatedBeforeMs: startupRecoveryCutoffMs,
+      reason: "startup_stale_running_session",
+      safeFallbackDelivered: false,
+    });
+    reconciledStale += staleResult.reconciled;
+  }
   return {
     marked: marked.marked,
     recovered: recovered.recovered,
     failed: recovered.failed,
     skipped: marked.skipped + recovered.skipped,
+    reconciledStale,
   };
 }
 
