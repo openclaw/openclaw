@@ -64,6 +64,12 @@ export type CliBackendAuthForwardingDecision =
   | { status: "resolver-declined" }
   | { status: "forward"; credential: CliBackendForwardedCredential };
 
+type CliBackendForwardingSelection = {
+  provider: string;
+  profileId: string;
+  kind: CliBackendForwardedCredentialKind;
+};
+
 function normalizeId(value: string): string {
   return value.trim();
 }
@@ -73,7 +79,7 @@ function normalizeIds(values: readonly string[]): Set<string> {
 }
 
 function assertResolvedCredentialMatchesSelection(params: {
-  selected: CliBackendResolveForwardedCredentialContext;
+  selected: CliBackendForwardingSelection;
   resolved: CliBackendForwardedCredential;
 }): void {
   if (params.resolved.providerId !== params.selected.provider) {
@@ -86,9 +92,9 @@ function assertResolvedCredentialMatchesSelection(params: {
       `CLI backend credential resolver returned profile ${params.resolved.profileId} for selected profile ${params.selected.profileId}.`,
     );
   }
-  if (params.resolved.kind !== params.selected.credential.type) {
+  if (params.resolved.kind !== params.selected.kind) {
     throw new Error(
-      `CLI backend credential resolver returned kind ${params.resolved.kind} for selected credential kind ${params.selected.credential.type}.`,
+      `CLI backend credential resolver returned kind ${params.resolved.kind} for selected credential kind ${params.selected.kind}.`,
     );
   }
 }
@@ -122,15 +128,16 @@ export async function resolveCliBackendAuthForwarding(params: {
     };
   }
 
+  const selectedKind = params.context.credential.type;
   const providers = normalizeIds(params.policy.providers);
   if (!providers.has(selectedProvider)) {
     return { status: "provider-denied", provider: selectedProvider };
   }
 
-  if (!params.policy.credentialKinds.includes(params.context.credential.type)) {
+  if (!params.policy.credentialKinds.includes(selectedKind)) {
     return {
       status: "credential-kind-denied",
-      kind: params.context.credential.type,
+      kind: selectedKind,
     };
   }
 
@@ -138,14 +145,28 @@ export async function resolveCliBackendAuthForwarding(params: {
     return { status: "resolver-missing" };
   }
 
-  const resolved = await params.resolver(params.context);
+  const selected: CliBackendForwardingSelection = {
+    provider: selectedProvider,
+    profileId: selectedProfileId,
+    kind: selectedKind,
+  };
+  const resolverContext: CliBackendResolveForwardedCredentialContext = {
+    backendId: params.context.backendId,
+    provider: selectedProvider,
+    modelId: params.context.modelId,
+    profileId: selectedProfileId,
+    credential: {
+      type: selectedKind,
+      provider: credentialProvider,
+      profileId: credentialProfileId,
+    },
+  };
+
+  const resolved = await params.resolver(resolverContext);
   if (!resolved) {
     return { status: "resolver-declined" };
   }
 
-  assertResolvedCredentialMatchesSelection({
-    selected: params.context,
-    resolved,
-  });
+  assertResolvedCredentialMatchesSelection({ selected, resolved });
   return { status: "forward", credential: resolved };
 }
