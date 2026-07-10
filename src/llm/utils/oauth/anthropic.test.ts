@@ -184,3 +184,30 @@ describe("Anthropic OAuth callback host", () => {
     expect(tokenExchange).toHaveBeenCalledOnce();
   });
 });
+
+describe("Anthropic OAuth error body redaction", () => {
+  it("redacts raw response body from non-2xx error messages", async () => {
+    // postJson is internal; test that a 400 response does not leak raw body
+    // through the exported refreshAnthropicToken which calls postJson.
+    const sensitiveBody = JSON.stringify({
+      error: "invalid_grant",
+      error_description: "The refresh token is invalid or expired.",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(sensitiveBody, {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    await expect(refreshAnthropicToken("bad-token")).rejects.toThrow(
+      /Anthropic token refresh request failed.*status 400/,
+    );
+    await expect(refreshAnthropicToken("bad-token")).rejects.not.toThrow(/error_description/);
+    await expect(refreshAnthropicToken("bad-token")).rejects.not.toThrow(/refresh token/);
+  });
+});

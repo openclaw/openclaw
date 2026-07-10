@@ -6,6 +6,7 @@
  */
 
 import type { Server } from "node:http";
+import { extractProviderErrorDetail } from "../../../agents/provider-http-errors.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import { readResponseWithLimit } from "../../../infra/http-body.js";
 import {
@@ -253,8 +254,10 @@ async function postJson(
   const responseBody = new TextDecoder().decode(buffer);
 
   if (!response.ok) {
+    const detail = await extractProviderErrorDetail(response);
     throw new Error(
-      `HTTP request failed. status=${response.status}; url=${url}; body=${responseBody}`,
+      `Anthropic OAuth request failed with status ${response.status}` +
+        (detail ? `: ${detail}` : ""),
     );
   }
 
@@ -442,10 +445,8 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
       refresh_token: refreshToken,
     });
   } catch (error) {
-    throw new Error(
-      `Anthropic token refresh request failed. url=${TOKEN_URL}; details=${formatErrorDetails(error)}`,
-      { cause: error },
-    );
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`Anthropic token refresh request failed: ${msg}`, { cause: error });
   }
 
   return parseTokenCredentials(responseBody, {
