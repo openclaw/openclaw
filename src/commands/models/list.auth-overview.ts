@@ -16,7 +16,6 @@ import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
-  shouldPreferExplicitConfigApiKeyAuth,
 } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
@@ -152,7 +151,7 @@ export function resolveProviderAuthOverview(params: {
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
 
   const effective: ProviderAuthOverview["effective"] = (() => {
-    if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider) && usableCustomKey) {
+    if (cfg.models?.providers?.[provider]?.auth === "api-key" && usableCustomKey) {
       return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
     }
     if (profiles.length > 0) {

@@ -76,10 +76,6 @@ vi.mock("../../agents/model-auth.js", () => {
         return { apiKey, source: "models.json" };
       },
     ),
-    shouldPreferExplicitConfigApiKeyAuth: vi.fn(
-      (cfg: Parameters<typeof resolveConfigKey>[0], provider: string) =>
-        cfg?.models?.providers?.[provider]?.auth === "api-key",
-    ),
   };
 });
 

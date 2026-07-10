@@ -375,6 +375,10 @@ describe("resolveModelAuthLabel", () => {
       apiKey: "sk-literal-secret-key",
       source: "models.json",
     });
+    mocks.resolveUsableCustomProviderApiKey.mockReturnValue({
+      apiKey: "sk-literal-secret-key",
+      source: "models.json",
+    });
 
     const label = resolveModelAuthLabel({
       provider: "openai",
