@@ -906,10 +906,10 @@ export const dispatchTelegramMessage = async ({
     replyFenceGeneration = undefined;
   };
   const adoptReplyTurn = async () => {
-    // Fence abort authority ends at adoption. Core (queue interrupt mode /
-    // reply-run registry abort) is the sole owner of killing adopted runs.
-    releaseTelegramReplyFenceAbortController(activeReplyFenceKey, replyAbortController);
     await onTurnAdopted?.();
+    // Fence abort authority ends only after durable adoption succeeds. Core
+    // then becomes the sole owner of killing the adopted run.
+    releaseTelegramReplyFenceAbortController(activeReplyFenceKey, replyAbortController);
   };
   // Block mode sizes preview rotation steps from streaming.preview.chunk (same
   // contract as Discord's block chunker). Other modes keep one growing rich

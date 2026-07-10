@@ -6456,6 +6456,26 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(supersedeTelegramReplyFence("agent:main:telegram:direct:adopted")).toBe(false);
     expect(captures[1]?.abortSignal?.aborted).toBe(false);
     captures[1]?.lifecycle?.onComplete?.();
+
+    const rejectedKey = "agent:main:telegram:direct:rejected-adoption";
+    const onRejectedTurnAbandoned = vi.fn();
+    await dispatchWithContext({
+      context: createQueuedContext(rejectedKey, 103),
+      streamMode: "off",
+      onTurnAdopted: vi.fn(async () => {
+        throw new Error("durable adoption failed");
+      }),
+      onTurnDeferred: vi.fn(),
+      onTurnAbandoned: onRejectedTurnAbandoned,
+    });
+    await expect(captures[2]?.lifecycle?.onAdmitted?.()).rejects.toThrow(
+      "durable adoption failed",
+    );
+    expect(supersedeTelegramReplyFence(rejectedKey)).toBe(true);
+    expect(captures[2]?.abortSignal?.aborted).toBe(true);
+    captures[2]?.lifecycle?.onComplete?.();
+    expect(onRejectedTurnAbandoned).toHaveBeenCalledTimes(1);
+    expect(supersedeTelegramReplyFence(rejectedKey)).toBe(false);
   });
 
   it("does not send visible error fallbacks for room events", async () => {
