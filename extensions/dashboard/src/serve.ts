@@ -14,6 +14,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   CUSTOM_WIDGET_NAME_PATTERN,
   matchesApprovedFile,
+  MAX_WIDGET_FILE_BYTES,
   resolveWidgetDir,
   WIDGET_CONTENT_TYPES,
 } from "./manifest.js";
@@ -221,6 +222,12 @@ export async function serveWidgetAsset(
     }
     const stat = await fs.stat(real);
     if (!stat.isFile()) {
+      return notFound(res);
+    }
+    // Widget files stay writable after approval, and this route is unauthenticated.
+    // Refuse an oversized file before reading it: a swapped-in giant asset would
+    // otherwise be buffered in full only to fail the digest check below.
+    if (stat.size > MAX_WIDGET_FILE_BYTES) {
       return notFound(res);
     }
     data = await fs.readFile(real);

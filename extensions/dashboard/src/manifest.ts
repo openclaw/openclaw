@@ -42,7 +42,7 @@ const MAX_WIDGET_FILES = 64;
  * and untrusted: without a cap, dropping one huge file into the scaffold directory
  * would make approval read it into memory and stall or OOM the gateway.
  */
-const MAX_WIDGET_FILE_BYTES = 2 * 1024 * 1024;
+export const MAX_WIDGET_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_WIDGET_TOTAL_BYTES = 8 * 1024 * 1024;
 
 /** sha256 of one file's bytes, lowercase hex. */

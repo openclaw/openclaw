@@ -309,4 +309,20 @@ describe("serveWidgetAsset security jail", () => {
       expect(captured.statusCode).toBe(404);
     });
   });
+
+  it("404s an oversized file without reading it", async () => {
+    await withApprovedWidget(async ({ store, stateDir, widgetDir }) => {
+      // Approved files stay writable, and this route is unauthenticated: a swapped-in
+      // giant asset must be refused on its size, not buffered and then hash-checked.
+      await fs.writeFile(path.join(widgetDir, "app.js"), Buffer.alloc(2 * 1024 * 1024 + 1));
+
+      const { res, captured } = fakeResponse();
+      await serveWidgetAsset({ method: "GET", pathname: urlFor("revenue-chart", "app.js") }, res, {
+        store,
+        stateDir,
+      });
+
+      expect(captured.statusCode).toBe(404);
+    });
+  });
 });
