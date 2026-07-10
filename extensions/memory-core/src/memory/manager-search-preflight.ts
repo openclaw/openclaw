@@ -1,4 +1,8 @@
 // Memory Core plugin module implements manager search preflight behavior.
+export function normalizeMemorySearchQuery(query: string): string {
+  return query.trim();
+}
+
 export function resolveMemorySearchPreflight(params: {
   query: string;
   hasIndexedContent: boolean;
@@ -13,7 +17,7 @@ export function resolveMemorySearchPreflight(params: {
       shouldInitializeProvider: false;
       shouldSearch: false;
     } {
-  const normalizedQuery = params.query.trim();
+  const normalizedQuery = normalizeMemorySearchQuery(params.query);
   if (!normalizedQuery) {
     return {
       normalizedQuery,

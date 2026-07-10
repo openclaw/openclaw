@@ -56,7 +56,10 @@ import {
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
-import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
+import {
+  normalizeMemorySearchQuery,
+  resolveMemorySearchPreflight,
+} from "./manager-search-preflight.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import {
   collectMemoryStatusAggregate,
@@ -624,6 +627,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     },
   ): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
+    const normalizedQuery = normalizeMemorySearchQuery(query);
+    if (!normalizedQuery) {
+      return [];
+    }
     if (this.providerRequirement.mode === "required") {
       await this.ensureProviderInitialized();
       this.assertRequiredProviderAvailable("search");
@@ -641,7 +648,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       hasIndexedContent = this.hasIndexedContent();
     }
     const preflight = resolveMemorySearchPreflight({
-      query,
+      query: normalizedQuery,
       hasIndexedContent,
     });
     if (!preflight.shouldSearch) {
