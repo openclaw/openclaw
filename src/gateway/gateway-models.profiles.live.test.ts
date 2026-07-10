@@ -3805,7 +3805,7 @@ function buildOpenAIUltraWireProviderOverride(params: {
 function assertOpenAIUltraWireEffort(params: {
   expectedModel: string;
   observations: OpenAIUltraWireObservation[];
-}): void {
+}): number {
   const matching = params.observations.filter((entry) => entry.model === params.expectedModel);
   expect(
     matching.length,
@@ -3819,6 +3819,7 @@ function assertOpenAIUltraWireEffort(params: {
       matching,
     )}`,
   ).toBe(true);
+  return matching.length;
 }
 
 type LiveModelRegistry = ModelRegistry;
@@ -5065,10 +5066,13 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 }
                 // Check every request made by the passing model lane, including
                 // child and tool-followup turns, so later paths cannot downgrade.
-                assertOpenAIUltraWireEffort({
+                const capturedRequestCount = assertOpenAIUltraWireEffort({
                   expectedModel: model.id,
                   observations: ultraWireCapture.observations.slice(wireObservationStart),
                 });
+                logProgress(
+                  `${progressLabel}: ultra wire effort=max captured_requests=${capturedRequestCount}`,
+                );
               }
               return "done";
             })(),
