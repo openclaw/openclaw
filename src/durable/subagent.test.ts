@@ -146,7 +146,7 @@ describe("durable subagent bridge", () => {
     }
   });
 
-  it("preserves background task and taskflow bindings on child runs and parent links", () => {
+  it("preserves external task bindings on child runs and parent links", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-subagent-"));
     const dbPath = path.join(dir, "state", "openclaw.sqlite");
     const env = {
@@ -155,7 +155,7 @@ describe("durable subagent bridge", () => {
       OPENCLAW_STATE_DIR: dir,
     };
     const parentSessionKey = "agent:bo:discord:channel:bo-main";
-    const childSessionKey = "agent:bo:subagent:workboard-default-card";
+    const childSessionKey = "agent:bo:subagent:wu-default-card";
 
     const setupStore = openDurableRuntimeSqliteStore({ path: dbPath });
     try {

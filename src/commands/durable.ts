@@ -1,3 +1,4 @@
+import { isDurableRuntimesEnabled } from "../durable/config.js";
 import { buildDurableCoordinationProjection } from "../durable/coordination-projection.js";
 import { openDurableRuntimeStore } from "../durable/store-factory.js";
 import type {
@@ -271,7 +272,20 @@ function renderDetails(details: DurableRunDetails): string {
 }
 
 export async function durableCommand(opts: DurableCliOptions, runtime: RuntimeEnv): Promise<void> {
-  const store = openDurableRuntimeStore({ env: opts.env });
+  const env = opts.env ?? process.env;
+  if (!isDurableRuntimesEnabled(env)) {
+    if (opts.json) {
+      writeJson(runtime, { enabled: false });
+    } else {
+      write(
+        runtime,
+        "Durable runtime is disabled. Set OPENCLAW_DURABLE_RUNTIME=1 to inspect durable runtime state.",
+      );
+    }
+    return;
+  }
+
+  const store = openDurableRuntimeStore({ env });
   try {
     if (opts.action === "stats") {
       const stats = store.getStats();
