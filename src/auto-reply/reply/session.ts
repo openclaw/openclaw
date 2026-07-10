@@ -33,8 +33,8 @@ import {
 import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
   DEFAULT_RESET_TRIGGERS,
@@ -283,18 +283,25 @@ function resolveInitSessionStateContext(params: InitSessionStateParams): InitSes
 
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
   const context = resolveInitSessionStateContext(params);
-  // Keep old-session cleanup on the writer lane too: harness resets carry the
-  // session key, so releasing early can delete a replacement created by the next turn.
-  return await runExclusiveSessionStoreWrite(
+  const initialized = await runExclusiveSessionStoreWrite(
     context.storePath,
     async () => await initSessionStateLocked(params, context),
   );
+  if (initialized.pendingHarnessReset) {
+    // Reset hooks receive the retired session id/file, but may legitimately write
+    // the session store. Run them after releasing the writer to avoid self-deadlock.
+    await resetRegisteredAgentHarnessSessions(initialized.pendingHarnessReset);
+  }
+  return initialized.result;
 }
 
 async function initSessionStateLocked(
   params: InitSessionStateParams,
   context: InitSessionStateContext,
-): Promise<SessionInitResult> {
+): Promise<{
+  result: SessionInitResult;
+  pendingHarnessReset?: Parameters<typeof resetRegisteredAgentHarnessSessions>[0];
+}> {
   const { ctx, cfg, commandAuthorized } = params;
   const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
     context;
@@ -881,6 +888,15 @@ async function initSessionStateLocked(
     sessionFile?: string;
     transcriptArchived?: boolean;
   } = {};
+  const pendingHarnessReset: Parameters<typeof resetRegisteredAgentHarnessSessions>[0] | undefined =
+    previousSessionEntry?.sessionId
+      ? {
+          sessionId: previousSessionEntry.sessionId,
+          sessionKey,
+          sessionFile: previousSessionEntry.sessionFile,
+          reason: previousSessionEndReason ?? "unknown",
+        }
+      : undefined;
   if (previousSessionEntry?.sessionId) {
     const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
       await loadSessionArchiveRuntime();
@@ -912,12 +928,6 @@ async function initSessionStateLocked(
           error: String(error),
         });
       },
-    });
-    await resetRegisteredAgentHarnessSessions({
-      sessionId: previousSessionEntry.sessionId,
-      sessionKey,
-      sessionFile: previousSessionEntry.sessionFile,
-      reason: previousSessionEndReason ?? "unknown",
     });
     void cleanupBrowserSessionsForLifecycleEnd({
       cfg,
@@ -995,21 +1005,24 @@ async function initSessionStateLocked(
   }
 
   return {
-    sessionCtx,
-    sessionEntry,
-    previousSessionEntry,
-    sessionStore,
-    sessionKey,
-    sessionId: sessionId ?? crypto.randomUUID(),
-    isNewSession,
-    resetTriggered,
-    systemSent,
-    abortedLastRun,
-    storePath,
-    sessionScope,
-    groupResolution,
-    isGroup,
-    bodyStripped,
-    triggerBodyNormalized,
+    result: {
+      sessionCtx,
+      sessionEntry,
+      previousSessionEntry,
+      sessionStore,
+      sessionKey,
+      sessionId: sessionId ?? crypto.randomUUID(),
+      isNewSession,
+      resetTriggered,
+      systemSent,
+      abortedLastRun,
+      storePath,
+      sessionScope,
+      groupResolution,
+      isGroup,
+      bodyStripped,
+      triggerBodyNormalized,
+    },
+    ...(pendingHarnessReset ? { pendingHarnessReset } : {}),
   };
 }

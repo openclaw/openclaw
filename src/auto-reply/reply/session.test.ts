@@ -8,10 +8,11 @@ import {
   getOrCreateSessionMcpRuntime,
 } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -341,6 +342,7 @@ function registerCurrentConversationBindingAdapterForTest(params: {
 }
 
 beforeEach(() => {
+  clearAgentHarnesses();
   channelSummaryMocks.buildChannelSummary.mockReset().mockResolvedValue([]);
   browserMaintenanceMocks.closeTrackedBrowserTabsForSessions.mockReset().mockResolvedValue(0);
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
@@ -376,6 +378,7 @@ beforeEach(() => {
     });
 });
 afterEach(async () => {
+  clearAgentHarnesses();
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
@@ -470,6 +473,41 @@ describe("initSessionState serialized initialization", () => {
       contextTokens: 321,
       sessionId: "existing-session",
     });
+  });
+
+  it("releases the session writer before awaiting harness reset hooks", async () => {
+    const storePath = await createStorePath("openclaw-session-init-harness-reset-");
+    const sessionKey = "agent:main:telegram:chat:42";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "retired-session",
+        updatedAt: Date.now(),
+      },
+    });
+    registerAgentHarness({
+      id: "session-store-reset-test",
+      label: "Session store reset test",
+      supports: () => ({ supported: false, reason: "test-only" }),
+      runAttempt: async () => {
+        throw new Error("not used");
+      },
+      reset: async ({ sessionId }) => {
+        await updateSessionStore(storePath, (store) => {
+          store["reset-marker"] = { sessionId: sessionId ?? "missing", updatedAt: Date.now() };
+        });
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: { Body: "/new", SessionKey: sessionKey },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionId).not.toBe("retired-session");
+    expect(loadSessionStore(storePath, { skipCache: true })["reset-marker"]?.sessionId).toBe(
+      "retired-session",
+    );
   });
 });
 describe("initSessionState thread forking", () => {
