@@ -597,7 +597,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [
     ".github/workflows/plugin-npm-release.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-npm-extended-stable-workflow.test.ts",
+    ],
   ],
   [".github/workflows/plugin-prerelease.yml", ["test/scripts/plugin-prerelease-test-plan.test.ts"]],
   [

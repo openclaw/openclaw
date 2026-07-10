@@ -117,6 +117,30 @@ Use `source=npm -f package_spec=openclaw@beta` for published beta proof. Keep
 `workflow_ref` as trusted current harness code unless the release process says
 otherwise.
 
+## Plugin npm Artifact Preflight
+
+Use the trusted `main` workflow to prepare and read back a selected plugin npm
+artifact from an exact release SHA without entering any publish approval,
+environment, secret, OIDC, npm mutation, or ClawHub mutation path:
+
+```bash
+release_sha="$(git rev-parse origin/release/2026.7.1)"
+ghx workflow run plugin-npm-release.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f preflight_only=true \
+  -f publish_scope=selected \
+  -f plugins=@openclaw/meta-provider \
+  -f ref="${release_sha}" \
+  -f npm_dist_tag=default
+```
+
+Do not pass `release_publish_run_id`. Require the workflow to finish
+`verify_plugin_npm_preflight` successfully. Record the run URL, workflow SHA,
+source SHA, `plugin-npm-preflight-<sha>-<plugin-id>` artifact name, Actions
+artifact digest, tarball SHA-256, npm integrity, and npm shasum. This artifact
+is validation evidence only; it does not authorize or stage publication.
+
 ## New Testbox Harness Plan
 
 If more certainty is needed, add or run a `plugin-lifecycle-matrix` Docker lane
