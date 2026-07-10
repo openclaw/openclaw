@@ -20,6 +20,7 @@ import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
+import ai.openclaw.app.ui.design.ClawSegmentedControl
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
@@ -61,6 +62,8 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
@@ -1126,6 +1129,11 @@ private fun ChatComposer(
     remember(value, commands) {
       matchingSlashCommands(input = value, commands = commands)
     }
+  var thinkingSelectorExpanded by rememberSaveable { mutableStateOf(false) }
+  LaunchedEffect(thinkingSupported) {
+    if (!thinkingSupported) thinkingSelectorExpanded = false
+  }
+
   val sendEnabled =
     voiceNoteState !is VoiceNoteRecorderState.Recording &&
       voiceNoteState !is VoiceNoteRecorderState.Preparing &&
@@ -1155,8 +1163,21 @@ private fun ChatComposer(
       ChatContextMeter(
         thinkingLevel = thinkingLevel,
         thinkingSupported = thinkingSupported,
+        expanded = thinkingSelectorExpanded,
         contextUsage = contextUsage,
-        onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) },
+        onClick = { thinkingSelectorExpanded = !thinkingSelectorExpanded },
+      )
+    }
+
+    if (thinkingSelectorExpanded && thinkingSupported) {
+      ClawSegmentedControl(
+        options = listOf("Off", "Low", "Medium", "High"),
+        selected = contextMeterThinkingLabel(thinkingLevel).replaceFirstChar { it.uppercase() },
+        onSelect = { selected ->
+          onThinkingLevelChange(selected.lowercase(Locale.US))
+          thinkingSelectorExpanded = false
+        },
+        modifier = Modifier.fillMaxWidth(),
       )
     }
 
@@ -1454,6 +1475,7 @@ private fun ChatOfflineNotice(
 private fun ChatContextMeter(
   thinkingLevel: String,
   thinkingSupported: Boolean,
+  expanded: Boolean,
   contextUsage: ChatContextUsage,
   onClick: () -> Unit,
 ) {
@@ -1477,7 +1499,12 @@ private fun ChatContextMeter(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         if (thinkingSupported) {
-          Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textSubtle)
+          Icon(
+            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = if (expanded) "Close thinking level selector" else "Open thinking level selector",
+            modifier = Modifier.size(13.dp),
+            tint = ClawTheme.colors.textSubtle,
+          )
         }
         Text(
           text = contextMeterLabel(contextUsage, thinkingLevel, thinkingSupported),
@@ -1739,15 +1766,6 @@ internal fun userFacingChatError(
     else -> error
   }
 }
-
-/** Cycles through context budget presets from the compact composer control. */
-private fun nextThinkingValue(value: String): String =
-  when (value.lowercase(Locale.US)) {
-    "off" -> "low"
-    "low" -> "medium"
-    "medium" -> "high"
-    else -> "off"
-  }
 
 internal fun contextMeterWidth(usage: ChatContextUsage): Float? {
   if (usage.totalTokensFresh == false) return null
