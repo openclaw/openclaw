@@ -210,19 +210,28 @@ struct DashboardWindowSmokeTests {
 
     @Test func `dashboard link browser calculates final drag insertion indexes`() {
         let midpoints: [CGFloat] = [50, 150, 250]
-        let cases: [(currentIndex: Int, locationX: CGFloat, expected: Int?)] = [
-            (0, 100, nil),
-            (0, 200, 1),
-            (0, 300, 2),
-            (2, 100, 1),
-            (2, 0, 0),
-            (1, 150, nil),
+        let cases: [(currentIndex: Int, locationX: CGFloat, targetIndex: Int?, order: [Int])] = [
+            (0, 100, nil, [0, 1, 2]),
+            (0, 150, 1, [1, 0, 2]),
+            (0, 200, 1, [1, 0, 2]),
+            (0, 300, 2, [1, 2, 0]),
+            (2, 100, 1, [0, 2, 1]),
+            (2, 0, 0, [2, 0, 1]),
+            (1, 150, nil, [0, 1, 2]),
         ]
         for testCase in cases {
-            #expect(DashboardLinkBrowserTabBar.dropIndex(
+            let targetIndex = DashboardLinkBrowserTabBar.dropIndex(
                 currentIndex: testCase.currentIndex,
                 itemMidpoints: midpoints,
-                locationX: testCase.locationX) == testCase.expected)
+                locationX: testCase.locationX)
+            #expect(targetIndex == testCase.targetIndex)
+
+            var order = Array(midpoints.indices)
+            if let targetIndex {
+                let moved = order.remove(at: testCase.currentIndex)
+                order.insert(moved, at: targetIndex)
+            }
+            #expect(order == testCase.order)
         }
     }
 
@@ -246,6 +255,10 @@ struct DashboardWindowSmokeTests {
         #expect(view._testActiveWebView === webView)
 
         view._testFinishNavigation(initialNavigation, at: currentURL, in: webView)
+        view.open(requestedURL)
+        #expect(view._testTabCount == 1)
+        #expect(view._testActiveWebView === webView)
+
         view._testStartNavigation(NSObject(), in: webView)
         view.navigationWillStart(currentURL, in: webView)
         view.open(requestedURL)
