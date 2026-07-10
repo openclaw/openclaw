@@ -945,4 +945,72 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.messageTimestampsMs).toStrictEqual([0]);
   });
+
+  // Heartbeat acks are filtered per-message via isHeartbeatOkResponse so they
+  // never leak into the session corpus as low-confidence snippets, regardless
+  // of whether the underlying transcript is active, reset, or deleted. The
+  // filter only fires when the literal HEARTBEAT_OK token is present, so a
+  // real answer that merely mentions the token is preserved. See #103720.
+  it("drops a natural-language heartbeat ack and keeps surrounding content", async () => {
+    const jsonlLines = [
+      JSON.stringify({ type: "message", message: { role: "user", content: "Hello there" } }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Heartbeat received. Main is active. HEARTBEAT_OK",
+        },
+      }),
+      JSON.stringify({ type: "message", message: { role: "user", content: "Follow-up question" } }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-ack-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe("User: Hello there\nUser: Follow-up question");
+    expect(entry.lineMap).toStrictEqual([1, 3]);
+  });
+
+  it("keeps a real assistant answer that only mentions HEARTBEAT_OK", async () => {
+    // A genuine assistant answer that happens to include the token must stay in
+    // the corpus: stripHeartbeatToken only skips when the remaining text after
+    // stripping the token fits within ackMaxChars (default 300). A real answer
+    // exceeds that budget, so shouldSkip is false and the message is retained.
+    const longAnswer = [
+      "Here is a detailed walkthrough of how the heartbeat subsystem works.",
+      "When the model is asked to acknowledge a heartbeat tick it may reply HEARTBEAT_OK",
+      "but that token is just a convenience flag and is not part of the protocol contract.",
+      "The cron runner interprets absence of further user intent as 'nothing to do' and",
+      "moves on without surfacing a notification to the operator. This answer is long",
+      "enough to exceed the 300 character acknowledgement budget by a comfortable margin.",
+    ].join(" ");
+    const jsonlLines = [
+      JSON.stringify({ type: "message", message: { role: "user", content: "Explain heartbeat" } }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: longAnswer },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-mention-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe(`User: Explain heartbeat\nAssistant: ${longAnswer}`);
+    expect(entry.lineMap).toStrictEqual([1, 2]);
+  });
+
+  it("keeps any assistant message that does not contain the HEARTBEAT_OK token", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Heartbeat received. Main is active." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "plain-assistant-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe("Assistant: Heartbeat received. Main is active.");
+    expect(entry.lineMap).toStrictEqual([1]);
+  });
 });
