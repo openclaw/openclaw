@@ -110,7 +110,13 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
         continue;
       }
       if (
-        !isMemoryRecallAllowed({ keys, guard, sandboxed: params.sandboxed, authoritative: true })
+        !isMemoryRecallAllowed({
+          keys,
+          guard,
+          sandboxed: params.sandboxed,
+          visibility,
+          authoritative: true,
+        })
       ) {
         continue;
       }
@@ -170,7 +176,15 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     // Slug-fallback key resolution is lossy: a QMD slug can map to the wrong
     // transcript, so those hits must still pass the strict visibility guard.
     const authoritative = liveKeys.length > 0 || !isQmdSessionHit;
-    if (!isMemoryRecallAllowed({ keys, guard, sandboxed: params.sandboxed, authoritative })) {
+    if (
+      !isMemoryRecallAllowed({
+        keys,
+        guard,
+        sandboxed: params.sandboxed,
+        visibility,
+        authoritative,
+      })
+    ) {
       continue;
     }
     next.push(hit);
@@ -188,9 +202,13 @@ function isMemoryRecallAllowed(params: {
   keys: string[];
   guard: { check: (key: string) => { allowed: boolean } };
   sandboxed: boolean;
+  visibility: string;
   authoritative: boolean;
 }): boolean {
-  if (!params.sandboxed && params.authoritative) {
+  // The bypass exists only for the default "tree" subtree semantics, which
+  // made corpus=sessions recall return nothing (#103732). An operator's
+  // explicit stricter mode (e.g. "self") and sandboxed clamps keep the guard.
+  if (!params.sandboxed && params.visibility === "tree" && params.authoritative) {
     return params.keys.length > 0;
   }
   return params.keys.some((key) => params.guard.check(key).allowed);
