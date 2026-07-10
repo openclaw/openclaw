@@ -10,6 +10,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isRecord } from "../../utils.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { isAuthProfileEncryptedUnreadable, resolveEncryptionKey } from "./crypto.js";
 import {
   listRuntimeExternalAuthProfiles,
   overlayExternalAuthProfiles,
@@ -1048,7 +1049,21 @@ export function saveAuthProfileStore(
     payload: buildPersistedAuthProfileSecretsStore(localStore),
     existingRaw,
   });
-  if (!isDeepStrictEqual(existingRaw, payload)) {
+
+  // 🦞 Fail closed: refuse to proceed when encrypted data is unreadable.
+  if (isAuthProfileEncryptedUnreadable(existingRaw)) {
+    throw new Error(
+      "Cannot save auth profile store: persisted data is encrypted with a " +
+        "different or missing OPENCLAW_AUTH_PROFILE_SECRET_KEY. " +
+        "Set the original key or clear the env var to fall back to plaintext.",
+    );
+  }
+
+  // 🦞 Force write when encryption key is configured to migrate existing
+  // plaintext rows to encrypted format. The random IV in the encryption
+  // ensures each write produces a distinct stored value.
+  const hasKey = resolveEncryptionKey() !== null;
+  if (hasKey || !isDeepStrictEqual(existingRaw, payload)) {
     writePersistedAuthProfileStoreRaw(payload, agentDir, database);
   }
   if (database) {

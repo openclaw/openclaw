@@ -12,6 +12,7 @@ import { loadJsonFile } from "../../infra/json-file.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { isAuthProfileEncryptedUnreadable } from "./crypto.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   hasOAuthIdentity,
@@ -270,6 +271,13 @@ export function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
 
 /** Coerces a persisted auth profile store payload into the current store shape. */
 export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore | null {
+  if (isAuthProfileEncryptedUnreadable(raw)) {
+    log.error(
+      "auth profile store is encrypted but cannot be decrypted. " +
+        "Verify OPENCLAW_AUTH_PROFILE_SECRET_KEY is set correctly.",
+    );
+    return null;
+  }
   if (!isRecord(raw)) {
     return null;
   }

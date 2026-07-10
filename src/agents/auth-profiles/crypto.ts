@@ -18,7 +18,7 @@ function deriveKey(secret: string): Buffer {
 
 let cachedKey: Buffer | null | undefined;
 
-function resolveEncryptionKey(): Buffer | null {
+export function resolveEncryptionKey(): Buffer | null {
   if (cachedKey !== undefined) {
     return cachedKey;
   }
@@ -93,13 +93,35 @@ export function decryptAuthProfilePayload(envelope: EncryptedEnvelope): unknown 
 }
 
 /**
+ * Sentinel value returned when an encrypted envelope exists in the store but
+ * cannot be decrypted with the current key. Callers must fail closed rather
+ * than treating this as absent/malformed data.
+ */
+export const AUTH_PROFILE_ENCRYPTED_UNREADABLE = Symbol("AUTH_PROFILE_ENCRYPTED_UNREADABLE");
+
+/** Returns true when the value signals an encrypted store that could not be decrypted. */
+export function isAuthProfileEncryptedUnreadable(
+  value: unknown,
+): value is typeof AUTH_PROFILE_ENCRYPTED_UNREADABLE {
+  return value === AUTH_PROFILE_ENCRYPTED_UNREADABLE;
+}
+
+/**
  * Reads a possibly-encrypted raw store_json value. If the parsed JSON is an
  * encrypted envelope and a key is configured, decrypts it. Otherwise returns
  * the JSON as-is (plaintext backward compat).
+ *
+ * When a key IS configured but the envelope cannot be decrypted (wrong key or
+ * corrupt data), returns {@link AUTH_PROFILE_ENCRYPTED_UNREADABLE} so callers
+ * can fail closed instead of silently treating encrypted data as absent.
  */
 export function decryptAuthProfileStoreRaw(raw: unknown): unknown {
   if (!isEncryptedEnvelope(raw)) {
     return raw;
   }
-  return decryptAuthProfilePayload(raw) ?? raw;
+  const key = resolveEncryptionKey();
+  if (!key) {
+    return raw;
+  }
+  return decryptAuthProfilePayload(raw) ?? AUTH_PROFILE_ENCRYPTED_UNREADABLE;
 }
