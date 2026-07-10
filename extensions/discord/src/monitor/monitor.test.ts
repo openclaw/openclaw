@@ -902,7 +902,48 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
-  it("lets plugin Discord interactions clear components after acknowledging", async () => {
+  it("lets plugin Discord interactions consume components with direct source-message update", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "codex:approve" })],
+      modals: [],
+    });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        respond: {
+          editMessage: (payload: { components: unknown[] }) => Promise<void>;
+        };
+      };
+      await typedParams.respond.editMessage({ components: [] });
+      return {
+        matched: true,
+        handled: true,
+        duplicate: false,
+      };
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const update = vi.fn().mockResolvedValue(undefined);
+    const baseInteraction = createComponentButtonInteraction().interaction as unknown as Record<
+      string,
+      unknown
+    >;
+    const interaction = {
+      ...baseInteraction,
+      reply,
+      update,
+    } as unknown as ButtonInteraction;
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(update).toHaveBeenCalledWith({
+      components: [],
+    });
+    expect(reply).not.toHaveBeenCalled();
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("lets plugin Discord interactions clear components after acknowledging via editReply", async () => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "codex:approve" })],
       modals: [],
@@ -926,6 +967,7 @@ describe("discord component interactions", () => {
     const button = createDiscordComponentButton(createComponentContext());
     const acknowledge = vi.fn().mockResolvedValue(undefined);
     const reply = vi.fn().mockResolvedValue(undefined);
+    const editReply = vi.fn().mockResolvedValue(undefined);
     const update = vi.fn().mockResolvedValue(undefined);
     const baseInteraction = createComponentButtonInteraction().interaction as unknown as Record<
       string,
@@ -934,6 +976,7 @@ describe("discord component interactions", () => {
     const interaction = {
       ...baseInteraction,
       acknowledge,
+      editReply,
       reply,
       update,
     } as unknown as ButtonInteraction;
@@ -941,10 +984,11 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({
+    expect(editReply).toHaveBeenCalledWith({
       content: "Handled",
       components: [],
     });
+    expect(reply).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });

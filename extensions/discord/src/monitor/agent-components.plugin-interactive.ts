@@ -47,7 +47,13 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       ...(input.components !== undefined ? { components: input.components } : {}),
     };
     if (acknowledged) {
-      await params.interaction.reply(payload);
+      if (
+        !("editReply" in params.interaction) ||
+        typeof params.interaction.editReply !== "function"
+      ) {
+        throw new Error("Discord interaction cannot edit the source message after acknowledgement");
+      }
+      await params.interaction.editReply(payload);
       return;
     }
     if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
