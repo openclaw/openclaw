@@ -98,6 +98,8 @@ export type QuickSettingsProps = {
   setTextScale: (value: number) => void;
   lobsterPetVisits: boolean;
   setLobsterPetVisits: (enabled: boolean) => void;
+  lobsterPetSounds: boolean;
+  setLobsterPetSounds: (enabled: boolean) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
@@ -795,6 +797,23 @@ function renderAppearanceCard(props: QuickSettingsProps) {
               ${props.lobsterPetVisits
                 ? t("quickSettings.appearance.lobsterVisitsOn")
                 : t("quickSettings.appearance.lobsterVisitsOff")}
+            </span>
+          </label>
+        </div>
+        <div class="qs-row">
+          <span class="qs-row__label">${t("quickSettings.appearance.lobsterSounds")}</span>
+          <label class="qs-toggle">
+            <input
+              type="checkbox"
+              .checked=${props.lobsterPetSounds}
+              @change=${(event: Event) =>
+                props.setLobsterPetSounds((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="qs-toggle__track"></span>
+            <span class="qs-toggle__hint muted">
+              ${props.lobsterPetSounds
+                ? t("quickSettings.appearance.lobsterSoundsOn")
+                : t("quickSettings.appearance.lobsterSoundsOff")}
             </span>
           </label>
         </div>
