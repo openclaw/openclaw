@@ -1493,21 +1493,21 @@ export function createSubagentRegistryLifecycleController(params: {
           entry.endedReason !== undefined ||
           entry.execution?.status === "terminal";
         const expectedElapsedMs =
-          typeof entry.startedAt === "number" && typeof completeParams.endedAt === "number"
-            ? Math.max(0, completeParams.endedAt - entry.startedAt)
+          typeof currentEntry.startedAt === "number" && typeof completeParams.endedAt === "number"
+            ? Math.max(0, completeParams.endedAt - currentEntry.startedAt)
             : undefined;
         const outcomeMatchesInterruptedRecovery = (outcome: SubagentRunOutcome | undefined) =>
           completeParams.outcome.status === "error" &&
           outcome?.status === "error" &&
           outcome.error === completeParams.outcome.error &&
-          (outcome.startedAt === undefined || outcome.startedAt === entry.startedAt) &&
+          (outcome.startedAt === undefined || outcome.startedAt === currentEntry.startedAt) &&
           (outcome.endedAt === undefined || outcome.endedAt === completeParams.endedAt) &&
           (outcome.elapsedMs === undefined || outcome.elapsedMs === expectedElapsedMs);
         const executionMatchesInterruptedRecovery =
           entry.execution?.status !== "terminal" ||
           (entry.execution.endedAt === completeParams.endedAt &&
             (entry.execution.startedAt === undefined ||
-              entry.execution.startedAt === entry.startedAt) &&
+              entry.execution.startedAt === currentEntry.startedAt) &&
             outcomeMatchesInterruptedRecovery(entry.execution.outcome));
         const matchesRequestedInterruptedTerminal =
           typeof completeParams.endedAt === "number" &&
