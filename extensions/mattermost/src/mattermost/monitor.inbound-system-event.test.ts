@@ -401,7 +401,7 @@ const testRuntime = (): RuntimeEnv =>
 
 async function emitMattermostChannelPost(
   socket: FakeWebSocket,
-  params: { id: string; message: string },
+  params: { id: string; message: string; rootId?: string },
 ) {
   await socket.emitMessage({
     event: "posted",
@@ -415,6 +415,7 @@ async function emitMattermostChannelPost(
         channel_id: "chan-1",
         user_id: "user-1",
         message: params.message,
+        root_id: params.rootId,
         create_at: 1_714_000_000_000,
       }),
     },
@@ -1645,11 +1646,17 @@ describe("mattermost inbound user posts", () => {
     await emitMattermostChannelPost(socket, {
       id: "post-confirmed-preview-final",
       message: "stream one block",
+      rootId: "thread-root-confirmed-preview",
     });
     socket.emitClose(1000);
     await monitor;
 
     expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
-    expect(mockState.recordMattermostThreadParticipation).toHaveBeenCalledTimes(1);
+    expect(mockState.recordMattermostThreadParticipation).toHaveBeenCalledWith(
+      "default",
+      "chan-1",
+      "thread-root-confirmed-preview",
+      { agentId: "main" },
+    );
   });
 });
