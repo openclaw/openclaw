@@ -29,6 +29,10 @@ import { resolveTenkiPluginConfig, type ResolvedTenkiPluginConfig } from "./conf
 
 const TENKI_SESSION_TAG = "openclaw";
 
+// Tenki's data-plane file API only accepts paths beneath the guest workdir
+// (/home/tenki); shell exec is unrestricted. Stage writeFile payloads here.
+const TENKI_SESSION_WORKDIR = "/home/tenki";
+
 // Local copies of the core SSH backend's remote shell scripts; the plugin SDK
 // exports the argv-string builders but not the raw scripts, and the SDK exec
 // surface needs the scripts themselves (openshell carries its own copies too).
@@ -326,6 +330,8 @@ class TenkiSandboxBackendImpl {
     return await client.create({
       name: this.params.runtimePaths.runtimeId,
       tags: [TENKI_SESSION_TAG, this.params.runtimePaths.runtimeId, ...this.cfg.tags],
+      projectId: this.cfg.projectId,
+      workspaceId: this.cfg.workspaceId,
       image: this.cfg.image,
       idleTimeoutMinutes: this.cfg.idleTimeoutMinutes,
       cpuCores: this.cfg.cpuCores,
@@ -435,7 +441,7 @@ class TenkiSandboxBackendImpl {
     if (params.stdin !== undefined) {
       // The SDK exec surface has no stdin stream; stage it as a session file and
       // redirect fd 0 before the script runs. rm-after-open is safe on Linux.
-      const stdinFile = `/tmp/.openclaw-stdin-${randomUUID()}`;
+      const stdinFile = `${TENKI_SESSION_WORKDIR}/.openclaw-stdin-${randomUUID()}`;
       await session.writeFile(
         stdinFile,
         typeof params.stdin === "string" ? params.stdin : new Uint8Array(params.stdin),
@@ -467,7 +473,7 @@ class TenkiSandboxBackendImpl {
     remoteDir: string,
   ): Promise<void> {
     const tarball = await createLocalTarball(localDir);
-    const remoteTar = `/tmp/.openclaw-upload-${randomUUID()}.tar`;
+    const remoteTar = `${TENKI_SESSION_WORKDIR}/.openclaw-upload-${randomUUID()}.tar`;
     await session.writeFile(remoteTar, tarball);
     await this.execShell(session, {
       script: `${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\nfind "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +\ntar -xf "$3" -C "$1"\nrm -f -- "$3"`,
@@ -543,14 +549,15 @@ export function resolveTenkiRuntimePaths(
 function buildTenkiSandboxRuntimeId(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
   // Keep the id human-readable while hashing the original scope to avoid
-  // collisions after normalization and truncation.
+  // collisions after normalization and truncation. The id doubles as a Tenki
+  // session tag, and Tenki caps tags at 32 characters: 9 (prefix) + 14 + 1 + 8.
   const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
+    .slice(0, 14);
   const hash = Array.from(trimmed).reduce(
     (acc, char) => ((acc * 33) ^ char.charCodeAt(0)) >>> 0,
     5381,
   );
-  return `openclaw-tenki-${safe || "session"}-${hash.toString(16).slice(0, 8)}`;
+  return `oc-tenki-${safe || "session"}-${hash.toString(16).slice(0, 8)}`;
 }

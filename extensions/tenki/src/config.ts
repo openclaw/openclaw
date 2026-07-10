@@ -10,6 +10,8 @@ import { z } from "zod";
 type TenkiPluginConfig = {
   authToken?: string;
   baseUrl?: string;
+  projectId?: string;
+  workspaceId?: string;
   image?: string;
   workspaceRoot?: string;
   cliCommand?: string;
@@ -23,6 +25,8 @@ type TenkiPluginConfig = {
 export type ResolvedTenkiPluginConfig = {
   authToken?: string;
   baseUrl?: string;
+  projectId?: string;
+  workspaceId?: string;
   image?: string;
   workspaceRoot: string;
   cliCommand: string;
@@ -47,6 +51,8 @@ const positiveNumber = (field: string) =>
 const TenkiPluginConfigSchema = z.strictObject({
   authToken: nonEmptyTrimmedString("authToken must be a non-empty string").optional(),
   baseUrl: nonEmptyTrimmedString("baseUrl must be a non-empty string").optional(),
+  projectId: nonEmptyTrimmedString("projectId must be a non-empty string").optional(),
+  workspaceId: nonEmptyTrimmedString("workspaceId must be a non-empty string").optional(),
   image: nonEmptyTrimmedString("image must be a non-empty string").optional(),
   workspaceRoot: nonEmptyTrimmedString("workspaceRoot must be a non-empty string").optional(),
   cliCommand: nonEmptyTrimmedString("cliCommand must be a non-empty string").optional(),
@@ -110,6 +116,8 @@ export function resolveTenkiPluginConfig(value: unknown): ResolvedTenkiPluginCon
   return {
     authToken: cfg.authToken,
     baseUrl: cfg.baseUrl,
+    projectId: cfg.projectId,
+    workspaceId: cfg.workspaceId,
     image: cfg.image,
     workspaceRoot: normalizeWorkspaceRoot(cfg.workspaceRoot),
     cliCommand: cfg.cliCommand ?? DEFAULT_CLI_COMMAND,
