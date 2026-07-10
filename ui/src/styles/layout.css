@@ -801,7 +801,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--accent);
-  cursor: pointer;
   font: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -869,6 +868,9 @@
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
+  /* Sessions are app chrome, not hyperlinks: the whole region uses the
+     default arrow cursor; the pointer hand is reserved for real links. */
+  cursor: default;
 }
 
 .sidebar-recent-sessions__group {
@@ -926,7 +928,6 @@
   background: transparent;
   color: inherit;
   text-align: left;
-  cursor: pointer;
 }
 
 .sidebar-session-group-toggle__icon {
@@ -979,7 +980,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -1014,7 +1014,6 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   opacity: 0;
   pointer-events: none;
   transition:
@@ -1077,7 +1076,6 @@
   font-size: 11px;
   font-weight: 600;
   text-overflow: ellipsis;
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -1130,6 +1128,8 @@
   opacity: 0.45;
 }
 
+/* Rows and row links are anchors (for middle-click/new-tab), but read as app
+   controls: override the UA link pointer back to the default arrow. */
 .sidebar-recent-session {
   display: flex;
   align-items: center;
@@ -1139,6 +1139,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--muted);
+  cursor: default;
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
@@ -1164,6 +1165,7 @@
   min-width: 0;
   padding: 5px 4px 5px 9px;
   color: inherit;
+  cursor: default;
   text-decoration: none;
 }
 
