@@ -140,10 +140,11 @@ describe("renderPlugins", () => {
     expect(groups.map((group) => group.label)).toEqual(["Channels", "Tools"]);
 
     const container = mount(createProps({ result: createResult(plugins) }));
-    const overview = container.querySelector(".plugins-overview");
-    expect(normalizedText(overview)).toContain("3 Installed");
-    expect(normalizedText(overview)).toContain("1 Enabled");
-    expect(normalizedText(overview)).toContain("1 Needs attention");
+    const pulse = container.querySelector(".plugins-pulse");
+    expect(normalizedText(pulse)).toContain("All 3");
+    expect(normalizedText(pulse)).toContain("Enabled 1");
+    expect(normalizedText(pulse)).toContain("Issues 1");
+    expect(pulse?.querySelectorAll(".plugins-pulse__segment")).toHaveLength(3);
     expect(
       container.querySelector('[data-plugin-id="broken"] [role="alert"]')?.textContent,
     ).toContain("manifest invalid");

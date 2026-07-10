@@ -595,31 +595,72 @@ function renderCatalogActions(
 
 /* ---------------------------------- installed tab ---------------------------------- */
 
-function renderOverview(props: PluginsViewProps) {
-  const plugins = props.result?.plugins ?? [];
-  const installed = plugins.filter((plugin) => plugin.installed);
-  const enabled = installed.filter((plugin) => plugin.enabled && plugin.state !== "error");
-  const issues = installed.filter((plugin) => plugin.state === "error");
-  const stats: Array<{ label: string; value: number; tone?: string }> = [
-    { label: t("pluginsPage.statInstalled"), value: installed.length },
-    { label: t("pluginsPage.statEnabled"), value: enabled.length, tone: "ok" },
-    {
-      label: t("pluginsPage.statIssues"),
-      value: issues.length,
-      tone: issues.length ? "danger" : undefined,
-    },
-    { label: t("pluginsPage.statMcpServers"), value: props.mcpServers?.length ?? 0 },
-  ];
+/**
+ * One compact strip instead of stat cards: a segmented distribution meter and
+ * filter chips that double as the legend and the counts.
+ */
+function renderInventoryPulse(props: PluginsViewProps) {
+  const installed = (props.result?.plugins ?? []).filter((plugin) => plugin.installed);
+  const issues = installed.filter((plugin) => plugin.state === "error").length;
+  const enabled = installed.filter((plugin) => plugin.enabled && plugin.state !== "error").length;
+  const disabled = installed.length - enabled - issues;
+  const counts: Record<InstalledFilter, number> = {
+    all: installed.length,
+    enabled,
+    disabled,
+    issues,
+  };
+  const segments = (
+    [
+      ["enabled", enabled],
+      ["disabled", disabled],
+      ["issues", issues],
+    ] as const
+  ).filter(([, value]) => value > 0);
   return html`
-    <div class="plugins-overview">
-      ${stats.map(
-        (stat) => html`
-          <div class="plugins-overview__stat plugins-overview__stat--${stat.tone ?? "default"}">
-            <span class="plugins-overview__value">${stat.value}</span>
-            <span class="plugins-overview__label">${stat.label}</span>
-          </div>
-        `,
-      )}
+    <div class="plugins-pulse">
+      ${segments.length > 0
+        ? html`
+            <div
+              class="plugins-pulse__meter"
+              role="img"
+              aria-label=${t("pluginsPage.pulseLabel", {
+                enabled: String(enabled),
+                disabled: String(disabled),
+                issues: String(issues),
+              })}
+            >
+              ${segments.map(
+                ([key, value]) => html`
+                  <span
+                    class="plugins-pulse__segment plugins-pulse__segment--${key}"
+                    style=${`flex-grow:${value}`}
+                  ></span>
+                `,
+              )}
+            </div>
+          `
+        : nothing}
+      <div class="plugins-filters" role="group" aria-label=${t("pluginsPage.filterLabel")}>
+        ${INSTALLED_FILTERS.map(
+          (filter) => html`
+            <button
+              type="button"
+              class=${props.installedFilter === filter ? "active" : ""}
+              @click=${() => props.onFilterChange(filter)}
+            >
+              ${filter === "all"
+                ? nothing
+                : html`<span
+                    class="plugins-filters__dot plugins-filters__dot--${filter}"
+                    aria-hidden="true"
+                  ></span>`}
+              ${filterLabel(filter)}
+              <span class="plugins-filters__count">${counts[filter]}</span>
+            </button>
+          `,
+        )}
+      </div>
     </div>
   `;
 }
@@ -820,20 +861,7 @@ function renderInstalled(props: PluginsViewProps) {
   const plugins = installedPlugins(props.result?.plugins ?? [], props.query, props.installedFilter);
   const groups = groupInstalledByCategory(plugins);
   return html`
-    ${renderOverview(props)}
-    <div class="plugins-filters" role="group" aria-label=${t("pluginsPage.filterLabel")}>
-      ${INSTALLED_FILTERS.map(
-        (filter) => html`
-          <button
-            type="button"
-            class=${props.installedFilter === filter ? "active" : ""}
-            @click=${() => props.onFilterChange(filter)}
-          >
-            ${filterLabel(filter)}
-          </button>
-        `,
-      )}
-    </div>
+    ${renderInventoryPulse(props)}
     ${groups.length === 0
       ? renderEmpty(
           props.query || props.installedFilter !== "all"

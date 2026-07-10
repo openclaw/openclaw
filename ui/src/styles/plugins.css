@@ -196,43 +196,38 @@
   margin-top: 14px;
 }
 
-/* ---------- overview strip ---------- */
+/* ---------- inventory pulse ---------- */
 
-.plugins-overview {
+.plugins-pulse {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: 10px;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 
-.plugins-overview__stat {
-  display: grid;
-  gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 12px 14px;
-  background: linear-gradient(135deg, var(--card-highlight), transparent 42%), var(--card);
+.plugins-pulse__meter {
+  display: flex;
+  height: 6px;
+  gap: 3px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
 }
 
-.plugins-overview__value {
-  color: var(--text-strong);
-  font-size: 22px;
-  font-weight: 680;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
+.plugins-pulse__segment {
+  min-width: 6px;
+  border-radius: var(--radius-full);
+  transition: flex-grow var(--duration-slow) var(--ease-out);
 }
 
-.plugins-overview__stat--ok .plugins-overview__value {
-  color: var(--ok);
+.plugins-pulse__segment--enabled {
+  background: var(--ok);
 }
 
-.plugins-overview__stat--danger .plugins-overview__value {
-  color: var(--danger);
+.plugins-pulse__segment--disabled {
+  background: var(--border-strong);
 }
 
-.plugins-overview__label {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+.plugins-pulse__segment--issues {
+  background: var(--danger);
 }
 
 /* ---------- filter chips ---------- */
@@ -241,10 +236,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 18px;
 }
 
 .plugins-filters button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 5px 12px;
@@ -267,6 +264,34 @@
 .plugins-filters button.active {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: var(--accent-subtle);
+  color: var(--text-strong);
+}
+
+.plugins-filters__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.plugins-filters__dot--enabled {
+  background: var(--ok);
+}
+
+.plugins-filters__dot--disabled {
+  background: var(--border-strong);
+}
+
+.plugins-filters__dot--issues {
+  background: var(--danger);
+}
+
+.plugins-filters__count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.plugins-filters button.active .plugins-filters__count {
   color: var(--text-strong);
 }
 
@@ -532,6 +557,8 @@
 .plugins-rows {
   display: grid;
   gap: 8px;
+  /* Two columns as soon as the panel can fit them; single column below. */
+  grid-template-columns: repeat(auto-fill, minmax(min(520px, 100%), 1fr));
 }
 
 .plugins-row {
