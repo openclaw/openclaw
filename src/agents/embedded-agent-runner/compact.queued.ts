@@ -21,6 +21,7 @@ import {
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
+import { mergeAbortSignals } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -59,7 +60,13 @@ import { log } from "./logger.js";
 import { readAgentModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
-import { clearActiveEmbeddedRun, isEmbeddedAgentRunActive, setActiveEmbeddedRun } from "./runs.js";
+import {
+  clearActiveEmbeddedRun,
+  isEmbeddedAgentRunHandleActive,
+  resolveActiveEmbeddedRunHandleSessionId,
+  resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
+  setActiveEmbeddedRun,
+} from "./runs.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 import { normalizeContextTokenBudget } from "./utils.js";
 
@@ -73,6 +80,27 @@ function shouldFallbackAfterHarnessCompaction(
 
 const DEFERRED_CONTEXT_ENGINE_COMPACTION_SCHEDULE_FAILURE_REASON =
   "failed to schedule background context-engine maintenance";
+const MANUAL_COMPACTION_ACTIVE_RUN_REASON =
+  "manual compaction unavailable while another embedded run is active";
+const COMPACTION_ABORTED_REASON = "compaction aborted";
+
+function createCompactionAbortedResult(): EmbeddedAgentCompactResult {
+  return {
+    ok: false,
+    compacted: false,
+    reason: COMPACTION_ABORTED_REASON,
+  };
+}
+
+function resolveManualCompactionActiveRunSessionId(
+  params: CompactEmbeddedAgentSessionParams,
+): string | undefined {
+  return (
+    (isEmbeddedAgentRunHandleActive(params.sessionId) ? params.sessionId : undefined) ??
+    (params.sessionKey ? resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) : undefined) ??
+    resolveActiveEmbeddedRunHandleSessionIdBySessionFile(params.sessionFile)
+  );
+}
 
 function shouldDeferOwningContextEngineBudgetCompaction(params: {
   compactParams: CompactEmbeddedAgentSessionParams;
@@ -89,49 +117,6 @@ function shouldDeferOwningContextEngineBudgetCompaction(params: {
     params.contextEngine.info.turnMaintenanceMode === "background" &&
     typeof params.contextEngine.maintain === "function"
   );
-}
-
-function createQueuedCompactionAbort(params: {
-  sessionId: string;
-  sessionKey?: string;
-  sessionFile?: string;
-  abortSignal?: AbortSignal;
-  registerActiveRun?: boolean;
-}): {
-  signal: AbortSignal;
-  dispose: () => void;
-} {
-  const controller = new AbortController();
-  const forwardAbort = () => controller.abort(params.abortSignal?.reason);
-  if (params.abortSignal) {
-    if (params.abortSignal.aborted) {
-      forwardAbort();
-    } else {
-      params.abortSignal.addEventListener("abort", forwardAbort, { once: true });
-    }
-  }
-  const handle: EmbeddedAgentQueueHandle = {
-    kind: "embedded",
-    queueMessage: async () => {},
-    isStreaming: () => true,
-    isCompacting: () => true,
-    abort: () => controller.abort("user_abort"),
-    cancel: (reason) => controller.abort(reason),
-  };
-  const registered =
-    params.registerActiveRun === true && !isEmbeddedAgentRunActive(params.sessionId);
-  if (registered) {
-    setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-  }
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      params.abortSignal?.removeEventListener("abort", forwardAbort);
-      if (registered) {
-        clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-      }
-    },
-  };
 }
 
 async function disposeContextEngine(contextEngine: ContextEngine): Promise<void> {
@@ -236,6 +221,48 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
+  if (params.trigger !== "manual") {
+    return await compactEmbeddedAgentSessionImpl(params);
+  }
+  // Reply operations and embedded handles are separate lifecycle owners. A
+  // /compact reply may coexist with this handle, but another embedded writer may not.
+  if (resolveManualCompactionActiveRunSessionId(params)) {
+    return {
+      ok: false,
+      compacted: false,
+      reason: MANUAL_COMPACTION_ACTIVE_RUN_REASON,
+      failure: { reason: "active_run" },
+    };
+  }
+
+  const controller = new AbortController();
+  const mergedAbort = mergeAbortSignals([params.abortSignal, controller.signal]);
+  const handle: EmbeddedAgentQueueHandle = {
+    kind: "embedded",
+    queueMessage: async () => {},
+    isStreaming: () => true,
+    isCompacting: () => true,
+    abort: (reason) => controller.abort(reason ?? "user_abort"),
+    cancel: (reason) => controller.abort(reason ?? "user_abort"),
+  };
+  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  try {
+    return await compactEmbeddedAgentSessionImpl({
+      ...params,
+      abortSignal: mergedAbort.signal,
+    });
+  } finally {
+    mergedAbort.dispose();
+    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  }
+}
+
+async function compactEmbeddedAgentSessionImpl(
+  params: CompactEmbeddedAgentSessionParams,
+): Promise<EmbeddedAgentCompactResult> {
+  if (params.abortSignal?.aborted) {
+    return createCompactionAbortedResult();
+  }
   ensureRuntimePluginsLoaded({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -390,14 +417,10 @@ export async function compactEmbeddedAgentSession(
     enqueueGlobal(async () => {
       let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null | undefined;
       let checkpointSnapshotRetained = false;
-      const queuedCompactionAbort = createQueuedCompactionAbort({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
-        abortSignal: params.abortSignal,
-        registerActiveRun: params.trigger === "manual",
-      });
       try {
+        if (params.abortSignal?.aborted) {
+          return createCompactionAbortedResult();
+        }
         // When the context engine owns compaction, its compact() implementation
         // bypasses compactEmbeddedAgentSessionDirect (which fires the hooks internally).
         // Fire before_compaction / after_compaction hooks here so plugin subscribers
@@ -481,7 +504,7 @@ export async function compactEmbeddedAgentSession(
               runtimeSettings: contextEngineRuntimeSettings,
             },
             resolveCompactionTimeoutMs(params.config),
-            queuedCompactionAbort.signal,
+            params.abortSignal,
           );
         } catch (compactErr) {
           log.warn("context-engine compaction failed", {
@@ -672,7 +695,6 @@ export async function compactEmbeddedAgentSession(
             : undefined,
         };
       } finally {
-        queuedCompactionAbort.dispose();
         if (!checkpointSnapshotRetained) {
           await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
         }

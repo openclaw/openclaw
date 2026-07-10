@@ -1,6 +1,7 @@
 // Hook integration coverage for direct and queued embedded compaction.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
@@ -41,6 +42,7 @@ import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
+  isEmbeddedAgentRunHandleActive,
   setActiveEmbeddedRun,
 } from "./runs.js";
 
@@ -81,6 +83,42 @@ function createDeferred<T>(): Deferred<T> {
     throw new Error("Expected compaction deferred resolver to be initialized");
   }
   return { promise, resolve };
+}
+
+function mockPendingContextEngineCompaction() {
+  const pending = {
+    signal: undefined as AbortSignal | undefined,
+    started: createDeferred<void>(),
+    release: createDeferred<void>(),
+  };
+  contextEngineCompactMock.mockImplementationOnce(async (...args: unknown[]) => {
+    const [params] = args;
+    pending.signal = (params as { abortSignal?: AbortSignal }).abortSignal;
+    pending.started.resolve(undefined);
+    await pending.release.promise;
+    return {
+      ok: true,
+      compacted: true,
+      reason: undefined,
+      result: { summary: "engine-summary", tokensAfter: 50 },
+    };
+  });
+  return pending;
+}
+
+function mockPendingNativeCompaction() {
+  const pending = {
+    signal: undefined as AbortSignal | undefined,
+    started: createDeferred<void>(),
+    terminal: createDeferred<{ ok: false; compacted: false; reason: string }>(),
+  };
+  maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async (...args: unknown[]) => {
+    const [params] = args;
+    pending.signal = (params as { abortSignal?: AbortSignal }).abortSignal;
+    pending.started.resolve(undefined);
+    return await pending.terminal.promise;
+  });
+  return pending;
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -2623,107 +2661,171 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
-  it("forwards the caller abort signal into the engine compact() call", async () => {
-    const controller = new AbortController();
-    let compactSignal: AbortSignal | undefined;
-    const compactionStarted = createDeferred<void>();
-    const compactionReleased = createDeferred<void>();
-    contextEngineCompactMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const [params] = args;
-      compactSignal = (params as { abortSignal?: AbortSignal }).abortSignal;
-      compactionStarted.resolve(undefined);
-      await compactionReleased.promise;
-      return {
-        ok: true,
-        compacted: true,
-        reason: undefined,
-        result: { summary: "engine-summary", tokensAfter: 50 },
-      };
-    });
+  it("aborts manual compaction before its queued global task starts", async () => {
+    let startQueuedTask: (() => void) | undefined;
+    const enqueue = <T>(task: () => Promise<T> | T): Promise<T> =>
+      new Promise<T>((resolve, reject) => {
+        startQueuedTask = () => {
+          void Promise.resolve().then(task).then(resolve, reject);
+        };
+      });
 
     const resultPromise = compactEmbeddedAgentSession(
-      wrappedCompactionArgs({ abortSignal: controller.signal }),
+      wrappedCompactionArgs({ enqueue, trigger: "manual" }),
     );
 
-    await compactionStarted.promise;
-    expect(compactSignal).toBeInstanceOf(AbortSignal);
-    expect(compactSignal).not.toBe(controller.signal);
-    controller.abort("caller_abort");
-    expect(compactSignal?.aborted).toBe(true);
-    expect(compactSignal?.reason).toBe("caller_abort");
-    compactionReleased.resolve(undefined);
+    await vi.waitFor(() => {
+      expect(startQueuedTask).toBeTypeOf("function");
+    });
+    expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(true);
+    expect(abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" })).toBe(true);
 
-    const result = await resultPromise;
+    const start = startQueuedTask;
+    if (!start) {
+      throw new Error("Expected queued compaction task");
+    }
+    start();
 
-    expect(result.ok).toBe(false);
-    expect(result.reason).toContain("aborted");
+    await expect(resultPromise).resolves.toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: expect.stringContaining("aborted"),
+    });
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
+    expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+    expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
   });
 
-  it("registers queued context-engine compaction as an abortable active run", async () => {
-    let compactSignal: AbortSignal | undefined;
-    const compactionStarted = createDeferred<void>();
-    const compactAborted = createDeferred<void>();
-    contextEngineCompactMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const [params] = args;
-      compactSignal = (params as { abortSignal?: AbortSignal }).abortSignal;
-      compactionStarted.resolve(undefined);
-      await compactAborted.promise;
-      return {
-        ok: false,
-        compacted: false,
-        reason: "aborted",
-        result: undefined,
-      };
+  it.each([
+    { position: "primary", ownsCompaction: false, abortReason: "user_abort", resultOk: false },
+    { position: "secondary", ownsCompaction: true, abortReason: "restart", resultOk: true },
+  ] as const)(
+    "aborts $position native harness compaction through the registered handle",
+    async ({ ownsCompaction, abortReason, resultOk }) => {
+      resolveContextEngineMock.mockResolvedValue({
+        info: { ownsCompaction },
+        compact: contextEngineCompactMock,
+      });
+      resolveAgentHarnessPolicyMock.mockReturnValue({
+        runtime: "codex",
+        runtimeSource: "model",
+      } as never);
+      const pending = mockPendingNativeCompaction();
+      const resultPromise = compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          provider: "openai",
+          model: "gpt-5.4",
+          agentHarnessId: "codex",
+          trigger: "manual",
+        }),
+      );
+
+      await pending.started.promise;
+      const aborted =
+        abortReason === "restart"
+          ? abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" })
+          : abortEmbeddedAgentRun(TEST_SESSION_ID);
+      expect(aborted).toBe(true);
+      expect(pending.signal?.reason).toBe(abortReason);
+      pending.terminal.resolve({ ok: false, compacted: false, reason: "aborted" });
+
+      await expect(resultPromise).resolves.toMatchObject({ ok: resultOk });
+      expect(contextEngineCompactMock).toHaveBeenCalledTimes(ownsCompaction ? 1 : 0);
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+    },
+  );
+
+  it("registers manual compaction alongside its active reply operation", async () => {
+    const replyOperation = createReplyOperation({
+      sessionKey: TEST_SESSION_KEY,
+      sessionId: TEST_SESSION_ID,
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("preflight_compacting");
+    expect(isEmbeddedAgentRunActive(TEST_SESSION_ID)).toBe(true);
+    expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+    const pending = mockPendingContextEngineCompaction();
+
+    try {
+      const resultPromise = compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          abortSignal: replyOperation.abortSignal,
+          trigger: "manual",
+        }),
+      );
+
+      await pending.started.promise;
+      expect(isEmbeddedAgentRunActive(TEST_SESSION_ID)).toBe(true);
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(true);
+      expect(replyOperation.abortByUser()).toBe(true);
+      expect(pending.signal?.aborted).toBe(true);
+      expect(pending.signal?.reason).toBe(replyOperation.abortSignal.reason);
+      pending.release.resolve(undefined);
+
+      await expect(resultPromise).resolves.toMatchObject({ ok: false, compacted: false });
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+      expect(isEmbeddedAgentRunActive(TEST_SESSION_ID)).toBe(true);
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
+  it("clears the manual handle when setup rejects", async () => {
+    resolveModelMock.mockImplementationOnce(() => {
+      throw new Error("model failed");
     });
 
-    const resultPromise = compactEmbeddedAgentSession(wrappedCompactionArgs({ trigger: "manual" }));
-
-    await compactionStarted.promise;
-    expect(isEmbeddedAgentRunActive(TEST_SESSION_ID)).toBe(true);
-    expect(abortEmbeddedAgentRun(TEST_SESSION_ID)).toBe(true);
-    expect(compactSignal?.aborted).toBe(true);
-    compactAborted.resolve(undefined);
-
-    const result = await resultPromise;
-
-    expect(result.ok).toBe(false);
-    expect(isEmbeddedAgentRunActive(TEST_SESSION_ID)).toBe(false);
+    await expect(
+      compactEmbeddedAgentSession(wrappedCompactionArgs({ trigger: "manual" })),
+    ).rejects.toThrow("model failed");
+    expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
   });
 
-  it("does not replace an existing active run handle during budget compaction", async () => {
-    const existingAbort = vi.fn();
+  it.each([
+    {
+      identity: "session key",
+      activeSessionKey: TEST_SESSION_KEY,
+      activeSessionFile: "/tmp/other-session.jsonl",
+    },
+    {
+      identity: "session file",
+      activeSessionKey: "agent:main:other-session",
+      activeSessionFile: TEST_SESSION_FILE,
+    },
+  ])("rejects manual compaction matching an active $identity", async (active) => {
+    const activeSessionId = "other-session";
     const existingHandle = {
       kind: "embedded" as const,
       queueMessage: async () => {},
       isStreaming: () => true,
       isCompacting: () => false,
-      abort: existingAbort,
+      abort: vi.fn(),
     };
-    setActiveEmbeddedRun(TEST_SESSION_ID, existingHandle, TEST_SESSION_KEY, TEST_SESSION_FILE);
-    let compactSignal: AbortSignal | undefined;
-    contextEngineCompactMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const [params] = args;
-      compactSignal = (params as { abortSignal?: AbortSignal }).abortSignal;
-      return {
-        ok: true,
-        compacted: true,
-        reason: undefined,
-        result: { summary: "engine-summary", tokensAfter: 50 },
-      };
-    });
-
+    setActiveEmbeddedRun(
+      activeSessionId,
+      existingHandle,
+      active.activeSessionKey,
+      active.activeSessionFile,
+    );
     try {
-      const result = await compactEmbeddedAgentSession(
-        wrappedCompactionArgs({ trigger: "budget" }),
-      );
-
-      expect(result.ok).toBe(true);
-      expect(isEmbeddedAgentRunActive(TEST_SESSION_ID)).toBe(true);
-      expect(abortEmbeddedAgentRun(TEST_SESSION_ID)).toBe(true);
-      expect(existingAbort).toHaveBeenCalledOnce();
-      expect(compactSignal?.aborted).toBe(false);
+      await expect(
+        compactEmbeddedAgentSession(wrappedCompactionArgs({ trigger: "manual" })),
+      ).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        failure: { reason: "active_run" },
+      });
+      expect(contextEngineCompactMock).not.toHaveBeenCalled();
+      expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+      expect(isEmbeddedAgentRunHandleActive(activeSessionId)).toBe(true);
     } finally {
-      clearActiveEmbeddedRun(TEST_SESSION_ID, existingHandle, TEST_SESSION_KEY, TEST_SESSION_FILE);
+      clearActiveEmbeddedRun(
+        activeSessionId,
+        existingHandle,
+        active.activeSessionKey,
+        active.activeSessionFile,
+      );
     }
   });
 
