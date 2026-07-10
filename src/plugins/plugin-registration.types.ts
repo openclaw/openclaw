@@ -90,6 +90,10 @@ export type OpenClawPluginCliCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
+  effectProfile?: import("../cli/catalog-metadata.js").CommandEffectProfile;
+  commandExposure?: import("../cli/catalog-metadata.js").CommandExposure;
+  /** Hide the placeholder from generated catalogs while preserving command ownership metadata. */
+  hidden?: boolean;
 };
 
 export type OpenClawPluginNodeCliFeatureOptions = {

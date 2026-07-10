@@ -12,6 +12,14 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "gateway",
     description: "Run, inspect, and query the WebSocket Gateway",
     hasSubcommands: true,
+    commandExposure: {
+      tier: "public",
+    },
+    effectProfile: {
+      risk: "medium",
+      confirmationRequired: true,
+      effectMode: "mixed",
+    },
   },
   {
     name: "daemon",
@@ -33,6 +41,12 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "promos",
     description: "Discover and claim promotional model offers from ClawHub",
     hasSubcommands: true,
+  },
+  {
+    name: "commands",
+    description: "List OpenClaw commands",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "infer",
