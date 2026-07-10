@@ -188,12 +188,18 @@ async function prepareNarrationModel(params: { cfg: OpenClawConfig; agentId: str
   }
 }
 
+// Command text carries the most user-sensitive detail; these tools follow the
+// channel's commandText display policy (see streaming.progress.commandText).
+const COMMAND_TEXT_TOOL_NAMES = new Set(["exec", "bash"]);
+
 export function createProgressNarrator(params: {
   cfg: OpenClawConfig;
   agentId: string;
   userMessage?: string;
   onUpdate: (payload: { text: string }) => Promise<void> | void;
   abortSignal?: AbortSignal;
+  /** Mirror of the channel's commandText: "status" policy for narration input. */
+  hideCommandText?: boolean;
   /** Test seam: replaces the utility-model completion. */
   generate?: (input: ProgressNarrationInput) => Promise<string | null>;
   now?: () => number;
@@ -312,7 +318,10 @@ export function createProgressNarrator(params: {
       if (payload.phase !== "start" || !isChannelProgressDraftWorkToolName(payload.name)) {
         return;
       }
-      addNote(formatToolSummary(resolveToolDisplay({ name: payload.name, args: payload.args })));
+      const display = resolveToolDisplay({ name: payload.name, args: payload.args });
+      const hideDetail =
+        params.hideCommandText === true && COMMAND_TEXT_TOOL_NAMES.has(display.name);
+      addNote(formatToolSummary(hideDetail ? { ...display, detail: undefined } : display));
     },
     noteCommandOutput(payload) {
       if (payload.phase !== "end") {
@@ -324,7 +333,11 @@ export function createProgressNarrator(params: {
       if (!failed) {
         return;
       }
-      const subject = payload.title || payload.name || "command";
+      // Command-output titles usually carry the raw command text; honor the
+      // channel's commandText: "status" policy for the failure note too.
+      const subject = params.hideCommandText
+        ? payload.name || "command"
+        : payload.title || payload.name || "command";
       const exit = typeof payload.exitCode === "number" ? ` (exit ${payload.exitCode})` : "";
       addNote(`${subject} failed${exit}`, { immediate: true });
     },
@@ -362,6 +375,7 @@ export function attachProgressNarratorToReplyOptions(params: {
     userMessage: params.userMessage,
     onUpdate: onNarrationUpdate,
     abortSignal: opts.abortSignal,
+    hideCommandText: opts.narrationHideCommandText === true,
   });
   return {
     ...opts,

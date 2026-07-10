@@ -1093,6 +1093,7 @@ async function processDiscordMessageInner(
               await draftPreview.pushNarrationProgress(payload.text);
             }
           : undefined,
+        narrationHideCommandText: draftPreview.narrationHideCommandText ? true : undefined,
         onReasoningStream: async (payload) => {
           if (payload?.requiresReasoningProgressOptIn === true && !reasoningWindowEnabled) {
             return;

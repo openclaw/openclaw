@@ -18,7 +18,11 @@ async function flushNarrations() {
   }
 }
 
-function createNarratorHarness(params?: { texts?: Array<string | null>; now?: () => number }) {
+function createNarratorHarness(params?: {
+  texts?: Array<string | null>;
+  now?: () => number;
+  hideCommandText?: boolean;
+}) {
   const inputs: ProgressNarrationInput[] = [];
   const texts = params?.texts ?? ["Working on the request."];
   const generate = vi.fn(async (input: ProgressNarrationInput) => {
@@ -33,6 +37,7 @@ function createNarratorHarness(params?: { texts?: Array<string | null>; now?: ()
     onUpdate,
     generate,
     now: params?.now,
+    hideCommandText: params?.hideCommandText,
   });
   return { narrator, generate, onUpdate, inputs };
 }
@@ -139,6 +144,28 @@ describe("createProgressNarrator", () => {
 
     expect(generate).toHaveBeenCalledTimes(2);
     expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("omits exec command text and failure titles when the channel hides command text", async () => {
+    const { narrator, inputs } = createNarratorHarness({ hideCommandText: true });
+
+    narrator.noteToolStart({
+      name: "exec",
+      phase: "start",
+      args: { command: "cat /etc/hosts" },
+    });
+    await flushNarrations();
+    narrator.noteCommandOutput({
+      name: "exec",
+      title: "cat /etc/hosts",
+      phase: "end",
+      exitCode: 1,
+    });
+    await flushNarrations();
+
+    const notes = inputs.at(-1)?.activityNotes.join("\n") ?? "";
+    expect(notes).not.toContain("/etc/hosts");
+    expect(notes).toContain("exec failed (exit 1)");
   });
 
   it("normalizes narration text to one bounded plain line", async () => {

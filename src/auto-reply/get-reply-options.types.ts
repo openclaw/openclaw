@@ -185,6 +185,12 @@ export type GetReplyOptions = {
    * only generates narration when an explicit utilityModel is configured.
    */
   onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
+  /**
+   * Omit exec/bash command text from narration model input, mirroring the
+   * channel's `streaming.progress.commandText: "status"` display policy so
+   * narration never receives more command detail than the draft shows.
+   */
+  narrationHideCommandText?: boolean;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */

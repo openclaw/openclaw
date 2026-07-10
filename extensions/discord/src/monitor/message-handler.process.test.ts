@@ -2251,6 +2251,23 @@ describe("processDiscordMessage draft streaming", () => {
     expect(getLastDispatchReplyOptions()?.onNarrationUpdate).toBeUndefined();
   });
 
+  it("mirrors status-only command text into the narration input policy", async () => {
+    createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Shelling", commandText: "status" } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const replyOptions = getLastDispatchReplyOptions();
+    expect(replyOptions?.onNarrationUpdate).toBeDefined();
+    expect(replyOptions?.narrationHideCommandText).toBe(true);
+  });
+
   it("declines failed item progress without updating the Discord draft", async () => {
     const draftStream = createMockDraftStreamForTest();
     let callbackResult: false | void = undefined;
