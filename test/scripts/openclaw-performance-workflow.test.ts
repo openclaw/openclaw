@@ -91,8 +91,12 @@ describe("OpenClaw performance workflow", () => {
     expect(installRun).toContain(
       'npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund',
     );
-    expect(installRun).toContain('for (const dependency of ["mock-ai-provider", "zod"])');
-    expect(installRun).toContain("require.resolve(dependency, { paths: [root] })");
+    expect(installRun).toContain('require.resolve("mock-ai-provider/package.json", {');
+    expect(installRun).toContain('packageJson.bin?.["mock-ai-provider"]');
+    expect(installRun).toContain('path.join(root, "node_modules", ".bin", "mock-ai-provider")');
+    expect(installRun).toContain("fs.constants.X_OK");
+    expect(installRun).toContain('require.resolve("zod", { paths: [root] })');
+    expect(installRun).not.toContain('require.resolve("mock-ai-provider",');
     expect(
       installRun.indexOf('npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund'),
     ).toBeLessThan(installRun.indexOf('cat > "$HOME/.local/bin/kova"'));

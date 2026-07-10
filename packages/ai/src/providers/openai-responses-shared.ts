@@ -46,6 +46,7 @@ import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-bou
 import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
+  supportsOpenAITemperature,
 } from "./openai-reasoning-effort.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
@@ -539,7 +540,7 @@ export function applyCommonResponsesParams<TApi extends Api>(
     params.max_output_tokens = options.maxTokens;
   }
 
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
 

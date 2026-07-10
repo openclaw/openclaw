@@ -229,6 +229,9 @@ describe("qa scenario catalog", () => {
       throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
     expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.testNamePattern).toBe(
+      "sends a chat turn through the GUI and renders the final Gateway event",
+    );
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
     expect(uxMatrix.execution.kind).toBe("script");
@@ -902,10 +905,12 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("isolates channel baseline silence assertions from shared transport state", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+  it("isolates scenarios that own asynchronous transport state", () => {
+    const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+    const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
 
-    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
+    expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
   it("adds a dreaming shadow trial report scenario", () => {
