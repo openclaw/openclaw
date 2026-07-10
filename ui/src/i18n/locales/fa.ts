@@ -442,6 +442,13 @@ export const fa: TranslationMap = {
     noEvents: "هنوز رویدادی وجود ندارد.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "بازدیدهای خرچنگ",
+      lobsterVisitsOn: "گاهی سر می‌زند",
+      lobsterVisitsOff: "هرگز سر نمی‌زند",
+      lobsterdex: "Lobsterdex",
+      lobsterdexSeen: "{seen}/{total} بازدیدشده",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -484,6 +491,10 @@ export const fa: TranslationMap = {
     settingsGroupConnections: "اتصال‌ها",
     settingsGroupAgents: "عامل‌ها و ابزارها",
     settingsGroupSystem: "سیستم",
+    settingsSearchLabel: "جست‌وجوی تنظیمات",
+    settingsSearchPlaceholder: "جست‌وجوی تنظیمات…",
+    settingsSearchNoResults: "هیچ تنظیمات منطبقی پیدا نشد.",
+    settingsSearchClear: "پاک کردن جست‌وجوی تنظیمات",
     exitSettings: "بازگشت به برنامه",
     expand: "گسترش نوار کناری",
     collapse: "جمع کردن نوار کناری",
@@ -603,7 +614,9 @@ export const fa: TranslationMap = {
   },
   tasksPage: {
     active: "فعال",
+    activeSub: "کارهای پس‌زمینه در صف و در حال اجرا.",
     recent: "اخیر",
+    recentSub: "آخرین وظایف تکمیل‌شده، ناموفق و لغوشده.",
     loading: "در حال بارگذاری وظایف…",
     empty: "هنوز هیچ وظیفهٔ پس‌زمینه‌ای وجود ندارد.",
     emptyActive: "هیچ وظیفه‌ای در صف یا در حال اجرا نیست.",
@@ -1700,7 +1713,6 @@ export const fa: TranslationMap = {
       splitRight: "تقسیم به راست",
       splitDown: "تقسیم به پایین",
       closePane: "بستن پنل",
-      sessionSelect: "نشست پنل",
       dropSplit: "تقسیم",
       dropOpenHere: "اینجا باز شود",
     },
@@ -1740,10 +1752,6 @@ export const fa: TranslationMap = {
       retry: "تلاش دوباره",
       retrySend: "تلاش دوباره برای ارسال",
       retryQueuedMessage: "تلاش دوباره برای پیام در صف",
-    },
-    modelPicker: {
-      faster: "سریع‌تر",
-      smarter: "هوشمندتر",
     },
     pairingQrExpired: {
       title: "کد QR جفت‌سازی منقضی شد",
@@ -1940,8 +1948,7 @@ export const fa: TranslationMap = {
     },
     summary: {
       enabled: "فعال",
-      yes: "بله",
-      no: "خیر",
+      scheduler: "زمان‌بند",
       jobs: "کارها",
       nextWake: "بیدارباش بعدی",
       refreshing: "در حال تازه‌سازی...",

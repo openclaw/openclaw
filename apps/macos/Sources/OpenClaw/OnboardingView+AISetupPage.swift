@@ -3,7 +3,8 @@ import SwiftUI
 extension OnboardingView {
     /// Structured AI setup: detect what's already on this machine, test the
     /// best option live, fall through automatically, offer an API-key form
-    /// when nothing works. Crestodian chat stays one click away for help.
+    /// when nothing works. Crestodian becomes available only after inference
+    /// has completed a live round-trip.
     func aiSetupPage() -> some View {
         VStack(spacing: 12) {
             Text("Connect your AI")
@@ -16,7 +17,10 @@ extension OnboardingView {
                 .fixedSize(horizontal: false, vertical: true)
 
             ScrollView {
-                OnboardingAISetupView(model: self.aiSetup, crestodianChat: self.crestodianChat)
+                OnboardingAISetupView(
+                    model: self.aiSetup,
+                    crestodianChat: self.crestodianState.chat,
+                    showCrestodianChat: self.$crestodianState.isPresented)
                     .padding(.vertical, 4)
                     .padding(.trailing, 12)
             }
@@ -40,21 +44,6 @@ extension OnboardingView {
         // Local mode reaches this page only after the CLI/gateway install page,
         // so the gateway is up before the first RPC.
         guard self.state.connectionMode != .local || self.cliInstalled else { return }
-        self.resetAISetupIfGatewayChanged()
-        self.configureAISetupCallbacks()
-        self.aiSetup.startIfNeeded()
-    }
-
-    @discardableResult
-    func resetAISetupIfGatewayChanged() -> Bool {
-        let identity = self.gatewaySetupIdentity
-        guard self.aiSetupGatewayIdentity != identity else { return false }
-        self.aiSetupGatewayIdentity = identity
-        self.aiSetup.resetForGatewayChange()
-        return true
-    }
-
-    func configureAISetupCallbacks() {
         if self.aiSetup.onConnected == nil {
             self.aiSetup.onConnected = { [self] in
                 // Setup authored the workspace (BOOTSTRAP.md); re-check so the
@@ -62,17 +51,6 @@ extension OnboardingView {
                 self.refreshBootstrapStatus()
             }
         }
-        if self.aiSetup.onExistingSetup == nil {
-            self.aiSetup.onExistingSetup = { [self] in
-                // A connected Gateway with a configured agent model is already
-                // onboarded; go straight to the real agent.
-                guard self.onboardingVisible else { return }
-                guard self.aiSetupGatewayIdentity == self.gatewaySetupIdentity else {
-                    self.resetAISetupIfGatewayChanged()
-                    return
-                }
-                self.finish()
-            }
-        }
+        self.aiSetup.startIfNeeded()
     }
 }

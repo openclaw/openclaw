@@ -148,9 +148,9 @@ function applyCrestodianModelSelectionWithModules(
       agent.models = agentModels;
     }
   } else {
-    // Model runtime resolution checks the default-agent map before defaults,
-    // then falls back to defaults. Clear the other scope as well so neither
-    // can revive a stale Codex/CLI runtime after native inference succeeded.
+    // Runtime resolution checks the default-agent map before defaults, then
+    // falls back to defaults. Clear the other scope so neither can revive a
+    // stale harness pin after native inference succeeded.
     const agent = nextConfig.agents?.list?.find((entry) => normalizeAgentId(entry.id) === agentId);
     const otherModels = writesAgent ? nextConfig.agents?.defaults?.models : agent?.models;
     if (otherModels) {
@@ -210,11 +210,9 @@ export async function applyCrestodianSetup(
 
   let nextConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspace);
   if (model) {
-    const { applyDefaultModelPrimaryUpdate } = await import("../commands/models/shared.js");
-    nextConfig = applyDefaultModelPrimaryUpdate({
-      cfg: nextConfig,
-      modelRaw: model,
-      field: "model",
+    nextConfig = await applyCrestodianModelSelection({
+      config: nextConfig,
+      model,
     });
   }
   nextConfig = applySecurityAcknowledgement(nextConfig);
@@ -237,7 +235,10 @@ export async function applyCrestodianSetup(
     command: "onboard",
     mode: "local",
   });
-  nextConfig = await writeWizardConfigFile(nextConfig, { allowConfigSizeDrop: false });
+  nextConfig = await writeWizardConfigFile(nextConfig, {
+    allowConfigSizeDrop: false,
+    migrationBaseConfig: baseConfig,
+  });
 
   await onboardHelpers.ensureWorkspaceAndSessions(workspace, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),

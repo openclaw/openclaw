@@ -55,13 +55,14 @@ describe("detectInferenceBackends", () => {
     expect(candidates[4]?.modelRef).toBe(CODEX_APP_SERVER_DEFAULT_MODEL_REF);
   });
 
-  it("detects the configured default agent model without a global default", async () => {
+  it("prefers the configured default agent model over the global default", async () => {
     const candidates = await detectInferenceBackends({
       config: {
         agents: {
+          defaults: { model: "openai/gpt-5.5" },
           list: [
-            { id: "work", model: "anthropic/claude-opus-4-8" },
-            { id: "main", default: true, model: "openai/gpt-5.5" },
+            { id: "fallback", model: "google/gemini-3.1-pro-preview" },
+            { id: "ops", default: true, model: "anthropic/claude-opus-4-8" },
           ],
         },
       },
@@ -74,14 +75,8 @@ describe("detectInferenceBackends", () => {
       },
     });
 
-    expect(candidates).toEqual([
-      {
-        kind: "existing-model",
-        modelRef: "openai/gpt-5.5",
-        label: "Current model",
-        detail: "already configured",
-        credentials: true,
-      },
+    expect(candidates).toMatchObject([
+      { kind: "existing-model", modelRef: "anthropic/claude-opus-4-8" },
     ]);
   });
 

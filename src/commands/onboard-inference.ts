@@ -1,11 +1,12 @@
-// Inference backend detection shared by onboarding bootstrap and Crestodian setup.
-import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
+// Inference backend detection shared by onboarding bootstrap and Crestodian setup.
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../crestodian/probes.js";
 
@@ -37,9 +38,8 @@ export type InferenceBackendCandidate = {
   /** One-line provenance, e.g. "logged in", "ANTHROPIC_API_KEY set". */
   detail: string;
   /**
-   * Credential evidence only, not inference health. true: credentials found;
-   * false: definitively logged out; undefined: unknown (for example a macOS
-   * keychain-backed login we must not prompt for here).
+   * true: credentials verified; false: definitively logged out; undefined:
+   * unknown (e.g. macOS keychain-backed logins we must not prompt for here).
    */
   credentials?: boolean;
 };
@@ -108,9 +108,12 @@ export async function detectInferenceBackends(
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
 
   const candidates: InferenceBackendCandidate[] = [];
-  const existingModel = options.config
-    ? resolveAgentEffectiveModelPrimary(options.config, resolveDefaultAgentId(options.config))
+  const defaultAgentModel = options.config
+    ? resolveAgentConfig(options.config, resolveDefaultAgentId(options.config))?.model
     : undefined;
+  const existingModel =
+    resolveAgentModelPrimaryValue(defaultAgentModel) ??
+    resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
   if (existingModel) {
     candidates.push({
       kind: "existing-model",

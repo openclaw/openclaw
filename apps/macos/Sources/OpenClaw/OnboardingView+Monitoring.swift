@@ -119,7 +119,6 @@ extension OnboardingView {
             return
         }
         cliInstalled = true
-        await preflightExistingSetupAfterCLIInstall()
     }
 
     func refreshCLIStatus() async {

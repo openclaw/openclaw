@@ -132,7 +132,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   font: inherit;
   font-size: 12.5px;
   font-weight: 550;
@@ -191,6 +190,100 @@
   color: var(--text-strong);
 }
 
+.settings-sidebar__search {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  margin: 8px 21px 0;
+  color: var(--muted);
+}
+
+.settings-sidebar__search-icon {
+  position: absolute;
+  inset-inline-start: 10px;
+  z-index: 1;
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
+}
+
+.settings-sidebar__search-icon svg,
+.settings-sidebar__search-clear svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-sidebar__search-input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding-block: 0;
+  padding-inline: 32px 34px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.settings-sidebar__search-input::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.settings-sidebar__search-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__search-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .settings-sidebar__search-input {
+    font-size: 16px;
+  }
+}
+
+.settings-sidebar__search-clear {
+  position: absolute;
+  inset-inline-end: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.settings-sidebar__search-clear:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.settings-sidebar__search-clear:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .settings-sidebar__nav {
   flex: 1 1 auto;
   min-height: 0;
@@ -201,6 +294,13 @@
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
+}
+
+.settings-sidebar__empty {
+  margin: 8px 9px 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
 }
 
 .settings-sidebar__group {
@@ -219,6 +319,8 @@
   color: color-mix(in srgb, var(--muted) 76%, transparent);
 }
 
+/* Settings rail entries are anchors but read as app chrome: default arrow,
+   not the UA link pointer. */
 .settings-sidebar__item {
   position: relative;
   display: flex;
@@ -230,6 +332,7 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
+  cursor: default;
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -426,7 +529,6 @@
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--muted);
   font-size: 13px;
-  cursor: pointer;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -466,7 +568,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -610,7 +711,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -699,7 +799,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--accent);
-  cursor: pointer;
   font: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -767,6 +866,9 @@
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
+  /* Sessions are app chrome, not hyperlinks: the whole region uses the
+     default arrow cursor; the pointer hand is reserved for real links. */
+  cursor: default;
 }
 
 .sidebar-recent-sessions__group {
@@ -824,7 +926,6 @@
   background: transparent;
   color: inherit;
   text-align: left;
-  cursor: pointer;
 }
 
 .sidebar-session-group-toggle__icon {
@@ -877,7 +978,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -912,7 +1012,6 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   opacity: 0;
   pointer-events: none;
   transition:
@@ -975,7 +1074,6 @@
   font-size: 11px;
   font-weight: 600;
   text-overflow: ellipsis;
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -1028,6 +1126,8 @@
   opacity: 0.45;
 }
 
+/* Rows and row links are anchors (for middle-click/new-tab), but read as app
+   controls: override the UA link pointer back to the default arrow. */
 .sidebar-recent-session {
   display: flex;
   align-items: center;
@@ -1037,6 +1137,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--muted);
+  cursor: default;
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
@@ -1062,6 +1163,7 @@
   min-width: 0;
   padding: 5px 4px 5px 9px;
   color: inherit;
+  cursor: default;
   text-decoration: none;
 }
 
@@ -1102,7 +1204,6 @@
   background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
   border-radius: var(--radius-md);
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
@@ -1170,7 +1271,6 @@
   border: none;
   border-radius: var(--radius-md);
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  cursor: pointer;
   text-align: left;
   transition:
     color var(--duration-fast) ease,
@@ -1262,7 +1362,6 @@
   font: inherit;
   font-size: 13px;
   text-align: left;
-  cursor: pointer;
 }
 
 .sidebar-customize-menu__item:hover {
@@ -1358,7 +1457,6 @@ openclaw-native-link-menu[popover] {
   font: inherit;
   font-size: 13px;
   text-align: left;
-  cursor: pointer;
 }
 
 .session-menu__item:hover:not(:disabled),
@@ -1416,6 +1514,14 @@ openclaw-native-link-menu[popover] {
   color: var(--muted);
 }
 
+.session-menu__shortcut {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: 0.04em;
+}
+
 .session-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
@@ -1438,6 +1544,8 @@ openclaw-native-link-menu[popover] {
   left: auto;
 }
 
+/* Nav rail entries are anchors (for middle-click/new-tab) but read as app
+   chrome: override the UA link pointer back to the default arrow. */
 .nav-item {
   position: relative;
   display: flex;
@@ -1450,7 +1558,7 @@ openclaw-native-link-menu[popover] {
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: default;
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -1607,6 +1715,9 @@ openclaw-native-link-menu[popover] {
   flex: 1 1 auto;
 }
 
+/* Footer icons mix in-app anchors, buttons, and one external docs link: the
+   chrome gets the default arrow; only the external (target=_blank) anchor is
+   a real hyperlink and keeps the pointer. */
 .sidebar-footer-icon {
   display: inline-flex;
   align-items: center;
@@ -1618,11 +1729,15 @@ openclaw-native-link-menu[popover] {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: default;
   text-decoration: none;
   transition:
     color var(--duration-fast) ease,
     background var(--duration-fast) ease;
+}
+
+.sidebar-footer-icon[target] {
+  cursor: pointer;
 }
 
 .sidebar-footer-icon:hover:not(:disabled),
@@ -1715,7 +1830,6 @@ openclaw-native-link-menu[popover] {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
     color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -1936,7 +2050,6 @@ openclaw-native-link-menu[popover] {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 600;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 0;

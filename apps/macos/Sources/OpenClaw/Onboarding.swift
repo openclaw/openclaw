@@ -74,7 +74,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         self.show()
     }
 
-    func windowShouldClose(_: NSWindow) -> Bool {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard let busyReason else { return true }
         let alert = NSAlert()
         alert.messageText = "Setup is still working"
@@ -89,7 +89,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        guard let closing = notification.object as? NSWindow, closing === window else { return }
+        guard let closing = notification.object as? NSWindow, closing === self.window else { return }
         self.busyReason = nil
         self.window = nil
     }
@@ -128,9 +128,8 @@ struct OnboardingView: View {
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
-    @State var crestodianChat = CrestodianOnboardingChatModel()
+    @State var crestodianState = OnboardingCrestodianChatState()
     @State var aiSetup = OnboardingAISetupModel()
-    @State var aiSetupGatewayIdentity: String?
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
     @State var defaultsToLocalGateway: Bool
@@ -148,9 +147,15 @@ struct OnboardingView: View {
 
     let permissionsPageIndex = 5
 
-    /// Chat-like pages shrink the mascot so the conversation gets the room.
+    /// Only the full-page chat shrinks the mascot so the conversation gets the room.
     var usesCompactHero: Bool {
-        [self.aiPageIndex, self.onboardingChatPageIndex].contains(self.activePageIndex)
+        Self.shouldUseCompactHero(
+            activePageIndex: self.activePageIndex,
+            onboardingChatPageIndex: self.onboardingChatPageIndex)
+    }
+
+    static func shouldUseCompactHero(activePageIndex: Int, onboardingChatPageIndex: Int) -> Bool {
+        activePageIndex == onboardingChatPageIndex
     }
 
     var heroFrameHeight: CGFloat {
@@ -170,21 +175,18 @@ struct OnboardingView: View {
     static func pageOrder(
         for mode: AppState.ConnectionMode,
         showOnboardingChat: Bool,
-        requiresCLIInstall: Bool,
-        includeAISetup: Bool = true) -> [Int]
+        requiresCLIInstall: Bool) -> [Int]
     {
         switch mode {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // but the AI check runs against the remote gateway so a broken
             // remote model surfaces here, not in the first chat.
-            let setupPages = [0, 1] + (includeAISetup ? [3] : []) + [5]
-            return showOnboardingChat ? setupPages + [8, 9] : setupPages + [9]
+            return showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
         case .unconfigured:
             return showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
-            let setupPages = [0, 1] + (requiresCLIInstall ? [2] : []) +
-                (includeAISetup ? [3] : []) + [5]
+            let setupPages = requiresCLIInstall ? [0, 1, 2, 3, 5] : [0, 1, 3, 5]
             return showOnboardingChat ? setupPages + [8, 9] : setupPages + [9]
         }
     }
@@ -208,28 +210,7 @@ struct OnboardingView: View {
         Self.pageOrder(
             for: self.state.connectionMode,
             showOnboardingChat: self.showOnboardingChat,
-            requiresCLIInstall: self.state.connectionMode == .local && !self.cliInstalled,
-            includeAISetup: self.aiSetup.needsAISetupPage)
-    }
-
-    var gatewaySetupIdentity: String {
-        switch self.state.connectionMode {
-        case .local:
-            "local:\(GatewayEnvironment.gatewayPort())"
-        case .remote:
-            [
-                "remote",
-                String(describing: self.state.remoteTransport),
-                self.state.remoteUrl,
-                self.state.remoteTarget,
-                self.state.remoteIdentity,
-                self.state.remoteProjectRoot,
-                self.state.remoteCliPath,
-                String(self.state.remoteToken.hashValue),
-            ].joined(separator: "\u{1F}")
-        case .unconfigured:
-            "unconfigured"
-        }
+            requiresCLIInstall: self.state.connectionMode == .local && !self.cliInstalled)
     }
 
     var pageCount: Int {
@@ -253,32 +234,32 @@ struct OnboardingView: View {
     /// server-side on that success). "Configure later" on the connection page
     /// remains the explicit skip path.
     var isAISetupBlocking: Bool {
-        self.activePageIndex == self.aiPageIndex &&
-            self.state.connectionMode != .unconfigured &&
-            !self.aiSetup.connected
+        Self.shouldBlockAISetup(
+            currentPage: self.currentPage,
+            pageOrder: self.pageOrder,
+            aiPageIndex: self.aiPageIndex,
+            connectionMode: self.state.connectionMode,
+            connected: self.aiSetup.connected)
     }
 
-    var isSetupPreflightBlocking: Bool {
-        Self.shouldLockForSetupPreflight(
-            pageCursor: self.currentPage,
-            connectionCursor: self.pageOrder.firstIndex(of: self.connectionPageIndex),
-            mode: self.state.connectionMode,
-            preflightComplete: self.aiSetup.existingSetupPreflightComplete)
+    static func shouldBlockAISetup(
+        currentPage: Int,
+        pageOrder: [Int],
+        aiPageIndex: Int,
+        connectionMode: AppState.ConnectionMode,
+        connected: Bool) -> Bool
+    {
+        guard connectionMode != .unconfigured,
+              !connected,
+              let aiPageCursor = pageOrder.firstIndex(of: aiPageIndex)
+        else {
+            return false
+        }
+        return currentPage >= aiPageCursor
     }
 
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isAISetupBlocking &&
-            !self.isSetupPreflightBlocking && !self.aiSetup.isBusy
-    }
-
-    static func shouldLockForSetupPreflight(
-        pageCursor: Int,
-        connectionCursor: Int?,
-        mode: AppState.ConnectionMode,
-        preflightComplete: Bool) -> Bool
-    {
-        guard let connectionCursor, mode != .unconfigured, !preflightComplete else { return false }
-        return pageCursor > connectionCursor
+        !self.isCLIBlocking && !self.isAISetupBlocking
     }
 
     struct LocalGatewayProbe: Equatable {
@@ -297,10 +278,10 @@ struct OnboardingView: View {
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
-        _defaultsToLocalGateway = State(
+        self._defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
-        _gatewayDiscovery = State(initialValue: discoveryModel)
-        _onboardingChatModel = State(
+        self._gatewayDiscovery = State(initialValue: discoveryModel)
+        self._onboardingChatModel = State(
             initialValue: OpenClawChatViewModel(
                 sessionKey: "onboarding",
                 transport: MacGatewayChatTransport()))

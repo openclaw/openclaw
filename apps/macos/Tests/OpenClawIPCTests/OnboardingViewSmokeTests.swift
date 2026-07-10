@@ -34,7 +34,7 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(8))
     }
 
-    @Test func `fresh local setup installs CLI before the Crestodian chat`() {
+    @Test func `fresh local setup installs CLI before inference setup`() {
         let order = OnboardingView.pageOrder(
             for: .local,
             showOnboardingChat: false,
@@ -53,74 +53,13 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(2))
     }
 
-    @Test func `configured gateway model bypasses AI setup`() {
-        #expect(OnboardingAISetupModel.configuredModelToReuse(
-            setupComplete: true,
-            configuredModel: "  openai/gpt-5.5  ") == "openai/gpt-5.5")
-        #expect(OnboardingAISetupModel.configuredModelToReuse(
-            setupComplete: false,
-            configuredModel: "openai/gpt-5.5") == nil)
-        #expect(OnboardingAISetupModel.configuredModelToReuse(
-            setupComplete: true,
-            configuredModel: "   ") == nil)
-    }
-
-    @Test func `configured gateway preflight runs before the AI page`() {
-        #expect(OnboardingView.shouldPreflightExistingSetup(
-            onConnectionPage: true,
-            mode: .remote,
-            cliInstalled: false))
-        #expect(OnboardingView.shouldPreflightExistingSetup(
-            onConnectionPage: true,
-            mode: .local,
-            cliInstalled: true))
-        #expect(!OnboardingView.shouldPreflightExistingSetup(
-            onConnectionPage: true,
-            mode: .local,
-            cliInstalled: false))
-        #expect(!OnboardingView.shouldPreflightExistingSetup(
-            onConnectionPage: false,
-            mode: .remote,
-            cliInstalled: true))
-    }
-
-    @Test func `AI page and later pager dots stay hidden until preflight completes`() {
-        let order = OnboardingView.pageOrder(
-            for: .remote,
-            showOnboardingChat: false,
-            requiresCLIInstall: false,
-            includeAISetup: false)
-
-        #expect(!order.contains(3))
-        #expect(OnboardingView.shouldLockForSetupPreflight(
-            pageCursor: 2,
-            connectionCursor: 1,
-            mode: .remote,
-            preflightComplete: false))
-        #expect(OnboardingView.shouldLockForSetupPreflight(
-            pageCursor: 2,
-            connectionCursor: 1,
-            mode: .local,
-            preflightComplete: false))
-        #expect(!OnboardingView.shouldLockForSetupPreflight(
-            pageCursor: 2,
-            connectionCursor: 1,
-            mode: .remote,
-            preflightComplete: true))
-    }
-
-    @Test func `delayed discovery metadata does not change the effective gateway identity`() {
-        let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .direct
-        state.remoteUrl = "wss://gateway.example"
-        state.remoteToken = "token"
-        let view = OnboardingView(state: state)
-        let identity = view.gatewaySetupIdentity
-
-        view.preferredGatewayID = "late-discovery-id"
-
-        #expect(view.gatewaySetupIdentity == identity)
+    @Test func `only full page chat uses compact hero`() {
+        #expect(!OnboardingView.shouldUseCompactHero(
+            activePageIndex: 3,
+            onboardingChatPageIndex: 8))
+        #expect(OnboardingView.shouldUseCompactHero(
+            activePageIndex: 8,
+            onboardingChatPageIndex: 8))
     }
 
     @Test func `fresh onboarding defaults to this Mac`() {
@@ -178,6 +117,45 @@ struct OnboardingViewSmokeTests {
             statusKnown: true,
             installed: false,
             installing: false))
+    }
+
+    @Test func `connection mode change restarts full page monitoring`() {
+        let state = AppState(preview: true)
+        let view = OnboardingView(state: state)
+        var monitoredPage: Int?
+        let previousCrestodianChat = view.crestodianState.chat
+        view.aiSetup.manualKey = "route-bound"
+        view.crestodianState.isPresented = true
+
+        view.handleConnectionModeChange { pageIndex in
+            monitoredPage = pageIndex
+        }
+
+        #expect(view.aiSetup.manualKey.isEmpty)
+        #expect(!view.crestodianState.isPresented)
+        #expect(view.crestodianState.chat !== previousCrestodianChat)
+        #expect(monitoredPage == view.activePageIndex)
+    }
+
+    @Test func `gateway route reset returns later pages to inference setup`() throws {
+        let order = OnboardingView.pageOrder(
+            for: .remote,
+            showOnboardingChat: false,
+            requiresCLIInstall: false)
+        let permissionsCursor = try #require(order.firstIndex(of: 5))
+        let aiCursor = try #require(order.firstIndex(of: 3))
+        let resetCursor = OnboardingView.pageCursorAfterGatewayReset(
+            currentPage: permissionsCursor,
+            pageOrder: order,
+            aiPageIndex: 3)
+
+        #expect(resetCursor == aiCursor)
+        #expect(OnboardingView.shouldBlockAISetup(
+            currentPage: resetCursor,
+            pageOrder: order,
+            aiPageIndex: 3,
+            connectionMode: .remote,
+            connected: false))
     }
 
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {

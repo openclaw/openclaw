@@ -2313,7 +2313,7 @@ describe("state migrations", () => {
     );
   });
 
-  it("migrates legacy plugin binding approvals from the home state dir when using a custom state dir", async () => {
+  it("migrates home-state-dir plugin binding approvals only with the cross-state-dir opt-in", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, "custom-state");
     const env = createEnv(stateDir);
@@ -2337,7 +2337,12 @@ describe("state migrations", () => {
       "utf8",
     );
 
-    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      crossStateDirImports: true,
+    });
     expect(detected.pluginBindingApprovals).toMatchObject({
       sourcePath,
       hasLegacy: true,
@@ -2360,7 +2365,53 @@ describe("state migrations", () => {
     await expectMissingPath(sourcePath);
   });
 
-  it("does not import default-profile approvals into a named profile", async () => {
+  it("leaves home-state-dir plugin binding approvals alone without the cross-state-dir opt-in", async () => {
+    // Regression: an isolated gateway pointed at a temp OPENCLAW_STATE_DIR must
+    // not import (and archive) the default state dir's approvals file.
+    const root = await createTempDir();
+    const stateDir = path.join(root, "custom-state");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(root, ".openclaw", "plugin-binding-approvals.json");
+    const sourceRaw = JSON.stringify({
+      version: 1,
+      approvals: [
+        {
+          pluginRoot: "/plugins/codex-a",
+          pluginId: "codex",
+          channel: "telegram",
+          accountId: "default",
+          approvedAt: 2345,
+        },
+      ],
+    });
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, sourceRaw, "utf8");
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(detected.pluginBindingApprovals).toMatchObject({
+      sourcePath,
+      hasLegacy: false,
+    });
+    expect(detected.notices.join("\n")).toContain(
+      "Plugin binding approvals in the default state dir were not imported",
+    );
+    expect(detected.preview).not.toContain(
+      "- Plugin binding approvals: legacy JSON file → shared SQLite state",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).not.toContain(
+      "Migrated 1 plugin binding approval → shared SQLite state",
+    );
+    expect(readPluginBindingApprovalRows(env)).toEqual([]);
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(sourceRaw);
+    await expectMissingPath(`${sourcePath}.migrated`);
+  });
+
+  it("never imports default-profile approvals into a named profile", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw-work");
     const env = { ...createEnv(stateDir), OPENCLAW_PROFILE: "work" };
@@ -2387,10 +2438,16 @@ describe("state migrations", () => {
       "utf8",
     );
 
-    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      crossStateDirImports: true,
+    });
 
     expect(detected.execApprovals.hasLegacy).toBe(false);
     expect(detected.pluginBindingApprovals.hasLegacy).toBe(false);
+    expect(detected.notices).toEqual([]);
     const result = await runLegacyStateMigrations({ detected, config: cfg, env });
     expect(result.changes.some((change) => change.includes("exec approvals"))).toBe(false);
     expect(result.changes.some((change) => change.includes("plugin binding approval"))).toBe(false);
