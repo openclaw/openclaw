@@ -25,7 +25,8 @@ import {
   MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX,
 } from "./update-managed-service-handoff-cleanup.js";
 
-const { spawnMock } = vi.hoisted(() => ({
+const { forceKillChildProcessTreeMock, spawnMock } = vi.hoisted(() => ({
+  forceKillChildProcessTreeMock: vi.fn(),
   spawnMock: vi.fn(),
 }));
 
@@ -52,10 +53,18 @@ vi.mock("node:child_process", async () => {
   });
 });
 
+vi.mock("../process/child-process-tree.js", async () => {
+  const actual = await vi.importActual<typeof import("../process/child-process-tree.js")>(
+    "../process/child-process-tree.js",
+  );
+  return { ...actual, forceKillChildProcessTree: forceKillChildProcessTreeMock };
+});
+
 const tempDirs = new Set<string>();
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
 
 beforeEach(() => {
+  forceKillChildProcessTreeMock.mockReset();
   spawnMock.mockReset();
   spawnMock.mockImplementation(() => {
     const child = createSpawnMock();
@@ -67,6 +76,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   closeOpenClawStateDatabaseForTest();
   await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
   tempDirs.clear();
@@ -456,6 +466,40 @@ describe("managed service update handoff", () => {
     await expect(resultPromise).rejects.toThrow(
       "managed update handoff exited before signaling readiness (code=1, signal=null)",
     );
+    expect(child.unref).not.toHaveBeenCalled();
+    await expect(pathExists(handoffDir)).resolves.toBe(false);
+    expect(child.listenerCount("exit")).toBe(0);
+    expect(child.listenerCount("error")).toBe(0);
+    expect(child.stdout.destroyed).toBe(true);
+  });
+
+  it("terminates a detached helper that misses the readiness deadline", async () => {
+    vi.useFakeTimers();
+    const child = createSpawnMock();
+    spawnMock.mockReturnValueOnce(child);
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+
+    const resultPromise = startManagedServiceUpdateHandoff({
+      root: "/tmp/openclaw",
+      restartDrainTimeoutMs: undefined,
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      meta: {},
+    });
+    const rejection = resultPromise.catch((err: unknown) => err);
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    const handoffDir = path.dirname(args[0] ?? "");
+    tempDirs.add(handoffDir);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expect(rejection).resolves.toMatchObject({
+      message: "managed update handoff did not signal readiness within 30 seconds",
+    });
+    expect(forceKillChildProcessTreeMock).toHaveBeenCalledExactlyOnceWith(child);
     expect(child.unref).not.toHaveBeenCalled();
     await expect(pathExists(handoffDir)).resolves.toBe(false);
     expect(child.listenerCount("exit")).toBe(0);

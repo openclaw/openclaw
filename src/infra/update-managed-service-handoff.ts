@@ -9,6 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import type { UpdateChannel } from "./update-channels.js";
@@ -655,7 +656,18 @@ async function waitForHandoffReady(child: HandoffChild): Promise<void> {
           `managed update handoff exited before signaling readiness (code=${code ?? "null"}, signal=${signal ?? "null"})`,
         ),
       );
-    const onOutputError = (err: Error) => finish(err);
+    const terminateBeforeFailure = () => {
+      if (typeof child.pid !== "number" || child.pid <= 0) {
+        return;
+      }
+      // A helper that loaded its parameters is armed even if its readiness
+      // marker is lost. Stop the detached tree before reporting failure.
+      forceKillChildProcessTree(child);
+    };
+    const onOutputError = (err: Error) => {
+      terminateBeforeFailure();
+      finish(err);
+    };
     const onData = (chunk: Buffer | string) => {
       buffered = `${buffered}${chunk.toString()}`.slice(-HANDOFF_READY_MARKER.length * 2);
       if (buffered.includes(HANDOFF_READY_MARKER)) {
@@ -663,7 +675,7 @@ async function waitForHandoffReady(child: HandoffChild): Promise<void> {
       }
     };
     const timeout = setTimeout(() => {
-      child.unref();
+      terminateBeforeFailure();
       finish(new Error("managed update handoff did not signal readiness within 30 seconds"));
     }, HANDOFF_READY_TIMEOUT_MS);
 
