@@ -60,4 +60,12 @@ describe("preserveFeishuBareMarkdownUrls", () => {
       "see https://example.com/plain",
     );
   });
+
+  it("keeps reference-style link definitions unchanged", () => {
+    expect(
+      preserveFeishuBareMarkdownUrls(
+        "[docs]: https://example.com/path_with_under \"title\"",
+      ),
+    ).toBe("[docs]: https://example.com/path_with_under \"title\"");
+  });
 });

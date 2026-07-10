@@ -129,6 +129,17 @@ function collectMarkdownLinkRanges(text: string, ranges: Range[]): void {
   }
 }
 
+function collectReferenceLinkDefinitionRanges(text: string, ranges: Range[]): void {
+  // Match reference-style link definitions: [label]: url ["title"]
+  const refDefPattern = /^ {0,3}\[([^\]]+)\]:\s*(?:<([^>\s]+)>|(\S+))(?:\s*(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = refDefPattern.exec(text)) !== null) {
+    if (!isInsideRanges(match.index, ranges)) {
+      ranges.push({ start: match.index, end: match.index + match[0].length });
+    }
+  }
+}
+
 function collectAngleAutolinkRanges(text: string, ranges: Range[]): void {
   const angleAutolinkPattern = /<https?:\/\/[^>\s]+>/g;
   let match: RegExpExecArray | null;
@@ -143,6 +154,7 @@ function collectProtectedRanges(text: string): Range[] {
   const ranges = collectFencedCodeRanges(text);
   collectInlineCodeRanges(text, ranges);
   collectMarkdownLinkRanges(text, ranges);
+  collectReferenceLinkDefinitionRanges(text, ranges);
   collectAngleAutolinkRanges(text, ranges);
   return ranges.sort((a, b) => a.start - b.start);
 }
