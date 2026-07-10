@@ -2150,6 +2150,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         runId: storedRunId,
         waitingReconnect: true,
       });
+      // A cold reload waits for initial Gateway bootstrap before rebuilding the
+      // UI. Storage survival here plus replay below is the reload contract.
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
       await gateway.setOnline(true);
@@ -2168,7 +2170,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           type: "file",
         },
       ]);
-      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
+      await expectRequestCountStable(gateway, "chat.send", 1);
       const requestsAfterReconnect = await gateway.getRequests("chat.send");
       await gateway.setHistoryMessages([
         {
