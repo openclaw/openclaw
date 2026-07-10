@@ -13,14 +13,14 @@ describe("createRunStateMachine", () => {
     });
   });
 
-  it("emits busy status while active and clears when done", () => {
+  it("keeps the zero-argument end callback compatible", () => {
     const setStatus = vi.fn();
     const machine = createRunStateMachine({
       setStatus,
       now: () => 123,
     });
-    const handle = machine.onRunStart();
-    machine.onRunEnd(handle);
+    machine.onRunStart();
+    machine.onRunEnd();
     expect(setStatus.mock.calls).toEqual([
       [{ activeRuns: 0, busy: false, activeRunStartedAt: null }],
       [{ activeRuns: 1, busy: true, lastRunActivityAt: 123, activeRunStartedAt: 123 }],

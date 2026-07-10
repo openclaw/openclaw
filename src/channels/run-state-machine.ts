@@ -18,7 +18,7 @@ type RunStateMachineParams = {
 
 const DEFAULT_RUN_ACTIVITY_HEARTBEAT_MS = 60_000;
 
-export type RunHandle = number;
+type RunHandle = number;
 
 /** Creates a channel run-state tracker with heartbeat updates while runs are active. */
 export function createRunStateMachine(params: RunStateMachineParams) {
@@ -109,8 +109,15 @@ export function createRunStateMachine(params: RunStateMachineParams) {
       ensureHeartbeat();
       return handle;
     },
-    onRunEnd(handle: RunHandle) {
-      runStartsByHandle.delete(handle);
+    onRunEnd(handle?: RunHandle) {
+      if (handle == null) {
+        const oldestHandle = runStartsByHandle.keys().next().value;
+        if (oldestHandle != null) {
+          runStartsByHandle.delete(oldestHandle);
+        }
+      } else {
+        runStartsByHandle.delete(handle);
+      }
       if (runStartsByHandle.size <= 0) {
         clearHeartbeat();
       }
