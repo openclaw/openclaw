@@ -1,4 +1,5 @@
 // Control UI app navigation defines sidebar and settings presentation metadata.
+import type { GatewayControlUiPluginTab } from "./api/gateway.ts";
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
 import { t } from "./i18n/index.ts";
@@ -62,19 +63,35 @@ export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNa
   return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
 }
 
-export const SETTINGS_NAVIGATION_ROUTES = [
-  "config",
-  "channels",
-  "communications",
-  "appearance",
-  "automation",
-  "mcp",
-  "infrastructure",
-  "worktrees",
-  "ai-agents",
-  "debug",
-  "logs",
-] as const satisfies readonly NavigationRouteId[];
+/** Dynamic plugin tabs stay in "More"; only stable static route ids can be
+ * persisted as pins. Grouped ordering keeps related tabs adjacent. */
+export function orderedControlUiPluginTabs(
+  tabs: readonly GatewayControlUiPluginTab[],
+): GatewayControlUiPluginTab[] {
+  return ["chat", "control", "agent", "settings"].flatMap((group) =>
+    tabs.filter((tab) => (tab.group ?? "control") === group),
+  );
+}
+
+type SettingsNavigationGroup = {
+  /** i18n key for the group heading; null renders the group without a label. */
+  labelKey: string | null;
+  routes: readonly NavigationRouteId[];
+};
+
+// Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
+export const SETTINGS_NAVIGATION_GROUPS = [
+  { labelKey: null, routes: ["profile", "config", "appearance"] },
+  { labelKey: "nav.settingsGroupConnections", routes: ["channels", "communications"] },
+  { labelKey: "nav.settingsGroupAgents", routes: ["ai-agents", "automation", "mcp"] },
+  {
+    labelKey: "nav.settingsGroupSystem",
+    routes: ["infrastructure", "worktrees", "debug", "logs"],
+  },
+] as const satisfies readonly SettingsNavigationGroup[];
+
+export const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] =
+  SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
 
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
@@ -86,13 +103,14 @@ const NAVIGATION_ICONS: NavigationItem = {
   instances: "radio",
   sessions: "fileText",
   usage: "barChart",
-  cron: "loader",
-  tasks: "loader",
+  cron: "calendarClock",
+  tasks: "listChecks",
   skills: "zap",
   "skill-workshop": "wrench",
   nodes: "monitor",
   chat: "messageSquare",
   config: "settings",
+  profile: "lobster",
   communications: "send",
   appearance: "spark",
   automation: "terminal",
@@ -181,6 +199,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
+  profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
   communications: {
     titleKey: "tabs.communications",
     subtitleKey: "subtitles.communications",
@@ -198,6 +217,15 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
 
 export function titleForRoute(routeId: NavigationRouteId): string {
   return t(NAVIGATION_COPY[routeId].titleKey);
+}
+
+/**
+ * Sidebar item label inside the settings takeover. The config route is titled
+ * "Settings" globally (gear tooltip, palette) but reads "General" next to its
+ * sibling sections.
+ */
+export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
+  return routeId === "config" ? t("nav.settingsGeneral") : titleForRoute(routeId);
 }
 
 export function subtitleForRoute(routeId: NavigationRouteId): string {

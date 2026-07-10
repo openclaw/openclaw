@@ -349,6 +349,41 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       },
     );
+    for (const toolName of ["spawn_task", "dismiss_task"]) {
+      expectConstructionPlan(
+        resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }),
+        {
+          constructTools: true,
+          includeCoreTools: true,
+          runtimeToolAllowlist: [toolName],
+          coding: {
+            includeBaseCodingTools: false,
+            includeShellTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: true,
+            includePluginTools: false,
+          },
+        },
+      );
+    }
+  });
+
+  it("materializes computer for an exact core-tool allowlist", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["computer"] }),
+      {
+        constructTools: true,
+        includeCoreTools: true,
+        runtimeToolAllowlist: ["computer"],
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      },
+    );
   });
 
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {

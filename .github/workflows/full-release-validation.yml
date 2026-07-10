@@ -59,6 +59,11 @@ on:
           - qa-live
           - npm-telegram
           - performance
+      reuse_evidence:
+        description: Reuse the newest prior green full validation when the target differs only by release metadata such as changelog and version stamps
+        required: false
+        default: true
+        type: boolean
       live_suite_filter:
         description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram; blank runs all selected live suites
         required: false
@@ -114,11 +119,13 @@ permissions:
 
 concurrency:
   group: full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}
-  cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}
+  cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_REPO: ${{ github.repository }}
+  # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
+  GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
   NODE_VERSION: "24.15.0"
 
 jobs:
@@ -226,10 +233,108 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+  evidence_reuse:
+    name: Check for reusable validation evidence
+    needs: [resolve_target]
+    if: inputs.rerun_group == 'all' && inputs.reuse_evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      reuse: ${{ steps.find.outputs.reuse }}
+      evidence_run_id: ${{ steps.find.outputs.evidence_run_id }}
+      evidence_root_run_id: ${{ steps.find.outputs.evidence_root_run_id }}
+      evidence_run_url: ${{ steps.find.outputs.evidence_run_url }}
+      evidence_sha: ${{ steps.find.outputs.evidence_sha }}
+      evidence_manifest: ${{ steps.find.outputs.evidence_manifest }}
+      changed_paths: ${{ steps.find.outputs.changed_paths }}
+    steps:
+      - name: Checkout trusted workflow helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.ref_name }}
+          path: workflow
+          fetch-depth: 1
+          persist-credentials: true
+          submodules: false
+
+      - name: Checkout target SHA
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.sha }}
+          path: target
+          fetch-depth: 1
+          persist-credentials: true
+          submodules: false
+
+      - name: Find reusable validation evidence
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
+          PROVIDER: ${{ inputs.provider }}
+          MODE: ${{ inputs.mode }}
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
+        run: |
+          set -euo pipefail
+          # Lane-selection inputs must match the prior run's manifest exactly;
+          # a default-input run must not stand in for a focused one.
+          inputs_json="$(jq -nc \
+            --arg provider "$PROVIDER" \
+            --arg mode "$MODE" \
+            --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
+            --arg crossOsSuiteFilter "$CROSS_OS_SUITE_FILTER" \
+            --arg releasePackageSpec "$RELEASE_PACKAGE_SPEC" \
+            --arg packageAcceptancePackageSpec "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" \
+            --arg codexPluginSpec "$CODEX_PLUGIN_SPEC" \
+            '{
+              provider: $provider,
+              mode: $mode,
+              liveSuiteFilter: $liveSuiteFilter,
+              crossOsSuiteFilter: $crossOsSuiteFilter,
+              releasePackageSpec: $releasePackageSpec,
+              packageAcceptancePackageSpec: $packageAcceptancePackageSpec,
+              codexPluginSpec: $codexPluginSpec
+            }')"
+          bash workflow/scripts/github/find-reusable-release-validation.sh \
+            --target-sha "$TARGET_SHA" \
+            --workflow-sha "$GITHUB_SHA" \
+            --release-profile "$RELEASE_PROFILE" \
+            --run-release-soak "$RUN_RELEASE_SOAK" \
+            --inputs-json "$inputs_json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --repo-dir target \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Summarize evidence reuse
+        env:
+          REUSE: ${{ steps.find.outputs.reuse }}
+          REUSE_REASON: ${{ steps.find.outputs.reuse_reason }}
+          EVIDENCE_RUN_URL: ${{ steps.find.outputs.evidence_run_url }}
+          EVIDENCE_SHA: ${{ steps.find.outputs.evidence_sha }}
+          CHANGED_PATHS: ${{ steps.find.outputs.changed_paths }}
+        run: |
+          {
+            echo "## Validation evidence reuse"
+            echo
+            if [[ "$REUSE" == "true" ]]; then
+              echo "- Reusing evidence: ${EVIDENCE_RUN_URL}"
+              echo "- Evidence SHA: \`${EVIDENCE_SHA}\`"
+              echo "- Release-metadata-only delta: \`${CHANGED_PATHS:-none}\`"
+            else
+              echo "- No reusable evidence: ${REUSE_REASON:-unknown}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   docker_runtime_assets_preflight:
     name: Verify Docker runtime image assets
-    needs: [resolve_target]
-    if: inputs.rerun_group == 'all'
+    needs: [resolve_target, evidence_reuse]
+    if: ${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -254,8 +359,8 @@ jobs:
 
   normal_ci:
     name: Run normal full CI
-    needs: [resolve_target, docker_runtime_assets_preflight]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    needs: [resolve_target, evidence_reuse]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
@@ -275,9 +380,10 @@ jobs:
 
           dispatch_and_wait() {
             local workflow="$1"
-            shift
+            local dispatch_run_name="$2"
+            shift 2
 
-            local dispatch_output run_id status conclusion url poll_count
+            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -289,7 +395,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -300,17 +406,46 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
+            # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
+            set +e
+            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            dispatch_status=$?
+            set -e
             printf '%s\n' "$dispatch_output"
-            run_id="$(
-              printf '%s\n' "$dispatch_output" |
-                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
-                tail -n 1
-            )"
+
+            if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+              echo "::error::${workflow} dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+              exit "$dispatch_status"
+            fi
+
+            run_id=""
+            for _ in $(seq 1 60); do
+              if matches_json="$(
+                DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
+                  gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+                  -F event=workflow_dispatch \
+                  -F per_page=100 \
+                  --jq '[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]'
+              )"; then
+                match_count="$(jq 'length' <<< "$matches_json")"
+                if (( match_count > 1 )); then
+                  echo "::error::Multiple runs matched ${dispatch_run_name}; refusing to guess." >&2
+                  exit 1
+                fi
+                if (( match_count == 1 )); then
+                  run_id="$(jq -r '.[0]' <<< "$matches_json")"
+                  break
+                fi
+              fi
+              sleep 5
+            done
 
             if [[ -z "$run_id" ]]; then
-              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
+              echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
               exit 1
+            fi
+            if [[ "$dispatch_status" -ne 0 ]]; then
+              echo "::warning::${workflow} dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -383,12 +518,14 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f include_android=true
+          dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-ci"
+          dispatch_run_name="CI ${dispatch_id}"
+          dispatch_and_wait ci.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id"
 
   plugin_prerelease:
     name: Run plugin prerelease validation
-    needs: [resolve_target, docker_runtime_assets_preflight]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    needs: [resolve_target, evidence_reuse]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}
     outputs:
@@ -408,9 +545,10 @@ jobs:
 
           dispatch_and_wait() {
             local workflow="$1"
-            shift
+            local dispatch_run_name="$2"
+            shift 2
 
-            local dispatch_output run_id status conclusion url poll_count
+            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -422,7 +560,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -433,17 +571,46 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
+            # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
+            set +e
+            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            dispatch_status=$?
+            set -e
             printf '%s\n' "$dispatch_output"
-            run_id="$(
-              printf '%s\n' "$dispatch_output" |
-                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
-                tail -n 1
-            )"
+
+            if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+              echo "::error::${workflow} dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+              exit "$dispatch_status"
+            fi
+
+            run_id=""
+            for _ in $(seq 1 60); do
+              if matches_json="$(
+                DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
+                  gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+                  -F event=workflow_dispatch \
+                  -F per_page=100 \
+                  --jq '[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]'
+              )"; then
+                match_count="$(jq 'length' <<< "$matches_json")"
+                if (( match_count > 1 )); then
+                  echo "::error::Multiple runs matched ${dispatch_run_name}; refusing to guess." >&2
+                  exit 1
+                fi
+                if (( match_count == 1 )); then
+                  run_id="$(jq -r '.[0]' <<< "$matches_json")"
+                  break
+                fi
+              fi
+              sleep 5
+            done
 
             if [[ -z "$run_id" ]]; then
-              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
+              echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
               exit 1
+            fi
+            if [[ "$dispatch_status" -ne 0 ]]; then
+              echo "::warning::${workflow} dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -516,12 +683,14 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          dispatch_and_wait plugin-prerelease.yml -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true
+          dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plugin-prerelease"
+          dispatch_run_name="Plugin Prerelease ${dispatch_id}"
+          dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id"
 
   release_checks:
     name: Run release/live/Docker/QA validation
-    needs: [resolve_target, docker_runtime_assets_preflight]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    needs: [resolve_target, evidence_reuse]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
@@ -551,9 +720,10 @@ jobs:
 
           dispatch_and_wait() {
             local workflow="$1"
-            shift
+            local dispatch_run_name="$2"
+            shift 2
 
-            local dispatch_output run_id status conclusion url poll_count run_json
+            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count run_json
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -565,7 +735,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -576,17 +746,46 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
+            # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
+            set +e
+            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            dispatch_status=$?
+            set -e
             printf '%s\n' "$dispatch_output"
-            run_id="$(
-              printf '%s\n' "$dispatch_output" |
-                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
-                tail -n 1
-            )"
+
+            if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+              echo "::error::${workflow} dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+              exit "$dispatch_status"
+            fi
+
+            run_id=""
+            for _ in $(seq 1 60); do
+              if matches_json="$(
+                DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
+                  gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+                  -F event=workflow_dispatch \
+                  -F per_page=100 \
+                  --jq '[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]'
+              )"; then
+                match_count="$(jq 'length' <<< "$matches_json")"
+                if (( match_count > 1 )); then
+                  echo "::error::Multiple runs matched ${dispatch_run_name}; refusing to guess." >&2
+                  exit 1
+                fi
+                if (( match_count == 1 )); then
+                  run_id="$(jq -r '.[0]' <<< "$matches_json")"
+                  break
+                fi
+              fi
+              sleep 5
+            done
 
             if [[ -z "$run_id" ]]; then
-              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
+              echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
               exit 1
+            fi
+            if [[ "$dispatch_status" -ne 0 ]]; then
+              echo "::warning::${workflow} dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -649,6 +848,22 @@ jobs:
                 fetch_child_jobs |
                   jq -s '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]'
               )"
+              if [[ "$workflow" == "openclaw-release-checks.yml" && "$RELEASE_PROFILE" == "beta" ]]; then
+                # Beta treats live-provider suites as advisory (live_advisory in
+                # openclaw-live-and-e2e-checks-reusable.yml); their failures must
+                # not fail-fast-cancel the remaining release-check matrix. Repo
+                # E2E under the same caller stays blocking.
+                failed_jobs_json="$(
+                  jq '[.[] | select(
+                    (.name | startswith("Run repo/live E2E validation / "))
+                    and ((.name | contains("Docker live"))
+                      or (.name | contains("Live media suites"))
+                      or (.name | contains("validate_live_provider_suites"))
+                      or (.name | contains("validate_release_live_cache"))
+                      or (.name | contains("prepare_live_test_image")))
+                    | not)]' <<< "$failed_jobs_json"
+                )"
+              fi
               if jq -e 'length > 0' <<< "$failed_jobs_json" >/dev/null; then
                 echo "::error::${workflow} has failed child jobs before the workflow completed; cancelling the remaining matrix."
                 jq '.[] | {name, conclusion, url: .html_url}' <<< "$failed_jobs_json"
@@ -764,7 +979,10 @@ jobs:
             args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")
           fi
 
-          dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
+          dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-release-checks"
+          dispatch_run_name="OpenClaw Release Checks ${dispatch_id}"
+          args+=(-f dispatch_id="$dispatch_id")
+          dispatch_and_wait openclaw-release-checks.yml "$dispatch_run_name" "${args[@]}"
 
   npm_telegram:
     name: Run package Telegram E2E
@@ -801,7 +1019,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue
@@ -818,17 +1036,50 @@ jobs:
             args+=(-f scenario="$SCENARIO")
           fi
 
-          dispatch_output="$(gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}")"
+          dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"
+          dispatch_run_name="NPM Telegram Beta E2E ${dispatch_id}"
+          args+=(-f dispatch_id="$dispatch_id")
+
+          # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
+          set +e
+          dispatch_output="$(gh workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}" 2>&1)"
+          dispatch_status=$?
+          set -e
           printf '%s\n' "$dispatch_output"
-          run_id="$(
-            printf '%s\n' "$dispatch_output" |
-              sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
-              tail -n 1
-          )"
+
+          if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+            echo "::error::npm-telegram-beta-e2e.yml dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+            exit "$dispatch_status"
+          fi
+
+          run_id=""
+          for _ in $(seq 1 60); do
+            if matches_json="$(
+              DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
+                gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/npm-telegram-beta-e2e.yml/runs" \
+                -F event=workflow_dispatch \
+                -F per_page=100 \
+                --jq '[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]'
+            )"; then
+              match_count="$(jq 'length' <<< "$matches_json")"
+              if (( match_count > 1 )); then
+                echo "::error::Multiple runs matched ${dispatch_run_name}; refusing to guess." >&2
+                exit 1
+              fi
+              if (( match_count == 1 )); then
+                run_id="$(jq -r '.[0]' <<< "$matches_json")"
+                break
+              fi
+            fi
+            sleep 5
+          done
 
           if [[ -z "$run_id" ]]; then
-            echo "::error::gh workflow run npm-telegram-beta-e2e.yml did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
+            echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
             exit 1
+          fi
+          if [[ "$dispatch_status" -ne 0 ]]; then
+            echo "::warning::npm-telegram-beta-e2e.yml dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
           fi
 
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -887,8 +1138,8 @@ jobs:
 
   performance:
     name: Run product performance evidence
-    needs: [resolve_target, docker_runtime_assets_preflight]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    needs: [resolve_target, evidence_reuse]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile == 'full' && 360 || 120 }}
     outputs:
@@ -916,7 +1167,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue
@@ -942,7 +1193,9 @@ jobs:
           dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           dispatch_run_name="OpenClaw Performance ${dispatch_id}"
 
-          dispatch_output="$(gh_with_retry workflow run openclaw-performance.yml \
+          # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
+          set +e
+          dispatch_output="$(gh workflow run openclaw-performance.yml \
             --ref "$CHILD_WORKFLOW_REF" \
             -f target_ref="$TARGET_SHA" \
             -f profile=release \
@@ -950,26 +1203,44 @@ jobs:
             -f deep_profile=false \
             -f live_openai_candidate=false \
             -f fail_on_regression=true \
-            -f dispatch_id="$dispatch_id")"
+            -f dispatch_id="$dispatch_id" 2>&1)"
+          dispatch_status=$?
+          set -e
           printf '%s\n' "$dispatch_output"
+
+          if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+            echo "::error::openclaw-performance.yml dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+            exit "$dispatch_status"
+          fi
 
           run_id=""
           for _ in $(seq 1 60); do
-            run_id="$(
-              DISPATCH_RUN_NAME="$dispatch_run_name" gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/openclaw-performance.yml/runs" \
+            if matches_json="$(
+              DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
+                gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/openclaw-performance.yml/runs" \
                 -F event=workflow_dispatch \
                 -F per_page=100 \
-                --jq '.workflow_runs | map(select(.display_title == env.DISPATCH_RUN_NAME)) | sort_by(.created_at) | reverse | .[0].id // empty'
-            )"
-            if [[ -n "$run_id" ]]; then
-              break
+                --jq '[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]'
+            )"; then
+              match_count="$(jq 'length' <<< "$matches_json")"
+              if (( match_count > 1 )); then
+                echo "::error::Multiple runs matched ${dispatch_run_name}; refusing to guess." >&2
+                exit 1
+              fi
+              if (( match_count == 1 )); then
+                run_id="$(jq -r '.[0]' <<< "$matches_json")"
+                break
+              fi
             fi
             sleep 5
           done
 
           if [[ -z "$run_id" ]]; then
-            echo "::error::Could not find dispatched run for ${dispatch_run_name}." >&2
+            echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
             exit 1
+          fi
+          if [[ "$dispatch_status" -ne 0 ]]; then
+            echo "::warning::openclaw-performance.yml dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
           fi
 
           echo "Dispatched openclaw-performance.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -1014,6 +1285,7 @@ jobs:
     needs:
       [
         resolve_target,
+        evidence_reuse,
         docker_runtime_assets_preflight,
         normal_ci,
         plugin_prerelease,
@@ -1039,6 +1311,11 @@ jobs:
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
           PERFORMANCE_RESULT: ${{ needs.performance.result }}
           DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
+          EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
+          EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
+          EVIDENCE_RUN_URL: ${{ needs.evidence_reuse.outputs.evidence_run_url }}
+          EVIDENCE_SHA: ${{ needs.evidence_reuse.outputs.evidence_sha }}
+          EVIDENCE_MANIFEST: ${{ needs.evidence_reuse.outputs.evidence_manifest }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
@@ -1056,7 +1333,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue
@@ -1298,7 +1575,33 @@ jobs:
           plugin_prerelease_required=0
           release_checks_required=0
           performance_required=0
-          if [[ "$RERUN_GROUP" == "all" && "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success" ]]; then
+          if [[ "$RERUN_GROUP" == "all" && "$EVIDENCE_REUSE" == "true" ]]; then
+            # Lanes were skipped because a prior green validation covers this
+            # target; re-verify the chain-root run and its recorded child runs
+            # so evidence that went stale after resolution cannot pass.
+            evidence_state="$(gh_with_retry run view "$EVIDENCE_ROOT_RUN_ID" --json status,conclusion --jq '(.status // "") + "/" + (.conclusion // "")')"
+            if [[ "$evidence_state" != "completed/success" ]]; then
+              echo "::error::Reused evidence run ${EVIDENCE_ROOT_RUN_ID} is ${evidence_state}; evidence is no longer valid."
+              failed=1
+            fi
+            while IFS= read -r evidence_child_run_id; do
+              [[ -n "$evidence_child_run_id" ]] || continue
+              evidence_child_state="$(gh_with_retry run view "$evidence_child_run_id" --json status,conclusion --jq '(.status // "") + "/" + (.conclusion // "")')"
+              if [[ "$evidence_child_state" != "completed/success" ]]; then
+                echo "::error::Reused evidence child run ${evidence_child_run_id} is ${evidence_child_state}; evidence is no longer valid."
+                failed=1
+              fi
+            done < <(jq -r '[.childRuns.normalCi // "", .childRuns.pluginPrerelease // "", .childRuns.releaseChecks // "", .childRuns.npmTelegram // "", (.childRuns.productPerformance.runId // "")] | map(select(. != "")) | .[]' <<< "$EVIDENCE_MANIFEST")
+            if [[ "$failed" == "0" ]]; then
+              {
+                echo "### Reused validation evidence"
+                echo
+                echo "- Evidence run: ${EVIDENCE_RUN_URL}"
+                echo "- Evidence SHA: \`${EVIDENCE_SHA}\`"
+                echo "- Target SHA: \`${TARGET_SHA}\` (release-metadata-only delta)"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          elif [[ "$RERUN_GROUP" == "all" && "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success" ]]; then
             echo "::error::Docker runtime-assets preflight ended with ${DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT}."
             failed=1
           elif [[ "$RERUN_GROUP" == "all" ]]; then
@@ -1382,11 +1685,21 @@ jobs:
           PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
           GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
+          EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
+          EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
         run: |
           set -euo pipefail
-          if [[ "$RELEASE_CHECKS_RESULT" == "skipped" ]]; then
+          if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && "$EVIDENCE_REUSE" != "true" ]]; then
             echo "Release checks were skipped by rerun group; skipping automatic release evidence update."
             exit 0
+          fi
+          # In reuse mode the child runs live on the chain-root validation run
+          # (the evidence consumer scrapes dispatch logs from the given run),
+          # so durable evidence must reference that run id, not this wrapper.
+          notes="Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions."
+          if [[ "$EVIDENCE_REUSE" == "true" && -n "${EVIDENCE_ROOT_RUN_ID// }" ]]; then
+            notes="Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE}, which reused green evidence from chain-root run ${EVIDENCE_ROOT_RUN_ID}; the release target differs from the validated SHA only by release metadata."
+            GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"
           fi
           if [[ -z "${RELEASES_DISPATCH_TOKEN// }" ]]; then
             echo "OPENCLAW_RELEASES_DISPATCH_TOKEN is not configured; skipping automatic release evidence update."
@@ -1418,7 +1731,7 @@ jobs:
               --arg release_id "$release_id" \
               --arg release_ref "$TARGET_REF" \
               --arg package_spec "$evidence_package_spec" \
-              --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions." \
+              --arg notes "$notes" \
               '{
                 event_type: "openclaw_full_release_validation_completed",
                 client_payload: {
@@ -1464,10 +1777,40 @@ jobs:
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
           PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
           PERFORMANCE_CONCLUSION: ${{ needs.performance.outputs.conclusion }}
+          EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
+          EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
+          EVIDENCE_MANIFEST: ${{ needs.evidence_reuse.outputs.evidence_manifest }}
+          PROVIDER: ${{ inputs.provider }}
+          MODE: ${{ inputs.mode }}
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
           mkdir -p "$manifest_dir"
+          if [[ "$EVIDENCE_REUSE" == "true" ]]; then
+            # Inherit the evidence manifest (profile, soak, child runs) so future
+            # reuse lookups and evidence consumers keep resolving the chain root.
+            jq \
+              --arg runId "$GITHUB_RUN_ID" \
+              --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+              --arg workflowRef "$GITHUB_REF_NAME" \
+              --arg targetRef "$TARGET_REF" \
+              --arg targetSha "$TARGET_SHA" \
+              --arg evidenceRootRunId "$EVIDENCE_ROOT_RUN_ID" \
+              '. + {
+                runId: $runId,
+                runAttempt: $runAttempt,
+                workflowRef: $workflowRef,
+                targetRef: $targetRef,
+                targetSha: $targetSha,
+                evidenceReuse: {runId: $evidenceRootRunId}
+              }' <<< "$EVIDENCE_MANIFEST" > "${manifest_dir}/full-release-validation-manifest.json"
+            exit 0
+          fi
           jq -n \
             --arg workflowName "Full Release Validation" \
             --arg runId "$GITHUB_RUN_ID" \
@@ -1484,6 +1827,13 @@ jobs:
             --arg npmTelegramRunId "$NPM_TELEGRAM_RUN_ID" \
             --arg performanceRunId "$PERFORMANCE_RUN_ID" \
             --arg performanceConclusion "$PERFORMANCE_CONCLUSION" \
+            --arg provider "$PROVIDER" \
+            --arg mode "$MODE" \
+            --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
+            --arg crossOsSuiteFilter "$CROSS_OS_SUITE_FILTER" \
+            --arg releasePackageSpec "$RELEASE_PACKAGE_SPEC" \
+            --arg packageAcceptancePackageSpec "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" \
+            --arg codexPluginSpec "$CODEX_PLUGIN_SPEC" \
             '{
               version: 2,
               workflowName: $workflowName,
@@ -1495,6 +1845,15 @@ jobs:
               releaseProfile: $releaseProfile,
               rerunGroup: $rerunGroup,
               runReleaseSoak: $runReleaseSoak,
+              validationInputs: {
+                provider: $provider,
+                mode: $mode,
+                liveSuiteFilter: $liveSuiteFilter,
+                crossOsSuiteFilter: $crossOsSuiteFilter,
+                releasePackageSpec: $releasePackageSpec,
+                packageAcceptancePackageSpec: $packageAcceptancePackageSpec,
+                codexPluginSpec: $codexPluginSpec
+              },
               controls: {
                 stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),
                 performanceBlocking: true

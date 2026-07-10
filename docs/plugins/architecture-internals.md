@@ -325,7 +325,9 @@ that still runs on OpenClaw's normal inference loop.
 
 `resolveUsageAuth` decides whether OpenClaw should call `fetchUsageSnapshot` or
 fall back to generic credential resolution for usage/status surfaces. Return
-`{ token, accountId? }` when the provider has a usage credential, return
+`{ token, accountId?, subscriptionType?, rateLimitTier? }` when the provider
+has a usage credential (the optional plan metadata flows into
+`fetchUsageSnapshot`), return
 `{ handled: true }` when provider-owned usage auth has handled the request and
 must suppress generic API-key/OAuth fallback, and return `null` or `undefined`
 when the provider did not handle usage auth.
@@ -736,7 +738,7 @@ fallback rules, provider mapping, and plugin author checklist.
 
 Send-capable plugins declare what they can render through message capabilities:
 
-- `presentation` for semantic presentation blocks (`text`, `context`, `divider`, `buttons`, `select`)
+- `presentation` for semantic presentation blocks (`text`, `context`, `divider`, `chart`, `buttons`, `select`)
 - `delivery-pin` for pinned-delivery requests
 
 Core decides whether to render the presentation natively or degrade it to text.
@@ -1061,6 +1063,7 @@ pipeline rather than just add memory search or hooks.
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function (api) {
   api.registerContextEngine("lossless-claw", (ctx) => ({
@@ -1068,13 +1071,15 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages, availableTools, citationsMode }) {
+    async assemble({ messages, sessionKey, availableTools, citationsMode }) {
       return {
         messages,
         estimatedTokens: 0,
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
+          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
+          agentSessionKey: sessionKey,
         }),
       };
     },
@@ -1106,6 +1111,7 @@ import {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
 } from "openclaw/plugin-sdk/core";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function (api) {
   api.registerContextEngine("my-memory-engine", (ctx) => ({
@@ -1117,13 +1123,15 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages, availableTools, citationsMode }) {
+    async assemble({ messages, sessionKey, availableTools, citationsMode }) {
       return {
         messages,
         estimatedTokens: 0,
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
+          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
+          agentSessionKey: sessionKey,
         }),
       };
     },

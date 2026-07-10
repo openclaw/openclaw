@@ -4,7 +4,6 @@ export type JsonObject = { [key: string]: JsonValue };
 export type CodexServiceTier = string;
 export type CodexApprovalPolicy =
   | "untrusted"
-  | "on-failure"
   | "on-request"
   | {
       granular: {
@@ -98,6 +97,9 @@ export type CodexDynamicToolFunctionSpec = JsonObject & {
 
 export type CodexDynamicToolNamespaceTool = CodexDynamicToolFunctionSpec;
 
+/** Namespace Codex keeps directly model-visible without exposing it to Code Mode guests. */
+export const CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE = "openclaw_direct";
+
 export type CodexDynamicToolNamespaceSpec = JsonObject & {
   type: "namespace";
   name: string;
@@ -123,6 +125,7 @@ export type CodexThreadStartParams = JsonObject & {
   cwd?: string;
   model?: string;
   modelProvider?: string | null;
+  config?: JsonObject;
   personality?: CodexPersonality | null;
   approvalPolicy?: CodexApprovalPolicy | null;
   approvalsReviewer?: CodexApprovalsReviewer | null;
@@ -287,6 +290,8 @@ export type CodexTurn = {
 export type CodexThread = {
   id: string;
   sessionId?: string;
+  historyMode?: "legacy" | "paginated";
+  extra?: JsonObject | null;
   name?: string | null;
   preview?: string | null;
   createdAt?: number | null;

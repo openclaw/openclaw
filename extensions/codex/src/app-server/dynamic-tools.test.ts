@@ -1,4 +1,5 @@
 // Codex tests cover dynamic tools plugin behavior.
+import { createHash } from "node:crypto";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
@@ -27,7 +28,23 @@ import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
 } from "./dynamic-tools.js";
-import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolFunctionSpec,
+  type CodexDynamicToolSpec,
+  type JsonValue,
+} from "./protocol.js";
+
+const COMPUTER_FRAME_IMAGE =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+const REPLACEMENT_FRAME_IMAGE =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+
+function frameImageIdentity(data: string, mimeType = "image/png") {
+  return createHash("sha256")
+    .update(JSON.stringify([mimeType, data]))
+    .digest("hex");
+}
 
 function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
   return {
@@ -240,6 +257,28 @@ describe("createCodexDynamicToolBridge", () => {
         deferLoading: true,
       },
     );
+    expectNoNamespace(specs.find((tool) => tool.name === "message"));
+  });
+
+  it("isolates direct-only tools in Codex's model-only namespace", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({ name: "computer", catalogMode: "direct-only" }),
+        createTool({ name: "message" }),
+      ],
+      signal: new AbortController().signal,
+      directToolNames: ["computer", "message"],
+    });
+
+    const specs = flattenSpecsWithNamespace(bridge.specs);
+    expectDynamicSpec(
+      specs.find((tool) => tool.name === "computer"),
+      {
+        name: "computer",
+        namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+      },
+    );
+    expect(specs.find((tool) => tool.name === "computer")).not.toHaveProperty("deferLoading");
     expectNoNamespace(specs.find((tool) => tool.name === "message"));
   });
 
@@ -731,6 +770,41 @@ describe("createCodexDynamicToolBridge", () => {
     expect(text).toContain("OpenClaw truncated dynamic tool result");
     expect(text).toContain("original 400 chars");
     expect(text).toContain("rerun with narrower args");
+  });
+
+  it("keeps a whole code point when dynamic tool text crosses the configured boundary", async () => {
+    const maxChars = 180;
+    const totalChars = 400;
+    const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalChars} chars, showing ${maxChars}; rerun with narrower args.)`;
+    const textBudget = maxChars - noticeText.length - 1;
+    const prefix = "a".repeat(textBudget - 1);
+    const longText = `${prefix}😀${"z".repeat(totalChars - prefix.length - 2)}`;
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "large_lookup",
+          execute: vi.fn(async () => textToolResult(longText)),
+        }),
+      ],
+      signal: new AbortController().signal,
+      hookContext: {
+        agentId: "main",
+        config: {
+          agents: { defaults: { contextLimits: { toolResultMaxChars: maxChars } } },
+        } as never,
+      },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "large_lookup",
+      arguments: {},
+    });
+
+    expect(result.contentItems).toEqual([{ type: "inputText", text: `${prefix}\n${noticeText}` }]);
   });
 
   it("honors normalized per-agent dynamic tool result caps", async () => {
@@ -1926,6 +2000,240 @@ describe("createCodexDynamicToolBridge", () => {
     expect(event.toolName).toBe("exec");
     expect(event.args).toEqual({ command: "git status" });
     expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
+  });
+
+  it("expires the current computer frame when middleware removes its screenshot", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({
+      result: {
+        ...event.result,
+        content: [{ type: "text" as const, text: "screenshot removed" }],
+      },
+    }));
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const computerContextEpoch: {
+      value: number;
+      frameToolCallId?: string;
+      frameImageIdentity?: string;
+    } = { value: 0 };
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "computer",
+          execute: vi.fn(async (toolCallId: string) => {
+            computerContextEpoch.frameToolCallId = toolCallId;
+            computerContextEpoch.frameImageIdentity = frameImageIdentity(COMPUTER_FRAME_IMAGE);
+            return {
+              content: [
+                { type: "image" as const, data: COMPUTER_FRAME_IMAGE, mimeType: "image/png" },
+              ],
+              details: {},
+            };
+          }),
+        }),
+      ],
+      signal: new AbortController().signal,
+      computerContextEpoch,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "shot-1",
+      namespace: null,
+      tool: "computer",
+      arguments: { action: "screenshot" },
+    });
+
+    expect(result).toEqual(expectInputText("screenshot removed"));
+    expect(computerContextEpoch).toEqual({ value: 1 });
+  });
+
+  it("expires the current computer frame when middleware swaps its screenshot", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({
+      result: {
+        ...event.result,
+        content: [{ type: "image" as const, data: REPLACEMENT_FRAME_IMAGE, mimeType: "image/png" }],
+      },
+    }));
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const computerContextEpoch: {
+      value: number;
+      frameToolCallId?: string;
+      frameImageIdentity?: string;
+    } = { value: 0 };
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "computer",
+          execute: vi.fn(async (toolCallId: string) => {
+            computerContextEpoch.frameToolCallId = toolCallId;
+            computerContextEpoch.frameImageIdentity = frameImageIdentity(COMPUTER_FRAME_IMAGE);
+            return {
+              content: [
+                { type: "image" as const, data: COMPUTER_FRAME_IMAGE, mimeType: "image/png" },
+              ],
+              details: {},
+            };
+          }),
+        }),
+      ],
+      signal: new AbortController().signal,
+      computerContextEpoch,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "shot-1",
+      namespace: null,
+      tool: "computer",
+      arguments: { action: "screenshot" },
+    });
+
+    expect(result.contentItems).toEqual([
+      {
+        type: "inputImage",
+        imageUrl: `data:image/png;base64,${REPLACEMENT_FRAME_IMAGE}`,
+      },
+    ]);
+    expect(computerContextEpoch).toEqual({ value: 1 });
+  });
+
+  it("expires a computer frame when screenshot result middleware throws", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(async () => {
+      throw new Error("middleware exploded");
+    });
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "broken-redactor",
+      pluginName: "Broken redactor",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const computerContextEpoch: {
+      value: number;
+      frameToolCallId?: string;
+      frameImageIdentity?: string;
+    } = { value: 0 };
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "computer",
+          execute: vi.fn(async (toolCallId: string) => {
+            computerContextEpoch.frameToolCallId = toolCallId;
+            computerContextEpoch.frameImageIdentity = frameImageIdentity(COMPUTER_FRAME_IMAGE);
+            return {
+              content: [
+                { type: "image" as const, data: COMPUTER_FRAME_IMAGE, mimeType: "image/png" },
+              ],
+              details: {},
+            };
+          }),
+        }),
+      ],
+      signal: new AbortController().signal,
+      computerContextEpoch,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "shot-1",
+      namespace: null,
+      tool: "computer",
+      arguments: { action: "screenshot" },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.contentItems).toEqual([
+      { type: "inputText", text: "Tool output unavailable due to post-processing error." },
+    ]);
+    expect(handler).toHaveBeenCalledOnce();
+    expect(computerContextEpoch).toEqual({ value: 1 });
+  });
+
+  it("keeps the current computer frame when middleware preserves its exact screenshot", async () => {
+    const computerContextEpoch = {
+      value: 0,
+      frameToolCallId: "shot-1",
+      frameImageIdentity: frameImageIdentity(COMPUTER_FRAME_IMAGE),
+    };
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "computer",
+          execute: vi.fn(async () => ({
+            content: [
+              { type: "image" as const, data: COMPUTER_FRAME_IMAGE, mimeType: "image/png" },
+            ],
+            details: {},
+          })),
+        }),
+      ],
+      signal: new AbortController().signal,
+      computerContextEpoch,
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "shot-1",
+      namespace: null,
+      tool: "computer",
+      arguments: { action: "screenshot" },
+    });
+
+    expect(computerContextEpoch).toEqual({
+      value: 0,
+      frameToolCallId: "shot-1",
+      frameImageIdentity: frameImageIdentity(COMPUTER_FRAME_IMAGE),
+    });
+  });
+
+  it("does not expire a newer computer frame for an older text-only result", async () => {
+    const computerContextEpoch = { value: 2, frameToolCallId: "shot-newer" };
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "computer",
+          execute: vi.fn(async () => textToolResult("older result")),
+        }),
+      ],
+      signal: new AbortController().signal,
+      computerContextEpoch,
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "shot-older",
+      namespace: null,
+      tool: "computer",
+      arguments: {},
+    });
+
+    expect(computerContextEpoch).toEqual({ value: 2, frameToolCallId: "shot-newer" });
   });
 
   it("preserves nested toolResult content after no-op middleware", async () => {

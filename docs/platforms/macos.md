@@ -33,8 +33,19 @@ has no macOS app asset, use the newest one that does, or build from source with
 4. Complete provider setup and the macOS permission checklist.
 5. Send the onboarding test message.
 
+If the app finds an existing Gateway configuration and connects successfully,
+it treats that Gateway as already set up, skips provider onboarding, and opens
+the dashboard. If the configured Gateway cannot connect, onboarding remains
+available for recovery.
+
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
+
+## Open dashboard links
+
+In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar. Each link opens in its own tab; clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls, and it remembers its width.
+
+Right-click an external link to choose **Open in Sidebar**, **Open in Default Browser**, or **Copy Link**. Modified clicks and user-activated new-window links from the dashboard continue to open in the default browser; new-window links inside the sidebar open as new sidebar tabs. Regular browser-hosted Control UI pages keep the browser's normal link and context-menu behavior.
 
 ## Choose a Gateway mode
 

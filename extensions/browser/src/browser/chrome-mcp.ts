@@ -29,7 +29,8 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { asRecord } from "../record-shared.js";
-import { redactCdpUrl } from "./cdp.helpers.js";
+import { createBoundedUtf8Tail, decodeBoundedUtf8Tail } from "./bounded-utf8-tail.js";
+import { redactCdpErrorText, redactCdpUrl } from "./cdp.helpers.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.types.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
@@ -155,7 +156,6 @@ const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
 const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;
 const CHROME_MCP_STDERR_MAX_BYTES = 8 * 1024;
 const CHROME_MCP_PROCESS_EXIT_GRACE_MS = 250;
-const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
 const DEVTOOLS_ACTIVE_PORT_RE = /\bDevToolsActivePort\b/i;
 const CHROME_CONNECTION_TOOL_ERROR_RE =
   /(?:Could not connect to Chrome|DevToolsActivePort|ECONNREFUSED|ECONNRESET|websocket|timed out)/i;
@@ -170,15 +170,7 @@ let chromeMcpProcessCleanupDepsForTest: ChromeMcpProcessCleanupDeps | null = nul
 
 /** Decode a bounded UTF-8-safe stderr tail for Chrome MCP diagnostics. */
 export function decodeChromeMcpStderrTail(buffer: Buffer): string {
-  if (buffer.length <= CHROME_MCP_STDERR_MAX_BYTES) {
-    return buffer.toString("utf8").trim();
-  }
-
-  let start = buffer.length - CHROME_MCP_STDERR_MAX_BYTES;
-  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
-    start++;
-  }
-  return buffer.subarray(start).toString("utf8").trim();
+  return decodeBoundedUtf8Tail(buffer, CHROME_MCP_STDERR_MAX_BYTES).trim();
 }
 
 function asPages(value: unknown): ChromeMcpStructuredPage[] {
@@ -480,33 +472,16 @@ function drainStderr(transport: StdioClientTransport): () => string {
   if (!stream) {
     return () => "";
   }
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
+  const tail = createBoundedUtf8Tail(CHROME_MCP_STDERR_MAX_BYTES);
   stream.on("data", (chunk: Buffer | string) => {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    const capped =
-      buffer.length > CHROME_MCP_STDERR_MAX_BYTES
-        ? buffer.subarray(buffer.length - CHROME_MCP_STDERR_MAX_BYTES)
-        : buffer;
-    chunks.push(capped);
-    totalBytes += capped.length;
-    while (totalBytes > CHROME_MCP_STDERR_MAX_BYTES && chunks.length > 1) {
-      const dropped = chunks.shift();
-      if (dropped) {
-        totalBytes -= dropped.length;
-      }
-    }
+    tail.append(chunk);
   });
   stream.on("error", () => {});
-  return () => decodeChromeMcpStderrTail(Buffer.concat(chunks));
+  return () => tail.text().trim();
 }
 
 function redactChromeMcpDiagnosticText(text: string): string {
-  return redactToolPayloadText(
-    text.replace(CDP_URL_IN_TEXT_RE, (match) =>
-      redactToolPayloadText(redactCdpUrl(match) ?? match),
-    ),
-  );
+  return redactCdpErrorText(text);
 }
 
 function redactChromeMcpDiagnosticTextWithLocalPaths(text: string): string {

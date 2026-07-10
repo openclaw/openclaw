@@ -50,7 +50,7 @@ Top-level fields:
 ## App-server transport
 
 By default OpenClaw starts the managed Codex binary shipped with the bundled
-plugin (currently `@openai/codex` `0.142.5`):
+plugin (currently `@openai/codex` `0.144.1`):
 
 ```bash
 codex app-server --listen stdio://
@@ -146,7 +146,7 @@ permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
 The plugin blocks older or unversioned app-server handshakes: Codex app-server
-must report stable version `0.142.0` or newer.
+must report stable version `0.143.0` or newer.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
@@ -379,6 +379,15 @@ toward native `spawn_agent` for Codex-native subagent work, while
 Message-tool-only source replies also stay direct, since that is a
 turn-control contract.
 
+Tools marked `catalogMode: "direct-only"`, including the OpenClaw `computer`
+tool, are grouped under `openclaw_direct`. OpenClaw adds that namespace to
+Codex's `code_mode.direct_only_tool_namespaces` list without replacing
+operator-supplied entries. Codex therefore exposes those tools as
+`DirectModelOnly` in normal and code-mode-only threads instead of routing them
+through nested Code Mode `tools.*` calls. This boundary is required for
+image-bearing results: nested Code Mode serialization flattens image output to
+text, which would discard the screenshot needed for the next computer action.
+
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when debugging
 the full tool payload.
@@ -462,16 +471,21 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog:
 | `gpt-5.4-mini` | GPT-5.4-Mini | low, medium, high, xhigh |
 
 <Note>
-The current bundled harness is `@openai/codex` `0.142.5`. A `model/list` probe
-against that bundled app-server returned these public picker rows beyond the
-fallback catalog:
+The current bundled harness is `@openai/codex` `0.144.1`. A `model/list` probe
+against that bundled app-server returned these public picker rows:
 
-| Model id              | Input modalities | Reasoning efforts        |
-| --------------------- | ---------------- | ------------------------ |
-| `gpt-5.5`             | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`             | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`        | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex-spark` | text             | low, medium, high, xhigh |
+| Model id        | Input modalities | Reasoning efforts                    |
+| --------------- | ---------------- | ------------------------------------ |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
+| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh             |
+| `gpt-5.2`       | text, image      | low, medium, high, xhigh             |
+
+The app-server catalog can report `ultra`; OpenClaw reasoning controls currently
+expose levels through `max`.
 
 Live picker rows are account-scoped and can change with the account, Codex
 catalog, or bundled version; run `/codex models` for the current list rather

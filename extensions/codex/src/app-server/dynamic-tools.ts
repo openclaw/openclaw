@@ -2,6 +2,7 @@
  * Bridges OpenClaw runtime tools into Codex app-server dynamic tool specs and
  * tool-call responses.
  */
+import { createHash } from "node:crypto";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   consumeAdjustedParamsForToolCall,
@@ -47,17 +48,19 @@ import {
   asOptionalRecord as readRecord,
   isRecord,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
-import type {
-  CodexDynamicToolCallOutputContentItem,
-  CodexDynamicToolCallParams,
-  CodexDynamicToolCallResponse,
-  CodexDynamicToolDiagnosticTerminalReason,
-  CodexDynamicToolDiagnosticTerminalType,
-  CodexDynamicToolFunctionSpec,
-  CodexDynamicToolSpec,
-  JsonValue,
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolCallOutputContentItem,
+  type CodexDynamicToolCallParams,
+  type CodexDynamicToolCallResponse,
+  type CodexDynamicToolDiagnosticTerminalReason,
+  type CodexDynamicToolDiagnosticTerminalType,
+  type CodexDynamicToolFunctionSpec,
+  type CodexDynamicToolSpec,
+  type JsonValue,
 } from "./protocol.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -374,6 +377,32 @@ const EXPLICIT_MESSAGE_THREAD_KEYS = ["threadId", "thread_id", "messageThreadId"
 const EXPLICIT_MESSAGE_REPLY_KEYS = ["replyTo", "replyToId", "replyToIdFull"];
 const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
 
+function computerFrameImageIdentity(
+  content: AgentToolResult<unknown>["content"] | undefined,
+): string | undefined {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const images = content.filter((block): block is ImageContent => block.type === "image");
+  if (images.length !== 1) {
+    return undefined;
+  }
+  const image = images[0];
+  return createHash("sha256")
+    .update(JSON.stringify([image.mimeType, image.data]))
+    .digest("hex");
+}
+
+function invalidateComputerFrame(contextEpoch: {
+  value: number;
+  frameToolCallId?: string;
+  frameImageIdentity?: string;
+}): void {
+  contextEpoch.value += 1;
+  delete contextEpoch.frameToolCallId;
+  delete contextEpoch.frameImageIdentity;
+}
+
 /**
  * Creates dynamic tool specs and a call handler that executes OpenClaw tools,
  * applies hooks/middleware, and records delivery/media telemetry.
@@ -382,6 +411,11 @@ export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   registeredTools?: AnyAgentTool[];
   signal: AbortSignal;
+  computerContextEpoch?: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  };
   hookContext?: CodexDynamicToolHookContext;
   loading?: CodexDynamicToolsLoading;
   directToolNames?: Iterable<string>;
@@ -605,9 +639,23 @@ export function createCodexDynamicToolBridge(params: {
         });
         const terminalType =
           resultFailureKind === "blocked" ? "blocked" : resultIsError ? "error" : "completed";
+        const contentItems = convertToolContents(result.content, toolResultMaxChars);
+        const deliveredFrameImages = contentItems.filter((item) => item.type === "inputImage");
+        const finalFrameImageIdentity = computerFrameImageIdentity(result.content);
+        if (
+          toolName === "computer" &&
+          params.computerContextEpoch?.frameToolCallId === call.callId &&
+          (deliveredFrameImages.length !== 1 ||
+            finalFrameImageIdentity === undefined ||
+            finalFrameImageIdentity !== params.computerContextEpoch.frameImageIdentity)
+        ) {
+          // Middleware and legacy extensions can replace a screenshot result.
+          // Never retain coordinates for pixels other than the exact frame Codex received.
+          invalidateComputerFrame(params.computerContextEpoch);
+        }
         const response = withDiagnosticTerminalType(
           {
-            contentItems: convertToolContents(result.content, toolResultMaxChars),
+            contentItems,
             success: !resultIsError,
           },
           terminalType,
@@ -671,6 +719,14 @@ export function createCodexDynamicToolBridge(params: {
             isReplaySafeToolCall(toolName, executedArgs));
         return withSideEffectEvidence(response, !replaySafe);
       } catch (error) {
+        if (
+          toolName === "computer" &&
+          params.computerContextEpoch?.frameToolCallId === call.callId
+        ) {
+          // Execution may have armed a screenshot before post-processing failed.
+          // Never retain coordinates for a frame Codex did not receive.
+          invalidateComputerFrame(params.computerContextEpoch);
+        }
         const beforeToolCallDisposition = getBeforeToolCallFailureDisposition(error);
         const executionDisposition =
           beforeToolCallDisposition ??
@@ -814,8 +870,13 @@ function createCodexDynamicToolSpecs(params: {
 }): CodexDynamicToolSpec[] {
   const specs: CodexDynamicToolSpec[] = [];
   const namespaceTools: CodexDynamicToolFunctionSpec[] = [];
+  const directOnlyNamespaceTools: CodexDynamicToolFunctionSpec[] = [];
   for (const entry of params.entries) {
     const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
+    if (entry.tool.catalogMode === "direct-only") {
+      directOnlyNamespaceTools.push(functionSpec);
+      continue;
+    }
     if (params.loading === "direct" || params.directToolNames.has(entry.name)) {
       specs.push(functionSpec);
       continue;
@@ -828,6 +889,14 @@ function createCodexDynamicToolSpecs(params: {
       name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
       description: "",
       tools: namespaceTools,
+    });
+  }
+  if (directOnlyNamespaceTools.length > 0) {
+    specs.push({
+      type: "namespace",
+      name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+      description: "",
+      tools: directOnlyNamespaceTools,
     });
   }
   return specs;
@@ -1359,16 +1428,18 @@ function convertToolContents(
       continue;
     }
     if (notice.length >= maxChars) {
-      output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+      output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
       appendedNotice = true;
       continue;
     }
     const sliceLength = Math.min(item.text.length, remainingTextBudget);
     remainingTextBudget -= sliceLength;
     const shouldAppendNotice = remainingTextBudget <= 0;
-    const text = item.text.slice(0, sliceLength);
+    const text = truncateUtf16Safe(item.text, sliceLength);
     if (shouldAppendNotice) {
-      output.push({ type: "inputText", text: `${text.trimEnd()}${notice}`.slice(0, maxChars) });
+      // The notice budget is reserved before slicing text, so the combined
+      // result is already bounded without another boundary-sensitive cut.
+      output.push({ type: "inputText", text: `${text.trimEnd()}${notice}` });
       appendedNotice = true;
     } else if (text.length > 0) {
       output.push({ type: "inputText", text });
@@ -1376,7 +1447,7 @@ function convertToolContents(
   }
 
   if (!appendedNotice) {
-    output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+    output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
   }
   return output;
 }

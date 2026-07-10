@@ -93,6 +93,19 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
+function isFailedProgress(payload: {
+  phase?: string;
+  status?: string;
+  exitCode?: number | null;
+}): boolean {
+  return (
+    payload.phase === "error" ||
+    payload.status === "failed" ||
+    payload.status === "error" ||
+    (typeof payload.exitCode === "number" && payload.exitCode !== 0)
+  );
+}
+
 type DiscordReplySkipReason = "aborted before delivery" | "internal-only payload";
 
 export function formatDiscordReplySkip(params: {
@@ -1143,9 +1156,12 @@ async function processDiscordMessageInner(
           );
         },
         onItemEvent: async (payload) => {
+          if (isFailedProgress(payload)) {
+            return false;
+          }
           if (payload.kind === "preamble") {
             if (shouldYieldDraftProgress()) {
-              return;
+              return undefined;
             }
             if (draftPreview.commentaryProgressEnabled && payload.progressText) {
               // Count only commentary that actually streams to the window draft.
@@ -1154,10 +1170,10 @@ async function processDiscordMessageInner(
                 itemId: payload.itemId,
               });
             }
-            return;
+            return undefined;
           }
           if (shouldYieldDraftProgress()) {
-            return;
+            return undefined;
           }
           await draftPreview.pushToolProgress(
             buildChannelProgressDraftLineForEntry(discordConfig, {
@@ -1174,6 +1190,7 @@ async function processDiscordMessageInner(
               meta: payload.meta,
             }),
           );
+          return undefined;
         },
         onPlanUpdate: async (payload) => {
           if (payload.phase !== "update") {
@@ -1205,11 +1222,14 @@ async function processDiscordMessageInner(
           );
         },
         onCommandOutput: async (payload) => {
+          if (isFailedProgress(payload)) {
+            return false;
+          }
           if (payload.phase !== "end") {
-            return;
+            return undefined;
           }
           if (shouldYieldDraftProgress()) {
-            return;
+            return undefined;
           }
           await draftPreview.pushToolProgress(
             buildChannelProgressDraftLine({
@@ -1223,6 +1243,7 @@ async function processDiscordMessageInner(
               exitCode: payload.exitCode,
             }),
           );
+          return undefined;
         },
         onPatchSummary: async (payload) => {
           if (payload.phase !== "end") {

@@ -1,6 +1,7 @@
 // Slack tests cover action runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
@@ -35,6 +36,16 @@ describe("handleSlackAction", () => {
       },
     } as OpenClawConfig;
   }
+
+  it("rejects all actions before Slack API work for an enterprise org account", async () => {
+    await expect(
+      handleSlackAction(
+        { action: "readMessages", channelId: "C123" },
+        slackConfig({ enterpriseOrgInstall: true }),
+      ),
+    ).rejects.toThrow(/unavailable for Enterprise Grid org installs/);
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
 
   function createReplyToFirstContext(hasRepliedRef: { value: boolean }) {
     return {
@@ -143,7 +154,7 @@ describe("handleSlackAction", () => {
 
   async function sendSecondMessageAndExpectNoThread(params: {
     cfg: OpenClawConfig;
-    context: ReturnType<typeof createReplyToFirstContext>;
+    context: SlackActionContext;
   }) {
     await handleSlackAction(
       { action: "sendMessage", to: "channel:C123", content: "Second" },
@@ -227,9 +238,14 @@ describe("handleSlackAction", () => {
   });
 
   it.each([
-    { name: "raw channel id", channelId: "C1" },
-    { name: "channel: prefixed id", channelId: "channel:C1" },
-  ])("adds reactions for $name", async ({ channelId }) => {
+    { name: "raw channel id", channelId: "C1", expectedChannelId: "C1" },
+    { name: "channel: prefixed id", channelId: "channel:C1", expectedChannelId: "C1" },
+    {
+      name: "folded channel id",
+      channelId: "channel:c08gqh53ejm",
+      expectedChannelId: "C08GQH53EJM",
+    },
+  ])("adds reactions for $name", async ({ channelId, expectedChannelId }) => {
     const cfg = slackConfig();
     const result = await handleSlackAction(
       {
@@ -240,7 +256,7 @@ describe("handleSlackAction", () => {
       },
       cfg,
     );
-    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅", { cfg });
+    expect(reactSlackMessage).toHaveBeenCalledWith(expectedChannelId, "123.456", "✅", { cfg });
     expect(JSON.parse((result.content[0] as { type: "text"; text: string }).text)).toEqual({
       ok: true,
       added: "✅",
@@ -774,6 +790,59 @@ describe("handleSlackAction", () => {
 
     expectLastSlackSend("First", cfg, "1111111111.111111");
     await sendSecondMessageAndExpectNoThread({ cfg, context });
+  });
+
+  it("replyToMode=first threads standalone message-tool sends without ReplyToId", async () => {
+    const cfg = slackConfig({ replyToMode: "first" });
+    const hasRepliedRef = { value: false };
+    const context = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      hasRepliedRef,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1111111111.111111",
+      },
+    });
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "First" },
+      cfg,
+      context,
+    );
+
+    expectLastSlackSend("First", cfg, "1111111111.111111");
+    await sendSecondMessageAndExpectNoThread({ cfg, context });
+  });
+
+  it("does not use standalone current-message anchors for different channels", async () => {
+    const cfg = slackConfig({ replyToMode: "first" });
+    const hasRepliedRef = { value: false };
+    const context = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      hasRepliedRef,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1111111111.111111",
+      },
+    });
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C999", content: "Other channel" },
+      cfg,
+      context,
+    );
+
+    expectSlackSendCall(0, "channel:C999", "Other channel", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: undefined,
+    });
+    expect(hasRepliedRef.value).toBe(false);
   });
 
   it("replyToMode=first normalizes channel target when accounting explicit threadTs", async () => {

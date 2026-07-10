@@ -1,5 +1,7 @@
 name: OpenClaw Release Checks
 
+run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Release Checks {0}', inputs.dispatch_id) || 'OpenClaw Release Checks' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -85,6 +87,11 @@ on:
         type: string
       codex_plugin_spec:
         description: Optional Codex plugin install spec for live Docker package checks; blank derives from release_package_spec or packs the selected ref
+        required: false
+        default: ""
+        type: string
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
         required: false
         default: ""
         type: string
@@ -634,6 +641,10 @@ jobs:
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      # Live-provider suites depend on third-party model deployments; beta
+      # treats only those as advisory while repo E2E stays blocking and
+      # stable/full keep everything blocking.
+      live_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: true
       include_release_path_suites: false

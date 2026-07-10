@@ -1,13 +1,13 @@
 ---
 summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for canvas/camera/screen/device/notifications/system"
 read_when:
-  - Pairing iOS/Android nodes to a gateway
+  - Pairing iOS/watchOS/Android nodes to a gateway
   - Using node canvas/camera for agent context
   - Adding new node commands or CLI helpers
 title: "Nodes"
 ---
 
-A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
+A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
@@ -19,7 +19,7 @@ Troubleshooting runbook: [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Pairing + status
 
-WS nodes use **device pairing**. A node presents a device identity during `connect`; the Gateway creates a device pairing request for `role: node`. Approve via the devices CLI (or UI).
+Nodes use **device pairing**. A node presents a signed device identity during connect; the Gateway creates a device pairing request for `role: node`. Approve via the devices CLI (or UI). The direct Apple Watch setup uses an admin-minted, short-lived node-only setup code to approve its fixed low-risk command surface; later capability expansion still requires normal approval.
 
 ```bash
 openclaw devices list
@@ -29,12 +29,12 @@ openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
-Pending pairing requests expire 5 minutes after the device's last retry — a device that keeps reconnecting keeps its one pending request (and `requestId`) alive instead of minting a new prompt every few minutes; see [Gateway-owned pairing](/gateway/pairing) for the full request/approve/token lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — clients get a `device.pair.resolved` event for the superseded request, and you should re-run `openclaw devices list` before approving.
+Pending pairing requests expire 5 minutes after the device's last retry — a device that keeps reconnecting keeps its one pending request (and `requestId`) alive instead of minting a new prompt every few minutes; see [Node pairing](/gateway/pairing) for the full request/approve lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — clients get a `device.pair.resolved` event for the superseded request, and you should re-run `openclaw devices list` before approving.
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate, gateway-owned node pairing store that tracks the node's approved command/capability surface across reconnects. It does **not** gate the WS `connect` handshake — device pairing does that.
-- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in `devices/paired.json` and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate, gateway-owned node pairing store that tracks the node's approved command/capability surface across reconnects. It does **not** gate transport authentication — device pairing does that.
+- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
@@ -42,7 +42,7 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
 
 ## Version skew and upgrade order
 
-The Gateway accepts authenticated node clients across an N-1 protocol window.
+The Gateway WebSocket accepts authenticated node clients across an N-1 protocol window.
 The current v4 Gateway therefore accepts v3 nodes when the connection declares
 both `role: "node"` and `client.mode: "node"`. Operator and UI sessions must
 still use the current protocol.
@@ -54,6 +54,9 @@ device authentication, command allowlists, and exec approvals still apply.
 Plugin-owned capabilities and commands stay hidden until the node upgrades to
 the current protocol. Nodes older than N-1 require an out-of-band upgrade before
 reconnecting.
+
+The direct watchOS HTTPS transport requires the current protocol version; update
+the watch app with the Gateway before enabling direct mode.
 
 ## Remote node host (system.run)
 
@@ -79,7 +82,7 @@ On the node machine:
 openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
-`node run` also accepts `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (overriding it clears the pairing token).
+`node run` also accepts `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the generated node instance id).
 
 ### Remote gateway via SSH tunnel (loopback bind)
 
@@ -174,6 +177,21 @@ Related:
 
 A desktop or server node can expose chat-capable models from an Ollama server running on that node. Agents use the Ollama plugin's `node_inference` tool to discover installed models and run a bounded prompt remotely; the Gateway does not need direct network access to Ollama. See [Ollama node-local inference](/providers/ollama#node-local-inference) for setup, model filtering, and direct verification commands.
 
+### Codex session catalog
+
+The opt-in `codex-supervisor` plugin lets a headless node host or the native
+macOS node expose metadata for its local interactive Codex sessions. Enable the
+plugin independently in the node's local config and on the Gateway. The node
+setting is local consent; enabling only the Gateway cannot read another
+computer's Codex state.
+
+The node advertises the versioned read-only
+`codex.appServer.threads.list.v1` command. Approve the node pairing upgrade when
+that command first appears. The Gateway invokes it through the normal plugin
+node policy and isolates failures by host. See the [Codex Supervisor plugin
+reference](/plugins/reference/codex-supervisor) for configuration, CLI and
+Control UI use, pagination, and the metadata security boundary.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -188,7 +206,7 @@ openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"ja
 
 Node commands must pass two gates before they can be invoked:
 
-1. The node must declare the command in its WebSocket `connect.commands` list.
+1. The node must declare the command in its authenticated connect metadata (`connect.commands`).
 2. The gateway's platform-and-approval-derived allowlist must include the declared command.
 
 Default allowlists by platform (before plugin defaults and `allowCommands`/`denyCommands` overrides):
@@ -196,6 +214,7 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 | Platform | Commands allowed by default                                                                                                                                                                                                                                                                                           |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | iOS      | `camera.list`, `location.get`, `device.info`, `device.status`, `contacts.search`, `calendar.events`, `reminders.list`, `photos.latest`, `motion.activity`, `motion.pedometer`, `system.notify`                                                                                                                        |
+| watchOS  | `device.info`, `device.status`, `system.notify`                                                                                                                                                                                                                                                                       |
 | Android  | `camera.list`, `location.get`, `notifications.list`, `notifications.actions`, `system.notify`, `device.info`, `device.status`, `device.permissions`, `device.health`, `device.apps`, `contacts.search`, `calendar.events`, `callLog.search`, `reminders.list`, `photos.latest`, `motion.activity`, `motion.pedometer` |
 | macOS    | `camera.list`, `location.get`, `device.info`, `device.status`, `contacts.search`, `calendar.events`, `reminders.list`, `photos.latest`, `motion.activity`, `motion.pedometer`, `system.notify`                                                                                                                        |
 | Windows  | `camera.list`, `location.get`, `device.info`, `device.status`, `system.notify`                                                                                                                                                                                                                                        |
@@ -207,7 +226,7 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 
 Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `screen.snapshot` on macOS/Windows) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
 
-Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries.
+Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `computer.act`, `contacts.add`, `calendar.add`, `reminders.add`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries. See [Computer use](/nodes/computer-use) for the additional macOS, tool-policy, and arming gates around desktop input.
 
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy runs after the allowlist check and before forwarding to the node, so raw `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin permission boundary. Dangerous plugin node commands still require explicit `gateway.nodes.allowCommands` opt-in.
 

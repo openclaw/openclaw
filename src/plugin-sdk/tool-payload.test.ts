@@ -165,6 +165,67 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
     ]);
   });
 
+  it("parses zero-argument XML tool calls", () => {
+    const raw = ["<function=get_system_info>", "</function>"].join("\n");
+
+    expect(
+      parseStandalonePlainTextToolCallBlocks(raw, {
+        allowedToolNames: ["get_system_info"],
+      }),
+    ).toEqual([
+      {
+        arguments: {},
+        end: raw.length,
+        name: "get_system_info",
+        raw,
+        start: 0,
+      },
+    ]);
+  });
+
+  it.each(["[tool:get_system_info]</function>", "[get_system_info]\n</function>"])(
+    "keeps bracketed opening %s from becoming a zero-argument XML call",
+    (raw) => {
+      expect(parseStandalonePlainTextToolCallBlocks(raw)).toBeNull();
+    },
+  );
+
+  it("counts XML body whitespace against the UTF-8 payload cap", () => {
+    const immediate = "<function=get_system_info></function>";
+    expect(
+      parseStandalonePlainTextToolCallBlocks(immediate, {
+        allowedToolNames: ["get_system_info"],
+        maxPayloadBytes: 0,
+      })?.[0]?.arguments,
+    ).toEqual({});
+
+    const oversizedBody = "\u00a0".repeat(129);
+    const oversized = `<function=get_system_info>${oversizedBody}</function>`;
+    expect(new TextEncoder().encode(oversizedBody).byteLength).toBe(258);
+    expect(
+      parseStandalonePlainTextToolCallBlocks(oversized, {
+        allowedToolNames: ["get_system_info"],
+        maxPayloadBytes: 256,
+      }),
+    ).toBeNull();
+    expect(stripPlainTextToolCallBlocks(["before", oversized, "after"].join("\n"))).toBe(
+      "before\nafter",
+    );
+
+    const parameter = "<parameter=value>x</parameter>";
+    const trailingBody = "\u00a0".repeat(2);
+    const parameterBytes = new TextEncoder().encode(parameter).byteLength;
+    expect(
+      parseStandalonePlainTextToolCallBlocks(
+        `<function=get_system_info>${parameter}${trailingBody}</function>`,
+        {
+          allowedToolNames: ["get_system_info"],
+          maxPayloadBytes: parameterBytes + 3,
+        },
+      ),
+    ).toBeNull();
+  });
+
   it("preserves whitespace inside serialized XML parameter values", () => {
     const raw = [
       "<function=write>",
@@ -242,6 +303,34 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
     ).toBeNull();
   });
 
+  it("counts serialized XML parameter payload limits in UTF-8 bytes", () => {
+    const parameter = ["<parameter=content>", "é".repeat(20), "</parameter>"].join("\n");
+    const raw = ["<function=write>", parameter, "</function>"].join("\n");
+    expect(parameter.length).toBeLessThan(64);
+    expect(new TextEncoder().encode(parameter).byteLength).toBeGreaterThan(64);
+
+    expect(
+      parseStandalonePlainTextToolCallBlocks(raw, {
+        allowedToolNames: ["write"],
+        maxPayloadBytes: 64,
+      }),
+    ).toBeNull();
+  });
+
+  it("counts serialized JSON payload limits in UTF-8 bytes", () => {
+    const payload = JSON.stringify({ content: "é".repeat(20) });
+    const raw = ["[write]", payload, "[/write]"].join("\n");
+    expect(payload.length).toBeLessThan(48);
+    expect(new TextEncoder().encode(payload).byteLength).toBeGreaterThan(48);
+
+    expect(
+      parseStandalonePlainTextToolCallBlocks(raw, {
+        allowedToolNames: ["write"],
+        maxPayloadBytes: 48,
+      }),
+    ).toBeNull();
+  });
+
   it("respects allowed tool names for Harmony calls", () => {
     const blocks = parseStandalonePlainTextToolCallBlocks(
       'commentary to=write code {"path":"/tmp/file.txt","content":"x"}',
@@ -305,6 +394,12 @@ describe("stripPlainTextToolCallBlocks", () => {
         ].join("\n"),
       ),
     ).toBe("before\n\nafter");
+  });
+
+  it("strips zero-argument XML tool calls", () => {
+    expect(
+      stripPlainTextToolCallBlocks("before\n<function=get_system_info></function>\nafter"),
+    ).toBe("before\nafter");
   });
 
   it("keeps legacy bracketed XML parameter blocks scrubbed", () => {

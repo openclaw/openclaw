@@ -126,6 +126,31 @@ describe("openclaw-tools update_plan gating", () => {
     expect(enabledTools).toContain("transcripts");
   });
 
+  it("registers task suggestions only for sessions with an actionable gateway sink", () => {
+    const withoutSession = createFastToolNames({
+      config: {} as OpenClawConfig,
+      cwd: "/repo",
+      taskSuggestionDeliveryMode: "gateway",
+    });
+    const withoutSink = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+      cwd: "/repo",
+    });
+    const withSink = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+      cwd: "/repo",
+      taskSuggestionDeliveryMode: "gateway",
+    });
+
+    expect(withoutSession).not.toContain("spawn_task");
+    expect(withoutSession).not.toContain("dismiss_task");
+    expect(withoutSink).not.toContain("spawn_task");
+    expect(withoutSink).not.toContain("dismiss_task");
+    expect(withSink).toEqual(expect.arrayContaining(["spawn_task", "dismiss_task"]));
+  });
+
   it("keeps explicitly allowed message tool in embedded completions", () => {
     setEmbeddedMode(true);
     const fromRuntimeAllowlist = createOpenClawTools({

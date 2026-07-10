@@ -935,6 +935,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           },
           sandbox,
           messageProvider: resolvedMessageProvider,
+          clientCaps: params.clientCaps,
           chatType: params.chatType,
           agentAccountId: params.agentAccountId,
           sessionKey: sandboxSessionKey,
@@ -963,6 +964,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           modelProvider: model.provider,
           modelId,
+          modelHasVision: effectiveModel.input?.includes("image") ?? false,
           modelCompat: extractModelCompat(effectiveModel),
           modelApi: model.api,
           modelContextWindowTokens: contextTokenBudget,
@@ -1097,6 +1099,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
       : undefined;
 
     const runtimeInfo = {
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
       host: machineName,
       os: resolveRuntimeOsLabel(),
       arch: os.arch(),

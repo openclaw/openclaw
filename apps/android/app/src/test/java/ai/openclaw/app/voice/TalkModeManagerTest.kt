@@ -360,6 +360,35 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeUserTranscriptsDriveSpeechActive() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    assertFalse(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello"))
+    assertTrue(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello world", final = true))
+    assertFalse(manager.speechActive.value)
+  }
+
+  @Test
+  fun finalUserTranscriptMarksAwaitingAgentUntilStatusMovesOn() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    assertFalse(manager.awaitingAgent.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello", final = true))
+    assertTrue(manager.awaitingAgent.value)
+    // Any later status transition clears the typed flag; forgetting it at a
+    // new setStatus site fails safe instead of showing a stale Thinking wave.
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "hi there", final = true))
+    manager.stopAllCapture()
+    assertFalse(manager.awaitingAgent.value)
+  }
+
+  @Test
   fun realtimeTranscriptDeltasAccumulateVoiceConversation() {
     val manager = createManager()
 

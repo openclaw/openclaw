@@ -7,19 +7,29 @@ actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
     private let cameraCapture = CameraCaptureService()
-    private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
+    private let makeMainActorServices: @Sendable () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
-    // Injectable so tests can pin the gate instead of racing on process-global
-    // OPENCLAW_CONFIG_PATH; config parsing is covered by OpenClawConfigFileTests.
+    /// Injectable so tests can pin the gate instead of racing on process-global
+    /// OPENCLAW_CONFIG_PATH; config parsing is covered by OpenClawConfigFileTests.
     private let browserControlEnabled: @Sendable () -> Bool
+    // Injectable so tests pin the gate instead of racing on process-global UserDefaults.
+    private let computerControlEnabled: @Sendable () -> Bool
     private let canvasSurfaceUrl: @Sendable () async -> String?
     private let refreshCanvasSurfaceUrl: @Sendable () async -> String?
+    private let codexThreadCatalogEnabled: @Sendable () -> Bool
+    private let codexThreadListRequest: @Sendable (String?) async throws -> String
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
+    /// Single-flight lazy initialization. Separate service instances would split
+    /// ownership of held computer input and make lifecycle release incomplete.
+    private var mainActorServicesInitializationTask: Task<any MacNodeRuntimeMainActorServices, Never>?
+    /// Invalidates computer actions admitted before a lifecycle release, including
+    /// the first action while the shared main-actor services are still initializing.
+    private var computerInputReleaseGeneration: UInt64 = 0
     private var mainSessionKey: String = "main"
     private var eventSender: (@Sendable (String, String?) async -> Void)?
 
     init(
-        makeMainActorServices: @escaping () async -> any MacNodeRuntimeMainActorServices = {
+        makeMainActorServices: @escaping @Sendable () async -> any MacNodeRuntimeMainActorServices = {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
         browserProxyRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
@@ -28,16 +38,29 @@ actor MacNodeRuntime {
         browserControlEnabled: @escaping @Sendable () -> Bool = {
             OpenClawConfigFile.browserControlEnabled()
         },
+        computerControlEnabled: @escaping @Sendable () -> Bool = {
+            MacNodeRuntime.computerControlEnabledDefault()
+        },
         canvasSurfaceUrl: @escaping @Sendable () async -> String? = {
             await GatewayConnection.shared.canvasPluginSurfaceUrl()
         },
-        refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil })
+        refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil },
+        codexThreadCatalogEnabled: @escaping @Sendable () -> Bool = {
+            OpenClawConfigFile.explicitlyEnabledPlugin(
+                MacNodeCodexThreadCatalogContract.pluginId)
+        },
+        codexThreadListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
+            try await MacNodeCodexThreadCatalog.list(paramsJSON: paramsJSON)
+        })
     {
         self.makeMainActorServices = makeMainActorServices
         self.browserProxyRequest = browserProxyRequest
         self.browserControlEnabled = browserControlEnabled
+        self.computerControlEnabled = computerControlEnabled
         self.canvasSurfaceUrl = canvasSurfaceUrl
         self.refreshCanvasSurfaceUrl = refreshCanvasSurfaceUrl
+        self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
+        self.codexThreadListRequest = codexThreadListRequest
     }
 
     func updateMainSessionKey(_ sessionKey: String) {
@@ -84,6 +107,8 @@ actor MacNodeRuntime {
                 return try await self.handleScreenSnapshotInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
+            case OpenClawComputerCommand.act.rawValue:
+                return try await self.handleComputerActInvoke(req)
             case OpenClawSystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
             case OpenClawSystemCommand.which.rawValue:
@@ -94,9 +119,23 @@ actor MacNodeRuntime {
                 return try await self.handleSystemExecApprovalsGet(req)
             case OpenClawSystemCommand.execApprovalsSet.rawValue:
                 return try await self.handleSystemExecApprovalsSet(req)
+            case MacNodeCodexThreadCatalogContract.listCommand:
+                guard self.codexThreadCatalogEnabled() else {
+                    return Self.errorResponse(
+                        req,
+                        code: .unavailable,
+                        message: "UNAVAILABLE: Codex session catalog is disabled")
+                }
+                let payload = try await codexThreadListRequest(req.paramsJSON)
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
             default:
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
             }
+        } catch let error as MacNodeCodexThreadCatalog.CatalogError {
+            return Self.errorResponse(
+                req,
+                code: error.isInvalidRequest ? .invalidRequest : .unavailable,
+                message: error.localizedDescription)
         } catch {
             return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
         }
@@ -149,7 +188,9 @@ actor MacNodeRuntime {
             let params = try? Self.decodeParams(OpenClawCanvasSnapshotParams.self, from: req.paramsJSON)
             let format = params?.format ?? .jpeg
             let maxWidth: Int? = {
-                if let raw = params?.maxWidth, raw > 0 { return raw }
+                if let raw = params?.maxWidth, raw > 0 {
+                    return raw
+                }
                 return switch format {
                 case .png: 900
                 case .jpeg: 1600
@@ -200,7 +241,7 @@ actor MacNodeRuntime {
                     code: .unavailable,
                     message: "BROWSER_DISABLED: enable Browser in Settings"))
         }
-        let payloadJSON = try await self.browserProxyRequest(req.paramsJSON)
+        let payloadJSON = try await browserProxyRequest(req.paramsJSON)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payloadJSON)
     }
 
@@ -218,7 +259,7 @@ actor MacNodeRuntime {
             let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraSnapParams()
             let delayMs = min(10000, max(0, params.delayMs ?? 2000))
-            let res = try await self.cameraCapture.snap(
+            let res = try await cameraCapture.snap(
                 facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
                 maxWidth: params.maxWidth,
                 quality: params.quality,
@@ -239,7 +280,7 @@ actor MacNodeRuntime {
         case OpenClawCameraCommand.clip.rawValue:
             let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraClipParams()
-            let res = try await self.cameraCapture.clip(
+            let res = try await cameraCapture.clip(
                 facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
                 durationMs: params.durationMs,
                 includeAudio: params.includeAudio ?? true,
@@ -260,7 +301,7 @@ actor MacNodeRuntime {
                 hasAudio: res.hasAudio))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.list.rawValue:
-            let devices = await self.cameraCapture.listDevices()
+            let devices = await cameraCapture.listDevices()
             let payload = try Self.encodePayload(["devices": devices])
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         default:
@@ -282,7 +323,7 @@ actor MacNodeRuntime {
             OpenClawLocationGetParams()
         let desired = params.desiredAccuracy ??
             (Self.locationPreciseEnabled() ? .precise : .balanced)
-        let services = await self.mainActorServices()
+        let services = await mainActorServices()
         let status = await services.locationAuthorizationStatus()
         let hasPermission = switch mode {
         case .always:
@@ -335,6 +376,62 @@ actor MacNodeRuntime {
         }
     }
 
+    private func handleComputerActInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        guard self.computerControlEnabled() else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(
+                    code: .unavailable,
+                    message: "COMPUTER_DISABLED: enable Computer Control in Settings"))
+        }
+        let params: OpenClawComputerActParams
+        do {
+            params = try Self.decodeParams(OpenClawComputerActParams.self, from: req.paramsJSON)
+        } catch {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: invalid computer.act params")
+        }
+        let releaseGenerationAtStart = self.computerInputReleaseGeneration
+        let services = await mainActorServices()
+        guard self.computerInputReleaseGeneration == releaseGenerationAtStart else {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: computer control lifecycle changed")
+        }
+        try Task.checkCancellation()
+        do {
+            let result = try await services.performComputerAct(
+                params,
+                lifecycleGeneration: releaseGenerationAtStart)
+            let payload = try Self.encodePayload(result)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        } catch let error as ComputerActionService.ComputerActionError {
+            switch error {
+            case .accessibilityNotTrusted:
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "ACCESSIBILITY_REQUIRED: grant Accessibility permission to OpenClaw")
+            case .noDisplays, .invalidScreenIndex, .missingDisplayFrameId, .displayFrameChanged,
+                 .missingCoordinate, .coordinateOutOfBounds, .invalidReferenceWidth, .missingKeys,
+                 .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld:
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: \(error.localizedDescription)")
+            case .eventCreationFailed, .lifecycleChanged:
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "UNAVAILABLE: \(error.localizedDescription)")
+            }
+        }
+    }
+
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
             MacNodeScreenRecordParams()
@@ -344,7 +441,7 @@ actor MacNodeRuntime {
                 code: .invalidRequest,
                 message: "INVALID_REQUEST: screen format must be mp4")
         }
-        let services = await self.mainActorServices()
+        let services = await mainActorServices()
         let res = try await services.recordScreen(
             screenIndex: params.screenIndex,
             durationMs: params.durationMs,
@@ -385,9 +482,14 @@ actor MacNodeRuntime {
         } else {
             params = MacNodeScreenSnapshotParams()
         }
-        let services = await self.mainActorServices()
+        let services = await mainActorServices()
         let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let res: (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+        let res: (
+            data: Data,
+            format: OpenClawScreenSnapshotFormat,
+            width: Int,
+            height: Int,
+            displayFrameId: String)
         do {
             res = try await services.snapshotScreen(
                 screenIndex: params.screenIndex,
@@ -424,6 +526,7 @@ actor MacNodeRuntime {
         struct ScreenSnapshotPayload: Encodable {
             var format: String
             var base64: String
+            var displayFrameId: String
             var width: Int
             var height: Int
             var screenIndex: Int?
@@ -432,6 +535,7 @@ actor MacNodeRuntime {
         let payload = try Self.encodePayload(ScreenSnapshotPayload(
             format: res.format.rawValue,
             base64: res.data.base64EncodedString(),
+            displayFrameId: res.displayFrameId,
             width: res.width,
             height: res.height,
             screenIndex: params.screenIndex,
@@ -447,10 +551,37 @@ actor MacNodeRuntime {
     }
 
     private func mainActorServices() async -> any MacNodeRuntimeMainActorServices {
-        if let cachedMainActorServices { return cachedMainActorServices }
-        let services = await self.makeMainActorServices()
-        self.cachedMainActorServices = services
-        return services
+        if let cachedMainActorServices {
+            return cachedMainActorServices
+        }
+        let task: Task<any MacNodeRuntimeMainActorServices, Never>
+        if let initializationTask = mainActorServicesInitializationTask {
+            task = initializationTask
+        } else {
+            let makeMainActorServices = self.makeMainActorServices
+            let initializationTask = Task {
+                await makeMainActorServices()
+            }
+            self.mainActorServicesInitializationTask = initializationTask
+            task = initializationTask
+        }
+        let services = await task.value
+        if cachedMainActorServices == nil {
+            cachedMainActorServices = services
+            self.mainActorServicesInitializationTask = nil
+        }
+        return cachedMainActorServices ?? services
+    }
+
+    /// Releases any synthetic input the computer.act service is still holding
+    /// (a left_mouse_down without its matching up) on lifecycle transitions:
+    /// node disconnect, node stop, or Computer Control disabled. Uses the cached
+    /// services directly so it never spins up services just to release nothing.
+    func releaseHeldComputerInput() async {
+        self.computerInputReleaseGeneration &+= 1
+        let lifecycleGeneration = self.computerInputReleaseGeneration
+        await self.cachedMainActorServices?.releaseHeldInput(
+            lifecycleGeneration: lifecycleGeneration)
     }
 
     private func handleA2UIReset(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -504,8 +635,10 @@ actor MacNodeRuntime {
     }
 
     private func ensureA2UIHost() async throws {
-        if await self.isA2UIReady() { return }
-        guard let a2uiUrl = await self.resolveA2UIHostUrlWithCapabilityRefresh() else {
+        if await self.isA2UIReady() {
+            return
+        }
+        guard let a2uiUrl = await resolveA2UIHostUrlWithCapabilityRefresh() else {
             throw NSError(domain: "Canvas", code: 30, userInfo: [
                 NSLocalizedDescriptionKey: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
             ])
@@ -514,12 +647,16 @@ actor MacNodeRuntime {
         _ = try await MainActor.run {
             try CanvasManager.shared.show(sessionKey: sessionKey, path: a2uiUrl)
         }
-        if await self.isA2UIReady(poll: true) { return }
-        if let refreshedUrl = await self.resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true) {
+        if await self.isA2UIReady(poll: true) {
+            return
+        }
+        if let refreshedUrl = await resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true) {
             _ = try await MainActor.run {
                 try CanvasManager.shared.show(sessionKey: sessionKey, path: refreshedUrl)
             }
-            if await self.isA2UIReady(poll: true) { return }
+            if await self.isA2UIReady(poll: true) {
+                return
+            }
         }
         throw NSError(domain: "Canvas", code: 31, userInfo: [
             NSLocalizedDescriptionKey: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable",
@@ -539,10 +676,10 @@ actor MacNodeRuntime {
     }
 
     func resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: Bool = false) async -> String? {
-        if !forceRefresh, let current = await self.resolveA2UIHostUrl() {
+        if !forceRefresh, let current = await resolveA2UIHostUrl() {
             return current
         }
-        let refreshedCanvasSurfaceUrl = await self.refreshCanvasSurfaceUrl()
+        let refreshedCanvasSurfaceUrl = await refreshCanvasSurfaceUrl()
         return Self.resolveA2UIHostUrl(from: refreshedCanvasSurfaceUrl)
     }
 
@@ -558,7 +695,9 @@ actor MacNodeRuntime {
                 })()
                 """)
                 let trimmed = ready.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed == "true" { return true }
+                if trimmed == "true" {
+                    return true
+                }
             } catch {
                 // Ignore transient eval failures while the page is loading.
             }
@@ -618,7 +757,7 @@ actor MacNodeRuntime {
                 message: "SYSTEM_RUN_DISABLED: security=deny")
         }
 
-        let approval = await self.resolveSystemRunApproval(
+        let approval = await resolveSystemRunApproval(
             req: req,
             params: params,
             context: ExecRunContext(
@@ -631,10 +770,12 @@ actor MacNodeRuntime {
                 skillAllow: evaluation.skillAllow,
                 sessionKey: sessionKey,
                 runId: runId))
-        if let response = approval.response { return response }
+        if let response = approval.response {
+            return response
+        }
         let approvedByAsk = approval.approvedByAsk
         let persistAllowlist = approval.persistAllowlist
-        self.persistAllowlistPatterns(
+        persistAllowlistPatterns(
             persistAllowlist: persistAllowlist,
             security: evaluation.security,
             agentId: evaluation.agentId,
@@ -655,7 +796,7 @@ actor MacNodeRuntime {
                 message: "SYSTEM_RUN_DENIED: allowlist miss")
         }
 
-        self.recordAllowlistMatches(
+        recordAllowlistMatches(
             security: evaluation.security,
             allowlistSatisfied: evaluation.allowlistSatisfied,
             agentId: evaluation.agentId,
@@ -663,7 +804,7 @@ actor MacNodeRuntime {
             allowlistResolutions: evaluation.allowlistResolutions,
             displayCommand: evaluation.displayCommand)
 
-        if let permissionResponse = await self.validateScreenRecordingIfNeeded(
+        if let permissionResponse = await validateScreenRecordingIfNeeded(
             req: req,
             needsScreenRecording: params.needsScreenRecording,
             sessionKey: sessionKey,
@@ -673,7 +814,7 @@ actor MacNodeRuntime {
             return permissionResponse
         }
 
-        return try await self.executeSystemRun(
+        return try await executeSystemRun(
             req: req,
             params: params,
             command: command,
@@ -890,7 +1031,7 @@ actor MacNodeRuntime {
     }
 
     private func emitExecEvent(_ event: String, payload: ExecEventPayload) async {
-        guard let sender = self.eventSender else { return }
+        guard let sender = eventSender else { return }
         guard let data = try? JSONEncoder().encode(payload),
               let json = String(data: data, encoding: .utf8)
         else {
@@ -1121,13 +1262,19 @@ extension MacNodeRuntime {
         UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
     }
 
+    nonisolated static func computerControlEnabledDefault() -> Bool {
+        UserDefaults.standard.object(forKey: computerControlEnabledKey) as? Bool ?? false
+    }
+
     private nonisolated static func locationMode() -> OpenClawLocationMode {
         let raw = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
         return OpenClawLocationMode(rawValue: raw) ?? .off
     }
 
     private nonisolated static func locationPreciseEnabled() -> Bool {
-        if UserDefaults.standard.object(forKey: locationPreciseKey) == nil { return true }
+        if UserDefaults.standard.object(forKey: locationPreciseKey) == nil {
+            return true
+        }
         return UserDefaults.standard.bool(forKey: locationPreciseKey)
     }
 

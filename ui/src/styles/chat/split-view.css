@@ -32,14 +32,34 @@ openclaw-chat-pane {
   min-height: 0;
 }
 
-.chat-split-view__pane {
+/* One cell = pane header + pane; the header lives in-flow with its pane, so
+   split geometry needs no mirrored toolbar layer. */
+.chat-split-view__cell {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 200px;
   overflow: hidden;
 }
 
-.chat-split-view--narrow .chat-split-view__pane {
+.chat-split-view__cell--active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.chat-split-view__pane {
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view--narrow .chat-split-view__cell {
+  min-height: 0;
+}
+
+/* Narrow mode shows only the active pane; a focus ring is pure noise there. */
+.chat-split-view--narrow .chat-split-view__cell--active {
+  box-shadow: none;
 }
 
 .chat-split-view__drop-indicator {
@@ -109,34 +129,26 @@ openclaw-chat-pane {
 
 .chat-pane__header {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  flex: 0 0 auto;
-  min-width: 0;
   min-height: 36px;
-  padding: 4px 6px 4px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
 }
 
-.chat-pane__header.chat-pane--active {
-  border-top: 2px solid var(--accent);
-  padding-top: 2px;
+.chat-pane__header--active {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.chat-pane__session-label {
+.chat-pane__session-title {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.chat-pane__session-select {
-  width: 100%;
-  min-width: 0;
-  border: 0;
+  overflow: hidden;
   color: var(--text);
-  background: transparent;
-  font: inherit;
   font-size: 12px;
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 
@@ -150,9 +162,38 @@ openclaw-chat-pane {
 .chat-pane__actions .btn--icon,
 .chat-open-split-view.btn--icon {
   width: 28px;
+  /* .btn--icon's min-width: 36px otherwise wins over width and stretches
+     these into 36x28 pills. */
+  min-width: 28px;
   height: 28px;
   min-height: 28px;
   padding: 5px;
+}
+
+.chat-open-split-view {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 12;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* The drop container spans the workspace rail column, so the default 16px
+   inset parks the 28px opener flush against the collapsed 44px rail's left
+   border. Center it in the rail instead ((44 - 28) / 2). Media guard matches
+   the rail's render breakpoint: the collapsed class stays on the workbench
+   while the rail is display:none below 1121px. */
+@media (min-width: 1121px) {
+  .chat-split-view__drop-container:has(
+      .chat-workbench--workspace-collapsed:not(.chat-workbench--dock-bottom)
+    )
+    .chat-open-split-view {
+    right: 8px;
+  }
 }
 
 @media (max-width: 1099px) {

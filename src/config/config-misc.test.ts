@@ -59,6 +59,20 @@ describe("boolean config validation", () => {
   });
 });
 
+describe("agent timeoutSeconds config", () => {
+  it.each([
+    ["unlimited opt-in", 0, true],
+    ["finite", 600, true],
+    ["negative", -1, false],
+    ["fractional", 1.5, false],
+  ])("agents.defaults.timeoutSeconds %s", (_label, timeoutSeconds, ok) => {
+    const result = OpenClawSchema.safeParse({
+      agents: { defaults: { timeoutSeconds } },
+    });
+    expect(result.success).toBe(ok);
+  });
+});
+
 describe("model provider localService config", () => {
   it("accepts standalone timeout overlays for bundled model providers", () => {
     const result = OpenClawSchema.safeParse({
@@ -78,6 +92,7 @@ describe("model provider localService config", () => {
   });
 
   it.each([
+    { provider: "x-ai", name: "xAI alias" },
     { provider: "xiaomi-token-plan", name: "Xiaomi Token Plan" },
     { provider: "tencent-tokenplan", name: "Tencent TokenPlan" },
   ] as const)("accepts standalone timeout overlays for $name", ({ provider }) => {
