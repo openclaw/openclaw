@@ -201,7 +201,17 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
     });
   }
 
-  const firstLineBytes = utf8ByteLength(input.lines[0]);
+  const firstLine = input.lines[0];
+  if (firstLine === undefined) {
+    return buildTruncationResult(input, {
+      content: "",
+      truncated: true,
+      truncatedBy: input.totalLines > input.maxLines ? "lines" : "bytes",
+      outputLines: 0,
+      outputBytes: 0,
+    });
+  }
+  const firstLineBytes = utf8ByteLength(firstLine);
   if (firstLineBytes > input.maxBytes) {
     return buildTruncationResult(input, {
       content: "",

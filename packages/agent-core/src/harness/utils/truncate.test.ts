@@ -3,6 +3,22 @@ import { describe, expect, it } from "vitest";
 import { truncateHead, truncateLine, truncateTail } from "./truncate.js";
 
 describe("truncate utilities", () => {
+  it.each([
+    { options: { maxLines: -1 }, truncatedBy: "lines" as const },
+    { options: { maxBytes: -1 }, truncatedBy: "bytes" as const },
+  ])("handles empty content with a negative $truncatedBy limit", ({ options, truncatedBy }) => {
+    expect(truncateHead("", options)).toMatchObject({
+      content: "",
+      truncated: true,
+      truncatedBy,
+      totalLines: 0,
+      totalBytes: 0,
+      outputLines: 0,
+      outputBytes: 0,
+      firstLineExceedsLimit: false,
+    });
+  });
+
   it("does not count a trailing newline as an extra display line", () => {
     expect(truncateHead("alpha\nbeta\n").totalLines).toBe(2);
     expect(truncateTail("alpha\nbeta\n").totalLines).toBe(2);
