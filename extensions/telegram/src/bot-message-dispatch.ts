@@ -112,6 +112,7 @@ import {
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
+import { materializeTelegramChartFallback } from "./interactive-fallback.js";
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
@@ -247,6 +248,14 @@ type DispatchTelegramMessageParams = {
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
+  /** Fires after recovery-relevant session/run state is durably persisted. */
+  onTurnAdopted?: () => void | Promise<void>;
+  /** Marks a queued follow-up whose adoption will happen at reply-lane admission. */
+  onTurnDeferred?: () => void;
+  /** Releases a deferred turn that completed without ever owning the reply lane. */
+  onTurnAbandoned?: () => void;
+  /** Cancels queued/model work when ingress ownership fails before adoption. */
+  turnAbortSignal?: AbortSignal;
 };
 
 type TelegramDispatchResult = { kind: "completed" } | { kind: "failed-retryable"; error: unknown };
@@ -786,6 +795,10 @@ export const dispatchTelegramMessage = async ({
   opts,
   retryDispatchErrors = false,
   suppressFailureFallback = false,
+  onTurnAdopted,
+  onTurnDeferred,
+  onTurnAbandoned,
+  turnAbortSignal,
 }: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ context });
@@ -870,7 +883,11 @@ export const dispatchTelegramMessage = async ({
   let activeReplyFenceKey = replyFenceKey.activeKey;
   let replyFenceGeneration: number | undefined;
   const replyAbortController = new AbortController();
+  const replyAbortSignal = turnAbortSignal
+    ? AbortSignal.any([replyAbortController.signal, turnAbortSignal])
+    : replyAbortController.signal;
   let replyAbortControllerQueued = false;
+  let queuedTurnAdmitted = false;
   let dispatchWasSuperseded;
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
@@ -887,6 +904,12 @@ export const dispatchTelegramMessage = async ({
       replyAbortControllerQueued ? undefined : replyAbortController,
     );
     replyFenceGeneration = undefined;
+  };
+  const adoptReplyTurn = async () => {
+    await onTurnAdopted?.();
+    // Fence abort authority ends only after durable adoption succeeds. Core
+    // then becomes the sole owner of killing the adopted run.
+    releaseTelegramReplyFenceAbortController(activeReplyFenceKey, replyAbortController);
   };
   // Block mode sizes preview rotation steps from streaming.preview.chunk (same
   // contract as Discord's block chunker). Other modes keep one growing rich
@@ -1506,7 +1529,9 @@ export const dispatchTelegramMessage = async ({
         activeKey: replyFenceKey.activeKey,
         laneKey: scopedReplyFenceLaneKey,
       });
-  if (!isRoomEvent && supersedeReplyFence) {
+  // Ambient room-event work uses a separate fence key. Any non-room-event
+  // inbound may cancel it without owning abort authority over adopted user turns.
+  if (!isRoomEvent) {
     supersedeTelegramReplyFence(replyFenceKey.roomEventKey);
   }
   replyFenceGeneration = beginTelegramReplyFence({
@@ -1731,7 +1756,7 @@ export const dispatchTelegramMessage = async ({
           surface: "telegram",
         }),
       )[0];
-      return normalized;
+      return normalized ? materializeTelegramChartFallback(normalized) : undefined;
     };
     const usesNativeTelegramQuote = (payload: ReplyPayload): boolean => {
       if (replyQuoteText != null) {
@@ -1842,7 +1867,11 @@ export const dispatchTelegramMessage = async ({
           recordOutboundMessageForPromptContext
         )({
           cfg,
-          account: { accountId: route.accountId },
+          account: {
+            accountId: route.accountId,
+            ...(telegramCfg.name !== undefined ? { name: telegramCfg.name } : {}),
+            ...(context.primaryCtx.me ? { bot: context.primaryCtx.me } : {}),
+          },
           chatId: deliveryBaseOptions.chatId,
           message: { message_id: result.delivery.messageId },
           messageId: result.delivery.messageId,
@@ -2613,25 +2642,35 @@ export const dispatchTelegramMessage = async ({
                 replyOptions: {
                   skillFilter,
                   disableBlockStreaming,
-                  abortSignal: replyAbortController.signal,
+                  abortSignal: replyAbortSignal,
+                  onTurnAdopted: adoptReplyTurn,
                   sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
                   queuedDeliveryCorrelations: isRoomEvent
                     ? [{ begin: beginDeliveryCorrelation }]
                     : undefined,
-                  queuedFollowupLifecycle: isRoomEvent
-                    ? {
-                        onEnqueued: () => {
-                          replyAbortControllerQueued = true;
-                        },
-                        onComplete: () => {
-                          replyAbortControllerQueued = false;
-                          releaseTelegramReplyFenceAbortController(
-                            activeReplyFenceKey,
-                            replyAbortController,
-                          );
-                        },
-                      }
-                    : undefined,
+                  queuedFollowupLifecycle:
+                    isRoomEvent || onTurnAdopted || onTurnDeferred || onTurnAbandoned
+                      ? {
+                          onEnqueued: () => {
+                            replyAbortControllerQueued = true;
+                            onTurnDeferred?.();
+                          },
+                          onAdmitted: async () => {
+                            await adoptReplyTurn();
+                            queuedTurnAdmitted = true;
+                          },
+                          onComplete: () => {
+                            replyAbortControllerQueued = false;
+                            releaseTelegramReplyFenceAbortController(
+                              activeReplyFenceKey,
+                              replyAbortController,
+                            );
+                            if (!queuedTurnAdmitted) {
+                              onTurnAbandoned?.();
+                            }
+                          },
+                        }
+                      : undefined,
                   suppressTyping: isRoomEvent,
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream

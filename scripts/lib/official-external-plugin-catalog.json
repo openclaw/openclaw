@@ -123,7 +123,12 @@
           "id": "diffs",
           "label": "Diffs"
         },
+        "catalog": {
+          "featured": true,
+          "order": 40
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/diffs",
           "npmSpec": "@openclaw/diffs",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.30"
@@ -312,7 +317,12 @@
           "id": "lobster",
           "label": "Lobster"
         },
+        "catalog": {
+          "featured": true,
+          "order": 50
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/lobster",
           "npmSpec": "@openclaw/lobster",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.25"
@@ -329,7 +339,12 @@
           "id": "memory-lancedb",
           "label": "Memory LanceDB"
         },
+        "catalog": {
+          "featured": true,
+          "order": 70
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/memory-lancedb",
           "npmSpec": "@openclaw/memory-lancedb",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.31"
@@ -610,6 +625,10 @@
         "plugin": {
           "id": "tokenjuice",
           "label": "Tokenjuice"
+        },
+        "catalog": {
+          "featured": true,
+          "order": 60
         },
         "install": {
           "clawhubSpec": "clawhub:@openclaw/tokenjuice",

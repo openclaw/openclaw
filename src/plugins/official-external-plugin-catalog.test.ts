@@ -132,6 +132,28 @@ describe("official external plugin catalog", () => {
     expect(officialExternalPluginCatalog.entries.length).toBeGreaterThan(0);
   });
 
+  it("curates featured external plugins with ClawHub install alternatives", () => {
+    const featured = [
+      ["diffs", "@openclaw/diffs", 40],
+      ["lobster", "@openclaw/lobster", 50],
+      ["tokenjuice", "@openclaw/tokenjuice", 60],
+      ["memory-lancedb", "@openclaw/memory-lancedb", 70],
+    ] as const;
+
+    for (const [id, npmSpec, order] of featured) {
+      const entry = expectCatalogEntry(id);
+      expect(getOfficialExternalPluginCatalogManifest(entry)?.catalog).toEqual({
+        featured: true,
+        order,
+      });
+      expect(resolveOfficialExternalPluginInstall(entry)).toMatchObject({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+      });
+    }
+  });
+
   it("does not allow malformed feed wrappers to count as feed documents", () => {
     expect(
       isOfficialExternalPluginCatalogFeed({
@@ -2283,6 +2305,8 @@ describe("official external plugin catalog", () => {
     expect(getOfficialExternalPluginCatalogEntry("modelstudio")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("qwen-oauth")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("qwen-portal")).toBe(qwen);
+    expect(getOfficialExternalPluginCatalogEntry("qwen-token-plan")).toBe(qwen);
+    expect(getOfficialExternalPluginCatalogEntry("bailian-token-plan")).toBe(qwen);
   });
 
   it("maps external speech and web-fetch contracts to plugin owners", () => {

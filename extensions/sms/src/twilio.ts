@@ -2,6 +2,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import {
+  readResponseTextPrefix,
+  readResponseWithLimit,
+} from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
@@ -129,28 +133,26 @@ function requestSearch(req: IncomingMessage): string {
   }
 }
 
-function configuredUrlHasQuery(url: string): boolean {
+function stripUrlFragment(url: string): string {
   const hashIndex = url.indexOf("#");
-  const beforeHash = hashIndex === -1 ? url : url.slice(0, hashIndex);
-  return beforeHash.includes("?");
+  return hashIndex === -1 ? url : url.slice(0, hashIndex);
 }
 
 export function resolveTwilioWebhookSignatureUrl(params: {
   req: IncomingMessage;
   publicWebhookUrl: string;
 }): string {
-  if (configuredUrlHasQuery(params.publicWebhookUrl)) {
-    return params.publicWebhookUrl;
+  // Twilio connection overrides live in the fragment but are excluded from its
+  // signature input. Strip without URL reserialization so exact port/path bytes survive.
+  const signatureBaseUrl = stripUrlFragment(params.publicWebhookUrl);
+  if (signatureBaseUrl.includes("?")) {
+    return signatureBaseUrl;
   }
   const search = requestSearch(params.req);
   if (!search) {
-    return params.publicWebhookUrl;
+    return signatureBaseUrl;
   }
-  const hashIndex = params.publicWebhookUrl.indexOf("#");
-  if (hashIndex === -1) {
-    return `${params.publicWebhookUrl}${search}`;
-  }
-  return `${params.publicWebhookUrl.slice(0, hashIndex)}${search}${params.publicWebhookUrl.slice(hashIndex)}`;
+  return `${signatureBaseUrl}${search}`;
 }
 
 export class TwilioSmsApiError extends Error {
@@ -273,54 +275,19 @@ function appendTruncatedResponseSuffix(text: string): string {
 }
 
 async function readTwilioApiResponseText(response: Response): Promise<string> {
-  if (!response.body) {
-    return "";
-  }
-
   const maxBytes = response.ok
     ? TWILIO_API_SUCCESS_BODY_LIMIT_BYTES
     : TWILIO_API_ERROR_BODY_LIMIT_BYTES;
-  const truncateOnLimit = !response.ok;
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let totalBytes = 0;
-  let text = "";
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        return text + decoder.decode();
-      }
-      if (!value?.byteLength) {
-        continue;
-      }
-
-      const remainingBytes = maxBytes - totalBytes;
-      if (value.byteLength > remainingBytes) {
-        const clipped = remainingBytes > 0 ? value.slice(0, remainingBytes) : undefined;
-        if (truncateOnLimit) {
-          if (clipped) {
-            text += decoder.decode(clipped, { stream: true });
-          }
-          await reader.cancel().catch(() => undefined);
-          return appendTruncatedResponseSuffix(text + decoder.decode());
-        }
-        await reader.cancel().catch(() => undefined);
-        throw new Error(
-          `Twilio SMS API response body too large: ${totalBytes + value.byteLength} bytes ` +
-            `(limit: ${maxBytes} bytes)`,
-        );
-      }
-
-      text += decoder.decode(value, { stream: true });
-      totalBytes += value.byteLength;
-    }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {}
+  if (!response.ok) {
+    const prefix = await readResponseTextPrefix(response, maxBytes);
+    return prefix.truncated ? appendTruncatedResponseSuffix(prefix.text) : prefix.text;
   }
+
+  const body = await readResponseWithLimit(response, maxBytes, {
+    onOverflow: ({ size, maxBytes: limit }) =>
+      new Error(`Twilio SMS API response body too large: ${size} bytes (limit: ${limit} bytes)`),
+  });
+  return new TextDecoder().decode(body);
 }
 
 function normalizeRequestHeaders(headers: HeadersInit | undefined): Record<string, string> {

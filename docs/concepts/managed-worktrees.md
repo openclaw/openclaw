@@ -55,6 +55,8 @@ The resulting managed worktree is owned by the session, and every agent run in t
 
 `sessions.create` may include an absolute `cwd` together with `worktree: true` when a task targets a project other than the configured agent workspace. That explicit host path requires `operator.admin`; ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace.
 
+`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. The created worktree is returned in the create result and persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show the checkout and branch. Deleting a session reports a preserved dirty checkout as `worktreePreserved` instead of silently leaving it behind.
+
 ## Snapshots, cleanup, and restore
 
 Removal first creates a synthetic commit containing tracked and non-ignored untracked files, and pins it at `refs/openclaw/snapshots/<id>`. Gitignored files are excluded from the repository object database; files selected by `.worktreeinclude` are copied again during restore. If snapshot creation fails, removal stops. An explicit force delete can continue without a snapshot.
@@ -82,15 +84,16 @@ The Control UI **Worktrees** page under Settings provides the same list, delete,
 
 ## Gateway methods
 
-| Method              | Purpose                                       |
-| ------------------- | --------------------------------------------- |
-| `worktrees.list`    | List active and restorable worktree records.  |
-| `worktrees.create`  | Create or reuse a named managed worktree.     |
-| `worktrees.remove`  | Snapshot and remove a worktree.               |
-| `worktrees.restore` | Restore a removed worktree from its snapshot. |
-| `worktrees.gc`      | Run idle, orphan, and retention cleanup now.  |
+| Method               | Purpose                                                                 |
+| -------------------- | ----------------------------------------------------------------------- |
+| `worktrees.list`     | List active and restorable worktree records.                            |
+| `worktrees.branches` | List local and remote branches of a repository for base-ref pickers.    |
+| `worktrees.create`   | Create or reuse a named managed worktree.                               |
+| `worktrees.remove`   | Snapshot and remove a worktree. Forced removals report `snapshotError`. |
+| `worktrees.restore`  | Restore a removed worktree from its snapshot.                           |
+| `worktrees.gc`       | Run idle, orphan, and retention cleanup now.                            |
 
-`worktrees.list` requires `operator.read`. Mutating methods require `operator.admin`.
+`worktrees.list` requires `operator.read`, and the mutating methods require `operator.admin`. `worktrees.branches` needs `operator.write` for configured agent workspaces, while any other host path requires `operator.admin` (matching the `sessions.create` cwd bar). It reads existing refs only and never fetches, and remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref.
 
 ## Workboard workspaces
 
