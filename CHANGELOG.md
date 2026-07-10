@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **OpenCode Zen model catalog:** refresh the provider-owned static seed for Claude Sonnet 5, Grok 4.5, Hy3 Free, Kimi K2.7 Code, and MiniMax M3 with verified routing, pricing, limits, and input capabilities, remove retired free-tier rows, and expose the same catalog through unauthenticated model listing. (#103184)
+- **xAI model compatibility:** publish canonical Grok 4.20 model ids and 1M context limits while preserving moving aliases, remove stale generated catalog rows and repair tool/image defaults, move server-tool defaults to Grok 4.3, align per-model reasoning controls, preserve supported tool-schema bounds, and disable Responses storage for dedicated xAI tools.
 - **Gateway startup migrations:** release the shared migration lease before exiting when the selected config changes during startup, allowing immediate retries instead of blocking readiness until the five-minute lease expires. (#103145)
 - **Apple timeout recovery:** return promptly from shared operation deadlines and caller cancellation even when platform work ignores cancellation, while isolating late Gateway handshakes and cleaning up location and permission waiters. (#103066) Thanks @NianJiuZst.
 - **CLI plugin listing:** skip state-migration runtime loading when no legacy inputs exist, reducing packaged cold-start memory while preserving migrations for legacy plugin indexes and configured session stores.
