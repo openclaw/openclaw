@@ -460,9 +460,9 @@ final class MacNodeModeCoordinator: NSObject {
 
                 try await self.session.connect(
                     url: config.url,
-                    token: config.token,
-                    bootstrapToken: nil,
-                    password: config.password,
+                    credentials: GatewayNodeSessionCredentials(
+                        token: config.token,
+                        password: config.password),
                     connectOptions: connectOptions,
                     sessionBox: sessionBox,
                     onConnected: { [weak self] in

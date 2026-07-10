@@ -384,8 +384,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.canGoBackObservation = self.webView.observe(\.canGoBack, options: [
             .initial,
             .new,
-        ]) { [weak self] webView, _ in
-            let canGoBack = webView.canGoBack
+        ]) { [weak self] _, change in
+            guard let canGoBack = change.newValue else { return }
             Task { @MainActor in
                 self?.backButton?.isEnabled = canGoBack
             }
@@ -393,8 +393,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.canGoForwardObservation = self.webView.observe(\.canGoForward, options: [
             .initial,
             .new,
-        ]) { [weak self] webView, _ in
-            let canGoForward = webView.canGoForward
+        ]) { [weak self] _, change in
+            guard let canGoForward = change.newValue else { return }
             Task { @MainActor in
                 self?.forwardButton?.isEnabled = canGoForward
             }
@@ -798,7 +798,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return
         }
         dashboardWindowLogger.error(
-            "dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            """
+            dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
+            error=\(error.localizedDescription, privacy: .public)
+            """)
         let html = Self.failureHTML(
             title: "Dashboard unavailable",
             message: error.localizedDescription,

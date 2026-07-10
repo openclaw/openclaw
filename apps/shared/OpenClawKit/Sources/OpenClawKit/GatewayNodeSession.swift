@@ -56,6 +56,22 @@ public enum GatewayNodeSessionRequestError: Error, Sendable {
     case routeChangedBeforeDispatch
 }
 
+public struct GatewayNodeSessionCredentials: Sendable, Equatable {
+    public let token: String?
+    public let bootstrapToken: String?
+    public let password: String?
+
+    public init(
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil)
+    {
+        self.token = token
+        self.bootstrapToken = bootstrapToken
+        self.password = password
+    }
+}
+
 public actor GatewayNodeSession {
     @TaskLocal private static var executingLifecycleCallbackID: UUID?
 
@@ -97,9 +113,7 @@ public actor GatewayNodeSession {
     private static let computerInvokeReceiptLimit = 256
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
-    private var activeToken: String?
-    private var activeBootstrapToken: String?
-    private var activePassword: String?
+    private var activeCredentials: GatewayNodeSessionCredentials?
     private var activeConnectOptionsKey: String?
     private var activeSessionIdentity: ObjectIdentifier?
     private var channelGeneration: UInt64 = 0
@@ -268,9 +282,7 @@ public actor GatewayNodeSession {
 
     public func connect(
         url: URL,
-        token: String?,
-        bootstrapToken: String?,
-        password: String?,
+        credentials: GatewayNodeSessionCredentials,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
         extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
@@ -282,9 +294,7 @@ public actor GatewayNodeSession {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
         let nextSessionIdentity = sessionBox.map { ObjectIdentifier($0.session) }
         let shouldReconnect = self.activeURL != url ||
-            self.activeToken != token ||
-            self.activeBootstrapToken != bootstrapToken ||
-            self.activePassword != password ||
+            self.activeCredentials != credentials ||
             self.activeConnectOptionsKey != nextOptionsKey ||
             self.activeSessionIdentity != nextSessionIdentity ||
             self.channel == nil
@@ -322,9 +332,9 @@ public actor GatewayNodeSession {
             guard self.channelGeneration == channelGeneration else { throw CancellationError() }
             let channel = GatewayChannelActor(
                 url: url,
-                token: token,
-                bootstrapToken: bootstrapToken,
-                password: password,
+                token: credentials.token,
+                bootstrapToken: credentials.bootstrapToken,
+                password: credentials.password,
                 session: sessionBox,
                 pushHandler: { [weak self] push, socketGeneration in
                     await self?.handlePush(
@@ -350,9 +360,7 @@ public actor GatewayNodeSession {
             self.onInvoke = onInvoke
             self.onRouteInvalidated = onRouteInvalidated
             self.activeURL = url
-            self.activeToken = token
-            self.activeBootstrapToken = bootstrapToken
-            self.activePassword = password
+            self.activeCredentials = credentials
             self.activeConnectOptionsKey = nextOptionsKey
             self.activeSessionIdentity = nextSessionIdentity
         } else {
@@ -392,6 +400,33 @@ public actor GatewayNodeSession {
         }
     }
 
+    /// Keeps the flat overload source-compatible while credentials remain one reconnect identity.
+    public func connect(
+        url: URL,
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil,
+        connectOptions: GatewayConnectOptions,
+        sessionBox: WebSocketSessionBox?,
+        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
+        onConnected: @escaping @Sendable () async -> Void,
+        onDisconnected: @escaping @Sendable (String) async -> Void,
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
+    {
+        try await self.connect(
+            url: url,
+            credentials: GatewayNodeSessionCredentials(
+                token: token,
+                bootstrapToken: bootstrapToken,
+                password: password),
+            connectOptions: connectOptions,
+            sessionBox: sessionBox,
+            extraHeadersProvider: extraHeadersProvider,
+            onConnected: onConnected,
+            onDisconnected: onDisconnected,
+            onInvoke: onInvoke)
+    }
+
     public func disconnect() async {
         let invalidatedAdmissionGeneration = self.admissionGeneration
         self.channelGeneration &+= 1
@@ -417,9 +452,7 @@ public actor GatewayNodeSession {
 
     private func clearActiveRoute() {
         self.activeURL = nil
-        self.activeToken = nil
-        self.activeBootstrapToken = nil
-        self.activePassword = nil
+        self.activeCredentials = nil
         self.activeConnectOptionsKey = nil
         self.activeSessionIdentity = nil
         self.connectOptions = nil
@@ -818,7 +851,11 @@ public actor GatewayNodeSession {
             let request = try decodeInvokeRequest(from: payload)
             let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
             self.logger.info(
-                "node invoke request decoded id=\(request.id, privacy: .public) command=\(request.command, privacy: .public) timeoutMs=\(timeoutLabel, privacy: .public)")
+                """
+                node invoke request decoded id=\(request.id, privacy: .public) \
+                command=\(request.command, privacy: .public) \
+                timeoutMs=\(timeoutLabel, privacy: .public)
+                """)
             guard let onInvoke else { return }
             let req = BridgeInvokeRequest(
                 id: request.id,
@@ -1276,7 +1313,10 @@ public actor GatewayNodeSession {
                 ifCurrentConnectionGeneration: socketGeneration)
         } catch {
             self.logger.error(
-                "node invoke result failed id=\(request.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                """
+                node invoke result failed id=\(request.id, privacy: .public) \
+                error=\(error.localizedDescription, privacy: .public)
+                """)
         }
     }
 

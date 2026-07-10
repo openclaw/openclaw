@@ -234,8 +234,12 @@ struct ChatContextUsageIndicator: View {
 
     private var tint: Color {
         guard let percent = usage.percentUsed else { return .secondary }
-        if percent >= 90 { return Color(nsColor: .systemRed) }
-        if percent >= 75 { return Color(nsColor: .systemOrange) }
+        if percent >= 90 {
+            return Color(nsColor: .systemRed)
+        }
+        if percent >= 75 {
+            return Color(nsColor: .systemOrange)
+        }
         return Color(nsColor: .systemGreen)
     }
 

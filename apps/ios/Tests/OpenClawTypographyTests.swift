@@ -150,9 +150,13 @@ struct OpenClawTypographyTests {
         let onboardingSteps = try String(
             contentsOf: Self.sourceURL("Onboarding/OnboardingWizardSteps.swift"),
             encoding: .utf8)
-        let onboardingWizard = try String(
-            contentsOf: Self.sourceURL("Onboarding/OnboardingWizardView.swift"),
-            encoding: .utf8)
+        let onboardingWizard = try [
+            "Onboarding/OnboardingWizardView.swift",
+            "Onboarding/OnboardingWizardConnectionSections.swift",
+            "Onboarding/OnboardingWizardTypes.swift",
+        ].map { path in
+            try String(contentsOf: Self.sourceURL(path), encoding: .utf8)
+        }.joined(separator: "\n")
         let settingsSections = try String(
             contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"),
             encoding: .utf8)
