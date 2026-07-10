@@ -232,6 +232,9 @@ function resolveOriginThreadIdForPayload(params: {
   // An explicit null means the provider transports its conversation thread
   // through replyToId. Undefined reply ids remain native message references.
   if (transport?.threadId === null) {
+    if (params.provider === "telegram" && params.replyDelivery?.chatType === "direct") {
+      return originThreadId;
+    }
     return normalizeThreadIdForComparison(transport.replyToId);
   }
   return originThreadId;

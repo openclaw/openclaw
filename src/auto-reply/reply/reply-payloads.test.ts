@@ -1,8 +1,14 @@
 // Tests reply payload helper behavior and delivery metadata.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelThreadingAdapter } from "../../channels/plugins/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { getMatchingMessagingToolReplyTargets } from "./reply-payloads-dedupe.js";
 import {
   filterMessagingToolMediaDuplicates,
   resolveMessagingToolPayloadDedupe,
@@ -128,6 +134,11 @@ describe("filterMessagingToolMediaDuplicates", () => {
 });
 
 describe("shouldDedupeMessagingToolRepliesForRoute", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
   const installTelegramSuppressionRegistry = () => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(
@@ -142,6 +153,38 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
               targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
             },
           }),
+        },
+      ]),
+    );
+  };
+
+  const installTelegramThreadingRegistry = () => {
+    const telegramThreading: ChannelThreadingAdapter = {
+      resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => {
+        const normalizedThreadId =
+          threadId != null && threadId !== "" ? String(threadId) : undefined;
+        if (replyDelivery?.chatType === "direct") {
+          return {
+            replyToId: replyToId ?? null,
+            threadId: null,
+          };
+        }
+        return {
+          replyToId: replyToId ?? null,
+          threadId: normalizedThreadId ?? null,
+        };
+      },
+    };
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram-threading-plugin",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            threading: telegramThreading,
+          },
         },
       ]),
     );
@@ -275,6 +318,49 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
         ],
       }),
     ).toBe(true);
+  });
+
+  it("does not treat Telegram DM replyToId as originatingThreadId for dedupe", () => {
+    installTelegramThreadingRegistry();
+
+    expect(
+      getMatchingMessagingToolReplyTargets({
+        config: {} as never,
+        messageProvider: "telegram",
+        originatingTo: "123",
+        replyToId: "456",
+        replyDelivery: {
+          chatType: "direct",
+          replyToMode: "all",
+        },
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "123" },
+          { tool: "message", provider: "telegram", to: "123", threadId: "456" },
+        ],
+      }),
+    ).toEqual([{ tool: "message", provider: "telegram", to: "123" }]);
+  });
+
+  it("preserves explicit Telegram thread ids for dedupe matching", () => {
+    installTelegramThreadingRegistry();
+
+    expect(
+      getMatchingMessagingToolReplyTargets({
+        config: {} as never,
+        messageProvider: "telegram",
+        originatingTo: "-100123",
+        originatingThreadId: "77",
+        replyToId: "456",
+        replyDelivery: {
+          chatType: "channel",
+          replyToMode: "all",
+        },
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "-100123" },
+          { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
+        ],
+      }),
+    ).toEqual([{ tool: "message", provider: "telegram", to: "-100123", threadId: "77" }]);
   });
 });
 
