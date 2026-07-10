@@ -17,6 +17,7 @@ export type ClawsAddOptions = {
 };
 
 export type ClawsStatusOptions = { json?: boolean };
+export type ClawsUpdateOptions = { from: string; dryRun?: boolean; json?: boolean };
 export type ClawsRemoveOptions = {
   dryRun?: boolean;
   yes?: boolean;
@@ -29,7 +30,7 @@ export function registerClawsCli(program: Command) {
   if (!isExperimentalClawsEnabled()) {
     return;
   }
-  const claws = program.command("claws").description("Inspect and add experimental OpenClaw Claws");
+  const claws = program.command("claws").description("Manage experimental OpenClaw Claws");
 
   claws
     .command("inspect")
@@ -64,6 +65,18 @@ export function registerClawsCli(program: Command) {
     .action(async (target: string | undefined, opts: ClawsStatusOptions) => {
       const { runClawsStatusCommand } = await import("./claws-cli.runtime.js");
       await runClawsStatusCommand(target, opts);
+    });
+
+  claws
+    .command("update")
+    .description("Plan changes to one installed Claw agent")
+    .argument("<claw-or-agent>", "Installed package name or final agent id")
+    .requiredOption("--from <source>", "Target Claw package directory or grouped manifest")
+    .option("--dry-run", "Preview update actions without mutating state", false)
+    .option("--json", "Print JSON", false)
+    .action(async (target: string, opts: ClawsUpdateOptions) => {
+      const { runClawsUpdateCommand } = await import("./claws-cli.runtime.js");
+      await runClawsUpdateCommand(target, opts);
     });
 
   claws

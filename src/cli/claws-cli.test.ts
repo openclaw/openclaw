@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => {
     readClawStatus: vi.fn(),
     buildClawRemovePlan: vi.fn(),
     applyClawRemovePlan: vi.fn(),
+    buildClawUpdatePlan: vi.fn(),
     exportClawAgent: vi.fn(),
   };
 });
@@ -70,6 +71,11 @@ vi.mock("../claws/lifecycle-state.js", async () => ({
 vi.mock("../claws/export.js", async () => ({
   ...(await vi.importActual<typeof import("../claws/export.js")>("../claws/export.js")),
   exportClawAgent: mocks.exportClawAgent,
+}));
+
+vi.mock("../claws/update-plan.js", async () => ({
+  ...(await vi.importActual<typeof import("../claws/update-plan.js")>("../claws/update-plan.js")),
+  buildClawUpdatePlan: mocks.buildClawUpdatePlan,
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
@@ -203,6 +209,29 @@ describe("claws cli", () => {
       cronJobs: [],
       packageRefsReleased: 1,
     });
+    mocks.buildClawUpdatePlan.mockReset();
+    mocks.buildClawUpdatePlan.mockResolvedValue({
+      schemaVersion: "openclaw.clawUpdatePlan.v1",
+      stability: "experimental",
+      dryRun: true,
+      mutationAllowed: false,
+      found: true,
+      agentId: "demo-agent",
+      currentClaw: { name: "@acme/demo-agent", version: "1.0.0", integrity: "sha256:old" },
+      targetClaw: { name: "@acme/demo-agent", version: "1.2.3", integrity: "sha256:new" },
+      summary: {
+        totalActions: 1,
+        added: 0,
+        changed: 1,
+        removed: 0,
+        unchanged: 0,
+        manual: 0,
+        blocked: 0,
+      },
+      actions: [],
+      blockers: [],
+      diagnostics: [],
+    });
     mocks.exportClawAgent.mockReset();
     mocks.exportClawAgent.mockResolvedValue({
       schemaVersion: "openclaw.clawExportResult.v1",
@@ -243,6 +272,7 @@ describe("claws cli", () => {
       "inspect",
       "add",
       "status",
+      "update",
       "remove",
       "export",
     ]);
@@ -471,6 +501,42 @@ describe("claws cli", () => {
       schemaVersion: "openclaw.clawRemovePlan.v1",
       mutationAllowed: false,
     });
+  });
+
+  it("prints a read-only grouped update plan", async () => {
+    const { root } = await writePackage();
+
+    await runCli(["claws", "update", "demo-agent", "--from", root, "--dry-run", "--json"]);
+
+    expect(mocks.buildClawUpdatePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "demo-agent",
+        targetManifest: expect.objectContaining({
+          agent: { id: "demo-agent", name: "Demo Agent" },
+        }),
+        targetSource: expect.objectContaining({ name: "@acme/demo-agent", version: "1.2.3" }),
+        config: {},
+      }),
+    );
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawUpdatePlan.v1",
+      dryRun: true,
+      mutationAllowed: false,
+      agentId: "demo-agent",
+    });
+  });
+
+  it("fails closed when update is invoked without dry-run", async () => {
+    const { root } = await writePackage();
+
+    await runCli(["claws", "update", "demo-agent", "--from", root, "--json"]);
+
+    expect(mocks.buildClawUpdatePlan).not.toHaveBeenCalled();
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawUpdatePlan.v1",
+      error: { code: "update_preview_required" },
+    });
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("applies remove only after explicit consent", async () => {

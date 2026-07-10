@@ -31,6 +31,11 @@ import {
   type ClawAddPlan,
 } from "../claws/types.js";
 import { agentsDeleteCommand } from "../commands/agents.commands.delete.js";
+import {
+  buildClawUpdatePlan,
+  CLAW_UPDATE_PLAN_SCHEMA_VERSION,
+  type ClawUpdatePlan,
+} from "../claws/update-plan.js";
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -51,6 +56,7 @@ import type {
   ClawsInspectOptions,
   ClawsRemoveOptions,
   ClawsStatusOptions,
+  ClawsUpdateOptions,
 } from "./claws-cli.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -379,6 +385,79 @@ export async function runClawsStatusCommand(
     }
   }
   if (target && status.records.length === 0) {
+    runtime.exit(1);
+  }
+}
+
+function logClawUpdatePlanSummary(plan: ClawUpdatePlan, runtime: RuntimeEnv): void {
+  runtime.log(`Agent: ${plan.agentId}`);
+  runtime.log(`Update actions: ${plan.summary.totalActions}`);
+  runtime.log(
+    `Add: ${plan.summary.added}; change: ${plan.summary.changed}; remove: ${plan.summary.removed}; unchanged: ${plan.summary.unchanged}; manual: ${plan.summary.manual}`,
+  );
+  if (plan.blockers.length > 0) {
+    runtime.error(formatDiagnostics(plan.blockers));
+  }
+}
+
+export async function runClawsUpdateCommand(
+  target: string,
+  opts: ClawsUpdateOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
+  assertExperimentalClawsEnabled();
+  if (!opts.dryRun) {
+    const message =
+      "Claw update is read-only in this implementation slice; pass --dry-run to preview changes.";
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        schemaVersion: CLAW_UPDATE_PLAN_SCHEMA_VERSION,
+        stability: CLAW_OUTPUT_STABILITY,
+        ok: false,
+        error: { code: "update_preview_required", message },
+      });
+    } else {
+      runtime.error(message);
+    }
+    runtime.exit(1);
+    return;
+  }
+
+  const loaded = await readClawManifestFile(opts.from);
+  if (!loaded.ok) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        schemaVersion: CLAW_UPDATE_PLAN_SCHEMA_VERSION,
+        stability: CLAW_OUTPUT_STABILITY,
+        dryRun: true,
+        mutationAllowed: false,
+        valid: false,
+        diagnostics: loaded.diagnostics,
+      });
+    } else {
+      runtime.error(formatDiagnostics(loaded.diagnostics));
+    }
+    runtime.exit(1);
+    return;
+  }
+
+  const plan = await buildClawUpdatePlan({
+    agentId: target,
+    targetManifest: loaded.manifest,
+    targetSource: loaded.source,
+    config: loadConfig(),
+    diagnostics: loaded.diagnostics,
+  });
+  if (opts.json) {
+    writeRuntimeJson(runtime, plan);
+  } else {
+    logExperimentalWarning(runtime);
+    runtime.log(
+      `Claw update plan: ${plan.currentClaw?.name ?? target} ${plan.currentClaw?.version ?? "unknown"} -> ${plan.targetClaw?.version ?? "unknown"}`,
+    );
+    logClawUpdatePlanSummary(plan, runtime);
+  }
+  if (plan.blockers.length > 0) {
     runtime.exit(1);
   }
 }
