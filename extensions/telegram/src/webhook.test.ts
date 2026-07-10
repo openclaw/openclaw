@@ -461,7 +461,11 @@ function webhookUrl(port: number, webhookPath: string): string {
 
 async function withStartedWebhook<T>(
   options: StartWebhookOptions,
-  run: (ctx: { server: StartedWebhook["server"]; port: number }) => Promise<T>,
+  run: (ctx: {
+    server: StartedWebhook["server"];
+    port: number;
+    abortSignal: AbortSignal;
+  }) => Promise<T>,
 ): Promise<T> {
   const abort = new AbortController();
   const started = await startTelegramWebhook({
@@ -472,7 +476,11 @@ async function withStartedWebhook<T>(
     ...options,
   });
   try {
-    return await run({ server: started.server, port: getServerPort(started.server) });
+    return await run({
+      server: started.server,
+      port: getServerPort(started.server),
+      abortSignal: abort.signal,
+    });
   } finally {
     await started.stop();
     abort.abort();
@@ -526,7 +534,7 @@ async function runNearLimitPayloadTestAndExpectUpdate(
 }
 
 describe("startTelegramWebhook", () => {
-  it("starts server, registers webhook, and serves health", async () => {
+  it("starts server, wires shutdown into media fetches, registers webhook, and serves health", async () => {
     initSpy.mockClear();
     createTelegramBotSpy.mockClear();
     const runtimeLog = vi.fn();
@@ -540,7 +548,7 @@ describe("startTelegramWebhook", () => {
         runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
         setStatus,
       },
-      async ({ port }) => {
+      async ({ port, abortSignal }) => {
         const botParams = requireRecord(
           requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0],
           "createTelegramBot params",
@@ -548,6 +556,7 @@ describe("startTelegramWebhook", () => {
         expect(botParams.accountId).toBe("opie");
         expect(requireRecord(botParams.config, "telegram config").bindings).toEqual([]);
         expect(botParams.telegramTransport).toBeDefined();
+        expect(botParams.fetchAbortSignal).toBe(abortSignal);
         const health = await fetch(`http://127.0.0.1:${port}/healthz`);
         expect(health.status).toBe(200);
         expect(initSpy).toHaveBeenCalledTimes(1);

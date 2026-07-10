@@ -704,6 +704,7 @@ export async function startTelegramWebhook(opts: {
     token: opts.token,
     runtime,
     proxyFetch: opts.fetch,
+    fetchAbortSignal: opts.abortSignal,
     config: opts.config,
     accountId: opts.accountId,
     telegramTransport,
