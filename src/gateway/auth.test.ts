@@ -305,6 +305,48 @@ describe("gateway auth", () => {
     expect(res.method).toBe("none");
   });
 
+  it("rejects non-loopback HTTP request when auth mode is none", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: false },
+      connectAuth: null,
+      req: {
+        socket: { remoteAddress: "192.168.1.100" },
+        headers: { host: "gateway.lan" },
+      } as never,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("auth_none_requires_loopback");
+  });
+
+  it("rejects forwarded-header request when auth mode is none", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: false },
+      connectAuth: null,
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.lan",
+          "x-forwarded-for": "10.0.0.1",
+        },
+      } as never,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("auth_none_requires_loopback");
+  });
+
+  it("allows loopback HTTP request when auth mode is none", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: false },
+      connectAuth: null,
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { host: "localhost" },
+      } as never,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
+  });
+
   it("reports missing and mismatched password reasons", async () => {
     const missing = await authorizeGatewayConnect({
       auth: { mode: "password", password: "secret", allowTailscale: false },
