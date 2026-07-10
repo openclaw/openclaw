@@ -1535,8 +1535,20 @@ class ChatController internal constructor(
     // Claim the row before sending: 0 updated rows means it was deleted since the load, and a
     // deleted command must never be sent. Continue (like an acknowledged failure) lets the
     // flush advance to younger rows without replaying this one.
-    val claimed = runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Sending, item.retryCount, item.lastError) }.getOrDefault(0)
+    val claimed =
+      try {
+        outbox.updateStatus(item.id, ChatOutboxStatus.Sending, item.retryCount, item.lastError)
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        null
+      }
     publishOutbox()
+    if (claimed == null) {
+      // Never bypass an older row when its claim could not be made durable.
+      _healthOk.value = false
+      return OutboxSendOutcome.Stop
+    }
     if (claimed == 0) return OutboxSendOutcome.Continue
     return when (val result = attemptOutboxSend(item, flushScope.gatewayId)) {
       OutboxSendResult.Accepted -> {

@@ -35,6 +35,7 @@ class ChatControllerOutboxTest {
     var recoveryGate: CompletableDeferred<Unit>? = null
     var recoveryFailure: Throwable? = null
     var failedStatusUpdateFailure: Throwable? = null
+    var sendingStatusUpdateFailure: Throwable? = null
     private var nextCreatedAt = 0L
 
     fun seed(
@@ -81,6 +82,7 @@ class ChatControllerOutboxTest {
       lastError: String?,
     ): Int {
       if (status == ChatOutboxStatus.Failed) failedStatusUpdateFailure?.let { throw it }
+      if (status == ChatOutboxStatus.Sending) sendingStatusUpdateFailure?.let { throw it }
       val current = rows[id] ?: return 0
       rows[id] = current.copy(status = status, retryCount = retryCount, lastError = lastError)
       return 1
@@ -565,6 +567,45 @@ class ChatControllerOutboxTest {
       assertEquals("ambiguous", recovered.text)
       assertEquals(ChatOutboxStatus.Failed, recovered.status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, recovered.lastError)
+    }
+
+  @Test
+  fun failedClaimPersistenceStopsBeforeDispatch() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      chat.sendMessageAwaitAcceptance(
+        message = "older",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
+      chat.sendMessageAwaitAcceptance(
+        message = "younger",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
+
+      outbox.sendingStatusUpdateFailure = IllegalStateException("storage unavailable")
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertFalse(chat.healthOk.value)
+      assertEquals(
+        listOf(ChatOutboxStatus.Queued, ChatOutboxStatus.Queued),
+        outbox.rows.values.map { it.status },
+      )
+
+      outbox.sendingStatusUpdateFailure = null
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("older", "younger"), gateway.sentMessages)
+      assertTrue(chat.outboxItems.value.isEmpty())
     }
 
   @Test
