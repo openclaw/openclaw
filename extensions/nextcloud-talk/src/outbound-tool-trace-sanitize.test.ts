@@ -5,8 +5,7 @@ import { describe, expect, it } from "vitest";
 import { nextcloudTalkPlugin } from "./channel.js";
 
 function sanitizeOutboundText(text: string): string {
-  const base = nextcloudTalkPlugin.outbound?.base;
-  const sanitizeText = base?.sanitizeText;
+  const sanitizeText = nextcloudTalkPlugin.outbound?.sanitizeText;
   if (!sanitizeText) {
     throw new Error("Expected Nextcloud Talk outbound sanitizeText hook");
   }
