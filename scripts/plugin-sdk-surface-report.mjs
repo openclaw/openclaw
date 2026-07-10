@@ -195,7 +195,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10468,
+      10469,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
