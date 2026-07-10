@@ -1386,7 +1386,7 @@ export async function resetSessionEntryLifecycle(params: {
       });
       if (previousSessionId && previousSessionId !== nextEntry.sessionId) {
         const { reassignSessionTrajectoryPathOwner } = await loadTrajectoryCleanupRuntime();
-        reassignSessionTrajectoryPathOwner({
+        await reassignSessionTrajectoryPathOwner({
           previousSessionId,
           previousSessionFile,
           nextSessionId: nextEntry.sessionId,

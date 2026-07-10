@@ -10,8 +10,8 @@ import {
   safeTrajectorySessionFileName,
 } from "./paths.js";
 import {
-  bumpTrajectoryPathGeneration,
   canonicalizeTrajectoryPath as canonicalizePathForComparison,
+  claimTrajectoryPathIncarnation,
   reassignTrajectoryPathOwner,
   withTrajectoryPathLock,
 } from "./writer-lifecycle.js";
@@ -217,10 +217,12 @@ export async function removeSessionTrajectoryArtifacts(params: {
     const deleted = await withTrajectoryPathLock(canonicalRuntimePath, async () => {
       // Retire before unlinking, in the same locked turn: a writer's flush
       // turn queued behind this one must observe "retired" and no-op instead
-      // of recreating the file we are about to remove (F1/F2/F5).
-      bumpTrajectoryPathGeneration(canonicalRuntimePath, {
-        retire: true,
+      // of recreating the file we are about to remove (F1/F2/F5). Acquisition
+      // shares this same lock (writer-lifecycle.ts), so no concurrent claim
+      // can slip in between the retire and the unlink either (P1-A).
+      claimTrajectoryPathIncarnation(canonicalRuntimePath, {
         ownerSessionId: params.sessionId,
+        retired: true,
       });
       return await removeRegularFile(runtimePath, "runtime");
     });
@@ -245,12 +247,12 @@ export async function removeSessionTrajectoryArtifacts(params: {
  * in-flight writer for it remain valid, only the logical owner changes
  * (resetSessionEntryLifecycle's "reused transcript path" case, §3.6).
  */
-export function reassignSessionTrajectoryPathOwner(params: {
+export async function reassignSessionTrajectoryPathOwner(params: {
   previousSessionId: string;
   previousSessionFile?: string;
   nextSessionId: string;
   nextSessionFile: string;
-}): void {
+}): Promise<void> {
   const previousCandidatePath = resolveTrajectoryFilePath({
     sessionFile: params.previousSessionFile,
     sessionId: params.previousSessionId,
@@ -266,7 +268,7 @@ export function reassignSessionTrajectoryPathOwner(params: {
     // recorder creation claims its path fresh.
     return;
   }
-  reassignTrajectoryPathOwner(previousCanonicalPath, {
+  await reassignTrajectoryPathOwner(previousCanonicalPath, {
     from: params.previousSessionId,
     to: params.nextSessionId,
   });

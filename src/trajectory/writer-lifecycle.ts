@@ -1,7 +1,8 @@
-// Trajectory writer lifecycle owns per-canonical-path generation/ownership so
-// flush/rename (runtime.ts) and delete/retire (cleanup.ts) serialize through
-// one registry instead of three uncoordinated primitives (writers-map
-// eviction, the old windowFlushes queue, and delete's raw fs.rm).
+// Trajectory writer lifecycle owns per-canonical-path incarnation/ownership so
+// acquisition (runtime.ts), flush/rename (runtime.ts), and delete/retire
+// (cleanup.ts) all serialize through one registry and one lock instead of
+// racing through independent primitives (writers-map eviction, the old
+// windowFlushes queue, and delete's raw fs.rm).
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,7 +10,11 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 type TrajectoryPathEntry = {
-  generation: number;
+  // Process-unique, monotonically increasing, never reused — including across
+  // a reap of this same canonical path. A per-path counter that restarts at 1
+  // after reap would let a long-held stale writer from a fully retired-and-
+  // reaped epoch validate against a brand new owner's claim (P1-B).
+  incarnation: number;
   ownerSessionId: string;
   retired: boolean;
   retiredAtMs?: number;
@@ -21,6 +26,10 @@ const TRAJECTORY_REGISTRY_MAX_ENTRIES = 10_000;
 const log = createSubsystemLogger("trajectory/writer-lifecycle");
 const registry = new Map<string, TrajectoryPathEntry>();
 const pathQueue = new KeyedAsyncQueue();
+
+// Never reset (including by the test-clear helper below): its only job is to
+// guarantee no two claims, for any path, at any time, ever collide.
+let nextIncarnation = 1;
 
 /** Canonical registry key: resolved + best-effort realpath'd, shared with cleanup.ts. */
 export function canonicalizeTrajectoryPath(filePath: string): string {
@@ -40,58 +49,19 @@ function disambiguateTrajectoryCandidatePath(candidatePath: string, sessionId: s
 }
 
 /**
- * Resolves a candidate path to its registered filePath/generation, disambiguating a
- * sanitized-name collision against a different live/retired owner. Synchronous and
- * non-yielding by design: a claim can never interleave with a concurrent retirement
- * of the same path, since neither touches the registry across an `await` boundary.
- */
-export function acquireTrajectoryWriterLease(params: {
-  sessionId: string;
-  candidatePath: string;
-}): { filePath: string; generation: number } {
-  let candidatePath = params.candidatePath;
-  for (;;) {
-    const canonicalPath = canonicalizeTrajectoryPath(candidatePath);
-    const existing = registry.get(canonicalPath);
-    if (!existing) {
-      registry.set(canonicalPath, {
-        generation: 1,
-        ownerSessionId: params.sessionId,
-        retired: false,
-      });
-      return { filePath: candidatePath, generation: 1 };
-    }
-    if (existing.ownerSessionId === params.sessionId) {
-      if (!existing.retired) {
-        return { filePath: candidatePath, generation: existing.generation };
-      }
-      const generation = existing.generation + 1;
-      registry.set(canonicalPath, {
-        generation,
-        ownerSessionId: params.sessionId,
-        retired: false,
-      });
-      return { filePath: candidatePath, generation };
-    }
-    // Different owner already holds this canonical path: disambiguate rather
-    // than share a file between two unrelated sessions (F4/F6).
-    candidatePath = disambiguateTrajectoryCandidatePath(candidatePath, params.sessionId);
-  }
-}
-
-/**
- * THE serialized boundary for a trajectory path. Both the flush/rename path and the
- * delete/retire path go through this, so a stale-generation write can never land
- * after a retirement decided in an earlier turn for the same canonical path.
+ * THE serialized boundary for a trajectory path. Acquisition, reassignment,
+ * flush/rename, and delete/retire all go through this, so none of them can
+ * observe or mutate a canonical path's registry entry while another turn for
+ * the same path is in flight (P1-A).
  */
 export async function withTrajectoryPathLock<T>(
   canonicalPath: string,
-  fn: (ctx: { currentGeneration: number; retired: boolean }) => Promise<T> | T,
+  fn: (ctx: { currentIncarnation: number; retired: boolean }) => Promise<T> | T,
 ): Promise<T> {
   return await pathQueue.enqueue(canonicalPath, async () => {
     const entry = registry.get(canonicalPath);
     return await fn({
-      currentGeneration: entry?.generation ?? 0,
+      currentIncarnation: entry?.incarnation ?? 0,
       retired: entry?.retired ?? false,
     });
   });
@@ -99,41 +69,96 @@ export async function withTrajectoryPathLock<T>(
 
 /**
  * Must only be called from inside a withTrajectoryPathLock(canonicalPath, ...) turn.
- * ownerSessionId defaults to the existing entry's owner so a retire call that races
- * ahead of any writer created in this process (e.g. deleting a session whose
- * trajectory writer lived in a prior process run) still records who owned the path,
- * which is required for that owner's later resurrection to reuse the path instead of
+ * Claims a fresh, process-unique incarnation for canonicalPath. ownerSessionId
+ * defaults to the existing entry's owner so a retire call that races ahead of
+ * any writer created in this process (e.g. deleting a session whose trajectory
+ * writer lived in a prior process run) still records who owned the path, which
+ * is required for that owner's later resurrection to reuse the path instead of
  * hitting the collision-disambiguation branch.
  */
-export function bumpTrajectoryPathGeneration(
+export function claimTrajectoryPathIncarnation(
   canonicalPath: string,
-  opts: { retire: boolean; ownerSessionId?: string },
+  params: { ownerSessionId?: string; retired: boolean },
 ): number {
   const existing = registry.get(canonicalPath);
-  const generation = (existing?.generation ?? 0) + 1;
+  const incarnation = nextIncarnation;
+  nextIncarnation += 1;
   registry.set(canonicalPath, {
-    generation,
-    ownerSessionId: opts.ownerSessionId ?? existing?.ownerSessionId ?? "",
-    retired: opts.retire,
-    retiredAtMs: opts.retire ? Date.now() : undefined,
+    incarnation,
+    ownerSessionId: params.ownerSessionId ?? existing?.ownerSessionId ?? "",
+    retired: params.retired,
+    retiredAtMs: params.retired ? Date.now() : undefined,
   });
-  return generation;
+  return incarnation;
 }
 
 /**
- * Reassigns a still-live (non-retired) path to a new owner without a generation bump,
- * for the resetSessionEntryLifecycle "reused transcript path" case: the file and any
- * in-flight writer for it remain valid, only the logical owner changes (§3.6).
+ * Resolves a candidate path to its registered filePath/incarnation, disambiguating
+ * a sanitized-name collision against a different live/retired owner. Runs entirely
+ * inside withTrajectoryPathLock so a claim can never interleave with a concurrent
+ * delete/retire turn for the same canonical path (P1-A) — including the awaited
+ * unlink inside that turn, since the whole turn (bump + unlink) shares one lock
+ * admission and this claim queues behind it rather than racing it.
  */
-export function reassignTrajectoryPathOwner(
+export async function acquireTrajectoryWriterLease(params: {
+  sessionId: string;
+  candidatePath: string;
+}): Promise<{ filePath: string; incarnation: number }> {
+  let candidatePath = params.candidatePath;
+  for (;;) {
+    const canonicalPath = canonicalizeTrajectoryPath(candidatePath);
+    const claim = await withTrajectoryPathLock(canonicalPath, () => {
+      const existing = registry.get(canonicalPath);
+      if (!existing) {
+        return {
+          collision: false as const,
+          incarnation: claimTrajectoryPathIncarnation(canonicalPath, {
+            ownerSessionId: params.sessionId,
+            retired: false,
+          }),
+        };
+      }
+      if (existing.ownerSessionId === params.sessionId) {
+        if (!existing.retired) {
+          return { collision: false as const, incarnation: existing.incarnation };
+        }
+        return {
+          collision: false as const,
+          incarnation: claimTrajectoryPathIncarnation(canonicalPath, {
+            ownerSessionId: params.sessionId,
+            retired: false,
+          }),
+        };
+      }
+      // Different owner already holds this canonical path: disambiguate rather
+      // than share a file between two unrelated sessions (F4/F6).
+      return { collision: true as const };
+    });
+    if (!claim.collision) {
+      return { filePath: candidatePath, incarnation: claim.incarnation };
+    }
+    candidatePath = disambiguateTrajectoryCandidatePath(candidatePath, params.sessionId);
+  }
+}
+
+/**
+ * Reassigns a still-live (non-retired) path to a new owner without a fresh
+ * incarnation claim, for the resetSessionEntryLifecycle "reused transcript path"
+ * case: the file and any in-flight writer for it remain valid, only the logical
+ * owner changes (§3.6). Runs inside withTrajectoryPathLock for the same reason
+ * acquisition does (P1-A).
+ */
+export async function reassignTrajectoryPathOwner(
   canonicalPath: string,
   params: { from: string; to: string },
-): void {
-  const existing = registry.get(canonicalPath);
-  if (!existing || existing.retired || existing.ownerSessionId !== params.from) {
-    return;
-  }
-  registry.set(canonicalPath, { ...existing, ownerSessionId: params.to });
+): Promise<void> {
+  await withTrajectoryPathLock(canonicalPath, () => {
+    const existing = registry.get(canonicalPath);
+    if (!existing || existing.retired || existing.ownerSessionId !== params.from) {
+      return;
+    }
+    registry.set(canonicalPath, { ...existing, ownerSessionId: params.to });
+  });
 }
 
 /**
@@ -141,6 +166,10 @@ export function reassignTrajectoryPathOwner(
  * above the cleanup-step flush timeout) so a late-arriving stale flush still finds a
  * "retired" entry rather than an absent one that would be wrongly treated as fresh.
  * Piggybacks on trimTrajectoryWriterCache's call site instead of a timer/interval.
+ * Reaping only ever removes the registry *entry* — it never touches or resets
+ * nextIncarnation, which is what keeps a stale writer from before the reap unable
+ * to match whatever fresh incarnation a later claim on the same path receives
+ * (P1-B).
  */
 export function reapRetiredTrajectoryPathEntries(): void {
   const nowMs = Date.now();
@@ -170,6 +199,7 @@ export function reapRetiredTrajectoryPathEntries(): void {
   }
 }
 
+/** Test-only: does not reset nextIncarnation — see its module-level comment. */
 export function clearTrajectoryWriterLifecycleRegistryForTest(): void {
   registry.clear();
 }

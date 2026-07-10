@@ -66,8 +66,8 @@ type TrajectoryRuntimeWriterDiagnostics = Omit<QueuedFileWriterDiagnostics, "act
 type TrajectoryRuntimeWriter = Omit<QueuedFileWriter, "describeQueue"> & {
   describeQueue?: () => TrajectoryRuntimeWriterDiagnostics;
   nextSourceSeq?: () => number;
-  /** Immutable generation captured at construction; absent for test-injected writers. */
-  leaseGeneration?: number;
+  /** Immutable incarnation captured at construction; absent for test-injected writers. */
+  leaseIncarnation?: number;
 };
 
 function writeTrajectoryPointerBestEffort(params: {
@@ -395,7 +395,7 @@ async function replaceTrajectoryWindow(params: {
 function createTrajectoryWindowWriter(
   filePath: string,
   maxFileBytes: number,
-  leaseGeneration: number,
+  leaseIncarnation: number,
 ): TrajectoryRuntimeWriter {
   let pendingLines: string[] = [];
   let queuedBytes = 0;
@@ -407,7 +407,7 @@ function createTrajectoryWindowWriter(
 
   return {
     filePath,
-    leaseGeneration,
+    leaseIncarnation,
     write: (line) => {
       const lineBytes = Buffer.byteLength(line, "utf8");
       if (lineBytes > maxFileBytes) {
@@ -430,11 +430,13 @@ function createTrajectoryWindowWriter(
       queue = queue
         .then(async () => {
           activeOperation = "file-replace";
-          await withTrajectoryPathLock(canonicalPath, async ({ currentGeneration, retired }) => {
-            if (retired || currentGeneration !== leaseGeneration) {
-              // Stale generation: the path was retired or reclaimed by a newer
-              // owner since this writer's lease was issued. Drop the write
-              // silently rather than resurrecting a deleted artifact (F1/F2/F5).
+          await withTrajectoryPathLock(canonicalPath, async ({ currentIncarnation, retired }) => {
+            if (retired || currentIncarnation !== leaseIncarnation) {
+              // Stale incarnation: the path was retired or reclaimed by a
+              // newer owner since this writer's lease was issued. Drop the
+              // write silently rather than resurrecting a deleted artifact
+              // (F1/F2/F5), and rather than trusting a restartable per-path
+              // counter that a reaped-then-reclaimed path could reuse (P1-B).
               return;
             }
             await replaceTrajectoryWindow({ filePath, maxFileBytes, appendedLines });
@@ -465,14 +467,14 @@ function createTrajectoryWindowWriter(
 function getTrajectoryWindowWriter(
   filePath: string,
   maxFileBytes: number,
-  leaseGeneration: number,
+  leaseIncarnation: number,
 ): TrajectoryRuntimeWriter {
   const existing = writers.get(filePath);
-  if (existing && existing.leaseGeneration === leaseGeneration) {
+  if (existing && existing.leaseIncarnation === leaseIncarnation) {
     return existing;
   }
   trimTrajectoryWriterCache();
-  const writer = createTrajectoryWindowWriter(filePath, maxFileBytes, leaseGeneration);
+  const writer = createTrajectoryWindowWriter(filePath, maxFileBytes, leaseIncarnation);
   writers.set(filePath, writer);
   return writer;
 }
@@ -497,9 +499,9 @@ export function toTrajectoryToolDefinitions(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-export function createTrajectoryRuntimeRecorder(
+export async function createTrajectoryRuntimeRecorder(
   params: TrajectoryRuntimeInit,
-): TrajectoryRuntimeRecorder | null {
+): Promise<TrajectoryRuntimeRecorder | null> {
   const env = params.env ?? process.env;
   // Trajectory capture is now default-on. The env var remains as an explicit
   // override so operators can still disable recording with OPENCLAW_TRAJECTORY=0.
@@ -513,7 +515,7 @@ export function createTrajectoryRuntimeRecorder(
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
   });
-  const lease = acquireTrajectoryWriterLease({
+  const lease = await acquireTrajectoryWriterLease({
     sessionId: params.sessionId,
     candidatePath,
   });
@@ -523,7 +525,7 @@ export function createTrajectoryRuntimeRecorder(
     Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
   const writer =
-    params.writer ?? getTrajectoryWindowWriter(filePath, maxRuntimeFileBytes, lease.generation);
+    params.writer ?? getTrajectoryWindowWriter(filePath, maxRuntimeFileBytes, lease.incarnation);
   writeTrajectoryPointerBestEffort({
     filePath,
     sessionFile: params.sessionFile,
