@@ -1216,7 +1216,7 @@ function restoreTaskRegistryOnce() {
       tasks: snapshotTaskRecords(tasks),
     }));
   } catch (error) {
-    log.warn("Failed to restore task registry", { error });
+    log.warn("Failed to restore task registry", { error: formatErrorMessage(error) });
   }
 }
 

@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -151,6 +152,27 @@ describe("task-registry store runtime", () => {
     };
     expect(latestSnapshot.tasks.size).toBe(2);
     expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
+  });
+
+  it("logs restore parser failures and keeps the registry empty", async () => {
+    const warnLogs = createWarnLogCapture("openclaw-task-registry-restore-test");
+    const invalidValue = "invalid-delivery-status";
+    try {
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            throw new Error(`Invalid persisted task delivery status: ${invalidValue}`);
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(findTaskByRunId("run-restored")).toBeUndefined();
+      expect(await warnLogs.findText(invalidValue)).toContain(invalidValue);
+      expect(getTaskById("task-restored")).toBeUndefined();
+    } finally {
+      warnLogs.cleanup();
+    }
   });
 
   it("uses scoped owner lookups for fresh owner task reads", () => {
