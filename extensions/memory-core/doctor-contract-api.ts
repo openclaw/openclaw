@@ -1149,6 +1149,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       configureMemoryCoreDreamingState(params.context.openPluginStateKeyedStore);
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       for (const source of await collectLegacySources(params.config, params.env)) {
         const targetHasRows = (
           await Promise.all(
@@ -1158,7 +1159,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           )
         ).some(Boolean);
         if (targetHasRows) {
-          warnings.push(
+          notices.push(
             `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because SQLite rows already exist; left legacy source in place`,
           );
           continue;
@@ -1182,7 +1183,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
-      return { changes, warnings };
+      return { changes, warnings, notices };
     },
   },
   {

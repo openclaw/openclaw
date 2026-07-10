@@ -81,8 +81,9 @@ async function migrateNamespace<T>(params: {
   legacy: WorkboardKeyedStore<T>;
   target: WorkboardKeyedStore<T>;
   isValid: (value: unknown) => value is T;
-}): Promise<{ imported: number; warnings: string[] }> {
+}): Promise<{ imported: number; warnings: string[]; notices: string[] }> {
   const warnings: string[] = [];
+  const notices: string[] = [];
   let imported = 0;
   for (const entry of await params.legacy.entries()) {
     if (!params.isValid(entry.value)) {
@@ -97,7 +98,7 @@ async function migrateNamespace<T>(params: {
           imported++;
           continue;
         }
-        warnings.push(
+        notices.push(
           `Skipped legacy Workboard ${params.label} entry ${entry.key} because the SQLite target already exists`,
         );
         continue;
@@ -111,7 +112,7 @@ async function migrateNamespace<T>(params: {
       );
     }
   }
-  return { imported, warnings };
+  return { imported, warnings, notices };
 }
 
 async function targetCardReferencesAttachment(
@@ -132,8 +133,9 @@ async function migrateAttachments(params: {
   legacy: WorkboardKeyedStore<PersistedWorkboardAttachment>;
   cards: WorkboardKeyedStore;
   target: WorkboardKeyedStore<PersistedWorkboardAttachment>;
-}): Promise<{ imported: number; warnings: string[] }> {
+}): Promise<{ imported: number; warnings: string[]; notices: string[] }> {
   const warnings: string[] = [];
+  const notices: string[] = [];
   let imported = 0;
   for (const entry of await params.legacy.entries()) {
     if (!isPersistedAttachment(entry.value)) {
@@ -153,7 +155,7 @@ async function migrateAttachments(params: {
         imported++;
         continue;
       }
-      warnings.push(
+      notices.push(
         `Skipped legacy Workboard attachment entry ${entry.key} because the SQLite target already exists`,
       );
       continue;
@@ -168,7 +170,7 @@ async function migrateAttachments(params: {
       );
     }
   }
-  return { imported, warnings };
+  return { imported, warnings, notices };
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
@@ -279,6 +281,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             ...boardResult.warnings,
             ...subscriptionResult.warnings,
             ...attachmentResult.warnings,
+          ],
+          notices: [
+            ...cardResult.notices,
+            ...boardResult.notices,
+            ...subscriptionResult.notices,
+            ...attachmentResult.notices,
           ],
         };
       } finally {

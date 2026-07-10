@@ -111,6 +111,7 @@ describe("matrix doctor contract state migrations", () => {
         `Archived Matrix sync cache legacy source -> ${path.join(storageRootDir, "bot-storage.json")}.migrated`,
       ],
       warnings: [],
+      notices: [],
     });
 
     const store = new SqliteBackedMatrixSyncStore(storageRootDir);
@@ -155,6 +156,7 @@ describe("matrix doctor contract state migrations", () => {
         `Archived Matrix storage metadata legacy source -> ${path.join(storageRootDir, "storage-meta.json")}.migrated`,
       ],
       warnings: [],
+      notices: [],
     });
 
     const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>(
@@ -187,6 +189,7 @@ describe("matrix doctor contract state migrations", () => {
     await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
       changes: [],
       warnings: [],
+      notices: [],
     });
     expect(fs.existsSync(path.join(flatRoot, "bot-storage.json"))).toBe(true);
   });
@@ -224,6 +227,7 @@ describe("matrix doctor contract state migrations", () => {
         `Archived Matrix recovery key legacy source -> ${path.join(storageRootDir, "recovery-key.json")}.migrated`,
       ],
       warnings: [],
+      notices: [],
     });
 
     expect(readMatrixRecoveryKeyState(storageRootDir)?.keyId).toBe("SSSS");
@@ -273,6 +277,7 @@ describe("matrix doctor contract state migrations", () => {
         `Archived Matrix IndexedDB snapshot legacy source -> ${path.join(storageRootDir, "crypto-idb-snapshot.json")}.migrated`,
       ],
       warnings: [],
+      notices: [],
     });
 
     expect(JSON.parse(readMatrixIdbSnapshotJson(storageRootDir) ?? "null")).toEqual(snapshot);
@@ -318,6 +323,7 @@ describe("matrix doctor contract state migrations", () => {
         `Archived Matrix legacy crypto migration legacy source -> ${path.join(storageRootDir, "legacy-crypto-migration.json")}.migrated`,
       ],
       warnings: [],
+      notices: [],
     });
 
     expect(readMatrixLegacyCryptoMigrationState(storageRootDir)?.restoreStatus).toBe("pending");
