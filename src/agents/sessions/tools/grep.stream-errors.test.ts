@@ -64,6 +64,36 @@ describe("grep tool stream errors", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("does not start ripgrep when aborted while checking the search path", async () => {
+    let resolveIsDirectory: ((value: boolean) => void) | undefined;
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+
+    const controller = new AbortController();
+    const tool = createGrepToolDefinition(process.cwd(), {
+      operations: {
+        isDirectory: async () =>
+          await new Promise<boolean>((resolve) => {
+            resolveIsDirectory = resolve;
+          }),
+        readFile: () => "",
+      },
+    });
+    const result = tool.execute(
+      "call-1",
+      { pattern: "foo" },
+      controller.signal,
+      undefined,
+      {} as never,
+    );
+
+    await vi.waitFor(() => expect(resolveIsDirectory).toBeDefined());
+    controller.abort();
+    resolveIsDirectory?.(true);
+
+    await expect(result).rejects.toThrow("Operation aborted");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it.each(["stdout", "stderr"] as const)(
     "rejects and terminates ripgrep when %s fails",
     async (stream) => {

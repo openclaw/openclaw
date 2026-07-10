@@ -239,6 +239,10 @@ export function createGrepToolDefinition(
             }
             args.push("--", pattern, searchPath);
 
+            if (signal?.aborted) {
+              settle(() => reject(new Error("Operation aborted")));
+              return;
+            }
             const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
             const rl = createInterface({ input: child.stdout });
             let stderr = "";
