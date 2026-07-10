@@ -290,7 +290,7 @@ function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
     block.type === "actions" &&
     Array.isArray(block.elements) &&
     block.elements.length > 0 &&
-    block.elements.every((el) => typeof el.action_id === "string" && el.action_id.includes("_all_"))
+    block.elements.every((el) => typeof el.action_id === "string" && el.action_id.endsWith("_all"))
   );
 }
 
