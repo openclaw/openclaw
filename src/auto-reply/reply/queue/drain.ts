@@ -1226,8 +1226,10 @@ export function scheduleFollowupDrain(
             const cancellation = createAggregateCancellation(activeGroupItems);
             let admitted = false;
             removeQueuedItemsByRef(queue.items, activeGroupItems);
-            const restoreGroupItems = (items: FollowupRun[]) => {
-              const missingItems = items.filter((item) => !queue.items.includes(item));
+            const restoreGroupItems = (groupItemsToRestore: FollowupRun[]) => {
+              const missingItems = groupItemsToRestore.filter(
+                (item) => !queue.items.includes(item),
+              );
               queue.items.unshift(...missingItems);
             };
             const needsGroupAdmission =
