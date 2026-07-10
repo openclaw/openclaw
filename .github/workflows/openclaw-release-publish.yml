@@ -613,7 +613,9 @@ jobs:
           import { readFileSync, writeFileSync } from "node:fs";
 
           const plan = JSON.parse(readFileSync(process.env.PLAN_PATH, "utf8"));
-          const packages = [...plan.bootstrap.packages].sort((a, b) => a.localeCompare(b));
+          const packages = [...plan.bootstrap.packages].toSorted((a, b) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          );
           const approval = {
             version: 1,
             kind: "clawhub-bootstrap",

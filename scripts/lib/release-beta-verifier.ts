@@ -84,6 +84,10 @@ const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/u;
 const NPM_VIEW_ATTEMPTS = 30;
 const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
 
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -662,7 +666,7 @@ function requireStringArray(value: unknown, label: string): string[] {
   return value
     .map((entry) => entry.trim())
     .filter(Boolean)
-    .toSorted((a, b) => a.localeCompare(b));
+    .toSorted(compareCodeUnits);
 }
 
 function requireArtifactWorkflowRun(
@@ -904,9 +908,7 @@ export function validateClawHubBootstrapEvidence(params: {
     throw new Error("Plugin ClawHub New producer attempt is newer than its terminal attempt.");
   }
 
-  const expectedPackages = [...new Set(params.expectedPackages)].toSorted((a, b) =>
-    a.localeCompare(b),
-  );
+  const expectedPackages = [...new Set(params.expectedPackages)].toSorted(compareCodeUnits);
   if (expectedPackages.length === 0) {
     throw new Error("Plugin ClawHub New expected package set is empty.");
   }
@@ -924,7 +926,7 @@ export function validateClawHubBootstrapEvidence(params: {
     .map((entry) =>
       isRecord(entry) ? requireString(entry.packageName, "bootstrap package name") : "",
     )
-    .toSorted((a, b) => a.localeCompare(b));
+    .toSorted(compareCodeUnits);
   if (JSON.stringify(evidencePackages) !== JSON.stringify(expectedPackages)) {
     throw new Error("Plugin ClawHub New terminal package set mismatch.");
   }

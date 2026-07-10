@@ -28,7 +28,7 @@ function canonicalPackages(value) {
   ) {
     fail("ClawHub bootstrap approval requires a unique @openclaw/* package set.");
   }
-  return packages.toSorted((a, b) => a.localeCompare(b));
+  return packages.toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 function positiveRunAttempt(value) {
