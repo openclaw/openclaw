@@ -229,6 +229,30 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(false);
   });
 
+  it("does not widen explicitly reviewer-bound approvals to another device", () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-reviewer-device-isolated",
+    );
+    bindApprovalReviewerDeviceIds({ record, deviceIds: ["device-mobile"] });
+
+    expect(
+      isApprovalRecordVisibleToClient({
+        record,
+        client: createApprovalClient({
+          connId: "conn-other",
+          clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+          deviceId: "device-other",
+          scopes: ["operator.approvals"],
+        }),
+      }),
+    ).toBe(false);
+  });
+
   it("allows gateway-client approval runtimes to see requester-bound approvals", () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(

@@ -253,10 +253,19 @@ The URL is a locator, not authority. Resolution requires:
 Record-level rules:
 
 - `operator.admin` may review.
-- Any paired device carrying `operator.approvals` may review. This is the deliberate cross-device rule.
-- `reviewer_device_ids` adds explicitly targeted reviewer devices; it does not turn the originating surface into an exclusive owner.
-- Device-less internal runtimes cannot use the generic reviewer API. A trusted channel-actor resolver is deferred to the typed-action PR; it must accept only server-authenticated actor metadata and never public `approval.resolve` fields.
-- Requester connection ownership permits waiting for the result, not cross-surface review.
+- `reviewer_device_ids` is authoritative when present. Only a listed paired
+  `operator.approvals` device may review; the requesting device has no implicit
+  access unless it is also listed.
+- Without an explicit reviewer list, the requesting paired
+  `operator.approvals` device may review its own record.
+- Genuinely legacy records with no requester or reviewer binding retain broad
+  paired-device visibility so upgrades do not strand already-pending work.
+- Device-less internal runtimes may resolve, but not read, through the scoped
+  approval-runtime connection. That authority comes only from the
+  server-authenticated runtime token; public `approval.resolve` fields cannot
+  mint it.
+- Live requester connection ownership remains valid for legacy adapters; it is
+  never inferred from a matching client name.
 - Audience membership changes presentation only. It never widens authorization.
 
 `approval.get` exposes only the sanitized reviewer projection and omits internal source/audience routing keys. The PR 3 `session.approval` event carries its one destination `sessionKey` plus `sourceSessionKey` after the Gateway applies the persisted audience snapshot server-side. Existing exec/plugin events keep their historical payload and restricted recipients until consumers migrate. The executable request, command binding, and continuation remain only in the process-local waiter. The durable row contains the safe presentation plus lifecycle, routing, and audit metadata; it never stores raw environment values, credentials, auth headers, or channel callback data.

@@ -156,10 +156,10 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     return true;
   }
 
-  // Device identity is the strongest requester binding; fall back to the
-  // live connection only for older callers that have not attached a device.
+  // Shipped legacy adapters retain exact requester connection/device authority.
+  // Unified durable methods apply their separate record authorization after lookup.
   if (requestedByDeviceId) {
-    return requestedByDeviceId === normalizeApprovalIdentity(params.client?.connect?.device?.id);
+    return requestedByDeviceId === clientDeviceId;
   }
 
   const requestedByConnId = normalizeApprovalIdentity(params.record.requestedByConnId);
@@ -167,7 +167,7 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     return requestedByConnId === normalizeApprovalIdentity(params.client?.connId);
   }
 
-  if (requestedByClientId) {
+  if (requestedByClientId || approvalReviewerDeviceIds.length > 0) {
     return false;
   }
 

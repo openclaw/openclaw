@@ -96,6 +96,7 @@ function registerExec(
       deviceId?: string | null;
       clientId?: string | null;
     };
+    reviewerDeviceIds?: string[];
   },
 ) {
   const record = manager.create(
@@ -119,6 +120,7 @@ function registerExec(
       ? params.requester.clientId
       : "requester-client";
   record.requestedByDeviceTokenAuth = true;
+  record.approvalReviewerDeviceIds = params.reviewerDeviceIds ?? ["reviewer"];
   if (params.expiresAtMs !== undefined) {
     record.expiresAtMs = params.expiresAtMs;
   }
@@ -128,7 +130,11 @@ function registerExec(
 
 function registerPlugin(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
-  params: { id: string; request?: Partial<PluginApprovalRequestPayload> },
+  params: {
+    id: string;
+    request?: Partial<PluginApprovalRequestPayload>;
+    reviewerDeviceIds?: string[];
+  },
 ) {
   const record = manager.create(
     {
@@ -147,6 +153,7 @@ function registerPlugin(
   record.requestedByDeviceId = "requester-device";
   record.requestedByClientId = "requester-client";
   record.requestedByDeviceTokenAuth = true;
+  record.approvalReviewerDeviceIds = params.reviewerDeviceIds ?? ["reviewer"];
   const decision = manager.register(record, 600_000);
   return { record, decision };
 }
@@ -229,6 +236,7 @@ describe("unified approval handlers", () => {
     const id = "exec:approval/with?reserved";
     registerExec(managers.exec, {
       id,
+      reviewerDeviceIds: ["reviewer-a"],
       request: {
         commandPreview: "printf approval-handler",
         warningText: "Review carefully",
@@ -326,6 +334,96 @@ describe("unified approval handlers", () => {
       client: createClient({ internal: true, scopes: ["operator.read"] }),
     });
     expect(underscopedInternal).toMatchObject({ ok: false, error: missing.error });
+  });
+
+  it("enforces explicit reviewer bindings over requester ownership", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, {
+      id: "reviewer-bound-unified-approval",
+      reviewerDeviceIds: ["reviewer-a"],
+    });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    for (const deviceId of ["reviewer-b", "requester-device"]) {
+      for (const method of ["approval.get", "approval.resolve"] as const) {
+        const response = await invoke({
+          handlers,
+          method,
+          body:
+            method === "approval.get"
+              ? { id: pending.record.id }
+              : { id: pending.record.id, decision: "deny" },
+          client: createClient({ deviceId }),
+        });
+        expect(response).toMatchObject({
+          ok: false,
+          error: { code: "INVALID_REQUEST", details: { reason: "APPROVAL_NOT_FOUND" } },
+        });
+      }
+    }
+    expect(managers.exec.getLiveSnapshot(pending.record.id)).toBe(pending.record);
+
+    const winner = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: pending.record.id, decision: "deny" },
+      client: createClient({ deviceId: "reviewer-a" }),
+    });
+    expect(winner.result).toMatchObject({
+      applied: true,
+      approval: { status: "denied", decision: "deny" },
+    });
+
+    const hiddenTerminal = await invoke({
+      handlers,
+      method: "approval.get",
+      body: { id: pending.record.id },
+      client: createClient({ deviceId: "reviewer-b" }),
+    });
+    expect(hiddenTerminal).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", details: { reason: "APPROVAL_NOT_FOUND" } },
+    });
+  });
+
+  it("lets only the server-authenticated device-less runtime resolve", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, { id: "trusted-runtime-resolve" });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+    const body = { id: pending.record.id, decision: "deny" };
+
+    const untrusted = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body,
+      client: createClient({ scopes: ["operator.approvals"] }),
+    });
+    expect(untrusted).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", details: { reason: "APPROVAL_NOT_FOUND" } },
+    });
+
+    const trusted = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body,
+      client: createClient({ internal: true, scopes: ["operator.approvals"] }),
+    });
+    expect(trusted.result).toMatchObject({
+      applied: true,
+      approval: { status: "denied", decision: "deny" },
+    });
+    await expect(pending.decision).resolves.toBe("deny");
   });
 
   it.each([
@@ -587,7 +685,7 @@ describe("unified approval handlers", () => {
       handlers,
       method: "approval.get",
       body: { id: pending.record.id },
-      client: createClient({ scopes: ["operator.approvals"] }),
+      client: createClient({ deviceId: "unrelated-device", scopes: ["operator.approvals"] }),
     });
 
     expect(response.ok).toBe(false);
@@ -600,6 +698,7 @@ describe("unified approval handlers", () => {
     const pending = registerPlugin(managers.plugin, {
       id: "plugin:deny-is-always-valid",
       request: { allowedDecisions: ["allow-once"] },
+      reviewerDeviceIds: ["phone-device"],
     });
     const context = createContext();
     const handlePluginApprovalResolved = vi.fn(async () => {});
@@ -694,6 +793,7 @@ describe("unified approval handlers", () => {
     const managers = createManagers(databaseOptions);
     const pending = registerExec(managers.exec, {
       id: "device-less-requester",
+      reviewerDeviceIds: ["reviewer-device"],
       requester: {
         connId: "requester-connection",
         deviceId: null,
@@ -745,7 +845,10 @@ describe("unified approval handlers", () => {
   it("returns the recorded winner to a competing surface without rebroadcasting", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, { id: "first-answer-wins" });
+    const pending = registerExec(managers.exec, {
+      id: "first-answer-wins",
+      reviewerDeviceIds: ["control-ui", "telegram"],
+    });
     const context = createContext();
     const handlers = createApprovalHandlers({
       execApprovalManager: managers.exec,
@@ -795,7 +898,10 @@ describe("unified approval handlers", () => {
     async ({ status, decision, terminalDecision }) => {
       const databaseOptions = createDatabaseOptions();
       const managers = createManagers(databaseOptions);
-      const pending = registerExec(managers.exec, { id: `terminal-after-restart-${status}` });
+      const pending = registerExec(managers.exec, {
+        id: `terminal-after-restart-${status}`,
+        reviewerDeviceIds: ["later-surface"],
+      });
       if (status === "allowed" || status === "denied") {
         managers.exec.resolveDetailed(pending.record.id, terminalDecision, {
           kind: "device",

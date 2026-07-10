@@ -22,7 +22,11 @@ import type {
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { normalizeControlUiBasePath } from "../control-ui-shared.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
-import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
+import {
+  canAccessOperatorApproval,
+  canResolveOperatorApproval,
+  canReviewOperatorApproval,
+} from "../operator-approval-authorization.js";
 import {
   getOperatorApprovalDetailed,
   type OperatorApprovalRecord,
@@ -89,17 +93,6 @@ function buildApprovalSnapshot(
   return terminal as ApprovalSnapshot;
 }
 
-function canReviewApproval(client: GatewayClient | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  if (scopes.includes(ADMIN_SCOPE)) {
-    return true;
-  }
-  if (!scopes.includes(APPROVALS_SCOPE)) {
-    return false;
-  }
-  return Boolean(normalizeOptionalString(client?.connect?.device?.id));
-}
-
 function resolveApprovalResolver(client: GatewayClient | null): OperatorApprovalResolver {
   const deviceId = normalizeOptionalString(client?.connect?.device?.id);
   if (deviceId) {
@@ -148,19 +141,41 @@ function readExactApprovalId(params: unknown): string | null {
     return null;
   }
   const id = params.id;
-  return id === id.trim() && id !== "." && id !== ".." && isWellFormedApprovalId(id) ? id : null;
+  return isWellFormedApprovalId(id) ? id : null;
 }
 
 function loadVisibleApproval(params: {
   id: string;
   client: GatewayClient | null;
+  allowApprovalRuntime?: boolean;
   execApprovalManager: ExecApprovalManager;
   pluginApprovalManager: ExecApprovalManager<PluginApprovalRequestPayload>;
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): OperatorApprovalRecord | null {
   // Reconciliation can settle a live waiter, so authorization must precede
   // every durable read and no unauthorized lookup may reach the bridge.
-  if (!canReviewApproval(params.client)) {
+  const authorized = params.allowApprovalRuntime
+    ? canResolveOperatorApproval(params.client)
+    : canReviewOperatorApproval(params.client);
+  if (!authorized) {
+    return null;
+  }
+  const liveRecord =
+    params.execApprovalManager.getLiveSnapshot(params.id) ??
+    params.pluginApprovalManager.getLiveSnapshot(params.id);
+  if (
+    liveRecord &&
+    !canAccessOperatorApproval({
+      client: params.client,
+      allowApprovalRuntime: params.allowApprovalRuntime,
+      binding: {
+        requestedByConnId: liveRecord.requestedByConnId,
+        requestedByDeviceId: liveRecord.requestedByDeviceId,
+        requestedByClientId: liveRecord.requestedByClientId,
+        reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds,
+      },
+    })
+  ) {
     return null;
   }
   let lookup: ReturnType<typeof getOperatorApprovalDetailed>;
@@ -176,6 +191,19 @@ function loadVisibleApproval(params: {
     throw error;
   }
   if (lookup.outcome === "found") {
+    if (
+      !canAccessOperatorApproval({
+        client: params.client,
+        allowApprovalRuntime: params.allowApprovalRuntime,
+        binding: {
+          requestedByDeviceId: lookup.record.requester.deviceId,
+          requestedByClientId: lookup.record.requester.clientId,
+          reviewerDeviceIds: lookup.record.reviewerDeviceIds,
+        },
+      })
+    ) {
+      return null;
+    }
     const manager =
       lookup.record.kind === "exec" ? params.execApprovalManager : params.pluginApprovalManager;
     // Durable truth can advance outside this manager. Settle only an existing
@@ -442,6 +470,7 @@ export function createApprovalHandlers(
           ? loadVisibleApproval({
               id,
               client,
+              allowApprovalRuntime: true,
               execApprovalManager: params.execApprovalManager,
               pluginApprovalManager: params.pluginApprovalManager,
               databaseOptions: params.databaseOptions,
