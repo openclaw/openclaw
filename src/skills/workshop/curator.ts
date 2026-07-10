@@ -523,9 +523,14 @@ export function getSkillCuratorStatus(
     const lifecycleState = row.state as SkillLifecycleState;
     counts[lifecycleState] += 1;
     skills.push({
-      ...row,
+      skillKey: row.skillKey,
+      skillName: row.skillName,
+      skillFile: row.skillFile,
       state: lifecycleState,
       pinned: row.pinned === 1,
+      createdAtMs: row.createdAtMs,
+      stateChangedAtMs: row.stateChangedAtMs,
+      archivedReason: row.archivedReason,
       lastUsedAtMs: row.lastUsedAtMs ?? null,
       useCount: row.useCount ?? 0,
     });

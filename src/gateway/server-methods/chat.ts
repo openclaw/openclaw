@@ -1,6 +1,7 @@
 // Chat gateway methods implement chat.send/history/abort/inject/metadata and
 // bridge UI RPCs to agent dispatch, transcripts, media, and streaming state.
 import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -208,7 +209,10 @@ import {
   listAgentsForGateway,
   resolveGatewayModelSupportsImages,
   resolveDeletedAgentIdFromSessionKey,
+  resolveSessionHistoryTranscriptPathAsync,
   resolveSessionModelRef,
+  resolveSessionTranscriptCandidates,
+  resolveSessionTranscriptResetArchiveCandidatesAsync,
   resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -2974,6 +2978,184 @@ function dropLocalHistoryOverreadContextMessage(
   return [...messages.slice(0, index), ...messages.slice(index + 1)];
 }
 
+type SessionTranscriptReadTarget = {
+  sessionId: string;
+  sessionFile?: string;
+  applySessionStartedAtFilter: boolean;
+  isCurrentActive?: boolean;
+};
+
+const MAX_CHAT_HISTORY_FAMILY_READ_TARGETS = 32;
+const RESERVED_CURRENT_CHAT_HISTORY_FAMILY_TARGETS = 2;
+
+function resolveHistoryFamilySessionIds(
+  entry: { usageFamilySessionIds?: string[] } | undefined,
+  currentSessionId: string,
+): string[] {
+  const withoutCurrent = (entry?.usageFamilySessionIds ?? []).filter(
+    (sessionId) => sessionId !== currentSessionId,
+  );
+  return uniqueStrings([currentSessionId, ...withoutCurrent]);
+}
+
+function resolveFirstExistingTranscriptCandidate(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+}): string | undefined {
+  return resolveSessionTranscriptCandidates(
+    params.sessionId,
+    params.storePath,
+    params.sessionFile,
+    params.agentId,
+  ).find((candidate) => fs.existsSync(candidate));
+}
+
+function orderFamilyReadTargetsForOutput(
+  targets: SessionTranscriptReadTarget[],
+  currentSessionId: string,
+): SessionTranscriptReadTarget[] {
+  return targets
+    .map((target, index) => ({ target, index }))
+    .toSorted((left, right) => {
+      const leftRank =
+        left.target.sessionId !== currentSessionId ? 0 : left.target.isCurrentActive ? 2 : 1;
+      const rightRank =
+        right.target.sessionId !== currentSessionId ? 0 : right.target.isCurrentActive ? 2 : 1;
+      return leftRank - rightRank || left.index - right.index;
+    })
+    .map(({ target }) => target);
+}
+
+async function resolveChatHistoryTranscriptReadTargets(params: {
+  entry: { sessionId?: string; sessionFile?: string; usageFamilySessionIds?: string[] } | undefined;
+  sessionId: string | undefined;
+  storePath: string | undefined;
+  agentId?: string;
+  includeFamily: boolean;
+}): Promise<SessionTranscriptReadTarget[]> {
+  if (!params.sessionId) {
+    return [];
+  }
+  const currentSessionId = params.sessionId;
+  const sessionIds = params.includeFamily
+    ? resolveHistoryFamilySessionIds(params.entry, currentSessionId)
+    : [currentSessionId];
+  const targets: SessionTranscriptReadTarget[] = [];
+  const ancestorTargets: SessionTranscriptReadTarget[] = [];
+  const currentTargets: SessionTranscriptReadTarget[] = [];
+  const seenFiles = new Set<string>();
+  const pushTarget = (
+    collection: SessionTranscriptReadTarget[],
+    target: SessionTranscriptReadTarget,
+    limit: number,
+  ): boolean => {
+    if (collection.length >= limit) {
+      return false;
+    }
+    const resolved = target.sessionFile ? path.resolve(target.sessionFile) : undefined;
+    if (resolved && seenFiles.has(resolved)) {
+      return true;
+    }
+    if (resolved) {
+      seenFiles.add(resolved);
+    }
+    collection.push({ ...target, ...(resolved ? { sessionFile: resolved } : {}) });
+    return collection.length < limit;
+  };
+  const finalizeTargets = (): SessionTranscriptReadTarget[] => {
+    if (!params.includeFamily) {
+      return targets;
+    }
+    const ancestorTargetLimit = Math.max(
+      0,
+      MAX_CHAT_HISTORY_FAMILY_READ_TARGETS - RESERVED_CURRENT_CHAT_HISTORY_FAMILY_TARGETS,
+    );
+    return orderFamilyReadTargetsForOutput(
+      [...ancestorTargets.slice(-ancestorTargetLimit), ...currentTargets],
+      currentSessionId,
+    );
+  };
+  for (const familySessionId of sessionIds) {
+    const isCurrentSession = familySessionId === params.sessionId;
+    const targetCollection = params.includeFamily
+      ? isCurrentSession
+        ? currentTargets
+        : ancestorTargets
+      : targets;
+    const targetLimit =
+      params.includeFamily && !isCurrentSession
+        ? Number.MAX_SAFE_INTEGER
+        : params.includeFamily
+          ? RESERVED_CURRENT_CHAT_HISTORY_FAMILY_TARGETS
+          : MAX_CHAT_HISTORY_FAMILY_READ_TARGETS;
+    const archivedFiles = params.includeFamily
+      ? await resolveSessionTranscriptResetArchiveCandidatesAsync(
+          familySessionId,
+          params.storePath,
+          isCurrentSession ? params.entry?.sessionFile : undefined,
+          params.agentId,
+        )
+      : [];
+    const activeFile =
+      params.includeFamily || familySessionId !== params.sessionId
+        ? resolveFirstExistingTranscriptCandidate({
+            sessionId: familySessionId,
+            storePath: params.storePath,
+            sessionFile: isCurrentSession ? params.entry?.sessionFile : undefined,
+            agentId: params.agentId,
+          })
+        : await resolveSessionHistoryTranscriptPathAsync(
+            familySessionId,
+            params.storePath,
+            params.entry?.sessionFile,
+            {
+              agentId: params.agentId,
+              allowResetArchiveFallback: true,
+            },
+          );
+    const archiveTargetLimit =
+      params.includeFamily && isCurrentSession && activeFile
+        ? Math.max(0, targetLimit - 1)
+        : targetLimit;
+    const archivedFilesForTargets =
+      params.includeFamily && archiveTargetLimit < archivedFiles.length
+        ? archiveTargetLimit > 0
+          ? archivedFiles.slice(-archiveTargetLimit)
+          : []
+        : archivedFiles;
+    for (const file of archivedFilesForTargets) {
+      if (
+        !pushTarget(
+          targetCollection,
+          {
+            sessionId: familySessionId,
+            sessionFile: file,
+            applySessionStartedAtFilter: false,
+          },
+          archiveTargetLimit,
+        )
+      ) {
+        break;
+      }
+    }
+    if (activeFile) {
+      pushTarget(
+        targetCollection,
+        {
+          sessionId: familySessionId,
+          sessionFile: activeFile,
+          applySessionStartedAtFilter: isCurrentSession,
+          ...(isCurrentSession ? { isCurrentActive: true } : {}),
+        },
+        targetLimit,
+      );
+    }
+  }
+  return finalizeTargets();
+}
+
 async function readChatHistoryPage(params: {
   entry: ReturnType<typeof loadSessionEntry>["entry"];
   provider: string | undefined;
@@ -2985,6 +3167,7 @@ async function readChatHistoryPage(params: {
   maxHistoryBytes: number;
   effectiveMaxChars: number;
   offset: number | undefined;
+  includeFamily: boolean;
 }): Promise<ChatHistoryPage> {
   const {
     entry,
@@ -2997,6 +3180,7 @@ async function readChatHistoryPage(params: {
     maxHistoryBytes,
     effectiveMaxChars,
     offset,
+    includeFamily,
   } = params;
   if (!sessionId || !storePath) {
     return { messages: [] };
@@ -3082,18 +3266,45 @@ async function readChatHistoryPage(params: {
     maxMessages: rawHistoryWindow.maxMessages + 1,
     maxLines: rawHistoryWindow.maxLines + 1,
   };
-  const localMessages = await readRecentSessionMessagesAsync(readScope, {
-    ...localHistoryReadOptions,
-    maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-    allowResetArchiveFallback: true,
+  const transcriptTargets = await resolveChatHistoryTranscriptReadTargets({
+    entry,
+    sessionId,
+    storePath,
+    agentId: sessionAgentId,
+    includeFamily,
   });
+  const localMessages =
+    transcriptTargets.length > 0
+      ? (
+          await Promise.all(
+            transcriptTargets.map(async (target) => {
+              const messages = await readRecentSessionMessagesAsync(
+                {
+                  agentId: sessionAgentId,
+                  sessionFile: target.sessionFile,
+                  sessionId: target.sessionId,
+                  storePath,
+                },
+                {
+                  ...localHistoryReadOptions,
+                  maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+                  allowResetArchiveFallback: true,
+                },
+              );
+              return dropPreSessionStartAnnouncePairs(
+                messages,
+                target.applySessionStartedAtFilter && typeof entry?.sessionStartedAt === "number"
+                  ? entry.sessionStartedAt
+                  : undefined,
+              );
+            }),
+          )
+        ).flat()
+      : [];
   const overreadContextMessage =
     localMessages.length > rawHistoryWindow.maxMessages ? localMessages[0] : undefined;
   const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
-    dropPreSessionStartAnnouncePairs(
-      localMessages,
-      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-    ),
+    localMessages,
     overreadContextMessage,
   );
   const rawMessages = augmentChatHistoryWithCliSessionImports({
@@ -3107,7 +3318,9 @@ async function readChatHistoryPage(params: {
   // timestamped messages share the same chat.history response surface.
   const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
     rawMessages,
-    typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+    !includeFamily && typeof entry?.sessionStartedAt === "number"
+      ? entry.sessionStartedAt
+      : undefined,
   );
   return {
     messages: augmentChatHistoryWithCanvasBlocks(
@@ -3142,12 +3355,13 @@ async function handleChatHistoryRequest({
     );
     return;
   }
-  const { sessionKey, limit, offset, maxChars } = params as {
+  const { sessionKey, limit, offset, maxChars, includeFamily } = params as {
     sessionKey: string;
     agentId?: string;
     limit?: number;
     offset?: number;
     maxChars?: number;
+    includeFamily?: boolean;
   };
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
   const requestedAgentId = resolveRequestedChatAgentId({
@@ -3202,6 +3416,16 @@ async function handleChatHistoryRequest({
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
+  if (includeFamily === true && offset !== undefined) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "includeFamily cannot be combined with offset"),
+    );
+    return;
+  }
+  const includeFamilyHistory =
+    includeFamily === true && method === "chat.history" && offset === undefined;
   const historyPage = await readChatHistoryPage({
     entry,
     provider: resolvedSessionModel.provider,
@@ -3213,6 +3437,7 @@ async function handleChatHistoryRequest({
     maxHistoryBytes,
     effectiveMaxChars,
     offset,
+    includeFamily: includeFamilyHistory,
   });
   const normalized = historyPage.messages;
   const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
@@ -3302,6 +3527,7 @@ async function handleChatHistoryRequest({
     sessionKey,
     sessionId,
     messages: bounded.messages,
+    includeFamily: includeFamilyHistory,
     ...(historyPage.offset !== undefined ? { offset: historyPage.offset } : {}),
     ...(hasMore ? { nextOffset } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),

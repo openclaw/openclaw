@@ -3,17 +3,26 @@
  *
  * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
  */
+import fs from "node:fs";
+import path from "node:path";
 import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   SessionsListParams,
   SessionsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import { dropPreSessionStartAnnouncePairs } from "../../gateway/chat-display-projection.js";
+import {
+  resolveSessionTranscriptCandidates,
+  resolveSessionTranscriptResetArchiveCandidatesAsync,
+} from "../../gateway/session-transcript-files.fs.js";
 import type {
   ReadSessionMessagesAsyncOptions,
   SessionTranscriptReadScope,
 } from "../../gateway/session-transcript-readers.js";
+import { resolveSessionHistoryTranscriptPathAsync } from "../../gateway/session-utils.fs.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -99,6 +108,17 @@ interface EmbeddedGatewayRuntime {
 }
 
 let runtimeMod: EmbeddedGatewayRuntime | undefined;
+
+type SessionTranscriptReadTarget = {
+  sessionId: string;
+  sessionFile?: string;
+  applySessionStartedAtFilter?: boolean;
+  isCurrentActive?: boolean;
+  useStoreEntryFallback?: boolean;
+};
+
+const MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS = 32;
+const RESERVED_CURRENT_EMBEDDED_CHAT_HISTORY_FAMILY_TARGETS = 2;
 
 async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
   if (!runtimeMod) {
@@ -209,10 +229,198 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   return { ok: true, key: resolved.key };
 }
 
+function resolveHistoryFamilySessionIds(
+  entry: { usageFamilySessionIds?: string[] } | undefined,
+  currentSessionId: string,
+): string[] {
+  const withoutCurrent = (entry?.usageFamilySessionIds ?? []).filter(
+    (sessionId) => sessionId !== currentSessionId,
+  );
+  return uniqueStrings([currentSessionId, ...withoutCurrent]);
+}
+
+function resolveFirstExistingTranscriptCandidate(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+}): string | undefined {
+  return resolveSessionTranscriptCandidates(
+    params.sessionId,
+    params.storePath,
+    params.sessionFile,
+    params.agentId,
+  ).find((candidate) => fs.existsSync(candidate));
+}
+
+function orderFamilyReadTargetsForOutput(
+  targets: SessionTranscriptReadTarget[],
+  currentSessionId: string,
+): SessionTranscriptReadTarget[] {
+  return targets
+    .map((target, index) => ({ target, index }))
+    .toSorted((left, right) => {
+      const leftRank =
+        left.target.sessionId !== currentSessionId ? 0 : left.target.isCurrentActive ? 2 : 1;
+      const rightRank =
+        right.target.sessionId !== currentSessionId ? 0 : right.target.isCurrentActive ? 2 : 1;
+      return leftRank - rightRank || left.index - right.index;
+    })
+    .map(({ target }) => target);
+}
+
+async function resolveChatHistoryTranscriptReadTargets(params: {
+  entry: { sessionId?: string; sessionFile?: string; usageFamilySessionIds?: string[] } | undefined;
+  sessionId: string | undefined;
+  storePath: string | undefined;
+  agentId?: string;
+  includeFamily: boolean;
+}): Promise<SessionTranscriptReadTarget[]> {
+  if (!params.sessionId) {
+    return [];
+  }
+  const currentSessionId = params.sessionId;
+  const sessionIds = params.includeFamily
+    ? resolveHistoryFamilySessionIds(params.entry, currentSessionId)
+    : [currentSessionId];
+  const targets: SessionTranscriptReadTarget[] = [];
+  const ancestorTargets: SessionTranscriptReadTarget[] = [];
+  const currentTargets: SessionTranscriptReadTarget[] = [];
+  const seenFiles = new Set<string>();
+  const pushTarget = (
+    collection: SessionTranscriptReadTarget[],
+    target: SessionTranscriptReadTarget,
+    limit: number,
+  ): boolean => {
+    if (collection.length >= limit) {
+      return false;
+    }
+    const resolved = target.sessionFile ? path.resolve(target.sessionFile) : undefined;
+    if (resolved && seenFiles.has(resolved)) {
+      return true;
+    }
+    if (resolved) {
+      seenFiles.add(resolved);
+    }
+    collection.push({ ...target, ...(resolved ? { sessionFile: resolved } : {}) });
+    return collection.length < limit;
+  };
+  const finalizeTargets = (): SessionTranscriptReadTarget[] => {
+    if (!params.includeFamily) {
+      return targets;
+    }
+    const ancestorTargetLimit = Math.max(
+      0,
+      MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS -
+        RESERVED_CURRENT_EMBEDDED_CHAT_HISTORY_FAMILY_TARGETS,
+    );
+    return orderFamilyReadTargetsForOutput(
+      [...ancestorTargets.slice(-ancestorTargetLimit), ...currentTargets],
+      currentSessionId,
+    );
+  };
+  for (const familySessionId of sessionIds) {
+    const isCurrentSession = familySessionId === currentSessionId;
+    const targetCollection = params.includeFamily
+      ? isCurrentSession
+        ? currentTargets
+        : ancestorTargets
+      : targets;
+    const targetLimit =
+      params.includeFamily && !isCurrentSession
+        ? Number.MAX_SAFE_INTEGER
+        : params.includeFamily
+          ? RESERVED_CURRENT_EMBEDDED_CHAT_HISTORY_FAMILY_TARGETS
+          : MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS;
+    const archivedFiles = params.includeFamily
+      ? await resolveSessionTranscriptResetArchiveCandidatesAsync(
+          familySessionId,
+          params.storePath,
+          isCurrentSession ? params.entry?.sessionFile : undefined,
+          params.agentId,
+        )
+      : [];
+    const activeFile =
+      params.includeFamily || familySessionId !== currentSessionId
+        ? resolveFirstExistingTranscriptCandidate({
+            sessionId: familySessionId,
+            storePath: params.storePath,
+            sessionFile: isCurrentSession ? params.entry?.sessionFile : undefined,
+            agentId: params.agentId,
+          })
+        : await resolveSessionHistoryTranscriptPathAsync(
+            familySessionId,
+            params.storePath,
+            params.entry?.sessionFile,
+            {
+              agentId: params.agentId,
+              allowResetArchiveFallback: true,
+            },
+          );
+    if (!params.includeFamily && isCurrentSession && !activeFile) {
+      if (
+        !pushTarget(
+          targetCollection,
+          {
+            sessionId: familySessionId,
+            sessionFile: params.entry?.sessionFile,
+            applySessionStartedAtFilter: true,
+            isCurrentActive: true,
+            useStoreEntryFallback: true,
+          },
+          targetLimit,
+        )
+      ) {
+        return finalizeTargets();
+      }
+      continue;
+    }
+    const archiveTargetLimit =
+      params.includeFamily && isCurrentSession && activeFile
+        ? Math.max(0, targetLimit - 1)
+        : targetLimit;
+    const archivedFilesForTargets =
+      params.includeFamily && archiveTargetLimit < archivedFiles.length
+        ? archiveTargetLimit > 0
+          ? archivedFiles.slice(-archiveTargetLimit)
+          : []
+        : archivedFiles;
+    for (const file of archivedFilesForTargets) {
+      if (
+        !pushTarget(
+          targetCollection,
+          {
+            sessionId: familySessionId,
+            sessionFile: file,
+            applySessionStartedAtFilter: false,
+          },
+          archiveTargetLimit,
+        )
+      ) {
+        break;
+      }
+    }
+    if (activeFile) {
+      pushTarget(
+        targetCollection,
+        {
+          sessionId: familySessionId,
+          sessionFile: activeFile,
+          applySessionStartedAtFilter: isCurrentSession,
+          ...(isCurrentSession ? { isCurrentActive: true } : {}),
+        },
+        targetLimit,
+      );
+    }
+  }
+  return finalizeTargets();
+}
+
 async function handleChatHistory(params: Record<string, unknown>): Promise<{
   sessionKey: string;
   sessionId: string | undefined;
   messages: unknown[];
+  includeFamily?: boolean;
   offset?: number;
   nextOffset?: number;
   hasMore?: boolean;
@@ -252,30 +460,48 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
           ...(typeof entry.sessionFile === "string" ? { sessionFile: entry.sessionFile } : {}),
         }
       : undefined;
+  if (params.includeFamily === true && params.offset !== undefined) {
+    throw new Error("includeFamily cannot be combined with offset");
+  }
+  const includeFamilyHistory = params.includeFamily === true && params.offset === undefined;
+  const transcriptTargets = await resolveChatHistoryTranscriptReadTargets({
+    entry,
+    sessionId,
+    storePath,
+    agentId: sessionAgentId,
+    includeFamily: includeFamilyHistory,
+  });
 
   const localMessages =
-    params.offset === undefined && sessionId && storePath
-      ? await rt.readSessionMessagesAsync(
-          {
-            agentId: sessionAgentId,
-            sessionEntry,
-            sessionId,
-            sessionKey,
-            storePath,
-          },
-          params.offset === undefined
-            ? {
-                mode: "recent",
-                maxMessages: max,
-                maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-                allowResetArchiveFallback: true,
-              }
-            : {
-                mode: "full",
-                reason: "chat.history offset pagination",
-                allowResetArchiveFallback: true,
-              },
-        )
+    params.offset === undefined && transcriptTargets.length > 0 && storePath
+      ? (
+          await Promise.all(
+            transcriptTargets.map(async (target) => {
+              const targetSessionEntry = target.useStoreEntryFallback ? sessionEntry : undefined;
+              const messages = await rt.readSessionMessagesAsync(
+                {
+                  agentId: sessionAgentId,
+                  ...(targetSessionEntry ? { sessionEntry: targetSessionEntry, sessionKey } : {}),
+                  ...(target.sessionFile ? { sessionFile: target.sessionFile } : {}),
+                  sessionId: target.sessionId,
+                  storePath,
+                },
+                {
+                  mode: "recent",
+                  maxMessages: max,
+                  maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+                  allowResetArchiveFallback: true,
+                },
+              );
+              return dropPreSessionStartAnnouncePairs(
+                messages,
+                target.applySessionStartedAtFilter && typeof entry?.sessionStartedAt === "number"
+                  ? entry.sessionStartedAt
+                  : undefined,
+              );
+            }),
+          )
+        ).flat()
       : [];
   const offsetPage =
     params.offset !== undefined && sessionId && storePath
@@ -339,7 +565,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
       : localMessagesForHistory;
   const recencyFilteredMessages = rt.dropPreSessionStartAnnouncePairs(
     rawMessages,
-    sessionStartedAt,
+    !includeFamilyHistory ? sessionStartedAt : undefined,
   );
 
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
@@ -388,6 +614,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     sessionKey,
     sessionId,
     messages: bounded.messages,
+    includeFamily: includeFamilyHistory,
     ...(params.offset !== undefined
       ? { offset, hasMore, totalMessages: offsetPage?.totalMessages ?? projected.length }
       : {}),

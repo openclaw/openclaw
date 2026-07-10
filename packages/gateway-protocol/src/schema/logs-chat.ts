@@ -34,6 +34,12 @@ export const ChatHistoryParamsSchema = Type.Object(
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
+    includeFamily: Type.Optional(
+      Type.Boolean({
+        description:
+          "When true, include reset-family transcript ancestors before the active session transcript. Omitted or false reads only the active session history.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );

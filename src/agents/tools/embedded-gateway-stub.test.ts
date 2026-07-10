@@ -1,19 +1,45 @@
 // Embedded gateway stub tests cover in-process gateway methods used by agent
 // tools when no external gateway transport is available.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
+
+type EmbeddedLoadSessionEntryResult = {
+  cfg: Record<string, unknown>;
+  storePath: string;
+  entry: {
+    sessionId: string;
+    sessionFile?: string;
+    sessionStartedAt?: number;
+    usageFamilySessionIds?: string[];
+  };
+};
 
 const runtime = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main", default: true }] } })),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveSessionAgentId: vi.fn(() => "main"),
-  loadSessionEntry: vi.fn(() => ({
-    cfg: {},
-    storePath: "/tmp/openclaw-sessions.json",
-    entry: { sessionId: "sess-main" },
-  })),
+  loadSessionEntry: vi.fn(
+    (): EmbeddedLoadSessionEntryResult => ({
+      cfg: {},
+      storePath: "/tmp/openclaw-sessions.json",
+      entry: { sessionId: "sess-main" },
+    }),
+  ),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai" })),
-  readSessionMessagesAsync: vi.fn(async (): Promise<unknown[]> => []),
+  readSessionMessagesAsync: vi.fn(
+    async (
+      _scope: {
+        agentId?: string;
+        sessionFile?: string;
+        sessionId: string;
+        storePath: string;
+      },
+      _opts: unknown,
+    ): Promise<unknown[]> => [],
+  ),
   readRecentSessionMessagesWithStatsAsync: vi.fn(async () => ({
     messages: [] as unknown[],
     totalMessages: 0,
@@ -28,7 +54,10 @@ const runtime = vi.hoisted(() => ({
   resolveEffectiveChatHistoryMaxChars: vi.fn(() => 100_000),
   dropPreSessionStartAnnouncePairs: vi.fn((messages: unknown[]) => messages),
   projectChatDisplayMessages: vi.fn((messages: unknown[]): unknown[] => messages),
-  projectRecentChatDisplayMessages: vi.fn((messages: unknown[]): unknown[] => messages),
+  projectRecentChatDisplayMessages: vi.fn(
+    (messages: unknown[], _opts?: { maxChars?: number; maxMessages?: number }): unknown[] =>
+      messages,
+  ),
   augmentChatHistoryWithCanvasBlocks: vi.fn((messages: unknown[]) => messages),
   getMaxChatHistoryMessagesBytes: vi.fn(() => 100_000),
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
@@ -154,6 +183,326 @@ describe("embedded gateway stub", () => {
       },
     );
     expect(result.messages).toEqual(projectedMessages);
+  });
+
+  it("reads embedded chat history from reset ancestor transcripts when includeFamily is set", async () => {
+    const sessionsDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-")),
+    );
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const ancestorActive = path.join(sessionsDir, "ancestor-session.jsonl");
+    const ancestorArchive = path.join(
+      sessionsDir,
+      "ancestor-session.jsonl.reset.2026-06-04T00-00-00.000Z",
+    );
+    const currentActive = path.join(sessionsDir, "current-session.jsonl");
+    const currentArchive = path.join(
+      sessionsDir,
+      "current-session-topic-123.jsonl.reset.2026-06-04T01-00-00.000Z",
+    );
+    const currentCollidingArchive = path.join(
+      sessionsDir,
+      "current-session-topic-secret.jsonl.reset.2026-06-04T02-00-00.000Z",
+    );
+    const currentHeaderlessArchive = path.join(
+      sessionsDir,
+      "current-session-topic-no-header.jsonl.reset.2026-06-04T03-00-00.000Z",
+    );
+    fs.writeFileSync(storePath, "", "utf8");
+    fs.writeFileSync(ancestorActive, "", "utf8");
+    fs.writeFileSync(currentActive, "", "utf8");
+    fs.writeFileSync(
+      ancestorArchive,
+      `${JSON.stringify({ type: "session", version: 1, id: "ancestor-session" })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      currentArchive,
+      `${JSON.stringify({ type: "session", version: 1, id: "current-session" })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      currentCollidingArchive,
+      `${JSON.stringify({ type: "session", version: 1, id: "current-session-topic-secret" })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(currentHeaderlessArchive, "", "utf8");
+    runtime.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      storePath,
+      entry: {
+        sessionId: "current-session",
+        sessionFile: currentActive,
+        usageFamilySessionIds: ["ancestor-session", "current-session"],
+      },
+    });
+    runtime.readSessionMessagesAsync.mockImplementation(
+      async (scope: { sessionId: string; sessionFile?: string }) => [
+        { role: "user", content: `${scope.sessionId}:${path.basename(scope.sessionFile ?? "")}` },
+      ],
+    );
+
+    const callGateway = createEmbeddedCallGateway();
+    const result = await callGateway<{ includeFamily?: boolean; messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main", includeFamily: true },
+    });
+
+    expect(result.includeFamily).toBe(true);
+    expect(runtime.readSessionMessagesAsync).toHaveBeenCalledTimes(4);
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      1,
+      {
+        agentId: "main",
+        sessionFile: ancestorArchive,
+        sessionId: "ancestor-session",
+        storePath,
+      },
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      2,
+      {
+        agentId: "main",
+        sessionFile: ancestorActive,
+        sessionId: "ancestor-session",
+        storePath,
+      },
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      3,
+      {
+        agentId: "main",
+        sessionFile: currentArchive,
+        sessionId: "current-session",
+        storePath,
+      },
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      4,
+      {
+        agentId: "main",
+        sessionFile: currentActive,
+        sessionId: "current-session",
+        storePath,
+      },
+      expect.any(Object),
+    );
+    expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(result.messages, {
+      maxChars: 100_000,
+      maxMessages: 200,
+    });
+  });
+
+  it("keeps newer embedded topic archives when family history is limited", async () => {
+    const sessionsDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-topic-limit-")),
+    );
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const currentActive = path.join(sessionsDir, "current-topic-limit-session.jsonl");
+    const newPlainArchive = path.join(
+      sessionsDir,
+      "current-topic-limit-session.jsonl.reset.2026-06-04T03-00-00.000Z",
+    );
+    const oldTopicArchive = path.join(
+      sessionsDir,
+      "current-topic-limit-session-topic-old.jsonl.reset.2026-06-04T01-00-00.000Z",
+    );
+    const newTopicArchive = path.join(
+      sessionsDir,
+      "current-topic-limit-session-topic-new.jsonl.reset.2026-06-04T02-00-00.000Z",
+    );
+    fs.writeFileSync(storePath, "", "utf8");
+    fs.writeFileSync(currentActive, "", "utf8");
+    for (const archive of [oldTopicArchive, newTopicArchive, newPlainArchive]) {
+      fs.writeFileSync(
+        archive,
+        `${JSON.stringify({ type: "session", version: 1, id: "current-topic-limit-session" })}\n`,
+        "utf8",
+      );
+    }
+    runtime.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      storePath,
+      entry: {
+        sessionId: "current-topic-limit-session",
+        sessionFile: currentActive,
+        usageFamilySessionIds: ["current-topic-limit-session"],
+      },
+    });
+    runtime.readSessionMessagesAsync.mockImplementation(
+      async (scope: { sessionId: string; sessionFile?: string }) => [
+        { role: "user", content: path.basename(scope.sessionFile ?? scope.sessionId) },
+      ],
+    );
+    runtime.projectRecentChatDisplayMessages.mockImplementationOnce((messages, opts) =>
+      messages.slice(-(opts?.maxMessages ?? messages.length)),
+    );
+
+    const callGateway = createEmbeddedCallGateway();
+    const result = await callGateway<{ includeFamily?: boolean; messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main", includeFamily: true, limit: 2 },
+    });
+
+    const rendered = JSON.stringify(result.messages);
+    expect(result.includeFamily).toBe(true);
+    expect(rendered).toContain(path.basename(newPlainArchive));
+    expect(rendered).toContain(path.basename(currentActive));
+    expect(rendered).not.toContain(path.basename(newTopicArchive));
+    expect(rendered).not.toContain(path.basename(oldTopicArchive));
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      1,
+      {
+        agentId: "main",
+        sessionFile: newPlainArchive,
+        sessionId: "current-topic-limit-session",
+        storePath,
+      },
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      2,
+      {
+        agentId: "main",
+        sessionFile: currentActive,
+        sessionId: "current-topic-limit-session",
+        storePath,
+      },
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionFile: oldTopicArchive }),
+      expect.any(Object),
+    );
+  });
+
+  it("preserves ancestor announce rows in embedded family history", async () => {
+    const sessionsDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-announce-")),
+    );
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const ancestorActive = path.join(sessionsDir, "ancestor-announce-session.jsonl");
+    const currentActive = path.join(sessionsDir, "current-announce-session.jsonl");
+    const ancestorAnnounce = {
+      role: "user",
+      content: "ancestor announce",
+      __openclaw: { type: "subagent_announce", timestamp: 1_000 },
+    };
+    const ancestorReply = {
+      role: "assistant",
+      content: "ancestor reply",
+      __openclaw: { timestamp: 1_001 },
+    };
+    const currentMessage = {
+      role: "user",
+      content: "current message",
+      __openclaw: { timestamp: 2_001 },
+    };
+    fs.writeFileSync(storePath, "", "utf8");
+    fs.writeFileSync(ancestorActive, "", "utf8");
+    fs.writeFileSync(currentActive, "", "utf8");
+    runtime.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      storePath,
+      entry: {
+        sessionId: "current-announce-session",
+        sessionFile: currentActive,
+        sessionStartedAt: 2_000,
+        usageFamilySessionIds: ["ancestor-announce-session", "current-announce-session"],
+      },
+    });
+    runtime.readSessionMessagesAsync.mockImplementation(async (scope: { sessionId: string }) =>
+      scope.sessionId === "ancestor-announce-session"
+        ? [ancestorAnnounce, ancestorReply]
+        : [currentMessage],
+    );
+    runtime.dropPreSessionStartAnnouncePairs.mockImplementation(
+      (messages: unknown[], sessionStartedAt?: number) =>
+        sessionStartedAt === undefined
+          ? messages
+          : messages.filter((message) => {
+              const timestamp = (message as { ["__openclaw"]?: { timestamp?: unknown } })[
+                "__openclaw"
+              ]?.timestamp;
+              return typeof timestamp !== "number" || timestamp >= sessionStartedAt;
+            }),
+    );
+
+    const callGateway = createEmbeddedCallGateway();
+    const result = await callGateway<{ includeFamily?: boolean; messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main", includeFamily: true },
+    });
+
+    expect(result.includeFamily).toBe(true);
+    expect(result.messages).toEqual([ancestorAnnounce, ancestorReply, currentMessage]);
+    expect(runtime.dropPreSessionStartAnnouncePairs).toHaveBeenLastCalledWith(
+      [ancestorAnnounce, ancestorReply, currentMessage],
+      undefined,
+    );
+  });
+
+  it("keeps embedded current chat history when family targets hit the cap", async () => {
+    const sessionsDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-cap-")),
+    );
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const currentSessionId = "current-cap-session";
+    const currentActive = path.join(sessionsDir, `${currentSessionId}.jsonl`);
+    const ancestorSessionIds = Array.from(
+      { length: 40 },
+      (_, index) => `ancestor-cap-session-${String(index).padStart(2, "0")}`,
+    );
+    fs.writeFileSync(storePath, "", "utf8");
+    fs.writeFileSync(currentActive, "", "utf8");
+    for (const ancestorSessionId of ancestorSessionIds) {
+      fs.writeFileSync(path.join(sessionsDir, `${ancestorSessionId}.jsonl`), "", "utf8");
+    }
+    runtime.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      storePath,
+      entry: {
+        sessionId: currentSessionId,
+        sessionFile: currentActive,
+        usageFamilySessionIds: [...ancestorSessionIds, currentSessionId],
+      },
+    });
+    runtime.readSessionMessagesAsync.mockImplementation(
+      async (scope: { sessionId: string; sessionFile?: string }) => [
+        { role: "user", content: `${scope.sessionId}:${path.basename(scope.sessionFile ?? "")}` },
+      ],
+    );
+    runtime.projectRecentChatDisplayMessages.mockImplementationOnce((messages, opts) =>
+      messages.slice(-(opts?.maxMessages ?? messages.length)),
+    );
+
+    const callGateway = createEmbeddedCallGateway();
+    const result = await callGateway<{ includeFamily?: boolean; messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main", includeFamily: true, limit: 2 },
+    });
+
+    const calls = runtime.readSessionMessagesAsync.mock.calls.map(
+      ([scope]) =>
+        scope as {
+          sessionFile?: string;
+          sessionId: string;
+        },
+    );
+    expect(result.includeFamily).toBe(true);
+    expect(calls).toHaveLength(31);
+    expect(calls.at(-1)).toMatchObject({
+      sessionFile: currentActive,
+      sessionId: currentSessionId,
+    });
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-00")).toBe(false);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-10")).toBe(true);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-39")).toBe(true);
+    expect(JSON.stringify(result.messages)).toContain("current-cap-session");
+    expect(JSON.stringify(result.messages)).toContain("ancestor-cap-session");
   });
 
   it("scopes embedded global chat history to the requested agent", async () => {
@@ -505,5 +854,19 @@ describe("embedded gateway stub", () => {
       }),
     ).rejects.toThrow("offset must be a non-negative integer");
     expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
+  });
+
+  it("rejects includeFamily with offset before reading session files", async () => {
+    const callGateway = createEmbeddedCallGateway();
+
+    await expect(
+      callGateway({
+        method: "chat.history",
+        params: { sessionKey: "agent:main:main", includeFamily: true, offset: 0 },
+      }),
+    ).rejects.toThrow("includeFamily cannot be combined with offset");
+    expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
+    expect(runtime.readRecentSessionMessagesWithStatsAsync).not.toHaveBeenCalled();
+    expect(runtime.readSessionMessagesPageWithStatsAsync).not.toHaveBeenCalled();
   });
 });
