@@ -14,6 +14,7 @@ import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   testing,
@@ -218,6 +219,7 @@ describe("subagent registry persistence", () => {
       startedAt: 111,
       endedAt: 222,
     });
+    vi.mocked(scheduleOrphanRecovery).mockReset();
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
   });
@@ -850,11 +852,22 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("prunes stale unended restored runs with abortedLastRun instead of keeping them for recovery", async () => {
+  it("keeps stale unended restored runs with abortedLastRun for lifecycle recovery", async () => {
+    vi.mocked(callGateway).mockImplementationOnce(async (request) => {
+      expectFields(request, {
+        method: "agent.wait",
+      });
+      expectFields((request as { params?: unknown }).params, {
+        runId: "run-stale-aborted-restore",
+      });
+      return {
+        status: "pending",
+      };
+    });
     const now = Date.now();
     const runId = "run-stale-aborted-restore";
     const childSessionKey = "agent:main:subagent:stale-aborted-restore";
-    const registryPath = await writePersistedRegistry(
+    await writePersistedRegistry(
       {
         version: 2,
         runs: {
@@ -880,17 +893,16 @@ describe("subagent registry persistence", () => {
     });
 
     restartRegistry();
-    await waitForRegistryWork(async () => {
-      const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-        runs?: Record<string, unknown>;
-      };
-      return after.runs?.[runId] === undefined;
-    });
+    await waitForRegistryWork(() => vi.mocked(callGateway).mock.calls.length > 0);
 
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const [request] = vi.mocked(callGateway).mock.calls.at(0) ?? [];
+    expectFields(request, { method: "agent.wait" });
+    expectFields((request as { params?: unknown } | undefined)?.params, { runId });
+    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
     expect(
       listSubagentRunsForRequester("agent:main:main").some((entry) => entry.runId === runId),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("removes attachments when pruning orphaned restored runs", async () => {

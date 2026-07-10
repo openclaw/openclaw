@@ -16,6 +16,9 @@ import {
   drainSessionStoreWriterQueuesForTest,
 } from "../config/sessions/store.js";
 import { callGateway } from "../gateway/call.js";
+import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
+import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import { captureEnv } from "../test-utils/env.js";
 import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
 import {
@@ -27,6 +30,7 @@ import {
 } from "./subagent-registry.js";
 import {
   createSubagentRegistryTestDeps,
+  readSubagentSessionStore,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -60,6 +64,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
   let tempStateDir: string | null = null;
 
   beforeEach(async () => {
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-orphan-integ-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     setRuntimeConfigSnapshot({ session: { store: undefined } } as never);
@@ -79,6 +85,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
     resetSubagentRegistryForTests({ persist: false });
     await drainSessionStoreWriterQueuesForTest();
     clearSessionStoreCacheForTest();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tempStateDir = null;
@@ -90,7 +98,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:stale-aborted";
     const runId = "run-stale-aborted";
-    await writeSubagentSessionEntry({
+    const storePath = await writeSubagentSessionEntry({
       stateDir: tempStateDir!,
       agentId: "main",
       sessionKey: childSessionKey,
@@ -105,6 +113,20 @@ describe("subagent orphan recovery — faithful restart path", () => {
       createdAt: now - 3 * TWO_HOURS_MS,
       startedAt: now - 3 * TWO_HOURS_MS,
     });
+    expect(
+      createRunningTaskRun({
+        runtime: "subagent",
+        sourceId: runId,
+        ownerKey: record.requesterSessionKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId,
+        task: record.task,
+        deliveryStatus: "pending",
+        startedAt: record.startedAt,
+        lastEventAt: record.startedAt,
+      }),
+    ).not.toBeNull();
     addSubagentRunForTests(record);
 
     const before = getSubagentRunByChildSessionKey(childSessionKey);
@@ -130,6 +152,23 @@ describe("subagent orphan recovery — faithful restart path", () => {
     expect(after?.endedAt).toBeTypeOf("number");
     expect(after?.outcome?.status).toBe("error");
     expect(result.recovered).toBe(0);
+    expect(findTaskByRunId(runId)).toMatchObject({
+      status: "failed",
+      endedAt: expect.any(Number),
+      error: expect.stringContaining("stale aborted subagent run not resumed"),
+    });
+
+    // The task finalizer and session projection are durable, not only
+    // in-memory side effects of the recovery pass.
+    resetTaskRegistryForTests({ persist: false });
+    expect(findTaskByRunId(runId)).toMatchObject({ status: "failed" });
+    await drainSessionStoreWriterQueuesForTest();
+    const persistedSession = (await readSubagentSessionStore(storePath))[childSessionKey];
+    expect(persistedSession).toMatchObject({
+      status: "failed",
+      endedAt: expect.any(Number),
+    });
+    expect(persistedSession?.abortedLastRun).toBeUndefined();
   });
 
   it("resumes a fresh (<2h) aborted run through the real recovery pass", async () => {
@@ -218,10 +257,11 @@ describe("subagent orphan recovery — faithful restart path", () => {
     expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 1 });
     expect(agentCalls).toHaveLength(1);
     expect(staleRecord.outcome?.status).toBe("error");
+    expect(freshRecord.endedAt).toBeUndefined();
     expect(freshRecord.outcome).toBeUndefined();
     expect(runs.some((entry) => entry.runId === staleRecord.runId)).toBe(false);
     expect(resumedAfter).toBeDefined();
-    expect(resumedAfter?.endedAt).toBeUndefined();
-    expect(resumedAfter?.outcome).toBeUndefined();
+    expect(resumedAfter?.endedAt).toBeTypeOf("number");
+    expect(resumedAfter?.outcome?.status).toBe("ok");
   });
 });
