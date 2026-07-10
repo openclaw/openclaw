@@ -13102,6 +13102,52 @@ public struct ChatInjectParams: Codable, Sendable {
     }
 }
 
+public struct ChatInjectBashExecutionParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let command: String
+    public let output: String
+    public let exitcode: Int?
+    public let cancelled: Bool?
+    public let truncated: Bool?
+    public let fulloutputpath: String?
+    public let excludefromcontext: Bool?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        command: String,
+        output: String,
+        exitcode: Int?,
+        cancelled: Bool?,
+        truncated: Bool?,
+        fulloutputpath: String?,
+        excludefromcontext: Bool?)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.command = command
+        self.output = output
+        self.exitcode = exitcode
+        self.cancelled = cancelled
+        self.truncated = truncated
+        self.fulloutputpath = fulloutputpath
+        self.excludefromcontext = excludefromcontext
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case command
+        case output
+        case exitcode = "exitCode"
+        case cancelled
+        case truncated
+        case fulloutputpath = "fullOutputPath"
+        case excludefromcontext = "excludeFromContext"
+    }
+}
+
 public struct ChatDeltaEvent: Codable, Sendable {
     public let runid: String
     public let sessionkey: String

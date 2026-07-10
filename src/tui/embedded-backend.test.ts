@@ -77,7 +77,9 @@ const loadSessionEntryMock = vi.fn(
   }),
 );
 const injectBashExecutionTranscriptMessageMock = vi.fn(
-  async (): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> => ({
+  async (
+    ..._args: unknown[]
+  ): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> => ({
     ok: true,
     messageId: "msg-embedded-1",
   }),

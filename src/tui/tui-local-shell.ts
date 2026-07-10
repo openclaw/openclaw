@@ -179,7 +179,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         stderr = appendWithCap(stderr, buf.toString("utf8"));
       });
 
-      child.on("close", async (code, signal) => {
+      const handleClose = async (code: number | null, signal: NodeJS.Signals | null) => {
         // Keep the tail (consistent with the streaming appendWithCap above) so a
         // large stdout cannot evict stderr: the failure reason (FATAL etc.) at the
         // end is what the operator needs most when output overflows the cap.
@@ -200,9 +200,9 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
           truncated: uncapped.length > maxChars,
         });
         resolve();
-      });
+      };
 
-      child.on("error", async (err) => {
+      const handleError = async (err: Error) => {
         deps.chatLog.addSystem(`[local] error: ${String(err)}`);
         deps.tui.requestRender();
         await persistResult({
@@ -211,6 +211,13 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
           truncated: false,
         });
         resolve();
+      };
+
+      child.on("close", (code, signal) => {
+        void handleClose(code, signal);
+      });
+      child.on("error", (err) => {
+        void handleError(err);
       });
     });
   };
