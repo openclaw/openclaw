@@ -453,13 +453,18 @@ describe("runGatewayLoop", () => {
 
       expect(startDurableWorkflowWorkerFromEnv).toHaveBeenCalledTimes(1);
       const [workerOptions] = startDurableWorkflowWorkerFromEnv.mock.calls[0] ?? [];
+      const workerRegistry = (
+        workerOptions as { registry: { listStepTypesWithHandlers(): string[] } }
+      ).registry;
       expect(workerOptions).toEqual({
         registry: expect.objectContaining({
           registerWorkflow: expect.any(Function),
           registerStepHandler: expect.any(Function),
+          listStepTypesWithHandlers: expect.any(Function),
         }),
         workerId: expect.stringMatching(/^gateway-[0-9a-f-]{36}$/),
       });
+      expect(workerRegistry.listStepTypesWithHandlers()).toEqual([]);
 
       sigterm();
 

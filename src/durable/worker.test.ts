@@ -200,8 +200,14 @@ describe("durable workflow worker", () => {
 
   it("fails closed from env when no step handlers are registered", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-worker-env-empty-"));
+    const env = {
+      OPENCLAW_STATE_DIR: dir,
+      OPENCLAW_DURABLE_WORKFLOWS: "1",
+      OPENCLAW_DURABLE_WORKER: "1",
+      OPENCLAW_DURABLE_WORKER_POLL_INTERVAL_MS: "5",
+    };
     try {
-      const store = openDurableWorkflowSqliteStore({ path: path.join(dir, "openclaw.sqlite") });
+      const store = openDurableWorkflowSqliteStore({ env });
       const run = store.createRun({
         workflowId: "test.workflow",
         status: "queued",
@@ -218,12 +224,7 @@ describe("durable workflow worker", () => {
       const worker = startDurableWorkflowWorkerFromEnv({
         registry: createDurableWorkflowRegistry(),
         workerId: "empty-registry-worker",
-        env: {
-          OPENCLAW_STATE_DIR: dir,
-          OPENCLAW_DURABLE_WORKFLOWS: "1",
-          OPENCLAW_DURABLE_WORKER: "1",
-          OPENCLAW_DURABLE_WORKER_POLL_INTERVAL_MS: "5",
-        },
+        env,
       });
 
       expect(worker.getStatus()).toMatchObject({
@@ -236,18 +237,22 @@ describe("durable workflow worker", () => {
       });
       await worker.stop();
 
-      const verifyStore = openDurableWorkflowSqliteStore({
-        path: path.join(dir, "openclaw.sqlite"),
-      });
+      const verifyStore = openDurableWorkflowSqliteStore({ env });
       try {
         expect(verifyStore.getRun(run.workflowRunId)).toMatchObject({
           status: "queued",
           recoveryState: "runnable",
         });
+        expect(verifyStore.getRun(run.workflowRunId)?.recoveryState).not.toBe(
+          "unknown_after_side_effect",
+        );
         expect(verifyStore.listSteps(run.workflowRunId)[0]).toMatchObject({
           status: "queued",
           recoveryState: "runnable",
         });
+        expect(verifyStore.listSteps(run.workflowRunId)[0]?.recoveryState).not.toBe(
+          "unknown_after_side_effect",
+        );
         expect(verifyStore.listSteps(run.workflowRunId)[0]?.claimedBy).toBeUndefined();
       } finally {
         verifyStore.close();
