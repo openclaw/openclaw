@@ -8,7 +8,7 @@
 
     <application>
         <activity
-            android:name=".ui.CanvasLifecycleSpikeActivity"
+            android:name=".ui.CanvasLifecycleTestActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|keyboard|keyboardHidden|navigation"
             android:exported="false"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
