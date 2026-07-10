@@ -8,6 +8,10 @@ describe("shared/node-match", () => {
     expect(normalizeNodeKey("---PI__Node---")).toBe("pi-node");
     expect(normalizeNodeKey("工作站 01")).toBe("工作站-01");
     expect(normalizeNodeKey("Cafe\u0301 01")).toBe("café-01");
+    expect(normalizeNodeKey("किताब")).toBe("किताब");
+    expect(normalizeNodeKey("Mac ❤️ Studio")).toBe("mac-studio");
+    expect(normalizeNodeKey("Node 1️⃣")).toBe("node-1");
+    expect(normalizeNodeKey("❤️")).toBe("");
     expect(normalizeNodeKey("###")).toBe("");
   });
 
@@ -139,6 +143,24 @@ describe("shared/node-match", () => {
     ];
     expect(resolveNodeIdFromCandidates(nodes, "工作站")).toBe("cn-desktop");
     expect(() => resolveNodeIdFromCandidates(nodes, "###")).toThrow(/unknown node: ###/);
+  });
+
+  it("preserves combining marks that distinguish Unicode display names", () => {
+    const nodes = [
+      { nodeId: "hi-short-i", displayName: "किताब" },
+      { nodeId: "hi-short-u", displayName: "कुताब" },
+    ];
+    expect(resolveNodeIdFromCandidates(nodes, "किताब")).toBe("hi-short-i");
+    expect(resolveNodeIdFromCandidates(nodes, "कुताब")).toBe("hi-short-u");
+  });
+
+  it("ignores emoji decoration marks during display-name matching", () => {
+    const nodes = [
+      { nodeId: "heart", displayName: "Mac ❤️ Studio" },
+      { nodeId: "keycap", displayName: "Node 1️⃣" },
+    ];
+    expect(resolveNodeIdFromCandidates(nodes, "Mac Studio")).toBe("heart");
+    expect(resolveNodeIdFromCandidates(nodes, "Node 1")).toBe("keycap");
   });
 
   it("keeps compact display-name selectors below exact name matches", () => {
