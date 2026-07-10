@@ -12,7 +12,7 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
-type MobileFixture = {
+type BrowserFixture = {
   browser: Browser;
   page: Page;
 };
@@ -25,8 +25,18 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/text.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
+}
+
+function readMountFallbackCss(): string {
+  const html = readStyleSheet("ui/index.html");
+  const css = html.match(/<style>([\s\S]*?)<\/style>/)?.[1];
+  if (!css) {
+    throw new Error("Missing inline mount fallback styles in ui/index.html");
+  }
+  return css;
 }
 
 function controlsHtml() {
@@ -59,17 +69,17 @@ function controlsHtml() {
   `;
 }
 
-async function openMobileFixture(): Promise<MobileFixture> {
+async function openBrowserFixture(
+  body: string,
+  css: string,
+  options?: Parameters<Browser["newPage"]>[0],
+): Promise<BrowserFixture> {
   const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
   let page: Page | undefined;
   try {
-    page = await browser.newPage({
-      hasTouch: true,
-      isMobile: true,
-      viewport: { width: 390, height: 844 },
-    });
+    page = await browser.newPage(options);
     await page.setContent(
-      `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${controlsHtml()}</body></html>`,
+      `<!doctype html><html data-theme-mode="light"><head><style>${css}</style></head><body>${body}</body></html>`,
     );
     return { browser, page };
   } catch (error) {
@@ -79,7 +89,15 @@ async function openMobileFixture(): Promise<MobileFixture> {
   }
 }
 
-async function closeMobileFixture(fixture: MobileFixture): Promise<void> {
+function openMobileFixture(): Promise<BrowserFixture> {
+  return openBrowserFixture(controlsHtml(), readUiCss(), {
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+  });
+}
+
+async function closeBrowserFixture(fixture: BrowserFixture): Promise<void> {
   await fixture.page.close().catch(() => {});
   await fixture.browser.close().catch(() => {});
 }
@@ -131,7 +149,7 @@ describeBrowserLayout("touch-primary form controls", () => {
         expect(size.fontSize, size.selector).toBeGreaterThanOrEqual(16);
       }
     } finally {
-      await closeMobileFixture(fixture);
+      await closeBrowserFixture(fixture);
     }
   });
 
@@ -157,7 +175,7 @@ describeBrowserLayout("touch-primary form controls", () => {
         expect(select.repeat).toContain("no-repeat");
       }
     } finally {
-      await closeMobileFixture(fixture);
+      await closeBrowserFixture(fixture);
     }
   });
 
@@ -186,7 +204,63 @@ describeBrowserLayout("touch-primary form controls", () => {
       expect(dimensions.checkbox).toBeLessThan(38);
       expect(dimensions.radio).toBeLessThan(38);
     } finally {
-      await closeMobileFixture(fixture);
+      await closeBrowserFixture(fixture);
+    }
+  });
+});
+
+describeBrowserLayout("cursor semantics", () => {
+  it("reserves the pointer for genuine content and external links", async () => {
+    const fixture = await openBrowserFixture(
+      `
+        <button class="btn">Control</button>
+        <a class="nav-item" href="/overview">Navigation</a>
+        <a class="sidebar-footer-icon" href="/settings">Settings</a>
+        <a class="sidebar-footer-icon" href="https://docs.openclaw.ai" target="_blank">Docs</a>
+        <section class="mount-fallback">
+          <button class="mount-fallback__button">Try again</button>
+        </section>
+        <p class="chat-text">
+          <a href="https://example.com">Content link</a>
+          <a class="markdown-file-link" data-file-path="report.txt">File link</a>
+        </p>
+      `,
+      `${readUiCss()}\n${readMountFallbackCss()}`,
+    );
+    const { page } = fixture;
+    try {
+      const cursors = await page.evaluate(() => {
+        const selectors = {
+          button: ".btn",
+          contentLink: '.chat-text a[href="https://example.com"]',
+          externalChromeLink: '.sidebar-footer-icon[target="_blank"]',
+          fileLink: ".markdown-file-link",
+          internalChromeLink: '.sidebar-footer-icon[href="/settings"]',
+          mountFallbackButton: ".mount-fallback__button",
+          navigation: ".nav-item",
+        };
+        return Object.fromEntries(
+          Object.entries(selectors).map(([name, selector]) => {
+            const node = document.querySelector(selector);
+            if (!(node instanceof HTMLElement)) {
+              throw new Error(`Missing cursor fixture ${selector}`);
+            }
+            return [name, getComputedStyle(node).cursor];
+          }),
+        );
+      });
+
+      expect(cursors).toEqual({
+        button: "default",
+        contentLink: "pointer",
+        externalChromeLink: "pointer",
+        fileLink: "pointer",
+        internalChromeLink: "default",
+        mountFallbackButton: "default",
+        navigation: "default",
+      });
+    } finally {
+      await closeBrowserFixture(fixture);
     }
   });
 });
