@@ -455,7 +455,9 @@ describe("qa scenario catalog", () => {
     expect(interruptedStatusAssertion).toBeDefined();
     const interruptedStatusContract = JSON.stringify(interruptedStatusAssertion);
     expect(interruptedStatusContract).toContain("waited.stopReason === 'restart'");
-    expect(interruptedStatusContract).toContain("waited.stopReason === 'aborted'");
+    expect(interruptedStatusContract).toContain(
+      "env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === 'codex' && waited.stopReason === 'aborted'",
+    );
     expect(interruptedStatusContract).toContain("EmbeddedAttemptSessionTakeoverError");
     expect(interruptedStatusContract).toContain("AbortError");
     expect(interruptedStatusContract).toContain("This operation was aborted");
