@@ -338,7 +338,7 @@ describe("chutes-oauth", () => {
         fetchFn,
         now: 1_000_000,
       }),
-    ).rejects.toThrow("Chutes token exchange failed: chutes exchange failure");
+    ).rejects.toThrow("Chutes token exchange failed with status 401");
     expect(textSpy).not.toHaveBeenCalled();
     expect(tracked.wasCanceled()).toBe(true);
   });
@@ -363,7 +363,7 @@ describe("chutes-oauth", () => {
         fetchFn,
         now: 5_000_000,
       }),
-    ).rejects.toThrow("Chutes token refresh failed: chutes refresh failure");
+    ).rejects.toThrow("Chutes token refresh failed with status 401");
     expect(textSpy).not.toHaveBeenCalled();
     expect(tracked.wasCanceled()).toBe(true);
   });
