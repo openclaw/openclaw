@@ -141,6 +141,12 @@ async function resolveValue(node: unknown, api: QaFlowApi, vars: QaFlowVars): Pr
 function resolveCallable(path: string, api: QaFlowApi, vars: QaFlowVars) {
   const { parent, value } = getPathWithParent(createEvalContext(api, vars), path);
   if (typeof value !== "function") {
+    if (path.startsWith("transport.")) {
+      const method = path.slice("transport.".length);
+      throw new Error(
+        `QA scenario "${api.scenario.id}" cannot run "${method}": the active transport adapter does not implement this method.`,
+      );
+    }
     throw new Error(`qa flow callable not found: ${path}`);
   }
   return parent ? value.bind(parent) : value;
@@ -159,6 +165,27 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     if (typeof action.saveAs === "string" && action.saveAs.trim()) {
       vars[action.saveAs.trim()] = result;
     }
+    return;
+  }
+  for (const name of [
+    "sendInbound",
+    "sendNativeCommand",
+    "waitForOutbound",
+    "waitForOutboundSequence",
+    "waitForNoOutbound",
+  ] as const) {
+    if (name in action) {
+      const callable = resolveCallable(`transport.${name}`, api, vars);
+      const result = await callable(await resolveValue(action[name], api, vars));
+      if (typeof action.saveAs === "string" && action.saveAs.trim()) {
+        vars[action.saveAs.trim()] = result;
+      }
+      return;
+    }
+  }
+  if (action.resetTransport === true) {
+    const reset = resolveCallable("transport.reset", api, vars);
+    await reset();
     return;
   }
   if (typeof action.set === "string") {

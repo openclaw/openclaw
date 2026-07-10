@@ -11,7 +11,12 @@ interface DecodedHtmlEntity {
 }
 
 function decodeCodePoint(codePoint: number): string | undefined {
-  if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) {
+  if (
+    !Number.isInteger(codePoint) ||
+    codePoint < 0 ||
+    codePoint > 0x10ffff ||
+    (codePoint >= 0xd800 && codePoint <= 0xdfff)
+  ) {
     return undefined;
   }
   return String.fromCodePoint(codePoint);

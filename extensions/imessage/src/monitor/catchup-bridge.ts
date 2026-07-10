@@ -42,7 +42,7 @@ type RuntimeLogger = {
   error?: (msg: string) => void;
 };
 
-export type RunIMessageCatchupParams = {
+type RunIMessageCatchupParams = {
   client: IMessageRpcClient;
   accountId: string;
   config: ResolvedCatchupConfig;

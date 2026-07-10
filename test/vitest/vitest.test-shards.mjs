@@ -30,11 +30,6 @@ export const fullSuiteVitestShards = [
     projects: ["test/vitest/vitest.unit-security.config.ts"],
   },
   {
-    config: "test/vitest/vitest.full-core-unit-ui.config.ts",
-    name: "core-unit-ui",
-    projects: ["test/vitest/vitest.unit-ui.config.ts"],
-  },
-  {
     config: "test/vitest/vitest.full-core-unit-support.config.ts",
     name: "core-unit-support",
     projects: ["test/vitest/vitest.unit-support.config.ts"],

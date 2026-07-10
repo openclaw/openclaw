@@ -1,5 +1,4 @@
 // WebSocket message handler validates frames, dispatches gateway RPCs, manages pairing, and reports responses.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -28,6 +27,8 @@ import {
   type ErrorShape,
   errorShape,
   formatValidationErrors,
+  GATEWAY_SERVER_CAPS,
+  MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   validateConnectParams,
@@ -42,6 +43,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { sha256HexPrefix } from "../../../infra/crypto-digest.js";
 import {
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
@@ -91,6 +93,13 @@ import { rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
+  getGatewaySuspendAdmissionPhase,
+  isGatewayRestartDraining,
+  runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
+import {
+  BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   isPairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
@@ -109,7 +118,9 @@ import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-to
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
+import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
+import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import {
@@ -118,6 +129,7 @@ import {
   isTrustedProxyAddress,
   resolveClientIp,
 } from "../../net.js";
+import { filterLegacyNodeProtocolFeatures } from "../../node-command-policy.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import {
   resolveNodePairingClientIpSource,
@@ -153,7 +165,7 @@ import {
   incrementPresenceVersion,
 } from "../health-state.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
-import type { GatewayWsClient } from "../ws-types.js";
+import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 import {
@@ -169,6 +181,7 @@ import {
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
+  shouldPreserveLocalCliSharedAuthScopes,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 import {
@@ -181,6 +194,8 @@ import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
+const GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS = 1_000;
+const GATEWAY_WORK_ADMISSION_CLOSE_CODE = 1013;
 const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.pair.remove",
   "device.token.rotate",
@@ -200,7 +215,7 @@ function hashGatewaySecurityId(value: string | undefined): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return `sha256:${createHash("sha256").update(normalized).digest("hex").slice(0, 12)}`;
+  return `sha256:${sha256HexPrefix(normalized, 12)}`;
 }
 
 function emitGatewayAuthSecurityEvent(params: {
@@ -351,6 +366,31 @@ function isSetupCodeMobileBootstrapClient(client: {
   return false;
 }
 
+function isControlUiOperatorBootstrapProfile(params: {
+  profile: DeviceBootstrapProfile | null;
+  requestedScopes: readonly string[];
+}): params is { profile: DeviceBootstrapProfile; requestedScopes: readonly string[] } {
+  const { profile, requestedScopes } = params;
+  if (!profile || profile.purpose !== "control-ui") {
+    return false;
+  }
+  if (profile.roles.length !== 1 || profile.roles[0] !== "operator") {
+    return false;
+  }
+  if (
+    !profile.scopes.every((scope) =>
+      (BOOTSTRAP_HANDOFF_OPERATOR_SCOPES as readonly string[]).includes(scope),
+    )
+  ) {
+    return false;
+  }
+  return roleScopesAllow({
+    role: "operator",
+    requestedScopes,
+    allowedScopes: profile.scopes,
+  });
+}
+
 function resolveTrustedProxyControlUiScopes(params: {
   requestedScopes: string[];
   upgradeReq: IncomingMessage;
@@ -488,6 +528,7 @@ export type GatewayWsMessageHandlerParams = {
   getClient: () => GatewayWsClient | null;
   setClient: (next: GatewayWsClient) => boolean;
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
+  advanceHandshakePhase: (phase: WsHandshakePhase) => void;
   setCloseCause: (cause: string, meta?: Record<string, unknown>) => void;
   setLastFrameMeta: (meta: { type?: string; method?: string; id?: string }) => void;
   originCheckMetrics: WsOriginCheckMetrics;
@@ -533,6 +574,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     getClient,
     setClient,
     setHandshakeState,
+    advanceHandshakePhase,
     setCloseCause,
     setLastFrameMeta,
     originCheckMetrics,
@@ -627,6 +669,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     });
     close(4001, `client invalidated: ${reason}`);
     return true;
+  };
+  const runDetachedConnectWork = (run: () => Promise<void>, onError: (error: unknown) => void) => {
+    // Connect-triggered mutations outlive hello-ok. Give each tail its own
+    // root lease so suspension cannot report ready while one is still active.
+    void runWithGatewayIndependentRootWorkAdmission(run).catch(onError);
   };
 
   const handleMessage = async (data: RawData) => {
@@ -811,7 +858,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE &&
           maxProtocol >= MIN_PROBE_PROTOCOL_VERSION &&
           minProtocol <= PROTOCOL_VERSION;
-        if (!supportsCurrentProtocol && !supportsProbeRestartProtocol) {
+        // Protocol v4 changed chat deltas, not node RPC frames. Keep N-1 limited to
+        // the node role+mode so stale operator/UI clients cannot enter the v4 surface.
+        const supportsPreviousNodeProtocol =
+          connectParams.role === "node" &&
+          connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+          maxProtocol >= MIN_NODE_PROTOCOL_VERSION &&
+          minProtocol <= MIN_NODE_PROTOCOL_VERSION;
+        const usesLegacyNodeProtocol = !supportsCurrentProtocol && supportsPreviousNodeProtocol;
+        if (
+          !supportsCurrentProtocol &&
+          !supportsProbeRestartProtocol &&
+          !supportsPreviousNodeProtocol
+        ) {
           markHandshakeFailure("protocol-mismatch", {
             minProtocol,
             maxProtocol,
@@ -911,6 +970,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           deviceRaw,
         });
         const device = controlUiAuthPolicy.device;
+        const hasRawHandshakeCredentials =
+          hasSharedAuth ||
+          Boolean(connectParams.auth?.bootstrapToken) ||
+          Boolean(connectParams.auth?.deviceToken) ||
+          Boolean(device);
+        if (hasRawHandshakeCredentials) {
+          advanceHandshakePhase("auth_credentials_received");
+        }
         const connectAuthState = await resolveConnectAuthState({
           resolvedAuth,
           connectAuth: connectParams.auth,
@@ -1026,6 +1093,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedAuthOk,
           authMethod,
         });
+        let preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
+          connectParams,
+          locality: pairingLocality,
+          hasBrowserOriginHeader,
+          sharedAuthOk,
+          authMethod,
+        });
         const handleMissingDeviceIdentity = (): boolean => {
           const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
             isControlUi,
@@ -1051,13 +1125,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             hasSharedAuth,
             isLocalClient,
           });
-          // Shared token/password auth can bypass pairing for trusted operators.
-          // Device-less clients still clear self-declared scopes by default, with
-          // one narrow exception: the direct-local backend gateway-client shared-
-          // auth handoff used for in-process control-plane coordination.
+          // Device-less shared auth clears self-declared scopes by default.
+          // Only first-party local control paths preserve scopes: backend self-
+          // calls and CLI shared-secret calls that already proved loopback auth.
           if (
             !device &&
             !skipLocalBackendSelfPairing &&
+            !preserveLocalCliSharedAuthScopes &&
             shouldClearUnboundScopesForMissingDeviceIdentity({
               decision,
               controlUiAuthPolicy,
@@ -1237,10 +1311,18 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedAuthOk,
           authMethod,
         });
+        preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
+          connectParams,
+          locality: pairingLocality,
+          hasBrowserOriginHeader,
+          sharedAuthOk,
+          authMethod,
+        });
         if (!authOk) {
           rejectUnauthorized(authResult);
           return;
         }
+        advanceHandshakePhase("auth_validated");
         const usesSharedGatewayAuth =
           authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
@@ -1378,13 +1460,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               authMethod === "bootstrap-token" &&
               bootstrapTokenCandidate &&
               reason === "not-paired" &&
-              role === "node" &&
-              scopes.length === 0 &&
               !existingPairedDevice &&
-              !isControlUi &&
-              !isBrowserOperatorUi &&
-              !isWebchat &&
-              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE
+              ((role === "node" &&
+                scopes.length === 0 &&
+                !isControlUi &&
+                !isBrowserOperatorUi &&
+                !isWebchat &&
+                connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE) ||
+                (isControlUi && role === "operator"))
                 ? await getBoundDeviceBootstrapProfile({
                     token: bootstrapTokenCandidate,
                     deviceId: device.id,
@@ -1394,22 +1477,45 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             const allowSetupCodeMobileBootstrapPairing =
               boundBootstrapProfile !== null &&
               isPairingSetupBootstrapProfile(boundBootstrapProfile) &&
+              role === "node" &&
+              scopes.length === 0 &&
+              !isControlUi &&
+              !isBrowserOperatorUi &&
+              !isWebchat &&
+              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
               isSetupCodeMobileBootstrapClient(connectParams.client);
+            const setupCodeMobileBootstrapProfile = allowSetupCodeMobileBootstrapPairing
+              ? boundBootstrapProfile
+              : null;
+            const allowControlUiOperatorBootstrapPairing = isControlUiOperatorBootstrapProfile({
+              profile: boundBootstrapProfile,
+              requestedScopes: scopes,
+            });
+            const controlUiOperatorBootstrapProfile = allowControlUiOperatorBootstrapPairing
+              ? boundBootstrapProfile
+              : null;
             // This is the native QR/setup-code onboarding seam. Mobile clients
             // must prove their canonical client id and platform/family metadata
             // agree before the Gateway can skip owner approval and hand off the
-            // bounded operator token below. Admin/pairing scopes still require
-            // an explicit owner flow.
-            const bootstrapPairingRoles = allowSetupCodeMobileBootstrapPairing
-              ? uniqueStrings([role, ...boundBootstrapProfile.roles])
-              : undefined;
-            const bootstrapPairingScopes =
-              allowSetupCodeMobileBootstrapPairing && bootstrapPairingRoles
-                ? resolveBootstrapProfileScopesForRoles(
-                    bootstrapPairingRoles,
-                    boundBootstrapProfile.scopes,
+            // bounded operator token below. Admin/pairing still require an explicit owner flow.
+            const bootstrapPairingRoles = setupCodeMobileBootstrapProfile
+              ? uniqueStrings([role, ...setupCodeMobileBootstrapProfile.roles])
+              : controlUiOperatorBootstrapProfile
+                ? ["operator"]
+                : undefined;
+            const bootstrapPairingScopes = setupCodeMobileBootstrapProfile
+              ? resolveBootstrapProfileScopesForRoles(
+                  bootstrapPairingRoles ?? [],
+                  setupCodeMobileBootstrapProfile.scopes,
+                )
+              : controlUiOperatorBootstrapProfile
+                ? resolveBootstrapProfileScopesForRole(
+                    "operator",
+                    controlUiOperatorBootstrapProfile.scopes,
                   )
                 : undefined;
+            const bootstrapApprovalProfile =
+              setupCodeMobileBootstrapProfile ?? controlUiOperatorBootstrapProfile;
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
@@ -1425,9 +1531,25 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   ? false
                   : allowSilentLocalPairing ||
                     allowSilentTrustedCidrsNodePairing ||
-                    allowSetupCodeMobileBootstrapPairing,
+                    allowSetupCodeMobileBootstrapPairing ||
+                    allowControlUiOperatorBootstrapPairing,
             });
             const context = buildRequestContext();
+            // A replacement request obsoletes older pending requestIds; tell approval
+            // UIs so they drop the stale prompts instead of stacking alerts forever.
+            const supersededResolvedAt = Date.now();
+            for (const superseded of pairing.superseded ?? []) {
+              context.broadcast(
+                "device.pair.resolved",
+                {
+                  requestId: superseded.requestId,
+                  deviceId: superseded.deviceId,
+                  decision: "rejected",
+                  ts: supersededResolvedAt,
+                },
+                { dropIfSlow: true },
+              );
+            }
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
             let resolvedByConcurrentApproval = false;
             let recoveryRequestId: string | undefined;
@@ -1446,20 +1568,23 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               return replacementPending?.requestId;
             };
             if (pairing.request.silent === true) {
-              approved =
-                allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile
-                  ? await approveBootstrapDevicePairing(
-                      pairing.request.requestId,
-                      boundBootstrapProfile,
-                      { accessMetadata: clientAccessMetadata },
-                    )
-                  : await approveDevicePairing(pairing.request.requestId, {
-                      callerScopes: scopes,
-                      accessMetadata: clientAccessMetadata,
-                    });
+              approved = bootstrapApprovalProfile
+                ? await approveBootstrapDevicePairing(
+                    pairing.request.requestId,
+                    bootstrapApprovalProfile,
+                    { accessMetadata: clientAccessMetadata },
+                  )
+                : await approveDevicePairing(pairing.request.requestId, {
+                    callerScopes: scopes,
+                    accessMetadata: clientAccessMetadata,
+                    // Same-host local approvals are prune-eligible "silent";
+                    // trusted-CIDR approvals cross hosts and must never be
+                    // auto-pruned, so they carry their own provenance.
+                    approvedVia: allowSilentLocalPairing ? "silent" : "trusted-cidr",
+                  });
               if (approved?.status === "approved") {
-                if (allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile) {
-                  handoffBootstrapProfile = boundBootstrapProfile;
+                if (bootstrapApprovalProfile) {
+                  handoffBootstrapProfile = bootstrapApprovalProfile;
                 }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
@@ -1474,6 +1599,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   },
                   { dropIfSlow: true },
                 );
+                if (!(allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile)) {
+                  // Best-effort retirement of stale silent siblings; a prune
+                  // failure must never fail the fresh device's handshake.
+                  try {
+                    await pruneSupersededSilentPairingsAfterApproval({
+                      deviceId: approved.device.deviceId,
+                      context,
+                    });
+                  } catch (error) {
+                    logGateway.warn(
+                      `device pairing prune failed device=${approved.device.deviceId} error=${String(error)}`,
+                    );
+                  }
+                }
               } else {
                 resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
                   await getPairedDevice(device.id),
@@ -1811,12 +1950,34 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             declaredCaps?: string[];
             declaredCommands?: string[];
             declaredPermissions?: Record<string, boolean>;
+            sessionCapsCeiling?: string[];
+            sessionCommandsCeiling?: string[];
           };
           nodeConnectParams.declaredCaps = reconciliation.declaredCaps;
           nodeConnectParams.declaredCommands = reconciliation.declaredCommands;
           nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
-          connectParams.caps = reconciliation.effectiveCaps;
-          connectParams.commands = reconciliation.effectiveCommands;
+          const pluginSurfaces = pluginNodeCapabilities.map((surface) => surface.surface);
+          if (usesLegacyNodeProtocol) {
+            const sessionCeiling = filterLegacyNodeProtocolFeatures({
+              caps: reconciliation.declaredCaps,
+              commands: reconciliation.declaredCommands,
+              pluginSurfaces,
+            });
+            nodeConnectParams.sessionCapsCeiling = sessionCeiling.caps;
+            nodeConnectParams.sessionCommandsCeiling = sessionCeiling.commands;
+          }
+          const effectiveFeatures = usesLegacyNodeProtocol
+            ? filterLegacyNodeProtocolFeatures({
+                caps: reconciliation.effectiveCaps,
+                commands: reconciliation.effectiveCommands,
+                pluginSurfaces,
+              })
+            : {
+                caps: reconciliation.effectiveCaps,
+                commands: reconciliation.effectiveCommands,
+              };
+          connectParams.caps = effectiveFeatures.caps;
+          connectParams.commands = effectiveFeatures.commands;
           connectParams.permissions = reconciliation.effectivePermissions;
         }
 
@@ -1842,7 +2003,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           capability: string;
           expiresAtMs: number;
         }> = [];
-        if (pluginSurfaceBaseUrl) {
+        if (pluginSurfaceBaseUrl && !usesLegacyNodeProtocol) {
           for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
             const capability = mintPluginNodeCapabilityToken();
             const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
@@ -1909,6 +2070,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   : {}),
               }
             : undefined;
+        if (usesLegacyNodeProtocol) {
+          logWsControl.warn(
+            `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
+          );
+        }
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,
@@ -1979,6 +2145,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
         setHandshakeState("connected");
+        advanceHandshakePhase("session_attached");
         logWs("in", "connect", {
           connId,
           client: connectParams.client.id,
@@ -2025,53 +2192,69 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             nodeIdsForPairing.add(instanceIdLocal);
           }
           for (const nodeId of nodeIdsForPairing) {
-            void updatePairedNodeMetadata(nodeId, {
-              lastConnectedAtMs: nodeSession.connectedAtMs,
-            }).catch((err: unknown) =>
-              logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
+            runDetachedConnectWork(
+              async () => {
+                await updatePairedNodeMetadata(nodeId, {
+                  lastConnectedAtMs: nodeSession.connectedAtMs,
+                });
+              },
+              (err) =>
+                logGateway.warn(
+                  `failed to record last connect for ${nodeId}: ${formatForLog(err)}`,
+                ),
             );
           }
           recordRemoteNodeInfo({
             nodeId: nodeSession.nodeId,
+            connId: nodeSession.connId,
             displayName: nodeSession.displayName,
             platform: nodeSession.platform,
             deviceFamily: nodeSession.deviceFamily,
             commands: nodeSession.commands,
             remoteIp: nodeSession.remoteIp,
           });
-          void refreshRemoteNodeBins({
-            nodeId: nodeSession.nodeId,
-            platform: nodeSession.platform,
-            deviceFamily: nodeSession.deviceFamily,
-            commands: nodeSession.commands,
-            cfg: getRuntimeConfig(),
-          }).catch((err: unknown) =>
-            logGateway.warn(
-              `remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
-            ),
+          runDetachedConnectWork(
+            async () => {
+              await refreshRemoteNodeBins({
+                nodeId: nodeSession.nodeId,
+                platform: nodeSession.platform,
+                deviceFamily: nodeSession.deviceFamily,
+                commands: nodeSession.commands,
+                cfg: getRuntimeConfig(),
+                // The node socket is registered before macOS app command handlers finish warming.
+                // Delay only the connect-time probe; later skill refreshes use the live session.
+                readinessDelayMs: 5_000,
+              });
+            },
+            (err) =>
+              logGateway.warn(
+                `remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+              ),
           );
-          void loadVoiceWakeConfig()
-            .then((cfg) => {
+          runDetachedConnectWork(
+            async () => {
+              const cfg = await loadVoiceWakeConfig();
               context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.changed", {
                 triggers: cfg.triggers,
               });
-            })
-            .catch((err: unknown) =>
+            },
+            (err) =>
               logGateway.warn(
                 `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
-            );
-          void loadVoiceWakeRoutingConfig()
-            .then((routing) => {
+          );
+          runDetachedConnectWork(
+            async () => {
+              const routing = await loadVoiceWakeRoutingConfig();
               context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.routing.changed", {
                 config: routing,
               });
-            })
-            .catch((err: unknown) =>
+            },
+            (err) =>
               logGateway.warn(
                 `voicewake routing snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
-            );
+          );
         }
 
         const snapshot = buildGatewaySnapshot({
@@ -2083,6 +2266,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           snapshot.stateVersion.health = getHealthVersion();
         }
         const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
+        const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes);
         const helloOk = {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
@@ -2090,8 +2274,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             version: resolveRuntimeServiceVersion(process.env),
             connId,
           },
-          features: { methods: gatewayMethods, events },
+          features: {
+            methods: gatewayMethods,
+            events,
+            capabilities: [GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT],
+          },
           snapshot,
+          ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
           ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           auth: {
             role,
@@ -2112,6 +2301,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             tickIntervalMs: TICK_INTERVAL_MS,
           },
         };
+        advanceHandshakePhase("hello_payload_prepared");
 
         let revokedBootstrapTokenRecord:
           | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
@@ -2179,6 +2369,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           clientMode: connectParams.client.mode,
           deviceId: device?.id,
         });
+        advanceHandshakePhase("ready");
         if (pendingNodePairingCleanup) {
           const context = buildRequestContext();
           const cleanupClaim = pendingNodePairingCleanup;
@@ -2344,8 +2535,80 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
+  const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
+    if (isClosed() || getRawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
+      return false;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawDataToString(data));
+    } catch {
+      return false;
+    }
+    if (
+      !validateRequestFrame(parsed) ||
+      parsed.method !== "connect" ||
+      !validateConnectParams(parsed.params)
+    ) {
+      return false;
+    }
+
+    const restartDraining = isGatewayRestartDraining();
+    const reason = restartDraining ? "gateway-restarting" : "gateway-suspending";
+    const operation = restartDraining ? "restart" : "suspension";
+    const phase = getGatewaySuspendAdmissionPhase();
+    setLastFrameMeta({ type: "req", method: "connect", id: parsed.id });
+    setHandshakeState("failed");
+    setCloseCause(reason, {
+      method: "connect",
+      phase,
+    });
+    await sendFrame({
+      type: "res",
+      id: parsed.id,
+      ok: false,
+      error: errorShape(ErrorCodes.UNAVAILABLE, `connect unavailable during gateway ${operation}`, {
+        retryable: true,
+        retryAfterMs: GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS,
+        details: {
+          method: "connect",
+          reason,
+          phase,
+        },
+      }),
+    }).catch(() => {});
+    queueMicrotask(() =>
+      close(GATEWAY_WORK_ADMISSION_CLOSE_CODE, `gateway ${operation} in progress`),
+    );
+    return true;
+  };
+
+  const handleIncomingMessage = async (data: RawData) => {
+    if (getClient()) {
+      await handleMessage(data);
+      return;
+    }
+    const admission = tryBeginGatewayRootWorkAdmission();
+    if (!admission) {
+      if (await rejectConnectForClosedAdmission(data)) {
+        return;
+      }
+      // Malformed pre-auth frames still use the established validation and
+      // close path; only a validated connect can cross into mutable work.
+      await handleMessage(data);
+      return;
+    }
+    try {
+      await admission.run(() => handleMessage(data));
+    } finally {
+      admission.release();
+    }
+  };
+
   socket.on("message", (data) => {
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () => handleMessage(data));
+    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+      handleIncomingMessage(data),
+    );
   });
 }
 

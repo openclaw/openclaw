@@ -166,6 +166,7 @@ describe("evidence summary", () => {
           title: "Telegram canary",
           status: "fail",
           details: "timed out waiting for SUT reply",
+          posture: "user-path",
           rttMs: 4321,
         },
       ],
@@ -191,6 +192,7 @@ describe("evidence summary", () => {
             role: "live-transport-coverage",
           },
         ],
+        posture: "user-path",
         execution: expect.objectContaining({
           runner: "crabbox",
           provider: {

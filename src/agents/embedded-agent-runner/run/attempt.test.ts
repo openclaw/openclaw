@@ -5,12 +5,13 @@ import { streamSimple } from "../../../llm/stream.js";
 vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import type { NormalizedUsage } from "../../usage.js";
 import {
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
@@ -1291,7 +1292,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expectSingleTextContent(result.content, '"blank tool name"');
     expect(finalToolCall.name).toBe("");
-    expect(finalToolCall.id).toBe("call_auto_1");
+    expect(finalToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
   });
 
   it("assigns fallback ids when both name and id are missing", async () => {
@@ -1308,7 +1309,33 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await stream.result();
 
     expect(finalToolCall.name).toBeUndefined();
-    expect(finalToolCall.id).toBe("call_auto_1");
+    expect(finalToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
+  });
+
+  it("does not reuse fallback ids across assistant response streams", async () => {
+    const ids: string[] = [];
+    for (let responseIndex = 0; responseIndex < 2; responseIndex += 1) {
+      const finalToolCall: { type: string; name: string; id?: string } = {
+        type: "toolCall",
+        name: "read",
+      };
+      const baseFn = vi.fn(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: { role: "assistant", content: [finalToolCall] },
+        }),
+      );
+      const stream = await invokeWrappedStream(baseFn, new Set(["read"]));
+      await stream.result();
+      if (!finalToolCall.id) {
+        throw new Error("missing fallback tool call id");
+      }
+      ids.push(finalToolCall.id);
+    }
+
+    expect(ids[0]).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(ids[1]).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(ids[1]).not.toBe(ids[0]);
   });
 
   it("prefers explicit canonical names over conflicting canonical ids", async () => {
@@ -1496,11 +1523,12 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const result = await stream.result();
 
     expect(partialToolCall.name).toBe("read");
-    expect(partialToolCall.id).toBe("call_auto_1");
+    expect(partialToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
     expect(finalToolCallA.name).toBe("exec");
-    expect(finalToolCallA.id).toBe("call_auto_1");
+    expect(finalToolCallA.id).toBe(partialToolCall.id);
     expect(finalToolCallB.name).toBe("write");
-    expect(finalToolCallB.id).toBe("call_auto_2");
+    expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(finalToolCallB.id).not.toBe(finalToolCallA.id);
     expect(result).toBe(finalMessage);
   });
 
@@ -1538,7 +1566,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCallA.name).toBe("read");
     expect(finalToolCallB.name).toBe("write");
     expect(finalToolCallA.id).toBe("edit:22");
-    expect(finalToolCallB.id).toBe("call_auto_1");
+    expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
   });
 });
 
@@ -3419,8 +3447,13 @@ describe("buildAfterTurnRuntimeContext", () => {
       output: 5,
       cacheRead: 40,
       cacheWrite: 2,
+      contextUsage: {
+        state: "available",
+        promptTokens: 23,
+        totalTokens: 28,
+      },
       total: 57,
-    };
+    } satisfies NormalizedUsage;
     const promptCache = buildContextEnginePromptCacheInfo({ lastCallUsage });
     const legacy = buildAfterTurnRuntimeContextFromUsage({
       attempt: {
@@ -3445,7 +3478,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       promptCache,
     });
 
-    expect(legacy.currentTokenCount).toBe(52);
+    expect(legacy.currentTokenCount).toBe(23);
     expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
   });
 

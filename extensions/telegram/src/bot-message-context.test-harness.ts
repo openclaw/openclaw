@@ -1,6 +1,7 @@
 // Telegram plugin module implements bot message context harness behavior.
 import { createHash } from "node:crypto";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
 import { setTelegramTopicNameStoreFactoryForTest } from "./topic-name-cache.js";
 
@@ -55,8 +56,16 @@ function createTelegramMessageContextSessionRuntimeForTest(
 ): TelegramTestSessionRuntime {
   return {
     buildChannelInboundEventContext,
+    readAmbientTranscriptWatermark: () => undefined,
     readSessionUpdatedAt: () => undefined,
     recordInboundSession: async () => undefined,
+    resolveAmbientTranscriptWatermarkKey: ({ channel, accountId, conversationId, threadId }) =>
+      JSON.stringify([
+        channel,
+        accountId ?? "",
+        conversationId,
+        threadId === undefined ? "" : String(threadId),
+      ]),
     resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
       route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
     resolvePinnedMainDmOwnerFromAllowlist: () => null,
@@ -124,7 +133,6 @@ export async function buildTelegramMessageContextForTest(
       },
     } as never,
     cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
-    loadFreshConfig: () => (params.cfg ?? baseTelegramMessageContextConfig) as never,
     runtime: {
       recordChannelActivity: () => undefined,
       ...params.runtime,
@@ -153,7 +161,6 @@ export async function buildTelegramMessageContextForTest(
 let buildTelegramMessageContextLoader:
   | typeof import("./bot-message-context.js").buildTelegramMessageContext
   | undefined;
-let vitestModuleLoader: Promise<typeof import("vitest")> | undefined;
 let messageContextMocksInstalled = false;
 
 async function loadBuildTelegramMessageContext() {
@@ -165,10 +172,7 @@ async function loadBuildTelegramMessageContext() {
   return buildTelegramMessageContextLoader;
 }
 
-async function loadVitestModule() {
-  vitestModuleLoader ??= import("vitest");
-  return await vitestModuleLoader;
-}
+const loadVitestModule = createLazyRuntimeModule(() => import("vitest"));
 
 async function installMessageContextTestMocks() {
   installTelegramTopicNameStoreForTest();

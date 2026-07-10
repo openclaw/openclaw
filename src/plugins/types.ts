@@ -415,6 +415,8 @@ export type ProviderAuthMethod = {
   label: string;
   hint?: string;
   kind: ProviderAuthKind;
+  /** Provider-owned model used to validate app-guided secret setup. */
+  starterModel?: string;
   /**
    * Optional wizard/onboarding metadata for this specific auth method.
    *
@@ -645,10 +647,21 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => string | undefined;
+  /** Ordered API-key/token candidates, including resolved SecretRefs, for credential classification. */
+  resolveApiKeyCandidatesFromConfigAndStore?: (params?: {
+    providerIds?: string[];
+    envDirect?: Array<string | undefined>;
+  }) => Promise<string[]>;
   resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
 
-export type ProviderUsageAuthToken = { token: string; accountId?: string };
+export type ProviderUsageAuthToken = {
+  token: string;
+  accountId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
+};
 
 /**
  * Result of `resolveUsageAuth`.
@@ -681,6 +694,9 @@ export type ProviderFetchUsageSnapshotContext = {
   token: string;
   accountId?: string;
   authProfileId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };
@@ -706,6 +722,9 @@ export type ProviderAuthDoctorHintContext = {
  * Use this to set provider defaults or rewrite provider-specific config keys
  * into the merged `extraParams` object. Return the full next extraParams object.
  */
+/** Provider-facing effort after OpenClaw lowers orchestration-only modes. */
+export type ProviderTransportThinkingLevel = Exclude<ThinkLevel, "ultra">;
+
 export type ProviderPrepareExtraParamsContext = {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -716,7 +735,7 @@ export type ProviderPrepareExtraParamsContext = {
   modelId: string;
   model?: ProviderRuntimeModel;
   extraParams?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderTransportThinkingLevel;
 };
 
 export type ProviderExtraParamsForTransportContext = Omit<
@@ -1980,6 +1999,8 @@ export type PluginCommandContext = {
   senderIsOwner?: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
+  /** Host-resolved agent that owns the active session. */
+  agentId?: string;
   /** Stable host session key for the active conversation when available. */
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */
@@ -2024,7 +2045,12 @@ export type PluginCommandContext = {
 /**
  * Result returned by a plugin command handler.
  */
-export type PluginCommandResult = ReplyPayload & { continueAgent?: boolean };
+export type PluginCommandResult = ReplyPayload & {
+  /** Allows the agent session to continue processing after the command. */
+  continueAgent?: boolean;
+  /** Suppresses channel fallback replies when the handler already delivered a response. */
+  suppressReply?: boolean;
+};
 
 /**
  * Handler function for plugin commands.
@@ -2197,10 +2223,19 @@ export type OpenClawPluginReloadRegistration = {
   noopPrefixes?: string[];
 };
 
+export type OpenClawPluginNodeHostCommandAvailabilityContext = {
+  /** Node-local configuration used to build this host's Gateway declaration. */
+  config: OpenClawConfig;
+  /** Node-host process environment. */
+  env: NodeJS.ProcessEnv;
+};
+
 export type OpenClawPluginNodeHostCommand = {
   command: string;
   cap?: string;
   dangerous?: boolean;
+  /** Return false to omit this command and capability from the node declaration. */
+  isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
   handle: (paramsJSON?: string | null) => Promise<string>;
 };
 

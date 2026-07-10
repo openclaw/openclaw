@@ -8,7 +8,7 @@ import {
   resolveRepoRootPath,
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
-import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
+import { getUnitFastTestFilesForIncludePatterns } from "./vitest.unit-fast-paths.mjs";
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
@@ -58,10 +58,7 @@ function directoryPatternCoversInclude(excludePattern: string, includePattern: s
   return candidate === excludeRoot || candidate.startsWith(`${excludeRoot}/`);
 }
 
-export function includePatternIsFullyExcluded(
-  includePattern: string,
-  excludePattern: string,
-): boolean {
+function includePatternIsFullyExcluded(includePattern: string, excludePattern: string): boolean {
   const include = normalizePathPattern(includePattern);
   const exclude = normalizePathPattern(excludePattern);
   return (
@@ -160,7 +157,6 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "unit-security",
     "unit-src",
     "unit-support",
-    "unit-ui",
     "utils",
     "wizard",
   ].map((name, index) => [name, index + 10]),
@@ -223,8 +219,12 @@ export function createScopedVitestConfig(
   const cliInclude = narrowIncludePatternsForCli(include, options?.argv, {
     scopedDir,
   });
+  const effectiveInclude = includeFromEnv ?? cliInclude ?? include;
+  const scopedInclude = relativizeScopedPatterns(effectiveInclude, scopedDir);
   const unitFastExcludePatterns =
-    options?.excludeUnitFastTests === false ? [] : getUnitFastTestFiles();
+    options?.excludeUnitFastTests === false
+      ? []
+      : getUnitFastTestFilesForIncludePatterns(effectiveInclude, { dir: scopedDir });
   const exclude = relativizeScopedPatterns(
     [...(baseTest.exclude ?? []), ...unitFastExcludePatterns, ...(options?.exclude ?? [])],
     scopedDir,
@@ -253,7 +253,7 @@ export function createScopedVitestConfig(
       ...(runner ? { runner } : { runner: undefined }),
       setupFiles,
       ...(resolvedScopedDir ? { dir: resolvedScopedDir } : {}),
-      include: relativizeScopedPatterns(includeFromEnv ?? cliInclude ?? include, scopedDir),
+      include: scopedInclude,
       exclude,
       ...(options?.pool ? { pool: options.pool } : {}),
       ...(options?.fileParallelism === undefined

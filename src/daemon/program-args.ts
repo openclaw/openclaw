@@ -311,6 +311,7 @@ export async function resolveGatewayProgramArguments(params: {
 export async function resolveNodeProgramArguments(params: {
   host: string;
   port: number;
+  contextPath?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
@@ -320,11 +321,18 @@ export async function resolveNodeProgramArguments(params: {
   nodePath?: string;
 }): Promise<GatewayProgramArgs> {
   const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
-  if (params.tls || params.tlsFingerprint) {
+  if (params.tls === false && !params.tlsFingerprint) {
+    // Managed services must carry plaintext explicitly; omission would let the
+    // node runtime re-inherit TLS from the operator's global Gateway config.
+    args.push("--no-tls");
+  } else if (params.tls || params.tlsFingerprint) {
     args.push("--tls");
   }
   if (params.tlsFingerprint) {
     args.push("--tls-fingerprint", params.tlsFingerprint);
+  }
+  if (params.contextPath) {
+    args.push("--context-path", params.contextPath);
   }
   if (params.nodeId) {
     args.push("--node-id", params.nodeId);

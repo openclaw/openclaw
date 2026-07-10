@@ -9,6 +9,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
@@ -58,12 +59,7 @@ type SessionKeyResolution = {
   storePath: string;
 };
 
-function clearRotatedTerminalMainSessionMetadata(
-  entry: SessionEntry | undefined,
-): SessionEntry | undefined {
-  if (!entry) {
-    return undefined;
-  }
+export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
   const next = {
     ...entry,
     sessionFile: undefined,
@@ -386,24 +382,27 @@ export function resolveSession(opts: {
           storePath,
         })
       : false;
+  const skipImplicitExpiry =
+    resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
   const fresh = sessionEntry
     ? !terminalMainTranscriptNewerThanRegistry &&
-      evaluateSessionFreshness({
-        updatedAt: sessionEntry.updatedAt,
-        ...resolveSessionLifecycleTimestamps({
-          entry: sessionEntry,
-          agentId: sessionAgentId,
-          storePath,
-        }),
-        now,
-        policy: resetPolicy,
-      }).fresh
+      (skipImplicitExpiry ||
+        evaluateSessionFreshness({
+          updatedAt: sessionEntry.updatedAt,
+          ...resolveSessionLifecycleTimestamps({
+            entry: sessionEntry,
+            agentId: sessionAgentId,
+            storePath,
+          }),
+          now,
+          policy: resetPolicy,
+        }).fresh)
     : false;
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
-  const resolvedSessionEntry = terminalMainTranscriptNewerThanRegistry
-    ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
+  const resolvedSessionEntry = isNewSession && sessionEntry
+    ? clearRotatedSessionMetadata(sessionEntry)
     : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({

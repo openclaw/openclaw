@@ -3,6 +3,18 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 
 describe("resolveSlackChannelAllowlist", () => {
+  it("returns stable channel ids without listing a workspace", async () => {
+    const list = vi.fn();
+    const res = await resolveSlackChannelAllowlist({
+      token: "xoxb-test",
+      entries: ["C123", "channel:G456", "<#C789|general>"],
+      client: { conversations: { list } } as never,
+    });
+
+    expect(res.map((entry) => entry.id)).toEqual(["C123", "G456", "C789"]);
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it("resolves by name and prefers active channels", async () => {
     const client = {
       conversations: {

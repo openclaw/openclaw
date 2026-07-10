@@ -3,6 +3,7 @@
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
+import { resolveLeastPrivilegeOperatorScopesForMethod } from "../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 
 type MockFn = (...args: unknown[]) => unknown;
@@ -303,8 +304,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
         await mutator(store);
         return store;
       }),
-    isAdminOnlyMethod: (method: string) =>
-      method === "sessions.patch" || method === "sessions.delete",
+    // Real scope resolver: spawn's admin-tier pinning depends on params-aware
+    // sessions.patch policy, so a stub here would hide policy regressions.
+    resolveLeastPrivilegeOperatorScopesForMethod,
     pruneLegacyStoreKeys: (...args: unknown[]) => params.pruneLegacyStoreKeysMock?.(...args),
     getSessionBindingService:
       params.getSessionBindingService ??

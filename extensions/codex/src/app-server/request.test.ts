@@ -68,6 +68,27 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, { timeoutMs: 60_000 });
   });
 
+  it("allows current native thread management methods in sandboxed sessions", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+    for (const method of ["thread/name/set", "thread/archive", "thread/unarchive"] as const) {
+      await expect(
+        requestCodexAppServerJson({
+          method,
+          requestParams:
+            method === "thread/name/set"
+              ? { threadId: "thread-1", name: "Shared thread" }
+              : { threadId: "thread-1" },
+          config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+          sessionKey: "sandboxed-session",
+        }),
+      ).resolves.toEqual({ ok: true });
+    }
+
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it("fails closed for config-level exec host=node even without a session key", async () => {
     await expect(
       requestCodexAppServerJson({

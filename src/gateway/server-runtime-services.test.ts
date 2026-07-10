@@ -60,6 +60,7 @@ const {
   activateGatewayScheduledServices,
   runGatewayPostReadyMaintenance,
   scheduleGatewayPostReadyMaintenance,
+  startGatewayCronWithLogging,
   startGatewayRuntimeServices,
 } = await import("./server-runtime-services.js");
 
@@ -140,6 +141,24 @@ describe("server-runtime-services", () => {
     });
     services.stopModelPricingRefresh();
     expect(hoisted.stopModelPricingRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs cron afterStart after startup succeeds", async () => {
+    const order: string[] = [];
+    const cron = {
+      start: vi.fn(async () => {
+        order.push("start");
+      }),
+    };
+    const afterStart = vi.fn(async () => {
+      order.push("after-start");
+    });
+    const logCron = { error: vi.fn() };
+
+    startGatewayCronWithLogging({ cron, afterStart, logCron });
+
+    await vi.waitFor(() => expect(order).toEqual(["start", "after-start"]));
+    expect(logCron.error).not.toHaveBeenCalled();
   });
 
   it("does not start model pricing refresh after scheduled services stop before import settles", async () => {
@@ -295,6 +314,7 @@ describe("server-runtime-services", () => {
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.healthInterval);
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.dedupeCleanup);
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.mediaCleanup);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.worktreeCleanup);
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {
@@ -378,5 +398,7 @@ function createMaintenanceHandles() {
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: setInterval(() => undefined, 60_000),
+    worktreeCleanup: setInterval(() => undefined, 60_000),
+    skillCuratorCleanup: vi.fn(),
   };
 }

@@ -17,6 +17,7 @@ import {
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   bindApprovalRequesterMetadata,
+  bindApprovalReviewerDeviceIds,
   buildRequestedApprovalEvent,
   handleApprovalResolve,
   handleApprovalWaitDecision,
@@ -60,6 +61,7 @@ export function createPluginApprovalHandlers(
         allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
+        approvalReviewerDeviceIds?: string[];
         turnSourceChannel?: string | null;
         turnSourceTo?: string | null;
         turnSourceAccountId?: string | null;
@@ -99,6 +101,12 @@ export function createPluginApprovalHandlers(
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       bindApprovalRequesterMetadata({ record, client });
+      if (client?.internal?.approvalRuntime === true) {
+        bindApprovalReviewerDeviceIds({
+          record,
+          deviceIds: p.approvalReviewerDeviceIds,
+        });
+      }
 
       const decisionPromise = registerPendingApprovalRecord({
         manager,

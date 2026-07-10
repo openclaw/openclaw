@@ -158,6 +158,29 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
   });
 
+  it("forwards prompt-context timestamps on durable payload sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-final", chatId: "12345" });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "Final answer",
+        channelData: {
+          telegram: {
+            promptContextTimestampMs: 1_779_394_740_123,
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Final answer");
+    expect(options.promptContextTimestampMs).toBe(1_779_394_740_123);
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-final", chatId: "12345" });
+  });
+
   it("applies reaction-only payloads without sending empty Telegram text", async () => {
     reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
 

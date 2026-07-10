@@ -45,6 +45,7 @@ type ParentState = {
   agentId?: string;
   taskRuntime?: AgentHarnessTaskRuntime;
   mirror?: CodexNativeSubagentTaskMirror;
+  deferredSettlement?: () => Promise<void> | void;
   deliveredCompletionKeys: Set<string>;
 };
 
@@ -62,6 +63,7 @@ type ChildState = {
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
   deliveringCompletionKey?: string;
   noFinalCompletionFallbackTimer?: ReturnType<typeof setTimeout>;
+  settledWithoutCompletion: boolean;
 };
 
 type ChildAssistantMessages = {
@@ -111,7 +113,7 @@ export function registerCodexNativeSubagentMonitor(params: {
   agentId?: string;
   codexHome?: string;
   runtime?: NativeSubagentMonitorRuntime;
-}): void {
+}): CodexNativeSubagentMonitor {
   let monitor = monitors.get(params.client);
   if (!monitor) {
     monitor = new CodexNativeSubagentMonitor(params.client, params.runtime ?? defaultRuntime, {
@@ -127,6 +129,7 @@ export function registerCodexNativeSubagentMonitor(params: {
     taskRuntimeScope: params.taskRuntimeScope,
     agentId: params.agentId,
   });
+  return monitor;
 }
 
 /** Tracks native subagent thread notifications, transcript completions, and task delivery. */
@@ -166,6 +169,18 @@ export class CodexNativeSubagentMonitor {
     this.childStates.clear();
     this.childThreadIdsByAgentPath.clear();
     this.transcriptPathsByChildThreadId.clear();
+  }
+
+  deferUntilParentSettles(parentThreadId: string, callback: () => Promise<void> | void): boolean {
+    const normalizedParentThreadId = parentThreadId.trim();
+    const state = this.parentStates.get(normalizedParentThreadId);
+    if (!state || !this.hasUnsettledChildren(normalizedParentThreadId)) {
+      return false;
+    }
+    // A yielded one-shot turn must keep this monitor alive until its child
+    // result reaches the parent; cleanup ownership transfers back afterward.
+    state.deferredSettlement = callback;
+    return true;
   }
 
   configure(options: MonitorOptions): void {
@@ -222,9 +237,40 @@ export class CodexNativeSubagentMonitor {
         });
       }
     }
+    this.markChildTurnStarted(notification);
+    await this.handleChildSystemError(notification);
     this.captureChildAssistantMessage(notification);
     await this.handleChildTurnCompletion(notification);
     await this.handleCompletionNotification(notification);
+  }
+
+  private markChildTurnStarted(notification: CodexServerNotification): void {
+    if (notification.method !== "turn/started") {
+      return;
+    }
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const childThreadId = readString(params, "threadId")?.trim();
+    const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
+    if (childState) {
+      childState.settledWithoutCompletion = false;
+    }
+  }
+
+  private async handleChildSystemError(notification: CodexServerNotification): Promise<void> {
+    if (notification.method !== "thread/status/changed") {
+      return;
+    }
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const status = isJsonObject(params?.status) ? params.status : undefined;
+    if (readString(status, "type") !== "systemError") {
+      return;
+    }
+    const childThreadId = readString(params, "threadId")?.trim();
+    const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
+    if (childState) {
+      childState.settledWithoutCompletion = true;
+      await this.flushDeferredParentSettlements(childState.parentThreadId);
+    }
   }
 
   private ensureParentTaskRuntime(state: ParentState): void {
@@ -275,6 +321,20 @@ export class CodexNativeSubagentMonitor {
         : undefined;
       const state = parentThreadId ? this.parentStates.get(parentThreadId) : undefined;
       if (state && parentThreadId) {
+        // Codex multi-agent V2 exposes the child only through this parent-scoped
+        // activity item; its later wait item has no receiver thread ids.
+        if (
+          notification.method === "item/completed" &&
+          readString(item, "type") === "subAgentActivity"
+        ) {
+          const childThreadId = readString(item, "agentThreadId")?.trim();
+          if (childThreadId) {
+            this.registerChildThread(parentThreadId, childThreadId, {
+              agentPath: readString(item, "agentPath"),
+            });
+          }
+          return state;
+        }
         const isSpawnAgentTool = normalizeToolName(readString(item, "tool")) === "spawnagent";
         const childThreadIds = isSpawnAgentTool
           ? new Set([
@@ -434,6 +494,10 @@ export class CodexNativeSubagentMonitor {
       if (turnId) {
         childState.assistantMessagesByTurn.delete(turnId);
       }
+      // Codex keeps interrupted agents resumable but intentionally sends no
+      // parent completion, so one-shot cleanup may settle until another turn starts.
+      childState.settledWithoutCompletion = true;
+      await this.flushDeferredParentSettlements(childState.parentThreadId);
       return;
     }
     if (childState && turn) {
@@ -516,6 +580,7 @@ export class CodexNativeSubagentMonitor {
       }
     }
     if (!state.requesterSessionKey) {
+      await this.flushDeferredParentSettlements(state.parentThreadId);
       return;
     }
     const completionKey = buildCompletionDedupeKey(state.parentThreadId, completion);
@@ -585,6 +650,7 @@ export class CodexNativeSubagentMonitor {
       });
     } finally {
       childState.deliveringCompletionKey = undefined;
+      await this.flushDeferredParentSettlements(state.parentThreadId);
     }
   }
 
@@ -633,6 +699,47 @@ export class CodexNativeSubagentMonitor {
       void this.deliverPendingCompletion(state, childState);
     }, delayMs);
     unrefTimer(childState.completionDeliveryTimer);
+  }
+
+  private hasUnsettledChildren(parentThreadId: string): boolean {
+    for (const childState of this.childStates.values()) {
+      if (
+        childState.parentThreadId === parentThreadId &&
+        (childState.pendingCompletion !== undefined ||
+          childState.deliveringCompletionKey !== undefined ||
+          (!childState.transcriptTerminal && !childState.settledWithoutCompletion))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private async flushDeferredParentSettlements(parentThreadId: string): Promise<void> {
+    if (this.hasUnsettledChildren(parentThreadId)) {
+      return;
+    }
+    const state = this.parentStates.get(parentThreadId);
+    const callback = state?.deferredSettlement;
+    if (!state || !callback) {
+      return;
+    }
+    state.deferredSettlement = undefined;
+    await this.runDeferredParentSettlement(parentThreadId, callback);
+  }
+
+  private async runDeferredParentSettlement(
+    parentThreadId: string,
+    callback: () => Promise<void> | void,
+  ): Promise<void> {
+    try {
+      await callback();
+    } catch (error) {
+      embeddedAgentLog.warn("Failed to finish deferred Codex app-server cleanup", {
+        parentThreadId,
+        error: formatErrorMessage(error),
+      });
+    }
   }
 
   private finalizeCompletionTask(completion: CodexNativeSubagentCompletion, eventAt: number): void {
@@ -701,6 +808,7 @@ export class CodexNativeSubagentMonitor {
         transcriptPollAttempt: 0,
         transcriptTerminal: false,
         completionDeliveryAttempt: 0,
+        settledWithoutCompletion: false,
       };
       this.childStates.set(normalizedChildThreadId, childState);
     }

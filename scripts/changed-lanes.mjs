@@ -35,9 +35,6 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
-  "apps/ios/Config/Version.xcconfig",
-  "apps/ios/fastlane/metadata/en-US/release_notes.txt",
-  "apps/ios/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
   "docs/.generated/config-baseline.sha256",
   "docs/install/updating.md",
@@ -360,7 +357,7 @@ export function listStagedChangedPaths(cwd = process.cwd()) {
 /**
  * Classifies package.json script-only changes from git content.
  */
-export function classifyPackageJsonChangeFromGit(params) {
+function classifyPackageJsonChangeFromGit(params) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
     if (isLiveDockerPackageScriptOnlyChange(before, after)) {
@@ -485,7 +482,7 @@ function stableJson(value) {
 /**
  * Writes changed-lane booleans to the GitHub Actions output file.
  */
-export function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
+function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }

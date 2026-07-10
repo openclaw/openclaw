@@ -94,7 +94,7 @@ export function findJsonObjectEnd(
 }
 
 /** Consumes one optional line break after a repaired serialized tool-call fragment. */
-export function skipSerializedToolCallTrailingLineBreak(text: string, cursor: number): number {
+function skipSerializedToolCallTrailingLineBreak(text: string, cursor: number): number {
   const afterLineBreak = consumeLineBreak(text, cursor);
   return afterLineBreak ?? cursor;
 }
@@ -174,16 +174,12 @@ export function findHarmonyJsonPayloadStart(text: string): number | null {
 }
 
 /** Case-insensitive marker compare for ASCII protocol tags without locale rules. */
-export function startsWithAsciiMarkerIgnoreCase(
-  text: string,
-  cursor: number,
-  marker: string,
-): boolean {
+function startsWithAsciiMarkerIgnoreCase(text: string, cursor: number, marker: string): boolean {
   return text.slice(cursor, cursor + marker.length).toLowerCase() === marker;
 }
 
 /** Case-insensitive marker search for ASCII protocol tags without allocating regexes. */
-export function indexOfAsciiMarkerIgnoreCase(text: string, marker: string, start: number): number {
+function indexOfAsciiMarkerIgnoreCase(text: string, marker: string, start: number): number {
   let cursor = start;
   while (cursor < text.length) {
     const next = text.indexOf(marker[0] ?? "", cursor);
@@ -201,6 +197,8 @@ export function indexOfAsciiMarkerIgnoreCase(text: string, marker: string, start
 /** Returns the end offset for a complete XML-ish or bracketed plain-text tool call. */
 export function findXmlishToolCallEnd(text: string): number | null {
   let cursor: number;
+  // Explicit <function=...> openings may close with zero parameters.
+  // Bracketed openings still require at least one <parameter=...> body.
   const xmlFunction = /^<function=[A-Za-z0-9_.:-]+>/i.exec(text);
   if (xmlFunction) {
     cursor = xmlFunction[0].length;
@@ -215,6 +213,9 @@ export function findXmlishToolCallEnd(text: string): number | null {
   }
 
   cursor = skipWhitespace(text, cursor);
+  if (xmlFunction && startsWithAsciiMarkerIgnoreCase(text, cursor, "</function>")) {
+    return skipSerializedToolCallTrailingLineBreak(text, cursor + "</function>".length);
+  }
   if (!startsWithAsciiMarkerIgnoreCase(text, cursor, "<parameter=")) {
     return null;
   }

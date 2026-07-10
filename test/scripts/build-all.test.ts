@@ -12,6 +12,7 @@ import {
   formatBuildAllDuration,
   formatBuildAllTimingSummary,
   parseBuildAllArgs,
+  resolveBuildAllEnvironment,
   resolveBuildAllStepCacheState,
   resolveBuildAllStepCacheStampState,
   resolveBuildAllStep,
@@ -69,6 +70,79 @@ function withBuildCacheFixture(
 }
 
 describe("resolveBuildAllStep", () => {
+  it("pins one generated timestamp across every child build", () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const buildEnv = resolveBuildAllEnvironment(
+      { FOO: "bar" },
+      () => new Date("2026-07-10T12:34:56.789Z"),
+      () => commit,
+    );
+    const uiInvocation = resolveBuildAllStep(getBuildAllStep("ui:build"), {
+      env: buildEnv,
+    });
+    const buildInfoInvocation = resolveBuildAllStep(getBuildAllStep("write-build-info"), {
+      env: buildEnv,
+    });
+
+    expect(uiInvocation.options.env).toMatchObject({
+      FOO: "bar",
+      GIT_COMMIT: commit,
+      OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56.789Z",
+    });
+    expect(buildInfoInvocation.options.env.OPENCLAW_BUILD_TIMESTAMP).toBe(
+      uiInvocation.options.env.OPENCLAW_BUILD_TIMESTAMP,
+    );
+  });
+
+  it("pins the first explicit full commit alias and rejects malformed values", () => {
+    const gitSha = "A".repeat(40);
+    expect(
+      resolveBuildAllEnvironment(
+        { GIT_SHA: gitSha, GITHUB_SHA: "b".repeat(40) },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => "c".repeat(40),
+      ).GIT_COMMIT,
+    ).toBe(gitSha.toLowerCase());
+    expect(() =>
+      resolveBuildAllEnvironment({ GIT_COMMIT: "deadbeef" }, undefined, () => null),
+    ).toThrow("full 40-character hexadecimal SHA");
+  });
+
+  it("uses checked-out Git instead of unverified GitHub workflow context", () => {
+    const checkedOutCommit = "b".repeat(40);
+    const ambientCommit = "a".repeat(40);
+
+    expect(
+      resolveBuildAllEnvironment(
+        { GITHUB_SHA: ambientCommit },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => checkedOutCommit,
+      ).GIT_COMMIT,
+    ).toBe(checkedOutCommit);
+    expect(
+      resolveBuildAllEnvironment(
+        { GITHUB_SHA: ambientCommit },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => null,
+      ).GIT_COMMIT,
+    ).toBe(ambientCommit);
+    expect(() =>
+      resolveBuildAllEnvironment(
+        { GITHUB_SHA: "bad" },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => null,
+      ),
+    ).toThrow("full 40-character hexadecimal SHA");
+  });
+
+  it("preserves an explicit build timestamp after trimming outer whitespace", () => {
+    expect(
+      resolveBuildAllEnvironment({
+        OPENCLAW_BUILD_TIMESTAMP: " 2026-07-10T01:02:03.000Z ",
+      }).OPENCLAW_BUILD_TIMESTAMP,
+    ).toBe("2026-07-10T01:02:03.000Z");
+  });
+
   it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
     const step = getBuildAllStep("plugins:assets:build");
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
@@ -116,6 +190,55 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
+  it.each([
+    {
+      label: "write-plugin-sdk-entry-dts",
+      scriptPath: "scripts/write-plugin-sdk-entry-dts.ts",
+      expectedEnv: { FOO: "bar", OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" },
+    },
+    {
+      label: "copy-hook-metadata",
+      scriptPath: "scripts/copy-hook-metadata.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+    {
+      label: "copy-export-html-templates",
+      scriptPath: "scripts/copy-export-html-templates.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+    {
+      label: "write-build-info",
+      scriptPath: "scripts/write-build-info.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+    {
+      label: "write-cli-startup-metadata",
+      scriptPath: "scripts/write-cli-startup-metadata.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+    {
+      label: "write-cli-compat",
+      scriptPath: "scripts/write-cli-compat.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+  ])("runs the $label TypeScript step through tsx", ({ label, scriptPath, expectedEnv }) => {
+    const step = getBuildAllStep(label);
+
+    const result = resolveBuildAllStep(step, {
+      nodeExecPath: "/custom/node",
+      env: { FOO: "bar" },
+    });
+
+    expect(result).toEqual({
+      command: "/custom/node",
+      args: ["--import", "tsx", scriptPath],
+      options: {
+        stdio: "inherit",
+        env: expectedEnv,
+      },
+    });
+  });
+
   it("can route pnpm script steps through direct node entrypoints", () => {
     const step = getBuildAllStep("plugins:assets:build");
 
@@ -132,46 +255,6 @@ describe("resolveBuildAllStep", () => {
         env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
       },
     });
-  });
-
-  it("adds heap headroom for plugin-sdk dts on Windows", () => {
-    const step = getBuildAllStep("build:plugin-sdk:dts");
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
-    const npmExecPath = path.join(tempDir, "pnpm.cjs");
-    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
-
-    try {
-      const result = resolveBuildAllStep(step, {
-        platform: "win32",
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        npmExecPath,
-        env: { FOO: "bar" },
-      });
-
-      expect(result).toEqual({
-        command: "C:\\Program Files\\nodejs\\node.exe",
-        args: [npmExecPath, "build:plugin-sdk:dts"],
-        options: {
-          stdio: "inherit",
-          env: {
-            FOO: "bar",
-            NODE_OPTIONS: "--max-old-space-size=8192",
-          },
-          shell: false,
-          windowsVerbatimArguments: undefined,
-        },
-      });
-    } finally {
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
-
-  it("keeps plugin-sdk dts cache metadata aligned with declaration inputs", () => {
-    const step = getBuildAllStep("build:plugin-sdk:dts");
-
-    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
-    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["npm-shrinkwrap.json"]));
-    expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
   });
 
   it("keeps export-html build output aligned with runtime template lookup", () => {
@@ -237,7 +320,6 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
-      "build:plugin-sdk:dts",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
       "plugins:assets:copy",
@@ -251,7 +333,7 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("skips bundled tsdown declarations for runtime-only profiles", () => {
-    for (const profile of ["ciArtifacts", "gatewayWatch", "qaRuntime", "cliStartup"]) {
+    for (const profile of ["gatewayWatch", "qaRuntime", "cliStartup"]) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
@@ -266,6 +348,20 @@ describe("resolveBuildAllSteps", () => {
         OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       });
     }
+  });
+
+  it("keeps canonical declarations enabled for package artifact builds", () => {
+    const tsdown = resolveBuildAllSteps("ciArtifacts").find((step) => step.label === "tsdown");
+    if (!tsdown) {
+      throw new Error("Missing ciArtifacts tsdown step");
+    }
+
+    expect(
+      resolveBuildAllStep(tsdown, { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } }).options.env,
+    ).toMatchObject({
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    });
   });
 
   it("preserves startup metadata only for profiles that regenerate it", () => {
@@ -410,24 +506,29 @@ describe("resolveBuildAllSteps", () => {
 
   it("caches plugin-sdk entry declarations without restoring compiled JS", () => {
     const step = getBuildAllStep("write-plugin-sdk-entry-dts");
-    expect(step.cache?.env).toEqual(["OPENCLAW_BUILD_PRIVATE_QA"]);
+    expect(step.env).toEqual({ OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" });
+    expect(step.cache?.env).toEqual([
+      "OPENCLAW_BUILD_PRIVATE_QA",
+      "OPENCLAW_PLUGIN_SDK_CANONICAL_DTS",
+    ]);
     expect(step.cache?.inputs).toEqual(
       expect.arrayContaining([
         "scripts/write-plugin-sdk-entry-dts.ts",
         "scripts/lib/plugin-sdk-entrypoints.json",
-        "src/plugin-sdk",
-        "packages/model-catalog-core/src",
+        { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
       ]),
     );
+    expect(step.cache?.inputs).not.toContain("src/plugin-sdk");
     expect(step.cache?.outputs).toEqual(
       expect.arrayContaining([
-        { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
         "dist/plugin-sdk/webhook-path.js",
         "dist/plugin-sdk/.boundary-entry-shims.stamp",
         "packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts",
       ]),
     );
-    expect(step.cache?.outputs).not.toContain("dist/plugin-sdk");
+    expect(step.cache?.outputs).not.toContainEqual(
+      expect.objectContaining({ path: "dist/plugin-sdk" }),
+    );
     expect(step.cache?.restore).toBe("always");
   });
 
@@ -453,10 +554,10 @@ describe("build-all timing output", () => {
       formatBuildAllTimingSummary([
         { label: "tsdown", status: "ran", durationMs: 99000 },
         { label: "plugins:assets:copy", status: "cached", durationMs: 12 },
-        { label: "build:plugin-sdk:dts", status: "ran", durationMs: 34567 },
+        { label: "write-plugin-sdk-entry-dts", status: "ran", durationMs: 34567 },
       ]),
     ).toBe(
-      "[build-all] phase timings: total 133.6s; slowest tsdown 99.0s; build:plugin-sdk:dts 34.6s; plugins:assets:copy (cached) 12ms",
+      "[build-all] phase timings: total 133.6s; slowest tsdown 99.0s; write-plugin-sdk-entry-dts 34.6s; plugins:assets:copy (cached) 12ms",
     );
   });
 });

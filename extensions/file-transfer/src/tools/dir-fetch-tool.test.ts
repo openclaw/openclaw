@@ -86,9 +86,102 @@ describe("validateTarUncompressedBudget", () => {
       });
     },
   );
+
+  it("fails closed when tar stdout cannot be read", async () => {
+    vi.resetModules();
+    const spawnMock = mockTarSpawn((child) => {
+      child.stdout.emit("data", Buffer.from("partial"));
+      child.stdout.emit("error", new Error("budget read failed"));
+      child.emit("close", 0);
+    });
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:child_process")>();
+      return { ...actual, spawn: spawnMock };
+    });
+
+    try {
+      const { testing } = await import("./dir-fetch-tool.js");
+      await expect(testing.validateTarUncompressedBudget(Buffer.from("x"))).resolves.toEqual({
+        ok: false,
+        reason: "tar uncompressed budget validation stdout error: Error: budget read failed",
+      });
+      expect(spawnMock.mock.results[0]?.value.kill).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
+  });
+
+  it("keeps complete budget output authoritative after diagnostic stderr errors", async () => {
+    vi.resetModules();
+    const spawnMock = mockTarSpawn((child) => {
+      child.stderr.emit("error", new Error("diagnostics unavailable"));
+      child.stdout.emit("data", Buffer.alloc(16));
+      child.emit("close", 0);
+    });
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:child_process")>();
+      return { ...actual, spawn: spawnMock };
+    });
+
+    try {
+      const { testing } = await import("./dir-fetch-tool.js");
+      await expect(testing.validateTarUncompressedBudget(Buffer.from("x"), 32)).resolves.toEqual({
+        ok: true,
+      });
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
+  });
 });
 
 describe("dir.fetch tar validation", () => {
+  it("fails tar listing closed when stdout cannot be read", async () => {
+    vi.resetModules();
+    const spawnMock = mockTarSpawn((child) => {
+      child.stdout.emit("data", Buffer.from("partial.txt\n"));
+      child.stdout.emit("error", new Error("listing read failed"));
+      child.emit("close", 0);
+    });
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:child_process")>();
+      return { ...actual, spawn: spawnMock };
+    });
+
+    try {
+      const { testing } = await import("./dir-fetch-tool.js");
+      await expect(testing.preValidateTarball(Buffer.from("x"))).resolves.toEqual({
+        ok: false,
+        reason: "tar -tzf stdout error: Error: listing read failed",
+      });
+      expect(spawnMock.mock.results[0]?.value.kill).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
+  });
+
+  it("keeps successful unpack authoritative after diagnostic stderr errors", async () => {
+    vi.resetModules();
+    const spawnMock = mockTarSpawn((child) => {
+      child.stderr.emit("error", new Error("diagnostics unavailable"));
+      child.emit("close", 0);
+    });
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:child_process")>();
+      return { ...actual, spawn: spawnMock };
+    });
+
+    try {
+      const { testing } = await import("./dir-fetch-tool.js");
+      await expect(testing.unpackTar(Buffer.from("x"), tmpRoot)).resolves.toBeUndefined();
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
+  });
+
   it("ignores late stdin EPIPE after tar listing has already settled", async () => {
     vi.resetModules();
     vi.doMock("node:child_process", async (importOriginal) => {

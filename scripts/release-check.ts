@@ -25,6 +25,7 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
+import { escapeRegExp } from "../src/shared/regexp.js";
 import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
   collectBundledExtensionManifestErrors,
@@ -49,15 +50,17 @@ import { resolveNpmRunner } from "./npm-runner.mjs";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
-  resolveInstalledBinaryCommandInvocation,
-  resolveInstalledBinaryPath,
 } from "./openclaw-npm-postpublish-verify.ts";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
 export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
+
+export const RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV =
+  "OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
@@ -70,6 +73,9 @@ type ReleaseCheckCommandInvocation = {
 };
 
 const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
+const rootPackageExcludedExtensionPrefixes = [...rootPackageExcludedExtensionDirs].map(
+  (extensionId) => `dist/extensions/${extensionId}/`,
+);
 const requiredPathGroups = [
   "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -94,6 +100,7 @@ const requiredPathGroups = [
   "dist/plugin-sdk/root-alias.cjs",
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
+  "dist/audit/audit-event-writer.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",
@@ -101,6 +108,7 @@ const requiredPathGroups = [
   "dist/control-ui/index.html",
 ];
 const forbiddenPrefixes = [
+  ...rootPackageExcludedExtensionPrefixes,
   ...LOCAL_BUILD_METADATA_DIST_PATHS,
   "dist-runtime/",
   "dist/OpenClaw.app/",
@@ -147,12 +155,12 @@ const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 const DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
 export const MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES = 2 * 1024 * 1024;
-export const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
+const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
   "openclaw/plugin-sdk/core",
   "openclaw/plugin-sdk/provider-entry",
   "openclaw/plugin-sdk/runtime",
 ] as const;
-export const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = ["openclaw/plugin-sdk/core"] as const;
+const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = ["openclaw/plugin-sdk/core"] as const;
 export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
   ["onboard", "--help"],
@@ -360,6 +368,19 @@ function execNpm(
   return runReleaseCheckCommand(invocation, options);
 }
 
+function execPnpm(
+  args: string[],
+  options: {
+    cwd?: string;
+    encoding: BufferEncoding;
+    maxBuffer?: number;
+    stdio: "inherit" | ["ignore", "pipe", "pipe"];
+  },
+): string {
+  const invocation = resolvePnpmRunner({ env: process.env, pnpmArgs: args });
+  return runReleaseCheckCommand(invocation, options);
+}
+
 function runPackDry(): PackResult[] {
   const raw = execNpm(["pack", "--dry-run", "--json", "--ignore-scripts"], {
     encoding: "utf8",
@@ -369,16 +390,18 @@ function runPackDry(): PackResult[] {
   return JSON.parse(raw) as PackResult[];
 }
 
-function runPack(packDestination: string): PackResult[] {
-  const raw = execNpm(
-    ["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination],
+function runPack(packDestination: string, cwd?: string): PackResult[] {
+  const raw = execPnpm(
+    ["--config.ignore-scripts=true", "pack", "--json", "--pack-destination", packDestination],
     {
+      cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 1024 * 1024 * 100,
     },
   );
-  return JSON.parse(raw) as PackResult[];
+  const parsed = JSON.parse(raw) as PackResult | PackResult[];
+  return Array.isArray(parsed) ? parsed : [parsed];
 }
 
 export function resolvePackedTarballPath(packDestination: string, results: PackResult[]): string {
@@ -391,45 +414,138 @@ export function resolvePackedTarballPath(packDestination: string, results: PackR
     );
   }
   const filename = filenames[0];
+  const filenameBasename = basename(filename);
+  const resolvedDestination = resolve(packDestination);
+  const resolvedTarball = resolve(resolvedDestination, filenameBasename);
+  const isLocalFilename = filename === filenameBasename;
+  const isAbsolutePathInDestination = resolve(filename) === resolvedTarball;
   if (
-    !filename.endsWith(".tgz") ||
+    !filenameBasename.endsWith(".tgz") ||
     filename.includes("\0") ||
-    filename !== basename(filename) ||
-    filename !== win32.basename(filename)
+    filenameBasename !== win32.basename(filename) ||
+    (!isLocalFilename && !isAbsolutePathInDestination)
   ) {
     throw new Error(
       `release-check: npm pack reported unsafe tarball filename ${JSON.stringify(filename)}.`,
     );
   }
-  return resolve(packDestination, filename);
+  return resolvedTarball;
 }
 
-function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
-  execNpm(
-    [
-      "install",
-      "-g",
-      "--prefix",
-      prefixDir,
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-      tarballPath,
-    ],
-    {
-      cwd,
-      encoding: "utf8",
-      stdio: "inherit",
-    },
+export function resolveReleaseCheckLocalPackageTarballs(
+  tarballDir: string | undefined = process.env[RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV],
+): string[] {
+  if (!tarballDir) {
+    return [];
+  }
+  const resolvedDir = resolve(tarballDir);
+  if (!existsSync(resolvedDir) || !statSync(resolvedDir).isDirectory()) {
+    throw new Error(
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} must name a directory.`,
+    );
+  }
+  const tarballs = readdirSync(resolvedDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"))
+    .map((entry) => resolve(resolvedDir, entry.name))
+    .toSorted((left, right) => left.localeCompare(right));
+  if (tarballs.length !== 1) {
+    throw new Error(
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} contains ${tarballs.length} tarballs; expected exactly one.`,
+    );
+  }
+  return tarballs;
+}
+
+export function prepareReleaseCheckLocalPackageTarballs(params: {
+  tmpRoot: string;
+  tarballDir?: string;
+  packLocalAi?: (packDestination: string) => PackResult[];
+}): string[] {
+  if (params.tarballDir) {
+    return resolveReleaseCheckLocalPackageTarballs(params.tarballDir);
+  }
+
+  // The root tarball requires the exact sibling AI version. Never fall back to
+  // registry bytes, which could silently validate an older publication.
+  const packDir = join(params.tmpRoot, "ai-pack");
+  mkdirSync(packDir);
+  const packResults = params.packLocalAi
+    ? params.packLocalAi(packDir)
+    : runPack(packDir, resolve("packages/ai"));
+  return [resolvePackedTarballPath(packDir, packResults)];
+}
+
+export function createPackedTarballInstallArgs(prefixDir: string): string[] {
+  return ["install", "--prefix", prefixDir, "--ignore-scripts", "--no-audit", "--no-fund"];
+}
+
+export function writePackedTarballInstallManifest(
+  prefixDir: string,
+  tarballPath: string,
+  localPackageTarballs: string[],
+): void {
+  const aiTarball = localPackageTarballs[0];
+  if (localPackageTarballs.length !== 1 || !aiTarball) {
+    throw new Error(
+      `release-check: packed install requires exactly one @openclaw/ai tarball; found ${localPackageTarballs.length}.`,
+    );
+  }
+  const dependencies: Record<string, string> = {
+    "@openclaw/ai": pathToFileURL(aiTarball).href,
+    openclaw: pathToFileURL(tarballPath).href,
+  };
+  mkdirSync(prefixDir, { recursive: true });
+  writeFileSync(
+    join(prefixDir, "package.json"),
+    `${JSON.stringify(
+      {
+        private: true,
+        dependencies,
+      },
+      null,
+      2,
+    )}\n`,
   );
 }
 
-function resolveGlobalRoot(prefixDir: string, cwd: string): string {
-  return execNpm(["root", "-g", "--prefix", prefixDir], {
+function installPackedTarball(
+  prefixDir: string,
+  tarballPath: string,
+  cwd: string,
+  localPackageTarballs: string[],
+): void {
+  writePackedTarballInstallManifest(prefixDir, tarballPath, localPackageTarballs);
+  execNpm(createPackedTarballInstallArgs(prefixDir), {
     cwd,
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+    stdio: "inherit",
+  });
+}
+
+export function resolvePackedInstalledBinaryPath(
+  prefixDir: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return join(
+    prefixDir,
+    "node_modules",
+    ".bin",
+    platform === "win32" ? "openclaw.cmd" : "openclaw",
+  );
+}
+
+function resolvePackedInstalledBinaryCommandInvocation(
+  prefixDir: string,
+  args: string[],
+): ReleaseCheckCommandInvocation {
+  const binaryPath = resolvePackedInstalledBinaryPath(prefixDir);
+  return process.platform === "win32"
+    ? {
+        command: resolveWindowsCmdExePath(),
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, args)],
+        windowsVerbatimArguments: true,
+      }
+    : { command: binaryPath, args };
 }
 
 export function createPackedBundledPluginPostinstallEnv(
@@ -554,7 +670,7 @@ function verifyPackedInstalledPackage(params: {
   prefixDir: string;
   tmpRoot: string;
 }): void {
-  const invocation = resolveInstalledBinaryCommandInvocation(params.prefixDir, ["--version"]);
+  const invocation = resolvePackedInstalledBinaryCommandInvocation(params.prefixDir, ["--version"]);
   const installedBinaryVersion = runReleaseCheckCommand(
     {
       command: invocation.command,
@@ -582,7 +698,14 @@ function verifyPackedInstalledPackage(params: {
 export function createPackedPluginSdkTypescriptSmokeProject(params: {
   consumerDir: string;
   packageSpec: string;
+  aiPackageSpec?: string;
 }): void {
+  const dependencies: Record<string, string> = {
+    openclaw: params.packageSpec,
+  };
+  if (params.aiPackageSpec) {
+    dependencies["@openclaw/ai"] = params.aiPackageSpec;
+  }
   mkdirSync(join(params.consumerDir, "src"), { recursive: true });
   writeFileSync(
     join(params.consumerDir, "package.json"),
@@ -591,9 +714,7 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
         name: "openclaw-plugin-sdk-type-smoke",
         private: true,
         type: "module",
-        dependencies: {
-          openclaw: params.packageSpec,
-        },
+        dependencies,
       },
       null,
       2,
@@ -625,11 +746,16 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
   );
 }
 
-function runPackedPluginSdkTypescriptSmoke(tarballPath: string, tmpRoot: string): void {
+function runPackedPluginSdkTypescriptSmoke(
+  tarballPath: string,
+  tmpRoot: string,
+  localPackageTarballs: string[],
+): void {
   const consumerDir = join(tmpRoot, "plugin-sdk-type-consumer");
   createPackedPluginSdkTypescriptSmokeProject({
     consumerDir,
     packageSpec: `file:${tarballPath}`,
+    aiPackageSpec: localPackageTarballs[0] ? `file:${localPackageTarballs[0]}` : undefined,
   });
   execNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
     cwd: consumerDir,
@@ -760,7 +886,7 @@ function runPackedCliSmoke(params: {
   homeDir: string;
   stateDir: string;
 }): void {
-  const binaryPath = resolveInstalledBinaryPath(params.prefixDir);
+  const binaryPath = resolvePackedInstalledBinaryPath(params.prefixDir);
   const env = createPackedCliSmokeEnv(process.env, {
     HOME: params.homeDir,
     OPENCLAW_STATE_DIR: params.stateDir,
@@ -814,9 +940,13 @@ function runPackedBundledChannelEntrySmoke(): void {
     const packResults = runPack(packDir);
     const tarballPath = resolvePackedTarballPath(packDir, packResults);
     const prefixDir = join(tmpRoot, "prefix");
-    installPackedTarball(prefixDir, tarballPath, tmpRoot);
+    const localPackageTarballs = prepareReleaseCheckLocalPackageTarballs({
+      tmpRoot,
+      tarballDir: process.env[RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV],
+    });
+    installPackedTarball(prefixDir, tarballPath, tmpRoot, localPackageTarballs);
 
-    const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    const packageRoot = join(prefixDir, "node_modules", "openclaw");
     verifyPackedInstalledPackage({
       expectedVersion,
       packageRoot,
@@ -835,7 +965,7 @@ function runPackedBundledChannelEntrySmoke(): void {
     runPackedBundledPluginPostinstall(packageRoot);
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
     runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
-    runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot);
+    runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot, localPackageTarballs);
     runReleaseCheckCommand(
       {
         command: process.execPath,
@@ -958,7 +1088,7 @@ export function collectForbiddenPackContentPaths(
 export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 
 function extractTag(item: string, tag: string): string | null {
-  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedTag = escapeRegExp(tag);
   const regex = new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`);
   return regex.exec(item)?.[1]?.trim() ?? null;
 }

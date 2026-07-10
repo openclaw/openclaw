@@ -155,6 +155,7 @@ export async function invokeGatewayTool(params: {
   agentTo?: string;
   agentThreadId?: string;
   senderIsOwner?: boolean;
+  clientCaps?: string[];
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
 }): Promise<ToolsInvokeOutcome> {
@@ -205,6 +206,7 @@ export async function invokeGatewayTool(params: {
       agentTo: params.agentTo,
       agentThreadId: params.agentThreadId,
       senderIsOwner: params.senderIsOwner,
+      clientCaps: params.clientCaps,
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
       surface: "http",
@@ -212,9 +214,9 @@ export async function invokeGatewayTool(params: {
       gatewayRequestedTools,
     });
 
-  let { agentId, tools } = resolveTools(knownCoreTool);
+  let { agentId, tools, workspaceDir } = resolveTools(knownCoreTool);
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
-    ({ agentId, tools } = resolveTools(false));
+    ({ agentId, tools, workspaceDir } = resolveTools(false));
   }
   const requestedAgentId = normalizeOptionalString(params.input.agentId);
   if (requestedAgentId && agentId && requestedAgentId !== agentId) {
@@ -257,6 +259,7 @@ export async function invokeGatewayTool(params: {
         agentId,
         config: params.cfg,
         sessionKey,
+        workspaceDir,
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },
       approvalMode: params.approvalMode,

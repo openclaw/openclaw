@@ -140,4 +140,33 @@ describe("MatrixAuthedHttpClient", () => {
     expect(httpError.message).toBe("forbidden");
     expect(httpError.statusCode).toBe(403);
   });
+
+  it("throws descriptive error on malformed JSON success response", async () => {
+    performMatrixRequestMock.mockResolvedValue({
+      response: new Response("NOT JSON {{{", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      text: "NOT JSON {{{",
+      buffer: Buffer.from("NOT JSON {{{", "utf8"),
+    });
+
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+    });
+    let rejection: unknown;
+    try {
+      await client.requestJson({
+        method: "GET",
+        endpoint: "/_matrix/client/v3/sync",
+        timeoutMs: 5000,
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toContain("malformed JSON");
+  });
 });

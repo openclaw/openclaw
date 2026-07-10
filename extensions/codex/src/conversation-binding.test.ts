@@ -72,15 +72,66 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import {
-  handleCodexConversationBindingResolved,
+  readCodexAppServerBinding,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+  type CodexAppServerThreadBinding,
+  writeCodexAppServerBinding,
+} from "./app-server/session-binding.test-helpers.js";
+import { legacyCodexConversationBindingId } from "./conversation-binding-data.js";
+import {
+  handleCodexConversationBindingResolved as handleCodexConversationBindingResolvedImpl,
   handleCodexConversationInboundClaim as handleCodexConversationInboundClaimImpl,
-  startCodexConversationThread,
+  startCodexConversationThread as startCodexConversationThreadImpl,
 } from "./conversation-binding.js";
 
+function testConversationIdentity(sessionFile: string) {
+  return {
+    kind: "conversation" as const,
+    bindingId: legacyCodexConversationBindingId(sessionFile),
+  };
+}
+
+async function writeTestConversationBinding(
+  sessionFile: string,
+  binding: CodexAppServerThreadBinding,
+): Promise<void> {
+  await testCodexAppServerBindingStore.mutate(testConversationIdentity(sessionFile), {
+    kind: "set",
+    binding,
+  });
+}
+
+async function readTestConversationBinding(sessionFile: string) {
+  return await testCodexAppServerBindingStore.read(testConversationIdentity(sessionFile));
+}
+
 function handleCodexConversationInboundClaim(
-  ...[event, ...rest]: Parameters<typeof handleCodexConversationInboundClaimImpl>
+  event: Parameters<typeof handleCodexConversationInboundClaimImpl>[0],
+  ctx: Parameters<typeof handleCodexConversationInboundClaimImpl>[1],
+  options: Omit<Parameters<typeof handleCodexConversationInboundClaimImpl>[2], "bindingStore"> = {},
 ) {
-  return handleCodexConversationInboundClaimImpl({ senderIsOwner: true, ...event }, ...rest);
+  return handleCodexConversationInboundClaimImpl({ senderIsOwner: true, ...event }, ctx, {
+    ...options,
+    bindingStore: testCodexAppServerBindingStore,
+  });
+}
+
+function startCodexConversationThread(
+  params: Omit<Parameters<typeof startCodexConversationThreadImpl>[0], "bindingStore">,
+) {
+  return startCodexConversationThreadImpl({
+    ...params,
+    bindingStore: testCodexAppServerBindingStore,
+  });
+}
+
+function handleCodexConversationBindingResolved(
+  event: Parameters<typeof handleCodexConversationBindingResolvedImpl>[0],
+) {
+  return handleCodexConversationBindingResolvedImpl(event, {
+    bindingStore: testCodexAppServerBindingStore,
+  });
 }
 
 let tempDir: string;
@@ -147,6 +198,7 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
 
 describe("codex conversation binding", () => {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
   });
 
@@ -235,9 +287,9 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
-    await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
-      '"authProfileId": "openai:default"',
-    );
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      authProfileId: "openai:default",
+    });
   });
 
   it("selects Codex network-proxy permissions through app-server bind thread config", async () => {
@@ -294,12 +346,10 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.params).not.toHaveProperty("threadId");
     expect(requests[0]?.params).not.toHaveProperty("sandbox");
     expect(requests[0]?.params.config).toMatchObject(NETWORK_PROXY_CONFIG_PATCH);
-    const bindingAfterStart = JSON.parse(
-      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
-    ) as Record<string, unknown>;
-    expect(bindingAfterStart.threadId).toBe("thread-new");
-    expect(bindingAfterStart.networkProxyProfileName).toBe(NETWORK_PROXY_PROFILE_NAME);
-    expect(bindingAfterStart.networkProxyConfigFingerprint).toBe(NETWORK_PROXY_CONFIG_FINGERPRINT);
+    const bindingAfterStart = await readCodexAppServerBinding(sessionFile);
+    expect(bindingAfterStart?.threadId).toBe("thread-new");
+    expect(bindingAfterStart?.networkProxyProfileName).toBe(NETWORK_PROXY_PROFILE_NAME);
+    expect(bindingAfterStart?.networkProxyConfigFingerprint).toBe(NETWORK_PROXY_CONFIG_FINGERPRINT);
   });
 
   it("starts a new bind thread when no model override is provided", async () => {
@@ -324,9 +374,9 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.method).toBe("thread/start");
     expect(requests[0]?.params).not.toHaveProperty("model");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
-    await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
-      '"model": "gpt-5.5"',
-    );
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      model: "gpt-5.5",
+    });
   });
 
   it("preserves Codex auth and omits the public OpenAI provider for native bind threads", async () => {
@@ -343,16 +393,12 @@ describe("codex conversation binding", () => {
         },
       },
     });
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-old",
-        cwd: tempDir,
-        authProfileId: "work",
-        modelProvider: "openai",
-      }),
-    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: tempDir,
+      authProfileId: "work",
+      modelProvider: "openai",
+    });
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
@@ -381,12 +427,9 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
-    await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
-      '"authProfileId": "work"',
-    );
-    await expect(
-      fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
-    ).resolves.not.toContain('"modelProvider": "openai"');
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.authProfileId).toBe("work");
+    expect(savedBinding?.modelProvider).toBeUndefined();
   });
 
   it("stores and uses the owning agent dir for bound app-server sessions", async () => {
@@ -548,10 +591,9 @@ describe("codex conversation binding", () => {
     expect(requests).toEqual([]);
   });
 
-  it("clears the Codex app-server sidecar when a pending bind is denied", async () => {
+  it("clears the Codex app-server binding when a pending bind is denied", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const sidecar = `${sessionFile}.codex-app-server.json`;
-    await fs.writeFile(sidecar, JSON.stringify({ schemaVersion: 1, threadId: "thread-1" }));
+    await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
 
     await handleCodexConversationBindingResolved({
       status: "denied",
@@ -571,7 +613,43 @@ describe("codex conversation binding", () => {
       },
     });
 
-    await expect(fs.stat(sidecar)).rejects.toHaveProperty("code", "ENOENT");
+    await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+  });
+
+  it("preserves the live conversation generation when a replacement bind is denied", async () => {
+    const identity = { kind: "conversation" as const, bindingId: "binding-data-1" };
+    await testCodexAppServerBindingStore.mutate(identity, {
+      kind: "set",
+      binding: {
+        threadId: "thread-old",
+        cwd: tempDir,
+        conversationStartId: "start-old",
+      },
+    });
+
+    await handleCodexConversationBindingResolved({
+      status: "denied",
+      decision: "deny",
+      request: {
+        data: {
+          kind: "codex-app-server-session",
+          version: 2,
+          bindingId: "binding-data-1",
+          workspaceDir: tempDir,
+          start: { id: "start-new", threadId: "thread-new" },
+        },
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:1",
+        },
+      },
+    });
+
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      threadId: "thread-old",
+      conversationStartId: "start-old",
+    });
   });
 
   it("consumes inbound bound messages when command authorization is absent", async () => {
@@ -695,10 +773,7 @@ describe("codex conversation binding", () => {
 
   it("blocks bound Codex app-server turns when the current OpenClaw session is sandboxed", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
-    );
+    await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -745,10 +820,7 @@ describe("codex conversation binding", () => {
 
   it("blocks bound Codex app-server turns when exec host=node is active", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
-    );
+    await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -795,10 +867,7 @@ describe("codex conversation binding", () => {
 
   it("blocks bound Codex app-server turns when the binding agent uses node exec without a session key", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
-    );
+    await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -849,10 +918,7 @@ describe("codex conversation binding", () => {
   it("keeps the bound agent node exec block ahead of current-session exec host overrides", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
-    );
+    await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
     await upsertSessionEntry({
       storePath,
       sessionKey: "agent:main:session-1",
@@ -916,10 +982,7 @@ describe("codex conversation binding", () => {
 
   it("rejects bound Codex app-server turns when the binding agent exec auto mode needs approvals", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
-    );
+    await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
     const request = vi.fn(async () => {
       throw new Error("unexpected native turn");
     });
@@ -989,10 +1052,7 @@ describe("codex conversation binding", () => {
   it("keeps bound agent approval policy ahead of different-agent session overrides", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const storePath = path.join(tempDir, "sessions.json");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
-    );
+    await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
     await upsertSessionEntry({
       storePath,
       sessionKey: "agent:main:session-1",
@@ -1132,20 +1192,16 @@ describe("codex conversation binding", () => {
         },
       },
     });
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-old",
-        cwd: tempDir,
-        authProfileId: "work",
-        model: "gpt-5.4-mini",
-        modelProvider: "openai",
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
-        serviceTier: "fast",
-      }),
-    );
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: tempDir,
+      authProfileId: "work",
+      model: "gpt-5.4-mini",
+      modelProvider: "openai",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      serviceTier: "fast",
+    });
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
@@ -1240,29 +1296,105 @@ describe("codex conversation binding", () => {
     expect(requests[2]?.params.threadId).toBe("thread-new");
     expect(requests[2]?.params.approvalPolicy).toBe("on-request");
     expect(requests[2]?.params.serviceTier).toBe("priority");
-    const savedBinding = JSON.parse(
-      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
-    );
-    expect(savedBinding.threadId).toBe("thread-new");
-    expect(savedBinding.authProfileId).toBe("work");
-    expect(savedBinding.approvalPolicy).toBe("on-request");
-    expect(savedBinding.sandbox).toBe("workspace-write");
-    expect(savedBinding.serviceTier).toBe("priority");
+    const savedBinding = await readTestConversationBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-new");
+    expect(savedBinding?.authProfileId).toBe("work");
+    expect(savedBinding?.approvalPolicy).toBe("on-request");
+    expect(savedBinding?.sandbox).toBe("workspace-write");
+    expect(savedBinding?.serviceTier).toBe("priority");
     expect(savedBinding).not.toHaveProperty("modelProvider");
+  });
+
+  it("applies a new lazy bind generation before running its first turn", async () => {
+    const identity = { kind: "conversation" as const, bindingId: "binding-data-1" };
+    await testCodexAppServerBindingStore.mutate(identity, {
+      kind: "set",
+      binding: {
+        threadId: "thread-old",
+        cwd: "/old-repo",
+        conversationStartId: "start-old",
+      },
+    });
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "thread/resume") {
+          return conversationThreadStartResult("thread-target");
+        }
+        if (method === "turn/start") {
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-target",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "rebound" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 2,
+            bindingId: "binding-data-1",
+            workspaceDir: "/new-repo",
+            start: { id: "start-new", threadId: "thread-target" },
+          },
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "rebound" } });
+    expect(requests.map((request) => request.method)).toEqual(["thread/resume", "turn/start"]);
+    expect(requests[0]?.params.threadId).toBe("thread-target");
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      threadId: "thread-target",
+      cwd: tempDir,
+      conversationStartId: "start-new",
+    });
   });
 
   it("recreates a missing bound thread with the stored binding agent runtime policy", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-old",
-        cwd: tempDir,
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
-      }),
-    );
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: tempDir,
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
@@ -1371,16 +1503,12 @@ describe("codex conversation binding", () => {
 
   it("does not silently decline auto-mode approvals during missing thread recovery", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-old",
-        cwd: tempDir,
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-      }),
-    );
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: tempDir,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
@@ -1540,10 +1668,8 @@ describe("codex conversation binding", () => {
     expect(requests.map((request) => request.method)).toEqual(["thread/start", "turn/start"]);
     expect(requests[1]?.params.threadId).toBe("thread-new");
     expect(requests[1]?.params.personality).toBe("none");
-    const savedBinding = JSON.parse(
-      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
-    );
-    expect(savedBinding.threadId).toBe("thread-new");
+    const savedBinding = await readTestConversationBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-new");
   });
 
   it("passes sandbox state when resolving bound turn policy", async () => {
@@ -1556,16 +1682,12 @@ describe("codex conversation binding", () => {
     );
     resolveSandboxContextMock.mockResolvedValue({ enabled: true });
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 2,
-        threadId: "thread-1",
-        cwd: tempDir,
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-      }),
-    );
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
     let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
@@ -1662,15 +1784,11 @@ describe("codex conversation binding", () => {
   it("returns a clean failure reply when app-server turn start rejects", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-1",
-        cwd: tempDir,
-        authProfileId: "openai:work",
-      }),
-    );
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      authProfileId: "openai:work",
+    });
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
       unhandledRejections.push(reason);
@@ -1742,14 +1860,10 @@ describe("codex conversation binding", () => {
   it("falls back to content when the channel body for agent is blank", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-1",
-        cwd: tempDir,
-      }),
-    );
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
     let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
@@ -1827,16 +1941,12 @@ describe("codex conversation binding", () => {
 
   it("keeps network-proxy bound app-server turns on their thread permissions profile", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 2,
-        threadId: "thread-1",
-        cwd: tempDir,
-        networkProxyProfileName: NETWORK_PROXY_PROFILE_NAME,
-        networkProxyConfigFingerprint: NETWORK_PROXY_CONFIG_FINGERPRINT,
-      }),
-    );
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      networkProxyProfileName: NETWORK_PROXY_PROFILE_NAME,
+      networkProxyConfigFingerprint: NETWORK_PROXY_CONFIG_FINGERPRINT,
+    });
     let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
@@ -1914,16 +2024,14 @@ describe("codex conversation binding", () => {
 
   it("refreshes stale network-proxy bound app-server threads before the turn", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 2,
-        threadId: "thread-old",
-        cwd: tempDir,
-        networkProxyProfileName: "openclaw-network-stale",
-        networkProxyConfigFingerprint: "stale-proxy-config",
-      }),
-    );
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: tempDir,
+      networkProxyProfileName: "openclaw-network-stale",
+      networkProxyConfigFingerprint: "stale-proxy-config",
+      conversationStartId: "start-1",
+      conversationSourceTransferComplete: true,
+    });
     let notificationHandler: ((notification: unknown) => void) | undefined;
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
@@ -2005,30 +2113,26 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.params.serviceTier).toBe("priority");
     expect(requests[1]?.params.threadId).toBe("thread-new");
     expect(requests[1]?.params).not.toHaveProperty("sandboxPolicy");
-    const bindingAfterRefresh = JSON.parse(
-      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
-    ) as Record<string, unknown>;
-    expect(bindingAfterRefresh.threadId).toBe("thread-new");
-    expect(bindingAfterRefresh.networkProxyProfileName).toBe(NETWORK_PROXY_PROFILE_NAME);
-    expect(bindingAfterRefresh.networkProxyConfigFingerprint).toBe(
+    const bindingAfterRefresh = await readTestConversationBinding(sessionFile);
+    expect(bindingAfterRefresh?.threadId).toBe("thread-new");
+    expect(bindingAfterRefresh?.networkProxyProfileName).toBe(NETWORK_PROXY_PROFILE_NAME);
+    expect(bindingAfterRefresh?.networkProxyConfigFingerprint).toBe(
       NETWORK_PROXY_CONFIG_FINGERPRINT,
     );
+    expect(bindingAfterRefresh?.conversationStartId).toBe("start-1");
+    expect(bindingAfterRefresh?.conversationSourceTransferComplete).toBe(true);
   });
 
   it("blocks Guardian-mode bound turns with stale no-approval policy on custom model providers", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-1",
-        cwd: tempDir,
-        model: "local-model",
-        modelProvider: "lmstudio",
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-      }),
-    );
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "local-model",
+      modelProvider: "lmstudio",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
     let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
@@ -2104,17 +2208,13 @@ describe("codex conversation binding", () => {
 
   it("infers custom model providers for legacy bound turns without stored modelProvider", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-1",
-        cwd: tempDir,
-        model: "lmstudio/local-model",
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
-      }),
-    );
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "lmstudio/local-model",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
     let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({

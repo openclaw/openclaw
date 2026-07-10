@@ -3,7 +3,7 @@
 const DEFAULT_MAX_OUTPUT_CHARS = 16_384;
 
 /** Captured child output plus truncation flag. */
-export type BoundedChildOutput = {
+type BoundedChildOutput = {
   text: string;
   truncated: boolean;
 };

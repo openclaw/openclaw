@@ -1,6 +1,6 @@
 // Zalo tests cover monitor.reply once.lifecycle plugin behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   createLifecycleMonitorSetup,
@@ -9,6 +9,7 @@ import {
   settleAsyncWork,
 } from "./test-support/lifecycle-test-support.js";
 import {
+  loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
   setLifecycleRuntimeCore,
@@ -29,6 +30,10 @@ describe("Zalo reply-once lifecycle", () => {
     matchedBy: "default",
   }));
   const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn();
+
+  beforeAll(async () => {
+    await loadCachedLifecycleMonitorModule("zalo-reply-once-lifecycle");
+  });
 
   beforeEach(async () => {
     await resetLifecycleTestState();

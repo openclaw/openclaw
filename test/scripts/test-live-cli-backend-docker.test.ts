@@ -60,6 +60,8 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain('direct_probe_log="$(mktemp)"');
+    expect(script).toContain("This is a local CLI smoke test.");
+    expect(script).not.toContain("OPENCLAW-CLAUDE-SUBSCRIPTION-DIRECT");
     expect(script).toContain("direct Claude subscription probe exited with status");
     expect(script).toContain("<redacted-email>");
     expect(script).toContain("<redacted-secret>");

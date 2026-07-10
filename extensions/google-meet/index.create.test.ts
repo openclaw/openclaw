@@ -13,6 +13,7 @@ import {
 import { CREATE_MEET_FROM_BROWSER_SCRIPT } from "./src/transports/chrome-create.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
+  createVoiceCallGateway: vi.fn(({ runtime }: { runtime: { gateway: unknown } }) => runtime.gateway),
   joinMeetViaVoiceCallGateway: vi.fn(async () => ({
     callId: "call-1",
     dtmfSent: true,
@@ -46,6 +47,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 });
 
 vi.mock("./src/voice-call-gateway.js", () => ({
+  createVoiceCallGateway: voiceCallMocks.createVoiceCallGateway,
   joinMeetViaVoiceCallGateway: voiceCallMocks.joinMeetViaVoiceCallGateway,
   endMeetVoiceCallGatewayCall: voiceCallMocks.endMeetVoiceCallGatewayCall,
   speakMeetViaVoiceCallGateway: voiceCallMocks.speakMeetViaVoiceCallGateway,
@@ -304,7 +306,7 @@ describe("google-meet create flow", () => {
         return false;
       }
       const body = proxy.body as Record<string, unknown>;
-      return proxy.path === "/tabs/open" && body.url === "https://meet.google.com/new";
+      return proxy.path === "/tabs/open" && body.url === "https://meet.google.com/new?hl=en";
     });
   });
 
@@ -426,7 +428,9 @@ describe("google-meet create flow", () => {
               payload: {
                 result: {
                   targetId:
-                    proxy.body?.url === "https://meet.google.com/new" ? "create-tab" : "join-tab",
+                    proxy.body?.url === "https://meet.google.com/new?hl=en"
+                      ? "create-tab"
+                      : "join-tab",
                   title: "Meet",
                   url: proxy.body?.url,
                 },

@@ -1,5 +1,6 @@
 // Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { randomUUID } from "node:crypto";
+import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   extractStandalonePlainTextToolCallText,
@@ -10,16 +11,15 @@ import {
   type PlainTextToolCallMessageNormalization,
 } from "../../packages/tool-call-repair/src/index.js";
 import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
-import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-export { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
-export { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
-export { notifyLlmRequestActivity, onLlmRequestActivity } from "../shared/llm-request-activity.js";
+export { applyAnthropicRefusal } from "@openclaw/ai/internal/anthropic";
+export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
+export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 
 type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
 

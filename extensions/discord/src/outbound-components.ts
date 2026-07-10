@@ -1,29 +1,60 @@
 // Discord plugin module implements outbound components behavior.
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeNamedExport,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
 
 type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
-type DiscordSharedInteractiveModule = typeof import("./shared-interactive.js");
 type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
 
-let discordComponentSendPromise: Promise<DiscordComponentSendFn> | undefined;
-let discordSharedInteractivePromise: Promise<DiscordSharedInteractiveModule> | undefined;
+export const DISCORD_PRESENTATION_TEXT_LIMIT = 2000;
+
+export const DISCORD_PRESENTATION_CAPABILITIES = {
+  supported: true,
+  buttons: true,
+  selects: true,
+  context: true,
+  divider: true,
+  charts: false,
+  limits: {
+    actions: {
+      maxActions: 25,
+      maxActionsPerRow: 5,
+      maxRows: 5,
+      maxLabelLength: 80,
+      supportsDisabled: true,
+    },
+    selects: {
+      maxOptions: 25,
+      maxLabelLength: 100,
+      maxValueBytes: 100,
+    },
+    text: {
+      maxLength: DISCORD_PRESENTATION_TEXT_LIMIT,
+      encoding: "characters",
+      markdownDialect: "discord-markdown",
+    },
+  },
+} satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
+
+const loadDiscordComponentSend = createLazyRuntimeNamedExport(
+  () => import("./send.components.js"),
+  "sendDiscordComponentMessage",
+);
 
 export async function sendDiscordComponentMessageLazy(
   ...args: Parameters<DiscordComponentSendFn>
 ): ReturnType<DiscordComponentSendFn> {
-  discordComponentSendPromise ??= import("./send.components.js").then(
-    (module) => module.sendDiscordComponentMessage,
-  );
   return await (
-    await discordComponentSendPromise
+    await loadDiscordComponentSend()
   )(...args);
 }
 
-function loadDiscordSharedInteractive(): Promise<DiscordSharedInteractiveModule> {
-  discordSharedInteractivePromise ??= import("./shared-interactive.js");
-  return discordSharedInteractivePromise;
-}
+const loadDiscordSharedInteractive = createLazyRuntimeModule(
+  () => import("./shared-interactive.js"),
+);
 
 function addPayloadTextFallback(
   spec: DiscordComponentMessageSpec,

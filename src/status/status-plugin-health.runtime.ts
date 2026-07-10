@@ -223,7 +223,43 @@ export async function collectInstalledPluginHealthSnapshot(params: {
     { ...runtime, compatibilityNotices: runtimeCompatibilityNotices },
   );
   const shouldRunPluginIds = await resolveEagerShouldRunPluginIds(params);
-  return shouldRunPluginIds ? { ...merged, shouldRunPluginIds } : merged;
+  const unregisteredMemoryEmbeddingProviders = await resolveUnregisteredMemoryEmbeddingProviders({
+    config: params.config,
+    registry: runtimeRegistry,
+  });
+  return {
+    ...merged,
+    ...(shouldRunPluginIds ? { shouldRunPluginIds } : {}),
+    ...(unregisteredMemoryEmbeddingProviders ? { unregisteredMemoryEmbeddingProviders } : {}),
+  };
+}
+
+// Configured memory embedding providers that no loaded plugin registers, surfaced on the
+// detailed /status path only. Needs the live runtime registry to know what a loaded plugin
+// actually serves; without config or an active registry we cannot tell "configured but
+// unavailable" from "not yet loaded", so degrade to no signal (no line). Resolved lazily so
+// the compact path never pulls the startup-plan module. Observer-only: any resolution failure
+// degrades to no set rather than breaking /status.
+async function resolveUnregisteredMemoryEmbeddingProviders(params: {
+  config?: OpenClawConfig;
+  registry: ReturnType<typeof getActiveRuntimePluginRegistry>;
+}): Promise<Array<{ configuredId: string; source: "provider" | "fallback" }> | undefined> {
+  if (!params.config || !params.registry) {
+    return undefined;
+  }
+  try {
+    const {
+      collectRegisteredEmbeddingProviderIds,
+      collectUnregisteredConfiguredMemoryEmbeddingProviders,
+    } = await import("../plugins/gateway-startup-plugin-ids.js");
+    const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: params.config,
+      registeredProviderIds: collectRegisteredEmbeddingProviderIds(params.registry),
+    });
+    return unregistered.length > 0 ? unregistered : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Eager should-run plugin ids from the gateway startup plan, with deferred channel

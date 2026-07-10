@@ -1,6 +1,7 @@
 // Coverage for normalizing assistant replay content before provider requests.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -50,7 +51,7 @@ function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injecte
   return {
     role: "assistant",
     content: [{ type: "text", text: "channel mirror" }],
-    api: "openai-responses",
+    api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
     provider: "openclaw",
     model,
     usage: {
@@ -93,6 +94,15 @@ describe("normalizeAssistantReplayContent", () => {
     const out = normalizeAssistantReplayContent(messages);
     expect(out).not.toBe(messages);
     expect(out).toEqual([messages[0], messages[2]]);
+  });
+
+  it("preserves consecutive ambient user rows", () => {
+    const messages = [
+      userMessage("#10 Sam: first ambient"),
+      userMessage("#11 Lee: second ambient"),
+      userMessage("#12 Pat: @bot what now?"),
+    ];
+    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
   });
 
   it("removes blank user text blocks while preserving non-text content", () => {

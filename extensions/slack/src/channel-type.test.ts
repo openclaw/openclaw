@@ -178,6 +178,55 @@ describe("resolveSlackChannelType", () => {
     expect(conversationsInfoMock).not.toHaveBeenCalled();
   });
 
+  it("evicts least-recently-used conversation info entries after the cache limit", async () => {
+    const cacheMaxEntries = 1024;
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+        },
+      },
+    } as never;
+
+    conversationsInfoMock.mockImplementation(async ({ channel }) => ({
+      channel: {
+        id: channel,
+      },
+    }));
+
+    for (let index = 0; index < cacheMaxEntries; index++) {
+      await resolveSlackConversationInfo({
+        cfg,
+        channelId: `C${index.toString().padStart(8, "0")}`,
+      });
+    }
+    expect(conversationsInfoMock).toHaveBeenCalledTimes(cacheMaxEntries);
+
+    await resolveSlackConversationInfo({
+      cfg,
+      channelId: "C00000000",
+    });
+    expect(conversationsInfoMock).toHaveBeenCalledTimes(cacheMaxEntries);
+
+    await resolveSlackConversationInfo({
+      cfg,
+      channelId: `C${cacheMaxEntries.toString().padStart(8, "0")}`,
+    });
+    expect(conversationsInfoMock).toHaveBeenCalledTimes(cacheMaxEntries + 1);
+
+    await resolveSlackConversationInfo({
+      cfg,
+      channelId: "C00000001",
+    });
+    expect(conversationsInfoMock).toHaveBeenCalledTimes(cacheMaxEntries + 2);
+
+    await resolveSlackConversationInfo({
+      cfg,
+      channelId: "C00000000",
+    });
+    expect(conversationsInfoMock).toHaveBeenCalledTimes(cacheMaxEntries + 2);
+  });
+
   it("preserves the channel-type wrapper contract", async () => {
     conversationsInfoMock.mockResolvedValueOnce({
       channel: {

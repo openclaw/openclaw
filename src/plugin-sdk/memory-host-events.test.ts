@@ -232,6 +232,20 @@ describe("createPersistentDedupe", () => {
     ]);
   });
 
+  it("treats malformed legacy JSON cache files as empty", async () => {
+    const root = await createTempDir("openclaw-legacy-dedupe-malformed-");
+    const legacyPath = path.join(root, "legacy.json");
+    await fs.writeFile(legacyPath, "{not valid json");
+
+    await expect(
+      listPersistentDedupeLegacyJsonFileEntries({
+        filePath: legacyPath,
+        ttlMs: 500,
+        now: 1_100,
+      }),
+    ).resolves.toStrictEqual([]);
+  });
+
   it("warms empty namespaces and ignores retired JSON cache files", async () => {
     const root = await createTempDir("openclaw-dedupe-");
     const emptyReader = createDedupe(root, { ttlMs: 10_000 });

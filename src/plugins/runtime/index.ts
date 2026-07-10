@@ -49,6 +49,22 @@ const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
 const loadModelAuthRuntime = createLazyRuntimeModule(
   () => import("./runtime-model-auth.runtime.js"),
 );
+const loadGatewayPluginRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/server-plugins.js"),
+);
+
+function createRuntimeGateway(): PluginRuntime["gateway"] {
+  return {
+    isAvailable: async () => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.hasInProcessGatewayContext();
+    },
+    request: async (method, params, options) => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
+    },
+  };
+}
 
 function createRuntimeTts(): PluginRuntime["tts"] {
   const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
@@ -223,6 +239,26 @@ function createLateBindingNodes(allowGatewayBinding = false): PluginRuntime["nod
   });
 }
 
+function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
+  const loadService = () => import("../../agents/worktrees/service.js");
+  return {
+    async create(params) {
+      const { managedWorktrees } = await loadService();
+      const record = await managedWorktrees.create(params);
+      await managedWorktrees.acquire(record.id);
+      return { id: record.id, path: record.path, branch: record.branch };
+    },
+    async release(params) {
+      const { managedWorktrees } = await loadService();
+      await managedWorktrees.releaseByPath(params.path);
+    },
+    async removeIfLossless(params) {
+      const { managedWorktrees } = await loadService();
+      return managedWorktrees.removeIfLosslessByPath(params.path);
+    },
+  };
+}
+
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
@@ -233,6 +269,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    gateway: createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),
     subagent: createLateBindingSubagent(
@@ -240,6 +277,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       _options.allowGatewaySubagentBinding === true,
     ),
     nodes: _options.nodes ?? createLateBindingNodes(_options.allowGatewaySubagentBinding === true),
+    worktrees: createRuntimeWorktrees(),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     webSearch: {

@@ -37,8 +37,10 @@ describe("Crestodian Docker E2E scripts", () => {
   });
 
   it("keeps rescue checks wired through auto-reply command handling", () => {
+    const shell = readScript("scripts/e2e/crestodian-rescue-docker.sh");
     const source = readScript("scripts/e2e/crestodian-rescue-docker-client.ts");
 
+    expect(shell).toContain("OPENCLAW_GATEWAY_TOKEN=crestodian-rescue-token");
     expect(source).toContain("../../dist/auto-reply/reply/commands-crestodian.js");
     expect(source).toContain("../../dist/crestodian/rescue-message.js");
     expect(source).toContain("handleCrestodianCommand(");

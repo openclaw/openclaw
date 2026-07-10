@@ -28,6 +28,10 @@ import {
   applyPreparedRuntimeAuthToModel,
   type ModelProviderRequestTransportOverrides,
 } from "../../provider-request-config.js";
+import {
+  protectPreparedProviderRuntimeAuth,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
@@ -117,8 +121,8 @@ export function createEmbeddedRunAuthController(params: {
     apiKey: string;
     authMode: string;
     profileId?: string;
-  }) =>
-    prepareProviderRuntimeAuth({
+  }) => {
+    const preparedAuth = await prepareProviderRuntimeAuth({
       provider: prepareParams.runtimeModel.provider,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -131,11 +135,20 @@ export function createEmbeddedRunAuthController(params: {
         provider: prepareParams.runtimeModel.provider,
         modelId: params.getModelId(),
         model: prepareParams.runtimeModel,
-        apiKey: prepareParams.apiKey,
+        apiKey: unwrapSecretSentinelsForProviderEgress(
+          prepareParams.apiKey,
+          "provider runtime auth exchange",
+        ),
         authMode: prepareParams.authMode,
         profileId: prepareParams.profileId,
       },
     });
+    return protectPreparedProviderRuntimeAuth({
+      sourceApiKey: prepareParams.apiKey,
+      provider: prepareParams.runtimeModel.provider,
+      preparedAuth,
+    });
+  };
 
   const clearRuntimeAuthRefreshTimer = () => {
     const runtimeAuthState = params.getRuntimeAuthState();
@@ -373,6 +386,7 @@ export function createEmbeddedRunAuthController(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       lockedProfile: candidate != null && candidate === params.lockedProfileId,
+      secretSentinels: true,
     });
   };
 
