@@ -2,7 +2,7 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   removeRemovedSessionTrajectoryArtifacts,
@@ -12,8 +12,17 @@ import { resolveTrajectoryFilePath, resolveTrajectoryPointerFilePath } from "./p
 import {
   acquireTrajectoryWriterLease,
   canonicalizeTrajectoryPath,
+  clearTrajectoryWriterLifecycleRegistryForTest,
   withTrajectoryPathLock,
 } from "./writer-lifecycle.js";
+
+afterEach(() => {
+  // findTrajectoryPathOwnedBySession scans the whole registry by sessionId;
+  // several tests below reuse the same literal sessionId strings ("abc*def"
+  // etc.) across cases, so leaked entries from an earlier test can otherwise
+  // shadow the current test's own owner record.
+  clearTrajectoryWriterLifecycleRegistryForTest();
+});
 
 function runtimeEvent(sessionId: string): string {
   return `${JSON.stringify({
@@ -255,6 +264,52 @@ describe("trajectory cleanup", () => {
 
       await expectPathMissing(leaseA.filePath);
       expect((await fs.stat(leaseB.filePath)).isFile()).toBe(true);
+    });
+  });
+
+  it("removes the disambiguated owner's own runtime and pointer on its own delete", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const trajectoryDir = path.join(dir, "traces");
+      const sessionAId = "abc*def";
+      const sessionBId = "abc_def";
+      const sessionFileA = path.join(dir, "session-a.jsonl");
+      const sessionFileB = path.join(dir, "session-b.jsonl");
+      const env = { OPENCLAW_TRAJECTORY_DIR: trajectoryDir };
+
+      const leaseA = await acquireTrajectoryWriterLease({
+        sessionId: sessionAId,
+        candidatePath: resolveTrajectoryFilePath({ env, sessionId: sessionAId }),
+      });
+      const leaseB = await acquireTrajectoryWriterLease({
+        sessionId: sessionBId,
+        candidatePath: resolveTrajectoryFilePath({ env, sessionId: sessionBId }),
+      });
+      expect(leaseA.filePath).not.toBe(leaseB.filePath);
+
+      await fs.mkdir(trajectoryDir, { recursive: true });
+      await fs.writeFile(leaseA.filePath, runtimeEvent(sessionAId), "utf8");
+      await fs.writeFile(leaseB.filePath, runtimeEvent(sessionBId), "utf8");
+      const pointerPathA = resolveTrajectoryPointerFilePath(sessionFileA);
+      const pointerPathB = resolveTrajectoryPointerFilePath(sessionFileB);
+      await fs.writeFile(pointerPathA, pointerFile(sessionAId, leaseA.filePath), "utf8");
+      await fs.writeFile(pointerPathB, pointerFile(sessionBId, leaseB.filePath), "utf8");
+
+      // Delete the DISAMBIGUATED owner (B) this time — the reverse of the
+      // sibling test above. B's own runtime file lives at a hash-suffixed
+      // path its own default-derivation never produces, so cleanup must
+      // resolve it via the registry's owner record, not by re-deriving B's
+      // (wrong) default candidate.
+      await removeSessionTrajectoryArtifacts({
+        sessionId: sessionBId,
+        sessionFile: sessionFileB,
+        storePath,
+        restrictToStoreDir: true,
+      });
+
+      await expectPathMissing(leaseB.filePath);
+      await expectPathMissing(pointerPathB);
+      expect((await fs.stat(leaseA.filePath)).isFile()).toBe(true);
     });
   });
 
