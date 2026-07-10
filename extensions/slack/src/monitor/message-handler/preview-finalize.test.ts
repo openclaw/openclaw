@@ -52,33 +52,6 @@ describe("finalizeSlackPreviewEdit", () => {
     expect(client.conversations.history as unknown as ReturnType<typeof vi.fn>).toHaveBeenCalled();
   });
 
-  it("keeps event-scoped edit readback on the listener client without a token override", async () => {
-    editSlackMessageMock.mockRejectedValueOnce(new Error("socket closed"));
-    const deliveryClient = createClient();
-    const readClient = createClient({
-      historyMessages: [{ ts: "171234.567", text: "delivered" }],
-    });
-
-    await expect(
-      finalizeSlackPreviewEdit({
-        client: deliveryClient,
-        readClient,
-        channelId: "C123",
-        messageId: "171234.567",
-        text: "delivered",
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(deliveryClient.conversations.history).not.toHaveBeenCalled();
-    expect(readClient.conversations.history).toHaveBeenCalledWith({
-      channel: "C123",
-      latest: "171234.567",
-      oldest: "171234.567",
-      inclusive: true,
-      limit: 1,
-    });
-  });
-
   it("checks threaded replies via conversations.replies", async () => {
     editSlackMessageMock.mockRejectedValueOnce(new Error("socket closed"));
     const client = createClient({

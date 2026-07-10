@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebClient } from "@slack/web-api";
 import { afterEach, describe, expect, it } from "vitest";
-import { createSlackWebClient, getSlackListenerDeliveryClient } from "./client.js";
+import { createSlackWebClient, getSlackListenerUploadCompletionClient } from "./client.js";
 
 const SLACK_API_URL_KEYS = ["SLACK_API_URL"] as const;
 const PROXY_KEYS = [
@@ -113,82 +113,62 @@ afterEach(() => {
 });
 
 describe("Slack Web API routing", () => {
-  it("keeps dropped Enterprise completion responses to one team-scoped request", async () => {
+  it("keeps dropped Enterprise upload completion responses to one team-scoped request", async () => {
     for (const key of TEST_ENV_KEYS) {
       delete process.env[key];
     }
     const requests: SlackApiRequest[] = [];
     const server = await startDroppedResponseSlackApiServer(requests);
     try {
-      for (const { teamId, token } of [
-        { teamId: "TENTERPRISE1", token: "xoxb-enterprise-one" },
-        { teamId: "TENTERPRISE2", token: "xoxb-enterprise-two" },
-      ]) {
-        const headers = {
-          Authorization: "Bearer stale-app-token",
+      const clientOptions = {
+        headers: {
+          Authorization: "Bearer stale-fixture",
           "X-Slack-Test": "preserved",
-        };
-        const clientOptions = {
-          headers,
-          slackApiUrl: `${server.baseUrl}/api/`,
-          retryConfig: { retries: 2 },
-          timeout: 1000,
-        };
-        const listenerClient = new WebClient(token, clientOptions);
-        const client = getSlackListenerDeliveryClient({
+        },
+        slackApiUrl: `${server.baseUrl}/api/`,
+        retryConfig: { retries: 2 },
+        timeout: 1000,
+      };
+      const listenerClient = new WebClient("listener-fixture", clientOptions);
+      const completionClient = getSlackListenerUploadCompletionClient({
+        listenerClient,
+        teamId: "TENTERPRISE1",
+        clientOptions,
+      });
+      expect(completionClient).toBeDefined();
+      if (!completionClient) {
+        throw new Error("missing Enterprise upload completion client");
+      }
+      expect(
+        getSlackListenerUploadCompletionClient({
           listenerClient,
-          teamId,
+          teamId: "TENTERPRISE1",
           clientOptions,
-        });
-        expect(client).toBeDefined();
-        if (!client) {
-          throw new Error("missing Enterprise delivery client");
-        }
-        expect(client).not.toBe(listenerClient);
-        expect(getSlackListenerDeliveryClient({ listenerClient, teamId, clientOptions })).toBe(
-          client,
-        );
-        expect(
-          getSlackListenerDeliveryClient({
-            listenerClient,
-            teamId: `${teamId}OTHER`,
-            clientOptions,
-          }),
-        ).toBeUndefined();
-        expect(clientOptions).toEqual({
-          headers: {
-            Authorization: "Bearer stale-app-token",
-            "X-Slack-Test": "preserved",
-          },
-          slackApiUrl: `${server.baseUrl}/api/`,
-          retryConfig: { retries: 2 },
-          timeout: 1000,
-        });
-        expect(headers).toEqual({
-          Authorization: "Bearer stale-app-token",
-          "X-Slack-Test": "preserved",
-        });
-        await expect(
-          client.files.completeUploadExternal({
-            files: [{ id: "F123", title: "proof.txt" }],
-            channel_id: "C123",
-          }),
-        ).rejects.toThrow();
-      }
+        }),
+      ).toBe(completionClient);
+      expect(
+        getSlackListenerUploadCompletionClient({
+          listenerClient,
+          teamId: "TENTERPRISE2",
+          clientOptions,
+        }),
+      ).toBeUndefined();
 
-      expect(requests).toHaveLength(2);
-      for (const [index, expected] of [
-        { teamId: "TENTERPRISE1", token: "xoxb-enterprise-one" },
-        { teamId: "TENTERPRISE2", token: "xoxb-enterprise-two" },
-      ].entries()) {
-        const request = requests[index];
-        expect(request).toMatchObject({
-          authorization: `Bearer ${expected.token}`,
-          method: "POST",
-          url: "/api/files.completeUploadExternal",
-        });
-        expect(new URLSearchParams(request?.body).get("team_id")).toBe(expected.teamId);
-      }
+      await expect(
+        completionClient.files.completeUploadExternal({
+          files: [{ id: "F123", title: "proof.txt" }],
+          channel_id: "C123",
+        }),
+      ).rejects.toThrow();
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        authorization: "Bearer listener-fixture",
+        method: "POST",
+        url: "/api/files.completeUploadExternal",
+      });
+      expect(new URLSearchParams(requests[0]?.body).get("team_id")).toBe("TENTERPRISE1");
+      expect(requests[0]?.authorization).not.toContain("stale-fixture");
     } finally {
       await server.close();
     }

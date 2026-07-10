@@ -468,7 +468,8 @@ describe("sendMessageSlack file upload with user IDs", () => {
       signal: expect.any(AbortSignal),
       requireHttps: true,
       policy: {
-        hostnameAllowlist: ["slack.com", "*.slack.com"],
+        hostnameAllowlist: ["files.slack.com"],
+        allowRfc2544BenchmarkRange: true,
       },
       capture: false,
       auditContext: "slack-upload-file",
@@ -558,27 +559,11 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
   });
 
-  it.each([
-    [
-      "a future commercial Slack subdomain",
-      "https://slack.com/api/",
-      "https://future-upload.slack.com/upload/v1/commercial-capability",
-    ],
-    [
-      "a future GovSlack subdomain",
-      "https://slack-gov.com/api/",
-      "https://future-upload.slack-gov.com/upload/v1/gov-capability",
-    ],
-    [
-      "a Slack-owned HTTPS capability returned by a custom API root",
-      "https://slack-relay.example/api/",
-      "https://future-upload.slack.com/upload/v1/relayed-capability",
-    ],
-  ])("allows %s through the real hostname guard", async (_label, apiUrl, uploadUrl) => {
-    const client = createUploadTestClient(apiUrl);
+  it("allows an exact Slack upload host returned by a custom API root", async () => {
+    const client = createUploadTestClient("https://slack-relay.example/api/");
     client.files.getUploadURLExternal.mockResolvedValueOnce({
       ok: true,
-      upload_url: uploadUrl,
+      upload_url: "https://files.slack.com/upload/v1/relayed-capability",
       file_id: "F001",
     });
     const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
@@ -597,12 +582,93 @@ describe("sendMessageSlack file upload with user IDs", () => {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
-      mediaUrl: "/tmp/slack-owned-subdomain.png",
+      mediaUrl: "/tmp/relayed-upload.png",
     });
 
     expect(networkFetch).toHaveBeenCalledOnce();
     expectCompletedUpload({ client, expected: { channel_id: "C123CHAN" } });
   });
+
+  it("allows GovSlack upload destinations through the real hostname guard", async () => {
+    const client = createUploadTestClient("https://slack-gov.com/api/");
+    client.files.getUploadURLExternal.mockResolvedValueOnce({
+      ok: true,
+      upload_url: "https://files.slack-gov.com/upload/v1/gov-capability",
+      file_id: "F001",
+    });
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+      "openclaw/plugin-sdk/ssrf-runtime",
+    );
+    const networkFetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    fetchWithSsrFGuard.mockImplementationOnce(async (params) =>
+      actual.fetchWithSsrFGuard({ ...params, fetchImpl: networkFetch }),
+    );
+
+    await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/gov-slack.png",
+    });
+
+    expect(networkFetch).toHaveBeenCalledOnce();
+    expectCompletedUpload({ client, expected: { channel_id: "C123CHAN" } });
+  });
+
+  it("retains the shipped RFC2544 fake-IP path for an exact Slack upload host", async () => {
+    const client = createUploadTestClient();
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+      "openclaw/plugin-sdk/ssrf-runtime",
+    );
+    const networkFetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    fetchWithSsrFGuard.mockImplementationOnce(async (params) =>
+      actual.fetchWithSsrFGuard({
+        ...params,
+        fetchImpl: networkFetch,
+        lookupFn: (async () => [{ address: "198.18.0.10", family: 4 }]) as unknown as LookupFn,
+      }),
+    );
+
+    await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/fake-ip.png",
+    });
+
+    expect(networkFetch).toHaveBeenCalledOnce();
+    expectCompletedUpload({ client, expected: { channel_id: "C123CHAN" } });
+  });
+
+  it.each(["10.0.0.1", "169.254.1.1"])(
+    "rejects exact Slack upload hosts resolving to blocked address %s",
+    async (address) => {
+      const client = createUploadTestClient();
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+        "openclaw/plugin-sdk/ssrf-runtime",
+      );
+      const networkFetch = vi.fn(async () => new Response("unexpected"));
+      fetchWithSsrFGuard.mockImplementationOnce(async (params) =>
+        actual.fetchWithSsrFGuard({
+          ...params,
+          fetchImpl: networkFetch,
+          lookupFn: (async () => [{ address, family: 4 }]) as unknown as LookupFn,
+        }),
+      );
+
+      await expect(
+        sendMessageSlack("channel:C123CHAN", "caption", {
+          token: "xoxb-test",
+          cfg: SLACK_TEST_CFG,
+          client,
+          mediaUrl: "/tmp/private-address.png",
+        }),
+      ).rejects.toThrow();
+
+      expect(networkFetch).not.toHaveBeenCalled();
+      expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     [
@@ -620,25 +686,37 @@ describe("sendMessageSlack file upload with user IDs", () => {
     [
       "commercial Slack to GovSlack",
       "https://slack.com/api/",
-      "https://files.slack-gov.com/upload/v1/cross-environment",
+      "https://files.slack-gov.com/upload/v1/cross-plane",
       /not in allowlist/i,
     ],
     [
       "GovSlack to commercial Slack",
       "https://slack-gov.com/api/",
-      "https://files.slack.com/upload/v1/cross-environment",
+      "https://files.slack.com/upload/v1/cross-plane",
       /not in allowlist/i,
     ],
     [
       "trailing-dot commercial Slack to GovSlack",
       "https://slack.com./api/",
-      "https://files.slack-gov.com/upload/v1/cross-environment",
+      "https://files.slack-gov.com/upload/v1/cross-plane",
       /not in allowlist/i,
     ],
     [
       "trailing-dot GovSlack to commercial Slack",
       "https://slack-gov.com./api/",
-      "https://files.slack.com/upload/v1/cross-environment",
+      "https://files.slack.com/upload/v1/cross-plane",
+      /not in allowlist/i,
+    ],
+    [
+      "undocumented commercial subdomain",
+      "https://slack.com/api/",
+      "https://future-upload.slack.com/upload/v1/capability",
+      /not in allowlist/i,
+    ],
+    [
+      "undocumented GovSlack subdomain",
+      "https://slack-gov.com/api/",
+      "https://future-upload.slack-gov.com/upload/v1/capability",
       /not in allowlist/i,
     ],
   ])(

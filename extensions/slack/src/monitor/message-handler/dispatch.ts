@@ -399,7 +399,7 @@ function shouldUseStreaming(params: {
 
 export async function resolveSlackStreamRecipientTeamId(params: {
   client: Pick<PreparedSlackMessage["ctx"]["app"]["client"], "users">;
-  token?: string;
+  token: string;
   userId?: PreparedSlackMessage["message"]["user"];
   fallbackTeamId?: string;
 }): Promise<string | undefined> {
@@ -410,7 +410,7 @@ export async function resolveSlackStreamRecipientTeamId(params: {
   if (params.userId) {
     try {
       const info = await params.client.users.info({
-        ...(params.token ? { token: params.token } : {}),
+        token: params.token,
         user: params.userId,
       });
       const teamId = info.user?.team_id ?? info.user?.profile?.team;
@@ -427,8 +427,7 @@ export async function resolveSlackStreamRecipientTeamId(params: {
 
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
-  const slackReadClient = prepared.eventScope?.client ?? ctx.app.client;
-  const slackDeliveryClient = prepared.eventScope?.deliveryClient ?? ctx.app.client;
+  const slackClient = prepared.eventScope?.client ?? ctx.app.client;
   const slackStreamFallbackTeamId = prepared.eventScope?.teamId ?? ctx.teamId;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -523,8 +522,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const slackStatusAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
       await reactSlackMessage(message.channel, reactionMessageTs ?? "", emoji, {
-        ...(prepared.eventScope ? {} : { token: ctx.botToken }),
-        client: slackDeliveryClient,
+        token: ctx.botToken,
+        client: slackClient,
       }).catch((err: unknown) => {
         if (formatErrorMessage(err).includes("already_reacted")) {
           return;
@@ -534,8 +533,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
     removeReaction: async (emoji) => {
       await removeSlackReaction(message.channel, reactionMessageTs ?? "", emoji, {
-        ...(prepared.eventScope ? {} : { token: ctx.botToken }),
-        client: slackDeliveryClient,
+        token: ctx.botToken,
+        client: slackClient,
       }).catch((err: unknown) => {
         if (formatErrorMessage(err).includes("no_reaction")) {
           return;
@@ -606,8 +605,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
         if (typingReaction && message.ts) {
           await reactSlackMessage(message.channel, message.ts, typingReaction, {
-            ...(prepared.eventScope ? {} : { token: ctx.botToken }),
-            client: slackDeliveryClient,
+            token: ctx.botToken,
+            client: slackClient,
           }).catch(() => {});
         }
       },
@@ -624,8 +623,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
         if (typingReaction && message.ts) {
           await removeSlackReaction(message.channel, message.ts, typingReaction, {
-            ...(prepared.eventScope ? {} : { token: ctx.botToken }),
-            client: slackDeliveryClient,
+            token: ctx.botToken,
+            client: slackClient,
           }).catch(() => {});
         }
       },
@@ -875,7 +874,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         cfg: ctx.cfg,
         replies: [{ text: fallbackText } as ReplyPayload],
         target: prepared.replyTarget,
-        ...(prepared.eventScope ? {} : { token: ctx.botToken }),
+        token: ctx.botToken,
         accountId: account.accountId,
         runtime,
         textLimit: ctx.textLimit,
@@ -950,7 +949,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       cfg: ctx.cfg,
       replies: [params.payload],
       target: prepared.replyTarget,
-      ...(prepared.eventScope ? {} : { token: ctx.botToken }),
+      token: ctx.botToken,
       accountId: account.accountId,
       runtime,
       textLimit: ctx.textLimit,
@@ -1080,14 +1079,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }
 
         streamSession = await startSlackStream({
-          client: slackDeliveryClient,
+          client: slackClient,
           channel: message.channel,
           threadTs: streamThreadTs,
           text,
           ...(slackIdentity ? { identity: slackIdentity } : {}),
           teamId: await resolveSlackStreamRecipientTeamId({
-            client: slackReadClient,
-            ...(prepared.eventScope ? {} : { token: ctx.botToken }),
+            client: slackClient,
+            token: ctx.botToken,
             userId: message.user,
             fallbackTeamId: slackStreamFallbackTeamId,
           }),
@@ -1294,9 +1293,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         await draftStream.seal();
         try {
           await finalizeSlackPreviewEdit({
-            client: slackDeliveryClient,
-            readClient: slackReadClient,
-            ...(prepared.eventScope ? {} : { token: ctx.botToken }),
+            client: slackClient,
+            token: ctx.botToken,
             accountId: account.accountId,
             channelId,
             messageId,
@@ -1383,9 +1381,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             return;
           }
           await finalizeSlackPreviewEdit({
-            client: slackDeliveryClient,
-            readClient: slackReadClient,
-            ...(prepared.eventScope ? {} : { token: ctx.botToken }),
+            client: slackClient,
+            token: ctx.botToken,
             accountId: account.accountId,
             channelId: preview.channelId,
             messageId: preview.messageId,
@@ -1592,15 +1589,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     nativeProgressStreamThreadTs = streamThreadTs;
     const startPromise = (async () => {
       const session = await startSlackStream({
-        client: slackDeliveryClient,
+        client: slackClient,
         channel: message.channel,
         threadTs: streamThreadTs,
         chunks,
         taskDisplayMode: "plan",
         ...(slackIdentity ? { identity: slackIdentity } : {}),
         teamId: await resolveSlackStreamRecipientTeamId({
-          client: slackReadClient,
-          ...(prepared.eventScope ? {} : { token: ctx.botToken }),
+          client: slackClient,
+          token: ctx.botToken,
           userId: message.user,
           fallbackTeamId: slackStreamFallbackTeamId,
         }),
@@ -2147,8 +2144,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           prepared.ackReactionMessageTs ?? "",
           prepared.ackReactionValue,
           {
-            ...(prepared.eventScope ? {} : { token: ctx.botToken }),
-            client: slackDeliveryClient,
+            token: ctx.botToken,
+            client: slackClient,
           },
         ),
       onError: (err) => {

@@ -5,10 +5,6 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist,
-  isHttpsUrlAllowedByHostnameSuffixAllowlist,
-} from "openclaw/plugin-sdk/ssrf-policy";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   appendSlackDataVisualizationFallbackText,
@@ -28,15 +24,17 @@ import {
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { truncateSlackText } from "./truncate.js";
 
-const SLACK_COMMERCIAL_HOST_SUFFIXES = ["slack.com"];
-const SLACK_GOV_HOST_SUFFIXES = ["slack-gov.com"];
-// Slack upload hosts still need public DNS answers. Hostname ownership alone
-// does not justify a fake-IP or private-range SSRF exemption.
+const SLACK_COMMERCIAL_API_HOSTNAME = "slack.com";
+const SLACK_COMMERCIAL_UPLOAD_HOSTNAME = "files.slack.com";
+const SLACK_GOV_API_HOSTNAME = "slack-gov.com";
+const SLACK_GOV_UPLOAD_HOSTNAME = "files.slack-gov.com";
 const SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY = {
-  ...buildHostnameAllowlistPolicyFromSuffixAllowlist(SLACK_COMMERCIAL_HOST_SUFFIXES),
+  hostnameAllowlist: [SLACK_COMMERCIAL_UPLOAD_HOSTNAME],
+  allowRfc2544BenchmarkRange: true,
 } satisfies SsrFPolicy;
 const SLACK_GOV_UPLOAD_SSRF_POLICY = {
-  ...buildHostnameAllowlistPolicyFromSuffixAllowlist(SLACK_GOV_HOST_SUFFIXES),
+  hostnameAllowlist: [SLACK_GOV_UPLOAD_HOSTNAME],
+  allowRfc2544BenchmarkRange: true,
 } satisfies SsrFPolicy;
 const SLACK_UPLOAD_POST_TIMEOUT_MS = 120_000;
 const SLACK_DNS_RETRY_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "UND_ERR_DNS_RESOLVE_FAILED"]);
@@ -109,14 +107,41 @@ function parseSlackUploadHttpUrl(value: string, label: string): URL {
   throw new Error(`${label} must use a valid HTTP or HTTPS URL`);
 }
 
+function normalizeSlackHostname(hostname: string): string {
+  return hostname.trim().toLowerCase().replace(/\.$/, "");
+}
+
 function resolveSlackOwnedUploadPolicy(url: URL): SsrFPolicy | undefined {
-  if (isHttpsUrlAllowedByHostnameSuffixAllowlist(url.toString(), SLACK_COMMERCIAL_HOST_SUFFIXES)) {
-    return SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY;
+  if (url.protocol !== "https:") {
+    return undefined;
   }
-  if (isHttpsUrlAllowedByHostnameSuffixAllowlist(url.toString(), SLACK_GOV_HOST_SUFFIXES)) {
-    return SLACK_GOV_UPLOAD_SSRF_POLICY;
+  switch (normalizeSlackHostname(url.hostname)) {
+    case SLACK_COMMERCIAL_UPLOAD_HOSTNAME:
+      return SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY;
+    case SLACK_GOV_UPLOAD_HOSTNAME:
+      return SLACK_GOV_UPLOAD_SSRF_POLICY;
+    default:
+      return undefined;
   }
-  return undefined;
+}
+
+function resolveOfficialSlackApiUploadPolicy(url: URL): SsrFPolicy | undefined {
+  if (url.protocol !== "https:" || url.port) {
+    return undefined;
+  }
+  switch (normalizeSlackHostname(url.hostname)) {
+    case SLACK_COMMERCIAL_API_HOSTNAME:
+      return SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY;
+    case SLACK_GOV_API_HOSTNAME:
+      return SLACK_GOV_UPLOAD_SSRF_POLICY;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeSlackOrigin(url: URL): string {
+  const port = url.port ? `:${url.port}` : "";
+  return `${url.protocol}//${normalizeSlackHostname(url.hostname)}${port}`;
 }
 
 function resolveSlackUploadTransportPolicy(params: { uploadUrl: string; slackApiUrl?: string }): {
@@ -127,10 +152,8 @@ function resolveSlackUploadTransportPolicy(params: { uploadUrl: string; slackApi
     return { requireHttps: true, policy: SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY };
   }
   const apiUrl = parseSlackUploadHttpUrl(params.slackApiUrl, "Configured Slack API URL");
-  const officialApiPolicy = resolveSlackOwnedUploadPolicy(apiUrl);
+  const officialApiPolicy = resolveOfficialSlackApiUploadPolicy(apiUrl);
   if (officialApiPolicy) {
-    // Commercial and GovSlack data planes are isolated. The API root selects
-    // which Slack-owned suffix may receive this upload capability.
     return { requireHttps: true, policy: officialApiPolicy };
   }
   const uploadUrl = parseSlackUploadHttpUrl(params.uploadUrl, "Slack external upload URL");
@@ -140,14 +163,15 @@ function resolveSlackUploadTransportPolicy(params: { uploadUrl: string; slackApi
   }
   // Default Slack capabilities stay Slack-hosted. An operator-selected API
   // root may additionally return upload capabilities on its exact origin.
-  if (uploadUrl.origin !== apiUrl.origin) {
+  if (normalizeSlackOrigin(uploadUrl) !== normalizeSlackOrigin(apiUrl)) {
     throw new Error("Slack external upload URL must match the configured Slack API origin");
   }
   return {
     requireHttps: apiUrl.protocol === "https:",
     policy: {
-      hostnameAllowlist: [apiUrl.hostname],
-      allowedOrigins: [apiUrl.origin],
+      hostnameAllowlist: [uploadUrl.hostname],
+      allowedOrigins: [uploadUrl.origin],
+      allowRfc2544BenchmarkRange: true,
     },
   };
 }
@@ -224,6 +248,7 @@ export async function postSlackMessageBestEffort(params: {
 
 export async function uploadSlackFile(params: {
   client: WebClient;
+  completionClient?: WebClient;
   channelId: string;
   mediaUrl: string;
   mediaAccess?: {
@@ -312,8 +337,9 @@ export async function uploadSlackFile(params: {
   await params.onPlatformSendDispatch?.();
   // Slack allows this finalize call only once. Keep only the pre-connect DNS
   // retry; a timeout or broader retry would create an unknown-send state.
+  const completionClient = params.completionClient ?? params.client;
   const completeResp = await withSlackDnsRequestRetry("files.completeUploadExternal", () =>
-    params.client.files.completeUploadExternal({
+    completionClient.files.completeUploadExternal({
       files: [{ id: uploadFileId, title: uploadTitle }],
       channel_id: params.channelId,
       ...(params.caption ? { initial_comment: params.caption } : {}),

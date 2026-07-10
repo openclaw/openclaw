@@ -107,14 +107,12 @@ describe("deliverReplies identity passthrough", () => {
     const identity = { username: "Bot", iconEmoji: ":chart_with_upwards_trend:" };
     const metadata = { event_type: "openclaw_test", event_payload: { source: "chart" } };
     const listenerClient = { chat: { postMessage: vi.fn() } } as never;
-    const deliveryClient = { chat: { postMessage: vi.fn() } } as never;
     const eventScope = {
       apiAppId: "A1",
       enterpriseId: "E1",
       isEnterpriseInstall: true as const,
       teamId: "T1",
       client: listenerClient,
-      deliveryClient,
     };
     const enterpriseCfg = { channels: { slack: { enterpriseOrgInstall: true } } };
 
@@ -152,6 +150,7 @@ describe("deliverReplies identity passthrough", () => {
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenNthCalledWith(1, "C123", "Revenue summary", {
       cfg: enterpriseCfg,
+      token: "xoxb-test",
       mediaUrl: "https://example.com/report.png",
       threadTs: "thread-ts",
       accountId: "work",
@@ -168,6 +167,7 @@ describe("deliverReplies identity passthrough", () => {
       "Revenue summary\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
       {
         cfg: enterpriseCfg,
+        token: "xoxb-test",
         threadTs: "thread-ts",
         accountId: "work",
         client: listenerClient,
@@ -214,14 +214,12 @@ describe("deliverReplies identity passthrough", () => {
   it("forwards the validated Enterprise event scope and exact listener client", async () => {
     sendMock.mockResolvedValue({ messageId: "123.456", channelId: "C123" });
     const listenerClient = { chat: { postMessage: vi.fn() } } as never;
-    const deliveryClient = { chat: { postMessage: vi.fn() } } as never;
     const eventScope = {
       apiAppId: "A1",
       enterpriseId: "E1",
       isEnterpriseInstall: true as const,
       teamId: "T1",
       client: listenerClient,
-      deliveryClient,
     };
 
     await deliverReplies(
@@ -235,7 +233,6 @@ describe("deliverReplies identity passthrough", () => {
     const options = requireSendCall()[2];
     expect(options.client).toBe(listenerClient);
     expect(options.enterpriseEventScope).toBe(eventScope);
-    expect(options).not.toHaveProperty("token");
     expect(options.textLimit).toBe(4000);
     expect(options.mediaMaxBytes).toBe(1024);
   });

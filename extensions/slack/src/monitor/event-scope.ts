@@ -1,7 +1,7 @@
 // Slack plugin module validates non-serializable per-event Enterprise Grid scope.
 import type { WebClient, WebClientOptions } from "@slack/web-api";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getSlackListenerDeliveryClient } from "../client.js";
+import { getSlackListenerUploadCompletionClient } from "../client.js";
 import type { SlackInstallationIdentity } from "./enterprise-install.js";
 
 export type SlackEventScope = {
@@ -9,10 +9,11 @@ export type SlackEventScope = {
   enterpriseId: string;
   teamId: string;
   isEnterpriseInstall: true;
-  // Bolt's exact pooled client retains normal retries for listener reads.
+  // Keep Bolt's exact listener client for ordinary reads and writes.
   client: WebClient;
-  // One-shot sends use a distinct zero-retry client with the same token, transport, and team scope.
-  deliveryClient: WebClient;
+  // Completion is one-shot, so uploads finalize through a team-scoped client
+  // that cannot inherit Bolt's normal request retries.
+  uploadCompletionClient?: WebClient;
 };
 
 export type SlackEventScopeResolution =
@@ -28,9 +29,7 @@ export type SlackEventScopeResolution =
         | "wrong_enterprise"
         | "missing_team_id"
         | "invalid_team_id"
-        | "missing_listener_client"
-        | "missing_listener_token"
-        | "listener_team_mismatch";
+        | "missing_listener_client";
     };
 
 export function resolveSlackEventScope(params: {
@@ -79,17 +78,11 @@ export function resolveSlackEventScope(params: {
   if (!params.client) {
     return { ok: false, reason: "missing_listener_client" };
   }
-  if (!normalizeOptionalString(params.client.token)) {
-    return { ok: false, reason: "missing_listener_token" };
-  }
-  const deliveryClient = getSlackListenerDeliveryClient({
+  const uploadCompletionClient = getSlackListenerUploadCompletionClient({
     listenerClient: params.client,
     teamId,
     clientOptions: params.clientOptions,
   });
-  if (!deliveryClient) {
-    return { ok: false, reason: "listener_team_mismatch" };
-  }
   return {
     ok: true,
     scope: {
@@ -98,7 +91,7 @@ export function resolveSlackEventScope(params: {
       teamId,
       isEnterpriseInstall: true,
       client: params.client,
-      deliveryClient,
+      ...(uploadCompletionClient ? { uploadCompletionClient } : {}),
     },
   };
 }

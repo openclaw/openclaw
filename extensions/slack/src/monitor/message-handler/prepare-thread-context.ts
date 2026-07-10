@@ -242,7 +242,7 @@ export async function resolveSlackThreadContextData(params: {
       threadStarterMedia = await resolveSlackMedia({
         files: starter.files,
         client: params.eventScope?.client ?? params.ctx.app.client,
-        token: params.eventScope?.client.token ?? params.ctx.botToken,
+        token: params.ctx.botToken,
         maxBytes: params.ctx.mediaMaxBytes,
       });
       if (threadStarterMedia) {

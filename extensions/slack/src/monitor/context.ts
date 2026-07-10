@@ -507,7 +507,7 @@ export function createSlackMonitorContext(params: {
     }
     try {
       const info = await (eventScope?.client ?? params.app.client).conversations.info({
-        ...(eventScope ? {} : { token: params.botToken }),
+        token: params.botToken,
         channel: channelId,
       });
       const name = info.channel && "name" in info.channel ? info.channel.name : undefined;
@@ -545,7 +545,7 @@ export function createSlackMonitorContext(params: {
     }
     try {
       const info = await (eventScope?.client ?? params.app.client).users.info({
-        ...(eventScope ? {} : { token: params.botToken }),
+        token: params.botToken,
         user: userId,
       });
       const profile = info.user?.profile;
@@ -569,8 +569,8 @@ export function createSlackMonitorContext(params: {
       return;
     }
     try {
-      await (p.eventScope?.deliveryClient ?? params.app.client).assistant.threads.setStatus({
-        ...(p.eventScope ? {} : { token: params.botToken }),
+      await (p.eventScope?.client ?? params.app.client).assistant.threads.setStatus({
+        token: params.botToken,
         channel_id: p.channelId,
         thread_ts: p.threadTs,
         status: p.status,

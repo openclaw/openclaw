@@ -9,7 +9,7 @@ import {
 
 const SLACK_WRITE_CLIENT_CACHE_MAX = 32;
 const slackWriteClientCache = new Map<string, WebClient>();
-let slackListenerDeliveryClientCache = new WeakMap<
+let slackListenerUploadCompletionClientCache = new WeakMap<
   WebClient,
   { teamId: string; client: WebClient }
 >();
@@ -63,23 +63,20 @@ export function getSlackWriteClient(
   return client;
 }
 
-export function getSlackListenerDeliveryClient(params: {
+export function getSlackListenerUploadCompletionClient(params: {
   listenerClient: WebClient;
   teamId: string;
   clientOptions?: WebClientOptions;
 }): WebClient | undefined {
   const token = params.listenerClient.token?.trim();
-  if (!token) {
-    return undefined;
-  }
   const teamId = params.teamId.trim().toUpperCase();
-  if (!teamId) {
+  if (!token || !teamId) {
     return undefined;
   }
-  const cached = slackListenerDeliveryClientCache.get(params.listenerClient);
+  const cached = slackListenerUploadCompletionClientCache.get(params.listenerClient);
   if (cached) {
-    // Bolt App.processEvent pools message listener clients by authorizeResult.teamId.
-    // Reusing that object for another event team is invalid scope, not a new key.
+    // Bolt pools listener clients by authorized team. Reusing one for a
+    // different team is invalid scope, not another completion-client key.
     return cached.teamId === teamId ? cached.client : undefined;
   }
   const headers = Object.fromEntries(
@@ -87,8 +84,8 @@ export function getSlackListenerDeliveryClient(params: {
       ([name]) => name.toLowerCase() !== "authorization",
     ),
   );
-  // Bolt exposes the finalized WebClient options. Clone that public transport
-  // contract, then override only the team scope and one-shot write retry policy.
+  // Completion is one-shot. Clone Bolt's public transport options and team
+  // scope, but never inherit the listener client's network retry policy.
   const client = new WebClient(
     token,
     resolveSlackWriteClientOptions({
@@ -99,11 +96,11 @@ export function getSlackListenerDeliveryClient(params: {
       retryConfig: SLACK_WRITE_RETRY_OPTIONS,
     }),
   );
-  slackListenerDeliveryClientCache.set(params.listenerClient, { teamId, client });
+  slackListenerUploadCompletionClientCache.set(params.listenerClient, { teamId, client });
   return client;
 }
 
 export function clearSlackWriteClientCacheForTest(): void {
   slackWriteClientCache.clear();
-  slackListenerDeliveryClientCache = new WeakMap();
+  slackListenerUploadCompletionClientCache = new WeakMap();
 }

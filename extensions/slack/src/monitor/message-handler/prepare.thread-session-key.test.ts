@@ -74,7 +74,6 @@ function buildEventScope(teamId: string): SlackEventScope {
     isEnterpriseInstall: true,
     teamId,
     client: {} as SlackEventScope["client"],
-    deliveryClient: {} as SlackEventScope["deliveryClient"],
   };
 }
 

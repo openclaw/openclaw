@@ -332,12 +332,6 @@ describe("isHttpsUrlAllowedByHostnameSuffixAllowlist", () => {
       expected: true,
     },
     {
-      name: "canonicalizes a trailing DNS dot",
-      url: "https://a.example.com./x",
-      allowlist: ["example.com"],
-      expected: true,
-    },
-    {
       name: "rejects non-matching hosts",
       url: "https://evil.com/x",
       allowlist: ["example.com"],

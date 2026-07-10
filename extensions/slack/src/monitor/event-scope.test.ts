@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { resolveSlackEventScope } from "./event-scope.js";
 
 const identity = { kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" } as const;
-const client = new WebClient("xoxb-listener");
+const client = new WebClient("listener-token");
 
 describe("resolveSlackEventScope", () => {
   it.each(["T111", "T222"])("accepts authorized workspace %s in the same org", (teamId) => {
-    const listenerClient = new WebClient(`xoxb-${teamId.toLowerCase()}`);
+    const listenerClient = new WebClient(`listener-token-${teamId.toLowerCase()}`);
     const result = resolveSlackEventScope({
       identity,
       body: { api_app_id: "A123" },
@@ -25,22 +25,8 @@ describe("resolveSlackEventScope", () => {
       },
     });
     expect(result.ok && result.scope?.client).toBe(listenerClient);
-    expect(result.ok && result.scope?.deliveryClient).toBeInstanceOf(WebClient);
-    expect(result.ok && result.scope?.deliveryClient).not.toBe(listenerClient);
-  });
-
-  it("rejects a different team on an already-scoped listener client", () => {
-    const listenerClient = new WebClient("xoxb-one-team");
-    const resolve = (teamId: string) =>
-      resolveSlackEventScope({
-        identity,
-        body: { api_app_id: "A123" },
-        context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId },
-        client: listenerClient,
-      });
-
-    expect(resolve("T111").ok).toBe(true);
-    expect(resolve("T222")).toEqual({ ok: false, reason: "listener_team_mismatch" });
+    expect(result.ok && result.scope?.uploadCompletionClient).toBeInstanceOf(WebClient);
+    expect(result.ok && result.scope?.uploadCompletionClient).not.toBe(listenerClient);
   });
 
   it("accepts a signed enterprise event when startup auth.test omitted app_id", () => {
@@ -93,7 +79,6 @@ describe("resolveSlackEventScope", () => {
     ["wrong org", { context: { enterpriseId: "E999" } }, "wrong_enterprise"],
     ["missing team", { context: { teamId: undefined } }, "missing_team_id"],
     ["missing client", { client: undefined }, "missing_listener_client"],
-    ["missing listener token", { client: new WebClient() }, "missing_listener_token"],
   ] as const)("rejects %s", (_label, override, reason) => {
     const baseContext = {
       isEnterpriseInstall: true,

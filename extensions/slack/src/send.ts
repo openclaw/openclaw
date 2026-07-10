@@ -81,12 +81,13 @@ type SlackEnterpriseEventScope = Readonly<{
   teamId: string;
   isEnterpriseInstall: true;
   client: WebClient;
-  deliveryClient: WebClient;
+  uploadCompletionClient?: WebClient;
 }>;
 
 type SlackEnterpriseDelivery = Readonly<{
   client: WebClient;
   teamId: string;
+  uploadCompletionClient?: WebClient;
 }>;
 
 const slackDefaultSendIdentities = new Map<string, SlackSendIdentity>();
@@ -356,7 +357,6 @@ function resolveEnterpriseEventScope(params: {
     !normalizeOptionalString(scope.enterpriseId) ||
     !/^T[A-Z0-9]+$/i.test(scope.teamId) ||
     !scope.client ||
-    !scope.deliveryClient ||
     params.opts.client !== scope.client
   ) {
     throw new Error("invalid_enterprise_slack_listener_scope");
@@ -939,8 +939,11 @@ export async function sendMessageSlack(
   const enterpriseEventScope = resolveEnterpriseEventScope({ account, opts });
   const enterpriseDelivery = enterpriseEventScope
     ? Object.freeze({
-        client: enterpriseEventScope.deliveryClient,
+        client: enterpriseEventScope.client,
         teamId: enterpriseEventScope.teamId,
+        ...(enterpriseEventScope.uploadCompletionClient
+          ? { uploadCompletionClient: enterpriseEventScope.uploadCompletionClient }
+          : {}),
       })
     : undefined;
   if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
@@ -1127,9 +1130,15 @@ async function sendMessageSlackQueuedInner(params: {
   let canonicalDeliveredThreadTs: string | undefined;
   let chunksToPost: string[];
   if (opts.mediaUrl) {
+    if (enterpriseDelivery && !enterpriseDelivery.uploadCompletionClient) {
+      throw new Error("missing_enterprise_slack_upload_completion_client");
+    }
     const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
       client,
+      ...(enterpriseDelivery?.uploadCompletionClient
+        ? { completionClient: enterpriseDelivery.uploadCompletionClient }
+        : {}),
       channelId,
       mediaUrl: opts.mediaUrl,
       mediaAccess: opts.mediaAccess,
