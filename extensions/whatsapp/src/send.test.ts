@@ -89,8 +89,7 @@ describe("web outbound", () => {
       sendPollWhatsApp,
       sendReactionWhatsApp,
       sendTypingWhatsApp,
-    } =
-      await import("./send.js"));
+    } = await import("./send.js"));
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
   });
 
@@ -158,6 +157,7 @@ describe("web outbound", () => {
       assertSendReady,
       sendComposingTo,
       sendMessage,
+      sendListReply,
       sendPoll,
       sendReaction,
     });
@@ -372,6 +372,7 @@ describe("web outbound", () => {
       assertSendReady,
       sendComposingTo,
       sendMessage,
+      sendListReply,
       sendPoll,
       sendReaction,
     });
@@ -392,6 +393,7 @@ describe("web outbound", () => {
       assertSendReady,
       sendComposingTo,
       sendMessage,
+      sendListReply,
       sendPoll,
       sendReaction,
     });
@@ -878,6 +880,7 @@ describe("web outbound", () => {
       assertSendReady,
       sendComposingTo,
       sendMessage,
+      sendListReply,
       sendPoll,
       sendReaction,
     });
