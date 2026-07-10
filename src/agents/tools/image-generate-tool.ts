@@ -538,7 +538,13 @@ function sanitizeInlineDirectiveText(value: string): string {
 
 function isInlineDirectiveControlCharacter(char: string): boolean {
   const code = char.charCodeAt(0);
-  return code <= 0x1f || code === 0x7f || code === 0x2028 || code === 0x2029;
+  return (
+    code <= 0x1f ||
+    code === 0x7f ||
+    (code >= 0x80 && code <= 0x9f) ||
+    code === 0x2028 ||
+    code === 0x2029
+  );
 }
 
 function validateImageGenerationCapabilities(params: {
