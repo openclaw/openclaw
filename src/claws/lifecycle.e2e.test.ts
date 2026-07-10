@@ -15,6 +15,7 @@ async function runOpenClaw(args: string[], options?: { expectFailure?: boolean }
     HOME: stateDir,
     USERPROFILE: stateDir,
     OPENCLAW_CONFIG_PATH: join(stateDir, "openclaw.json"),
+    OPENCLAW_EXPERIMENTAL_CLAWS: "1",
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_HOME: stateDir,
     OPENCLAW_STATE_DIR: stateDir,

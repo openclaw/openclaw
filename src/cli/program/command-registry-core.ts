@@ -153,14 +153,15 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
 ];
 
 function resolveCoreCommandGroups(ctx: ProgramContext, argv: string[]): CommandGroupEntry[] {
-  // Descriptor metadata and import specs stay separate so help can stay cheap.
-  return buildCommandGroupEntries(
-    getCoreCliCommandDescriptors(),
-    coreEntrySpecs,
-    (register) => async (program) => {
-      await register({ program, ctx, argv });
-    },
+  const descriptors = getCoreCliCommandDescriptors();
+  const visibleCommandNames = new Set(descriptors.map((descriptor) => descriptor.name));
+  const visibleEntrySpecs = coreEntrySpecs.filter((spec) =>
+    spec.commandNames.every((name) => visibleCommandNames.has(name)),
   );
+  // Descriptor metadata and import specs stay separate so help can stay cheap.
+  return buildCommandGroupEntries(descriptors, visibleEntrySpecs, (register) => async (program) => {
+    await register({ program, ctx, argv });
+  });
 }
 
 export function getCoreCliCommandNames(): string[] {

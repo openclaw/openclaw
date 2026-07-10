@@ -1,5 +1,6 @@
 // Commander registration for Claws inspection and dry-run apply previews.
 import type { Command } from "commander";
+import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type ClawsInspectOptions = {
@@ -21,6 +22,9 @@ export type ClawsFeedApplyOptions = {
 };
 
 export function registerClawsCli(program: Command) {
+  if (!isExperimentalClawsEnabled()) {
+    return;
+  }
   const claws = program.command("claws").description("Inspect and preview OpenClaw Claws");
 
   claws

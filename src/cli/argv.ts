@@ -6,13 +6,13 @@ import {
   isValueToken,
 } from "../infra/cli-root-options.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
+import { getCoreCliCommandDescriptors } from "./program/core-command-descriptors.js";
 import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
-const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_DESCRIPTORS];
+const ROOT_COMMAND_DESCRIPTORS = [...getCoreCliCommandDescriptors(), ...SUB_CLI_DESCRIPTORS];
 const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set(
   ROOT_COMMAND_DESCRIPTORS.map((descriptor) => descriptor.name),
 );

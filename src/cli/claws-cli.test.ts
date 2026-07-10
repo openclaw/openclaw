@@ -94,12 +94,22 @@ async function runCli(args: string[]) {
 
 describe("claws cli", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
     mocks.logs.length = 0;
     mocks.errors.length = 0;
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
     mocks.runtime.writeJson.mockClear();
     mocks.runtime.exit.mockClear();
+  });
+
+  it("does not register the command when the experiment is disabled", () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
+    const program = new Command();
+
+    registerClawsCli(program);
+
+    expect(program.commands.map((command) => command.name())).not.toContain("claws");
   });
 
   it("prints JSON inspection for a local claw manifest", async () => {

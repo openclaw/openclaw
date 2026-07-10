@@ -1,5 +1,6 @@
 // Runtime handlers for local Claws CLI commands.
 import { resolve } from "node:path";
+import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import { readClawFeedFile, readClawManifestFromFeed } from "../claws/feed.js";
 import { buildClawApplyPlan } from "../claws/lifecycle.js";
 import { buildClawPlan } from "../claws/plan.js";
@@ -57,6 +58,7 @@ export async function runClawsInspectCommand(
   opts: ClawsInspectOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  assertExperimentalClawsEnabled();
   const result = await readClawManifestFile(manifestPath);
   if (!result.ok) {
     if (opts.json) {
@@ -95,6 +97,7 @@ export async function runClawsApplyCommand(
   opts: ClawsApplyOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  assertExperimentalClawsEnabled();
   if (failNonDryRun(opts, runtime)) {
     return;
   }
@@ -132,6 +135,7 @@ export async function runClawsFeedInspectCommand(
   opts: ClawsFeedInspectOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  assertExperimentalClawsEnabled();
   const result = await readClawFeedFile(feedPath);
   if (!result.ok) {
     if (opts.json) {
@@ -168,6 +172,7 @@ export async function runClawsFeedApplyCommand(
   opts: ClawsFeedApplyOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  assertExperimentalClawsEnabled();
   if (failNonDryRun(opts, runtime)) {
     return;
   }
