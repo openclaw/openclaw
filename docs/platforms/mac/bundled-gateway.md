@@ -60,7 +60,8 @@ Logging:
 
 - launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use
   `gateway-<profile>.log`)
-- launchd stderr: suppressed
+- launchd stderr: `~/Library/Logs/openclaw/gateway.err.log` (profiles use
+  `gateway-<profile>.err.log`)
 
 ## Version compatibility
 
