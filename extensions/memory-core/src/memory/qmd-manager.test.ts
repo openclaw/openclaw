@@ -211,7 +211,11 @@ import {
   resetMemoryCoreDreamingStateForTests,
 } from "../dreaming-state.js";
 import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
-import { QmdMemoryManager, resolveQmdMcporterSearchProcessTimeoutMs } from "./qmd-manager.js";
+import {
+  QmdMemoryManager,
+  resolveQmdMcporterSearchProcessTimeoutMs,
+  resolveQmdWholeSearchTimeoutMs,
+} from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
@@ -292,6 +296,84 @@ describe("QmdMemoryManager", () => {
     expect(mockMessages(mock).join("\n")).not.toContain(text);
   }
 
+  function createClosableQmdManagerForTest(params?: {
+    pendingUpdate?: Promise<void> | null;
+    queuedForcedUpdate?: Promise<void> | null;
+  }): QmdMemoryManager {
+    const manager = Object.create(QmdMemoryManager.prototype) as QmdMemoryManager;
+    const mutable = manager as unknown as {
+      closed: boolean;
+      resolveCloseSignal: () => void;
+      updateTimer: NodeJS.Timeout | null;
+      embedTimer: NodeJS.Timeout | null;
+      watchTimer: NodeJS.Timeout | null;
+      watcher: { close: () => Promise<void> } | null;
+      queuedForcedRuns: number;
+      pendingUpdate: Promise<void> | null;
+      queuedForcedUpdate: Promise<void> | null;
+      db: { close: () => void } | null;
+    };
+    mutable.closed = false;
+    mutable.resolveCloseSignal = vi.fn();
+    mutable.updateTimer = null;
+    mutable.embedTimer = null;
+    mutable.watchTimer = null;
+    mutable.watcher = null;
+    mutable.queuedForcedRuns = 0;
+    mutable.pendingUpdate = params?.pendingUpdate ?? null;
+    mutable.queuedForcedUpdate = params?.queuedForcedUpdate ?? null;
+    mutable.db = null;
+    return manager;
+  }
+
+  it("clears qmd close timeout timers when update waits settle first", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createClosableQmdManagerForTest({
+        pendingUpdate: Promise.resolve(),
+        queuedForcedUpdate: Promise.resolve(),
+      });
+
+      await manager.close(5_000);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expectMockMessageNotContains(logWarnMock, "qmd close timed out");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses one qmd close timeout across pending and queued update waits", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createClosableQmdManagerForTest({
+        pendingUpdate: new Promise(() => {}),
+        queuedForcedUpdate: new Promise(() => {}),
+      });
+      let closed = false;
+
+      const closePromise = manager.close(5_000).then(() => {
+        closed = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      await Promise.resolve();
+      expect(closed).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await closePromise;
+
+      expect(closed).toBe(true);
+      expectMockMessageContains(
+        logWarnMock,
+        "qmd close timed out waiting for pending update and queued forced update after 5000ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("caps mcporter search process timeout grace", () => {
     expect(resolveQmdMcporterSearchProcessTimeoutMs(1_000)).toBe(5_000);
     expect(resolveQmdMcporterSearchProcessTimeoutMs(10_000)).toBe(12_000);
@@ -302,6 +384,39 @@ describe("QmdMemoryManager", () => {
     expect(resolveQmdMcporterSearchProcessTimeoutMs(MAX_TIMER_TIMEOUT_MS - 100)).toBe(
       MAX_TIMER_TIMEOUT_MS,
     );
+  });
+
+  it("budgets qmd whole-search lifecycles beyond one command timeout", () => {
+    expect(
+      resolveQmdWholeSearchTimeoutMs({
+        timeoutMs: 60_000,
+        updateTimeoutMs: 20_000,
+        embedTimeoutMs: 30_000,
+        searchMode: "vsearch",
+        collectionCount: 3,
+        mcporterEnabled: false,
+        onSearchSync: true,
+      }),
+    ).toBe(782_500);
+  });
+
+  it("keeps qmd memory_search on the old guard unless the qmd search timeout is raised", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          limits: { timeoutMs: 6_000 },
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager();
+
+    expect(manager.getSearchTimeoutMs()).toBe(15_000);
   });
 
   it("reuses persisted collection validation across transient cli managers", async () => {
