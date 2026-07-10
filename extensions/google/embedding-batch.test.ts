@@ -70,7 +70,7 @@ function singleRequest(): GeminiBatchRequest[] {
   ];
 }
 
-function makeOversizedResponse(): {
+function makeOversizedResponse(opts?: { status?: number }): {
   response: Response;
   getReadCount: () => number;
   wasCanceled: () => boolean;
@@ -94,7 +94,7 @@ function makeOversizedResponse(): {
           canceled = true;
         },
       }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
+      { status: opts?.status ?? 200, headers: { "Content-Type": "application/json" } },
     ),
     getReadCount: () => readCount,
     wasCanceled: () => canceled,
@@ -128,6 +128,34 @@ describe("Google embedding-batch bounded JSON reads", () => {
 
     expect(streamed.wasCanceled()).toBe(true);
     expect(streamed.getReadCount()).toBeLessThan(20);
+  });
+
+  it("bounds a non-OK file-upload error response and cancels the stream (#103306)", async () => {
+    const oversized = makeOversizedResponse({ status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (fetchInputUrl(input).includes("/upload/")) {
+          return oversized.response;
+        }
+        return new Response("unexpected", { status: 500 });
+      }),
+    );
+
+    await expect(
+      runGeminiEmbeddingBatches({
+        gemini: makeGeminiClient(),
+        agentId: "main",
+        requests: singleRequest(),
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 50,
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow(/gemini\.batch-file-upload/);
+
+    expect(oversized.wasCanceled()).toBe(true);
+    expect(oversized.getReadCount()).toBeLessThan(20);
   });
 
   it("bounds oversized batch-create JSON response and cancels the stream", async () => {
