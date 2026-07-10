@@ -15,10 +15,6 @@ import "../../components/session-menu.ts";
 import type { SessionMenuAction } from "../../components/session-menu.ts";
 import { t } from "../../i18n/index.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
-import {
-  loadStoredSessionCustomGroups,
-  saveStoredSessionCustomGroups,
-} from "../../lib/sessions/custom-groups.ts";
 import { normalizeSessionsGroupBy, type SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   filterSessionRows,
@@ -87,7 +83,6 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private sortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() private sortDir: "asc" | "desc" = "desc";
   @state() private groupBy: SessionsGroupBy = loadStoredGroupBy();
-  @state() private customGroups: string[] = loadStoredSessionCustomGroups();
   @state() private page = 0;
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
@@ -622,11 +617,17 @@ class SessionsPage extends OpenClawLightDomElement {
     await this.deleteSessions([row.key]);
   }
 
+  private customGroups(): readonly string[] {
+    return this.context?.sessions.state.groups ?? [];
+  }
+
   private knownCategories(): string[] {
     const fromRows = (this.result?.sessions ?? [])
       .map((row) => row.category?.trim())
       .filter((name): name is string => Boolean(name));
-    return [...new Set([...this.customGroups, ...fromRows.toSorted((a, b) => a.localeCompare(b))])];
+    return [
+      ...new Set([...this.customGroups(), ...fromRows.toSorted((a, b) => a.localeCompare(b))]),
+    ];
   }
 
   private setGroupBy(mode: SessionsGroupBy) {
@@ -639,9 +640,9 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private rememberCustomGroup(name: string) {
-    if (!this.customGroups.includes(name)) {
-      this.customGroups = [...this.customGroups, name];
-      saveStoredSessionCustomGroups(this.customGroups);
+    const known = this.knownCategories();
+    if (!known.includes(name)) {
+      void this.context?.sessions.groupsPut([...this.customGroups(), name]);
     }
   }
 

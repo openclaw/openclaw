@@ -1283,6 +1283,7 @@ export async function runReplyAgent(params: {
       followupRun.prompt,
       {
         steeringMode: "all",
+        ...(opts?.onTurnAdopted ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
         ...(followupRun.run.sourceReplyDeliveryMode
           ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
@@ -1295,6 +1296,17 @@ export async function runReplyAgent(params: {
     );
     if (steerOutcome.queued) {
       activeReplyOperation?.recordActivity();
+      try {
+        await opts?.onTurnAdopted?.();
+      } catch (error) {
+        // Transcript-backed steering is already irrevocably queued here.
+        // Replaying ingress would duplicate the injected user turn.
+        logVerbose(
+          `queue: active session ${steerSessionId} adoption finalizer failed after transcript commit: ${String(
+            error,
+          )}`,
+        );
+      }
       if (followupRun.currentInboundAudio === true) {
         activeReplyOperation?.markAcceptedSteeredInboundAudio();
       }
@@ -1728,6 +1740,10 @@ export async function runReplyAgent(params: {
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
     await persistRestartRecoveryDeliveryContext();
+    // Adoption marks run start and must never be spool-replayed (would re-run tools).
+    // Suppressed delivery has no recovery state to persist; crashed suppressed runs die
+    // silently. When a delivery context is resolvable, this still runs after its persist.
+    await opts?.onTurnAdopted?.();
     const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
       runAgentTurnWithFallback({
         commandBody,

@@ -90,6 +90,7 @@ export type MockGatewayControls = {
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
   ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
+  setOnline: (online: boolean) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   waitForRequest: (method: string) => Promise<MockGatewayRequest>;
 };
@@ -144,7 +145,12 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     clearScreen: false,
     configFile: false,
     define: {
-      OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify("e2e"),
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
+        version: "2026.7.10",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        builtAt: "2026-07-10T12:34:56.000Z",
+        buildId: "e2e",
+      }),
     },
     logLevel: "error",
     optimizeDeps: {
@@ -292,6 +298,7 @@ function installControlUiMockGateway(input: {
     ) => void;
     requests: BrowserRequest[];
     resolveDeferred: (method: string, payload?: unknown) => void;
+    setOnline: (online: boolean) => void;
     setHistoryMessages: (messages: unknown[]) => void;
     socketCount: () => number;
     socketUrls: () => string[];
@@ -307,6 +314,13 @@ function installControlUiMockGateway(input: {
   const requests: BrowserRequest[] = [];
   const sessionPatches = new Map<string, Record<string, unknown>>();
   const sockets: Array<{ readonly url: string }> = [];
+  const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
+  let online = true;
+  try {
+    online = window.sessionStorage.getItem(offlineStateKey) !== "1";
+  } catch {
+    // Storage-disabled browser contexts still get the in-memory mock default.
+  }
   let seq = 0;
 
   function isRecord(value: unknown): value is Record<string, unknown> {
@@ -625,17 +639,21 @@ function installControlUiMockGateway(input: {
       MockWebSocket.latest = this;
       sockets.push(this);
       window.setTimeout(() => {
-        if (this.readyState !== MockWebSocket.CONNECTING) {
-          return;
-        }
-        this.readyState = MockWebSocket.OPEN;
-        this.dispatchEvent(new Event("open"));
-        this.deliver({
-          event: "connect.challenge",
-          payload: { nonce: "control-ui-e2e-nonce" },
-          type: "event",
-        });
+        this.openConnection();
       }, 0);
+    }
+
+    openConnection(): void {
+      if (!online || this.readyState !== MockWebSocket.CONNECTING) {
+        return;
+      }
+      this.readyState = MockWebSocket.OPEN;
+      this.dispatchEvent(new Event("open"));
+      this.deliver({
+        event: "connect.challenge",
+        payload: { nonce: "control-ui-e2e-nonce" },
+        type: "event",
+      });
     }
 
     override dispatchEvent(event: Event): boolean {
@@ -763,8 +781,29 @@ function installControlUiMockGateway(input: {
         type: "res",
       });
     },
+    setOnline(nextOnline) {
+      online = nextOnline;
+      try {
+        if (online) {
+          window.sessionStorage.removeItem(offlineStateKey);
+        } else {
+          window.sessionStorage.setItem(offlineStateKey, "1");
+        }
+      } catch {
+        // The current document can still toggle the in-memory mock.
+      }
+      if (!online) {
+        MockWebSocket.latest?.close(1006, "mock offline");
+        return;
+      }
+      MockWebSocket.latest?.openConnection();
+    },
     setHistoryMessages(messages) {
       scenario.historyMessages = Array.isArray(messages) ? messages : [];
+      const configuredHistory = scenario.methodResponses["chat.history"];
+      if (isRecord(configuredHistory) && !responseCases(configuredHistory)) {
+        configuredHistory.messages = scenario.historyMessages;
+      }
     },
     socketCount() {
       return sockets.length;
@@ -958,6 +997,21 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         },
         { targetMethod: method, responsePayload: payload },
       );
+    },
+    async setOnline(online) {
+      await page.evaluate((nextOnline) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              setOnline: (online: boolean) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setOnline(nextOnline);
+      }, online);
     },
     async setHistoryMessages(messages) {
       await page.evaluate((nextMessages) => {
