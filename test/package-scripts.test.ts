@@ -152,6 +152,13 @@ describe("package scripts", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });
 
+  it("builds iOS without requiring an installed simulator device", () => {
+    const script = readPackageJson().scripts["ios:build"];
+
+    expect(script).toContain('-destination "${IOS_DEST:-generic/platform=iOS Simulator}"');
+    expect(script).not.toMatch(/\$\{IOS_DEST:-[^}]*,name=/u);
+  });
+
   it("runs generated module formatting coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/format-generated-module.test.ts",
