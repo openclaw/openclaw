@@ -59,6 +59,7 @@ type McpRequestContext = {
   clientCaps: string[] | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
+  currentThreadParentId: string | undefined;
   currentMessageId: string | undefined;
   currentInboundAudio: boolean | undefined;
   accountId: string | undefined;
@@ -393,6 +394,7 @@ export function resolveMcpRequestContext(
       clientCaps: undefined,
       currentChannelId: undefined,
       currentThreadTs: undefined,
+      currentThreadParentId: undefined,
       currentMessageId: undefined,
       currentInboundAudio: undefined,
       accountId: undefined,
@@ -413,6 +415,9 @@ export function resolveMcpRequestContext(
     clientCaps: normalizeMcpClientCapsHeader(getHeader(req, "x-openclaw-client-caps")),
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
+    currentThreadParentId: normalizeOptionalString(
+      getHeader(req, "x-openclaw-current-thread-parent-id"),
+    ),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
     currentInboundAudio: normalizeMcpBooleanHeader(
       getHeader(req, "x-openclaw-current-inbound-audio"),

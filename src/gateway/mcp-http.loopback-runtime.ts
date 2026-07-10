@@ -395,6 +395,7 @@ const MCP_CONTEXT_HEADERS = {
   "x-openclaw-client-caps": "${OPENCLAW_MCP_CLIENT_CAPS}",
   "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
   "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
+  "x-openclaw-current-thread-parent-id": "${OPENCLAW_MCP_CURRENT_THREAD_PARENT_ID}",
   "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
   "x-openclaw-current-inbound-audio": "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
   "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",

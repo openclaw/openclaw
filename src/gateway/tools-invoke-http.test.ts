@@ -107,6 +107,7 @@ vi.mock("../agents/openclaw-tools.js", () => {
         route: {
           agentTo: lastCreateOpenClawToolsContext?.agentTo,
           agentThreadId: lastCreateOpenClawToolsContext?.agentThreadId,
+          agentThreadParentId: lastCreateOpenClawToolsContext?.agentThreadParentId,
         },
         inheritedToolDenylist: lastCreateOpenClawToolsContext?.inheritedToolDenylist,
       }),
@@ -687,6 +688,7 @@ describe("POST /tools/invoke", () => {
         ...gatewayAuthHeaders(),
         "x-openclaw-message-to": "channel:24514",
         "x-openclaw-thread-id": "thread-24514",
+        "x-openclaw-thread-parent-id": "24514",
       },
       tool: "sessions_spawn",
       sessionKey: "main",
@@ -696,6 +698,7 @@ describe("POST /tools/invoke", () => {
     expect(body.result?.route).toEqual({
       agentTo: "channel:24514",
       agentThreadId: "thread-24514",
+      agentThreadParentId: "24514",
     });
   });
 

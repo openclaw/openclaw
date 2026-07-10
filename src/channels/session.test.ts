@@ -21,6 +21,8 @@ function requireFirstCallArg(mock: ReturnType<typeof vi.fn>): {
   deliveryContext?: {
     channel?: string;
     to?: string;
+    threadId?: string | number;
+    threadParentId?: string | number;
   };
 } {
   const [call] = mock.mock.calls;
@@ -89,6 +91,30 @@ describe("recordInboundSession", () => {
     expect(route.ctx).toBe(ctx);
     expect(route.deliveryContext?.channel).toBe("demo-channel");
     expect(route.deliveryContext?.to).toBe("demo-channel:1234");
+  });
+
+  it("passes thread parent route metadata into delivery context", async () => {
+    await recordInboundSession({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "agent:main:demo-channel:1234:thread:42",
+      ctx,
+      updateLastRoute: {
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
+        channel: "demo-channel",
+        to: "demo-channel:1234",
+        threadId: "42",
+        threadParentId: "1234",
+      },
+      onRecordError: vi.fn(),
+    });
+
+    const route = requireFirstCallArg(updateLastRouteMock);
+    expect(route.deliveryContext).toMatchObject({
+      channel: "demo-channel",
+      to: "demo-channel:1234",
+      threadId: "42",
+      threadParentId: "1234",
+    });
   });
 
   it("normalizes mixed-case session keys before recording and route updates", async () => {

@@ -171,6 +171,8 @@ export type SpawnAcpContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  /** Parent conversation for nested thread/topic contexts such as Discord threads. */
+  agentThreadParentId?: string | number;
   /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
   agentGroupId?: string;
   /** Group space label (guild/team id) from the originating channel context. */
@@ -282,6 +284,7 @@ type AcpSpawnRequesterState = {
   heartbeatEnabled: boolean;
   heartbeatRelayRouteUsable: boolean;
   origin: ReturnType<typeof normalizeDeliveryContext>;
+  threadParentId?: string | number;
 };
 
 type AcpSpawnStreamPlan = {
@@ -634,6 +637,7 @@ function resolveConversationRefForThreadBinding(params: {
   accountId?: string;
   to?: string;
   threadId?: string | number;
+  threadParentId?: string | number;
   groupId?: string;
 }): { conversationId: string; parentConversationId?: string } | null {
   const resolution = resolveInboundConversationResolution({
@@ -642,6 +646,7 @@ function resolveConversationRefForThreadBinding(params: {
     accountId: params.accountId,
     to: params.to,
     threadId: params.threadId,
+    threadParentId: params.threadParentId,
     groupId: params.groupId,
     isGroup: true,
   });
@@ -672,6 +677,7 @@ function prepareAcpThreadBinding(params: {
   accountId?: string;
   to?: string;
   threadId?: string | number;
+  threadParentId?: string | number;
   groupId?: string;
 }): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
   const channel = normalizeOptionalLowercaseString(params.channel);
@@ -742,6 +748,7 @@ function prepareAcpThreadBinding(params: {
     accountId: policy.accountId,
     to: params.to,
     threadId: params.threadId,
+    threadParentId: params.threadParentId,
     groupId: params.groupId,
   });
   if (!conversationRef?.conversationId) {
@@ -815,6 +822,7 @@ function resolveAcpSpawnRequesterState(params: {
       requesterGroupSpace: params.ctx.agentGroupSpace,
       requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
     }),
+    threadParentId: params.ctx.agentThreadParentId,
   };
 }
 
@@ -1211,6 +1219,7 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     channel: params.requester.origin?.channel,
     accountId: params.requester.origin?.accountId,
     threadId: fallbackThreadId,
+    threadParentId: params.requester.threadParentId,
     to: params.requester.origin?.to,
   });
   const requesterAccountId = resolveAcpSpawnChannelAccountId({
@@ -1458,6 +1467,7 @@ export async function spawnAcpDirect(
       accountId: requesterState.origin?.accountId,
       to: requesterState.origin?.to,
       threadId: requesterState.origin?.threadId,
+      threadParentId: requesterState.threadParentId,
       groupId: ctx.agentGroupId,
     });
     if (!prepared.ok) {

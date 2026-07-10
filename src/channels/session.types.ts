@@ -9,6 +9,7 @@ export type InboundLastRouteUpdate = {
   to: string;
   accountId?: string;
   threadId?: string | number;
+  threadParentId?: string | number;
   route?: ChannelRouteRef;
   mainDmOwnerPin?: {
     ownerRecipient: string;

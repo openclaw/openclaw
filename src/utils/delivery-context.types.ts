@@ -24,6 +24,8 @@ export type DeliveryContext = Pick<
   accountId?: string;
   /** Optional thread/topic id nested under `to`. */
   threadId?: string | number;
+  /** Optional parent conversation id for providers whose thread ids live under a channel/topic. */
+  threadParentId?: string | number;
   /** Optional queued-delivery intent associated with this context. */
   deliveryIntent?: DeliveryIntentRef;
 };
@@ -47,6 +49,7 @@ export type DeliveryContextSessionSource = {
     provider?: string;
     accountId?: string;
     threadId?: string | number;
+    threadParentId?: string | number;
   };
   /** Canonical delivery context stored on newer session records. */
   deliveryContext?: DeliveryContext;

@@ -48,6 +48,7 @@ type ScopedToolsCall = {
   clientCaps?: string[];
   currentChannelId?: string;
   currentThreadTs?: string;
+  currentThreadParentId?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   inboundEventKind?: string;
@@ -812,6 +813,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-client-caps": "tool-events,inline-widgets",
         "x-openclaw-current-channel-id": "telegram:chat123",
         "x-openclaw-current-thread-ts": "42",
+        "x-openclaw-current-thread-parent-id": "chat123",
         "x-openclaw-current-message-id": "reply-message-1",
         "x-openclaw-current-inbound-audio": "true",
         "x-openclaw-inbound-event-kind": "room_event",
@@ -831,6 +833,7 @@ describe("mcp loopback server", () => {
     expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
     expect(call.currentChannelId).toBe("telegram:chat123");
     expect(call.currentThreadTs).toBe("42");
+    expect(call.currentThreadParentId).toBe("chat123");
     expect(call.currentMessageId).toBe("reply-message-1");
     expect(call.currentInboundAudio).toBe(true);
     expect(call.inboundEventKind).toBe("room_event");
@@ -888,6 +891,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-account-id": "victim-account",
         "x-openclaw-current-channel-id": "telegram:victim-chat",
         "x-openclaw-current-thread-ts": "999",
+        "x-openclaw-current-thread-parent-id": "victim-chat",
         "x-openclaw-source-reply-delivery-mode": "automatic",
         "x-openclaw-inbound-event-kind": "room_event",
       }),
@@ -904,6 +908,7 @@ describe("mcp loopback server", () => {
     expect(call.accountId).toBeUndefined();
     expect(call.currentChannelId).toBeUndefined();
     expect(call.currentThreadTs).toBeUndefined();
+    expect(call.currentThreadParentId).toBeUndefined();
     expect(call.sourceReplyDeliveryMode).toBeUndefined();
     expect(call.inboundEventKind).toBeUndefined();
   });

@@ -1679,6 +1679,56 @@ describe("thread binding lifecycle", () => {
     );
   });
 
+  it("resolves parent channel when child binding parent equals source thread", async () => {
+    createTestThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    hoisted.restGet.mockClear();
+    hoisted.createThreadDiscord.mockClear();
+    hoisted.restGet.mockResolvedValueOnce({
+      id: "1491611525914558668",
+      type: ChannelType.PublicThread,
+      parent_id: "1491611525914558667",
+    });
+    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-sibling" });
+
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-sibling-parent-resolved",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "1491611525914558668",
+        parentConversationId: "1491611525914558668",
+      },
+      placement: "child",
+      metadata: {
+        agentId: "codex",
+        label: "Codex ACP bind test",
+        threadName: "Codex ACP bind test",
+      },
+    });
+
+    const boundConversation = requireRecord(
+      requireRecord(bound, "bound session").conversation,
+      "bound conversation",
+    );
+    expectFields(boundConversation, "bound conversation", {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-created-sibling",
+      parentConversationId: "1491611525914558667",
+    });
+    expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe(
+      "1491611525914558667",
+    );
+  });
+
   it("keeps ACP bindings in stored error state when no explicit stale probe verdict exists", async () => {
     const manager = createTestThreadBindingManager({
       accountId: "default",

@@ -312,7 +312,8 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     (entry.deliveryContext?.channel ?? undefined) === nextDelivery?.channel &&
     (entry.deliveryContext?.to ?? undefined) === nextDelivery?.to &&
     (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId &&
-    (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId;
+    (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId &&
+    (entry.deliveryContext?.threadParentId ?? undefined) === nextDelivery?.threadParentId;
   const sameLast =
     sameDeliveryChannelRoute(entryRoute, normalized.route) &&
     entry.lastChannel === normalized.lastChannel &&

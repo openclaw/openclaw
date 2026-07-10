@@ -71,6 +71,7 @@ export async function recordInboundSession(params: {
       to: update.to,
       accountId: update.accountId,
       threadId: update.threadId,
+      threadParentId: update.threadParentId,
     },
     // Avoid leaking inbound origin metadata into a different target session.
     ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,

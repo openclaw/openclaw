@@ -860,6 +860,7 @@ describe("spawnAcpDirect", () => {
         agentAccountId: "default",
         agentTo: "channel:parent-channel",
         agentThreadId: "requester-thread",
+        agentThreadParentId: "parent-channel",
       },
     );
 
@@ -875,6 +876,10 @@ describe("spawnAcpDirect", () => {
     expectBindingCallFields({
       targetKind: "session",
       placement: "child",
+      conversation: {
+        conversationId: "requester-thread",
+        parentConversationId: "parent-channel",
+      },
     });
     const patchCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
       (call: unknown[]) => (call[0] as { method?: string }).method === "sessions.patch",

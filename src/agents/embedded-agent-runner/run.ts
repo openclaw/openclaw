@@ -2167,6 +2167,7 @@ async function runEmbeddedAgentInternal(
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
             messageThreadId: params.messageThreadId,
+            messageThreadParentId: params.messageThreadParentId,
             groupId: params.groupId,
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,

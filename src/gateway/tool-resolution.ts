@@ -64,6 +64,7 @@ export function resolveGatewayScopedTools(params: {
   requireExplicitMessageTarget?: boolean;
   agentTo?: string;
   agentThreadId?: string;
+  agentThreadParentId?: string;
   senderIsOwner?: boolean;
   allowGatewaySubagentBinding?: boolean;
   allowMediaInvokeCommands?: boolean;
@@ -191,6 +192,7 @@ export function resolveGatewayScopedTools(params: {
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
+    agentThreadParentId: params.agentThreadParentId,
     currentChannelId: params.currentChannelId ?? params.agentTo,
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,

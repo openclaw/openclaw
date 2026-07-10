@@ -135,6 +135,7 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   }
   const next: DeliveryContext = { ...context };
   delete next.threadId;
+  delete next.threadParentId;
   return next;
 }
 
@@ -2009,6 +2010,7 @@ export async function updateLastRoute(params: {
       to,
       accountId,
       threadId,
+      threadParentId: params.deliveryContext?.threadParentId,
     });
     const routeContext = deliveryContextFromChannelRoute(params.route);
     const mergedInput = mergeDeliveryContext(
@@ -2043,6 +2045,7 @@ export async function updateLastRoute(params: {
         to: merged?.to,
         accountId: merged?.accountId,
         threadId: merged?.threadId,
+        threadParentId: merged?.threadParentId,
       },
     });
     const metaPatch = ctx

@@ -259,6 +259,7 @@ export function createSessionsSpawnTool(
     agentAccountId?: string;
     agentTo?: string;
     agentThreadId?: string | number;
+    agentThreadParentId?: string | number;
     sandboxed?: boolean;
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
@@ -405,6 +406,7 @@ export function createSessionsSpawnTool(
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
+            agentThreadParentId: opts?.agentThreadParentId,
             agentGroupId: opts?.agentGroupId ?? undefined,
             agentGroupSpace: opts?.agentGroupSpace,
             agentMemberRoleIds: opts?.agentMemberRoleIds,

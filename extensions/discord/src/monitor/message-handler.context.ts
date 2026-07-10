@@ -467,6 +467,8 @@ export async function buildDiscordMessageProcessContext(params: {
           channel: "discord",
           to: lastRouteTo,
           accountId: route.accountId,
+          threadId: threadChannel ? threadChannel.id : undefined,
+          threadParentId: threadChannel ? threadParentId : undefined,
           mainDmOwnerPin:
             isDirectMessage && persistedSessionKey === route.mainSessionKey && pinnedMainDmOwner
               ? {

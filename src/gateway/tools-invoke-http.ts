@@ -75,6 +75,9 @@ export async function handleToolsInvokeHttpRequest(
   const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
   const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
   const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
+  const agentThreadParentId = normalizeOptionalString(
+    getHeader(req, "x-openclaw-thread-parent-id"),
+  );
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
   const outcome = await invokeGatewayTool({
     cfg,
@@ -83,6 +86,7 @@ export async function handleToolsInvokeHttpRequest(
     accountId,
     agentTo,
     agentThreadId,
+    agentThreadParentId,
     senderIsOwner,
     toolCallIdPrefix: "http",
   });
