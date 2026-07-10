@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { removeSessionTrajectoryArtifacts } from "./cleanup.js";
 import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   resolveTrajectoryFilePath,
@@ -10,6 +11,7 @@ import {
   resolveTrajectoryPointerOpenFlags,
 } from "./paths.js";
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
+import * as writerLifecycle from "./writer-lifecycle.js";
 import {
   acquireTrajectoryWriterLease,
   canonicalizeTrajectoryPath,
@@ -585,6 +587,61 @@ describe("trajectory runtime", () => {
     await runtimeRecorder.flush();
 
     expect(fs.existsSync(runtimeFile)).toBe(false);
+  });
+
+  it("does not leave an orphaned pointer when a claim's publish would land after a concurrent delete retires the path", async () => {
+    const tmpDir = makeTempDir();
+    const sessionId = "race-a-session";
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+
+    // Wraps the real acquireTrajectoryWriterLease so this test controls
+    // exactly when createTrajectoryRuntimeRecorder's continuation resumes
+    // after the claim (and, once fixed, its bundled publish) settle — the
+    // window the round-4 finding is about. Old code's onClaimed never fires
+    // (the parameter did not exist yet), so old code's publish still runs in
+    // that continuation, unguarded, after this artificial pause.
+    const realAcquire = writerLifecycle.acquireTrajectoryWriterLease;
+    let releaseContinuation: () => void = () => {};
+    const continuationGate = new Promise<void>((resolve) => {
+      releaseContinuation = resolve;
+    });
+    const acquireSpy = vi
+      .spyOn(writerLifecycle, "acquireTrajectoryWriterLease")
+      .mockImplementation(async (params) => {
+        const lease = await realAcquire(params);
+        await continuationGate;
+        return lease;
+      });
+
+    try {
+      const recorderPromise = createTrajectoryRuntimeRecorder({ sessionId, sessionFile });
+
+      // Let the real claim (and, with the fix, its bundled publish) settle
+      // before the artificial pause; only createTrajectoryRuntimeRecorder's
+      // resumption is held back from here.
+      await new Promise<void>((resolve) => {
+        setImmediate(() => resolve());
+      });
+
+      await removeSessionTrajectoryArtifacts({
+        sessionId,
+        sessionFile,
+        storePath,
+        restrictToStoreDir: true,
+      });
+
+      releaseContinuation();
+      await recorderPromise;
+
+      await new Promise<void>((resolve) => {
+        setImmediate(() => resolve());
+      });
+      expect(fs.existsSync(pointerPath)).toBe(false);
+    } finally {
+      acquireSpy.mockRestore();
+    }
   });
 
   it("keeps colliding sanitized session ids in separate files under an override directory", async () => {
