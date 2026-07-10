@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes as nodeRandomBytes, randomUUID } from "node:crypto";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -58,6 +58,7 @@ export type GuestJoin = {
 type GuestGrantStoreOptions = {
   stateDir?: string;
   now?: () => number;
+  randomBytes?: (size: number) => Buffer;
   sweepIntervalMs?: number;
 };
 
@@ -81,7 +82,7 @@ function hashSecret(secret: string): string {
   return createHash("sha256").update(secret).digest("hex");
 }
 
-function mintShareCode(): string {
+function mintShareCode(randomBytes: (size: number) => Buffer): string {
   const bytes = randomBytes(SHARE_CODE_RANDOM_BYTES);
   const characters = Array.from(bytes, (byte) => SHARE_CODE_ALPHABET.charAt(byte & 31));
   return `${characters.slice(0, 3).join("")}-${characters.slice(3).join("")}`;
@@ -165,6 +166,7 @@ export class GuestGrantStore {
   readonly filePath: string;
   private readonly databaseOptions: OpenClawStateDatabaseOptions;
   private readonly now: () => number;
+  private readonly randomBytes: (size: number) => Buffer;
   private readonly sweepTimer: NodeJS.Timeout;
   private closed = false;
 
@@ -176,6 +178,7 @@ export class GuestGrantStore {
     this.filePath = database.path;
     this.databaseOptions = { path: database.path };
     this.now = options.now ?? Date.now;
+    this.randomBytes = options.randomBytes ?? nodeRandomBytes;
     const sweepIntervalMs = options.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
     if (!Number.isInteger(sweepIntervalMs) || sweepIntervalMs <= 0) {
       throw new Error("sweepIntervalMs must be a positive integer");
@@ -199,6 +202,13 @@ export class GuestGrantStore {
           subject: requireNonEmpty(params.invitedPrincipal.subject, "invitedPrincipal.subject"),
         }
       : undefined;
+    if (params.audience !== "open" && params.audience !== "deva-user") {
+      throw new Error("audience must be open or deva-user");
+    }
+    const replayPolicy = params.replayPolicy ?? "share-start";
+    if (replayPolicy !== "share-start" && replayPolicy !== "full") {
+      throw new Error("replayPolicy must be share-start or full");
+    }
     const now = this.now();
     const expiresAtMs = params.expiresAtMs ?? now + DEFAULT_GRANT_TTL_MS;
     if (!Number.isInteger(expiresAtMs) || expiresAtMs <= now) {
@@ -221,7 +231,7 @@ export class GuestGrantStore {
       const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
       const grantId = randomUUID();
       for (let attempt = 0; attempt < SHARE_CODE_MINT_ATTEMPTS; attempt += 1) {
-        const code = mintShareCode();
+        const code = mintShareCode(this.randomBytes);
         const codeHash = hashSecret(code);
         const collision = executeSqliteQueryTakeFirstSync(
           database.db,
@@ -240,7 +250,7 @@ export class GuestGrantStore {
           createdBy,
           createdAtMs: now,
           expiresAtMs,
-          replayPolicy: params.replayPolicy ?? "share-start",
+          replayPolicy,
           ...(params.maxConcurrentGuests === undefined
             ? {}
             : { maxConcurrentGuests: params.maxConcurrentGuests }),
@@ -323,17 +333,14 @@ export class GuestGrantStore {
       if (!current) {
         return undefined;
       }
-      if (current.revoked_at_ms === null) {
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .updateTable("guest_grants")
-            .set({ revoked_at_ms: now })
-            .where("grant_id", "=", grantId),
-        );
-        return grantFromRow({ ...current, revoked_at_ms: now });
+      if (current.revoked_at_ms !== null) {
+        throw new Error("guest grant already revoked");
       }
-      return grantFromRow(current);
+      executeSqliteQuerySync(
+        database.db,
+        db.updateTable("guest_grants").set({ revoked_at_ms: now }).where("grant_id", "=", grantId),
+      );
+      return grantFromRow({ ...current, revoked_at_ms: now });
     }, this.databaseOptions);
   }
 

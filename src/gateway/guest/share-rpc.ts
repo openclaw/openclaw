@@ -9,6 +9,7 @@ import {
 import { resolveControlPlaneActor } from "../control-plane-audit.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { assertValidParams } from "../server-methods/validation.js";
+import { loadSessionEntry } from "../session-utils.js";
 import { GuestGrantStore, type GuestGrant, type GuestInvitedPrincipal } from "./grant-store.js";
 
 const DEFAULT_JOIN_URL_BASE = "https://genie.deva.me/join";
@@ -16,6 +17,7 @@ const DEFAULT_JOIN_URL_BASE = "https://genie.deva.me/join";
 type GuestShareHandlerOptions = {
   store?: GuestGrantStore;
   joinUrlBase?: string;
+  sessionExists?: (sessionKey: string, context: GatewayRequestContext) => boolean;
 };
 
 type GuestGrantSummary = Omit<GuestGrant, "codeHash">;
@@ -82,6 +84,10 @@ function resolveJoinUrlBase(
   );
 }
 
+function sessionExists(sessionKey: string): boolean {
+  return Boolean(loadSessionEntry(sessionKey).entry?.sessionId);
+}
+
 function respondWithInvalidRequest(
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
   error: unknown,
@@ -110,6 +116,10 @@ export function createGuestShareHandlers(
         return;
       }
       try {
+        const hasSession = options.sessionExists ?? sessionExists;
+        if (!hasSession(params.sessionKey, context)) {
+          throw new Error(`session not found: ${params.sessionKey}`);
+        }
         const store = resolveStore();
         const invitedPrincipal = resolveInvitedPrincipal(params);
         const created = store.createGrant({
@@ -134,13 +144,19 @@ export function createGuestShareHandlers(
         respondWithInvalidRequest(respond, error);
       }
     },
-    "sessions.share.list": ({ params, respond }) => {
+    "sessions.share.list": ({ params, context, respond }) => {
       if (
         !assertValidParams(params, validateSessionsShareListParams, "sessions.share.list", respond)
       ) {
         return;
       }
       try {
+        if (params.sessionKey) {
+          const hasSession = options.sessionExists ?? sessionExists;
+          if (!hasSession(params.sessionKey, context)) {
+            throw new Error(`session not found: ${params.sessionKey}`);
+          }
+        }
         const store = resolveStore();
         const grants = store
           .listGrants(params.sessionKey ? { sessionKey: params.sessionKey } : {})
