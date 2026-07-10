@@ -12,6 +12,7 @@ import {
   type AllowAlwaysPersistenceDecision,
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
+  createExecApprovalPolicySnapshot,
   type ExecAsk,
   type ExecApprovalUsageAuthorization,
   resolveExecApprovalAllowedDecisions,
@@ -465,6 +466,10 @@ export async function processGatewayAllowlist(
     ask: params.ask,
     host: "gateway",
   });
+  const allowAlwaysPolicySnapshot = createExecApprovalPolicySnapshot({
+    file: approvals.file,
+    agentId: params.agentId,
+  });
   const fallbackSecurity = minSecurity(hostSecurity, askFallback);
   const allowlistEval = await evaluateShellAllowlistWithAuthorization({
     command: params.command,
@@ -510,12 +515,6 @@ export async function processGatewayAllowlist(
     commandText: params.command,
   });
   const allowlistAuthorizationSatisfied = analysisOk && allowlistEval.allowlistSatisfied;
-  const durableApprovalRequirement = resolveDurableExecApprovalRequirement({
-    durableApprovalSatisfied,
-    allowlistAuthorizationSatisfied,
-    allowlist: approvals.allowlist,
-    commandText: params.command,
-  });
   const shouldPrepareAllowlistExecution =
     hostSecurity === "allowlist" || fallbackSecurity === "allowlist";
   const gatewayEnforcedCommand =
@@ -578,7 +577,6 @@ export async function processGatewayAllowlist(
     }
     return { ...state, approvedByAsk: true, deniedReason: null };
   };
-  const exactCommandDurableApproval = durableApprovalRequirement === "exact-command";
   const commitExecutionAuthorization = (options: {
     source: ExecApprovalUsageAuthorization["source"];
     resolvedPath?: string;
@@ -586,6 +584,27 @@ export async function processGatewayAllowlist(
   }) => {
     const policyAuthorization =
       options.source === "current-policy" || options.source === "ask-fallback";
+    // Exact trust can be the sole basis for bypassing an unavailable execution
+    // plan, so derive the durable requirement from the final commit source.
+    const durableApprovalRequired =
+      options.source === "current-policy"
+        ? hostSecurity === "allowlist" &&
+          durableApprovalSatisfied &&
+          (!analysisOk ||
+            !allowlistSatisfied ||
+            (exactCommandDurableApprovalSatisfied && allowlistPlanUnavailableReason !== null))
+        : options.source === "ask-fallback"
+          ? fallbackSecurity === "allowlist" &&
+            exactCommandDurableApprovalSatisfied &&
+            fallbackEnforcedCommand === undefined
+          : false;
+    const durableApprovalRequirement = resolveDurableExecApprovalRequirement({
+      durableApprovalRequired,
+      allowlist: approvals.allowlist,
+      commandText: params.command,
+    });
+    const persistsAllowAlways =
+      options.allowAlwaysDecision !== undefined && options.allowAlwaysDecision.kind !== "one-shot";
     return commitExecAuthorizationLocked({
       agentId: params.agentId,
       matches: allowlistMatches,
@@ -596,9 +615,11 @@ export async function processGatewayAllowlist(
         security: options.source === "ask-fallback" ? fallbackSecurity : hostSecurity,
         ask: hostAsk,
         allowlistSatisfied: allowlistAuthorizationSatisfied || durableApprovalSatisfied,
+        ...(persistsAllowAlways ? { policySnapshot: allowAlwaysPolicySnapshot } : {}),
         requireAutoAllowSkills:
           policyAuthorization && allowlistEval.segmentSatisfiedBy.includes("skills"),
-        requireExactCommandApproval: policyAuthorization && exactCommandDurableApproval,
+        requireExactCommandApproval:
+          policyAuthorization && durableApprovalRequirement === "exact-command",
         requireDurableAllowlistApproval:
           policyAuthorization && durableApprovalRequirement === "segment-allowlist",
       },

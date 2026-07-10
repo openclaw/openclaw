@@ -40,8 +40,7 @@ enum ExecApprovalRequestSource: Sendable, Equatable {
 
 struct ExecApprovalPolicySnapshot: Sendable, Equatable {
     struct AllowlistRule: Sendable, Hashable {
-        let pattern: String
-        let argPattern: String?
+        let match: ExecAllowlistEntryMatchKey
         let source: String?
     }
 
@@ -64,8 +63,7 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
         self.autoAllowSkills = autoAllowSkills
         self.allowlistRules = Set(allowlist.map { entry in
             AllowlistRule(
-                pattern: entry.pattern,
-                argPattern: entry.argPattern,
+                match: ExecApprovalsStore.allowlistEntryMatchKey(entry),
                 source: entry.source)
         })
     }
@@ -133,7 +131,7 @@ struct ExecApprovalExecutionCommit: Sendable {
     }
 
     private static func allowlistUses(context: ExecApprovalEvaluation) -> [ExecAllowlistUse] {
-        var seenEntries = Set<String>()
+        var seenEntries = Set<ExecAllowlistEntryMatchKey>()
         var uses: [ExecAllowlistUse] = []
         for (idx, match) in context.allowlistMatches.enumerated() {
             if !seenEntries.insert(ExecApprovalsStore.allowlistEntryMatchKey(match)).inserted {

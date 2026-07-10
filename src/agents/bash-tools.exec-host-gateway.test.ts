@@ -1060,6 +1060,65 @@ describe("processGatewayAllowlist", () => {
     );
   });
 
+  it("binds mixed allowlist authorization to exact trust when it bypasses an unavailable plan", async () => {
+    const command = "ls *.ts";
+    const authorizationPlan = await planShellAuthorization({
+      command,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(authorizationPlan.ok).toBe(true);
+    if (!authorizationPlan.ok) {
+      throw new Error(authorizationPlan.reason);
+    }
+    const allowlistEntry = { pattern: "/usr/bin/ls", source: "allow-always" };
+    requiresExecApprovalMock.mockReturnValue(false);
+    hasDurableExecApprovalMock.mockReturnValue(true);
+    hasExactCommandDurableExecApprovalMock.mockReturnValue(true);
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [allowlistEntry],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: authorizationPlan.groups.flatMap((group) =>
+        group.candidates.map((candidate) => candidate.sourceSegment),
+      ),
+      segmentAllowlistEntries: [allowlistEntry],
+      segmentSatisfiedBy: ["allowlist"],
+      authorizationPlan,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [
+          allowlistEntry,
+          { pattern: exactCommandMarker(command), source: "allow-always" },
+        ],
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "allowlist",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+    commitExecAuthorizationMock.mockRejectedValueOnce(new Error("exact-command approval revoked"));
+
+    await expect(
+      runGatewayAllowlist({
+        command,
+        ask: "off",
+        autoReview: false,
+      }),
+    ).rejects.toThrow("exact-command approval revoked");
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          source: "current-policy",
+          requireExactCommandApproval: true,
+          requireDurableAllowlistApproval: false,
+        }),
+      }),
+    );
+  });
+
   it("offers allow-always for shell-wrapper misses with reusable executable patterns", async () => {
     if (process.platform === "win32") {
       return;
@@ -1957,7 +2016,14 @@ EOF`,
     );
   });
 
-  it("rejects a revoked explicit allow-always without a split durable grant", async () => {
+  it("binds explicit allow-always persistence to its evaluated policy snapshot", async () => {
+    hasDurableExecApprovalMock.mockReturnValue(false);
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
     createExecApprovalDecisionStateMock.mockReturnValue({
       baseDecision: { timedOut: false },
@@ -1969,13 +2035,29 @@ EOF`,
     await expect(
       runGatewayAllowlist({
         command: "pwd",
+        ask: "on-miss",
         turnSourceChannel: "webchat",
       }),
     ).rejects.toThrow("approval revoked");
     expect(commitExecAuthorizationMock).toHaveBeenCalledTimes(1);
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        authorization: expect.objectContaining({ source: "explicit-approval" }),
+        authorization: {
+          source: "explicit-approval",
+          security: "allowlist",
+          ask: "on-miss",
+          allowlistSatisfied: true,
+          policySnapshot: {
+            security: "full",
+            ask: "off",
+            askFallback: "deny",
+            autoAllowSkills: false,
+            allowlistRuleKeys: [],
+          },
+          requireAutoAllowSkills: false,
+          requireExactCommandApproval: false,
+          requireDurableAllowlistApproval: false,
+        },
         allowAlwaysDecision: expect.any(Object),
       }),
     );

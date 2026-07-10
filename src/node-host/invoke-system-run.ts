@@ -11,6 +11,7 @@ import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
+  createExecApprovalPolicySnapshot,
   hasDurableExecApproval,
   maxAsk,
   minSecurity,
@@ -21,6 +22,7 @@ import {
   resolveExecModePolicy,
   type ExecAllowlistEntry,
   type ExecApprovalUsageAuthorization,
+  type ExecApprovalPolicySnapshot,
   type ExecApprovalsResolved,
   type ExecAsk,
   type ExecCommandSegment,
@@ -115,6 +117,7 @@ type SystemRunParsePhase = {
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvals: ExecApprovalsResolved;
+  allowAlwaysPolicySnapshot: ExecApprovalPolicySnapshot;
   security: ExecSecurity;
   ask: ExecAsk;
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
@@ -530,6 +533,10 @@ async function evaluateSystemRunPolicyPhase(
     requireSocket: opts.preferMacAppExecHost,
   });
   const { agentExec, globalExec, approvals } = effectivePolicy;
+  const allowAlwaysPolicySnapshot = createExecApprovalPolicySnapshot({
+    file: approvals.file,
+    agentId: parsed.agentId,
+  });
   const baseSecurity = effectivePolicy.security;
   const baseAsk = effectivePolicy.ask;
   const fallbackRequest = parsed.approvalSource === "ask-fallback";
@@ -577,12 +584,6 @@ async function evaluateSystemRunPolicyPhase(
   const durableApprovalSatisfied = hasDurableExecApproval({
     analysisOk,
     segmentAllowlistEntries,
-    allowlist: approvals.allowlist,
-    commandText: parsed.commandText,
-  });
-  const durableApprovalRequirement = resolveDurableExecApprovalRequirement({
-    durableApprovalSatisfied,
-    allowlistAuthorizationSatisfied,
     allowlist: approvals.allowlist,
     commandText: parsed.commandText,
   });
@@ -741,6 +742,18 @@ async function evaluateSystemRunPolicyPhase(
     });
     return null;
   }
+  // Bind the commit to the normalized policy: Windows wrappers invalidate
+  // otherwise-valid raw allowlist matches before execution.
+  const durableApprovalRequired =
+    security === "allowlist" &&
+    durableApprovalSatisfied &&
+    !policy.approvedByAsk &&
+    (!policy.analysisOk || !policy.allowlistSatisfied);
+  const durableApprovalRequirement = resolveDurableExecApprovalRequirement({
+    durableApprovalRequired,
+    allowlist: approvals.allowlist,
+    commandText: parsed.commandText,
+  });
 
   const approvalContextBound = policy.approvedByAsk || fallbackRequest;
   const hardenedPaths = hardenApprovedExecutionPaths({
@@ -784,6 +797,7 @@ async function evaluateSystemRunPolicyPhase(
     argv: hardenedPaths.argv,
     cwd: hardenedPaths.cwd,
     approvals,
+    allowAlwaysPolicySnapshot,
     security,
     ask,
     policy,
@@ -952,21 +966,6 @@ async function executeSystemRunPhase(
     return;
   }
 
-  const authorizationSource: ExecApprovalUsageAuthorization["source"] =
-    phase.approvalSource === "ask-fallback"
-      ? "ask-fallback"
-      : phase.approvalSource === "auto-review"
-        ? "auto-review"
-        : (phase.approvalGrantSource ?? "current-policy");
-  const authorization: ExecApprovalUsageAuthorization = {
-    source: authorizationSource,
-    security: phase.security,
-    ask: phase.ask,
-    allowlistSatisfied: phase.allowlistAuthorizationSatisfied || phase.durableApprovalSatisfied,
-    requireAutoAllowSkills: phase.segmentSatisfiedBy.includes("skills"),
-    requireExactCommandApproval: phase.durableApprovalRequirement === "exact-command",
-    requireDurableAllowlistApproval: phase.durableApprovalRequirement === "segment-allowlist",
-  };
   const allowAlwaysDecision =
     phase.policy.approvalDecision === "allow-always"
       ? resolveAllowAlwaysPersistenceDecision({
@@ -980,6 +979,24 @@ async function executeSystemRunPhase(
           runtimePayload: phase.inlineEvalHit !== null,
         })
       : undefined;
+  const authorizationSource: ExecApprovalUsageAuthorization["source"] =
+    phase.approvalSource === "ask-fallback"
+      ? "ask-fallback"
+      : phase.approvalSource === "auto-review"
+        ? "auto-review"
+        : (phase.approvalGrantSource ?? "current-policy");
+  const persistsAllowAlways =
+    allowAlwaysDecision !== undefined && allowAlwaysDecision.kind !== "one-shot";
+  const authorization: ExecApprovalUsageAuthorization = {
+    source: authorizationSource,
+    security: phase.security,
+    ask: phase.ask,
+    allowlistSatisfied: phase.allowlistAuthorizationSatisfied || phase.durableApprovalSatisfied,
+    ...(persistsAllowAlways ? { policySnapshot: phase.allowAlwaysPolicySnapshot } : {}),
+    requireAutoAllowSkills: phase.segmentSatisfiedBy.includes("skills"),
+    requireExactCommandApproval: phase.durableApprovalRequirement === "exact-command",
+    requireDurableAllowlistApproval: phase.durableApprovalRequirement === "segment-allowlist",
+  };
 
   try {
     await (opts.commitExecAuthorization ?? commitExecAuthorizationLocked)({

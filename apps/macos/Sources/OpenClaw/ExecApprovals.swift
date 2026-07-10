@@ -219,6 +219,16 @@ struct ExecAllowlistUse: Sendable {
     let resolvedPath: String?
 }
 
+struct ExecAllowlistEntryMatchKey: Hashable, Sendable {
+    let pattern: Data
+    let argPattern: Data
+
+    init(pattern: String, argPattern: String?) {
+        self.pattern = Data(pattern.utf8)
+        self.argPattern = Data((argPattern ?? "").utf8)
+    }
+}
+
 struct ExecApprovalsDefaults: Codable, Sendable {
     var security: ExecSecurity?
     var ask: ExecAsk?
@@ -1083,7 +1093,7 @@ extension ExecApprovalsStore {
                 return .failure(.invalidPattern(reason))
             }
             item.commandText = nil
-            item.argPattern = self.normalizeOptionalString(item.argPattern)
+            item.argPattern = self.normalizeArgPattern(item.argPattern)
             normalizedEntries.append(item)
         }
 
@@ -1217,7 +1227,7 @@ extension ExecApprovalsStore {
                         id: grant.match.id,
                         pattern: pattern,
                         source: "allow-always",
-                        argPattern: self.normalizeOptionalString(grant.match.argPattern)),
+                        argPattern: self.normalizeArgPattern(grant.match.argPattern)),
                     resolvedPath: grant.resolvedPath))
             case let .invalid(reason):
                 return .failure(.invalidPattern(reason))
@@ -1229,7 +1239,7 @@ extension ExecApprovalsStore {
     private static func assertCurrentExecutionAuthorization(
         file: ExecApprovalsFile,
         agentId: String?,
-        usesByKey: [String: ExecAllowlistUse],
+        usesByKey: [ExecAllowlistEntryMatchKey: ExecAllowlistUse],
         authorization: ExecApprovalAuthorization) throws
     {
         let current = self.resolveFromFile(file, agentId: agentId)
@@ -1347,7 +1357,7 @@ extension ExecApprovalsStore {
     private static func applyAllowlistUsesUnlocked(
         file: inout ExecApprovalsFile,
         agentId: String?,
-        usesByKey: [String: ExecAllowlistUse],
+        usesByKey: [ExecAllowlistEntryMatchKey: ExecAllowlistUse],
         command: String) -> Bool
     {
         guard !usesByKey.isEmpty else { return false }
@@ -1461,13 +1471,15 @@ extension ExecApprovalsStore {
         }
     }
 
-    private static func normalizeOptionalString(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+    private static func normalizeArgPattern(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 
-    static func allowlistEntryMatchKey(_ entry: ExecAllowlistEntry) -> String {
-        "\(entry.pattern)\0\(entry.argPattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")"
+    static func allowlistEntryMatchKey(_ entry: ExecAllowlistEntry) -> ExecAllowlistEntryMatchKey {
+        ExecAllowlistEntryMatchKey(
+            pattern: entry.pattern,
+            argPattern: entry.argPattern)
     }
 
     private static func ensureSecureStateDirectory() throws {
@@ -1610,7 +1622,8 @@ extension ExecApprovalsStore {
             var migrated = self.migrateLegacyPattern(entry)
             // Command text can contain secrets; it is accepted only for legacy decode.
             migrated.commandText = nil
-            let normalizedArgPattern = self.normalizeOptionalString(migrated.argPattern)
+            // Regex whitespace and Unicode normalization are semantic policy bytes.
+            let normalizedArgPattern = self.normalizeArgPattern(migrated.argPattern)
             let trimmedPattern = migrated.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedResolvedPath = migrated.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let normalizedResolvedPath = trimmedResolvedPath.isEmpty ? nil : trimmedResolvedPath
@@ -1658,13 +1671,15 @@ extension ExecApprovalsStore {
     {
         let currentAllowlist = self.normalizeAllowlistEntries(current.allowlist ?? [], dropInvalid: false).entries
         let legacyAllowlist = self.normalizeAllowlistEntries(legacy.allowlist ?? [], dropInvalid: false).entries
-        var seen = Set<String>()
+        var seen = Set<ExecAllowlistEntryMatchKey>()
         var allowlist: [ExecAllowlistEntry] = []
         func append(_ entry: ExecAllowlistEntry) {
             guard let patternKey = normalizedPattern(entry.pattern) else {
                 return
             }
-            let key = "\(patternKey)\0\(entry.argPattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")"
+            let key = ExecAllowlistEntryMatchKey(
+                pattern: patternKey,
+                argPattern: entry.argPattern)
             guard !seen.contains(key) else {
                 return
             }
