@@ -3816,6 +3816,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                       )?.entry;
                       const marker = current?.cronRunContinuation;
                       if (
+                        !current ||
                         marker?.phase !== "continuing" ||
                         marker.ownerRunId !== runId ||
                         marker.lifecycleRevision !== restoredCronContinuationLifecycleRevision
