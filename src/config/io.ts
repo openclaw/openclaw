@@ -1833,6 +1833,11 @@ export function createConfigIO(
             legacyIssues: [],
           }),
         });
+        restoreEnvChangesIfUnchanged({
+          env: deps.env,
+          before: envBeforeRead,
+          after: snapshotEnv(deps.env),
+        });
         throwInvalidConfig({
           configPath,
           issues: validated.issues,
@@ -2071,6 +2076,11 @@ export function createConfigIO(
         const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
           collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed),
         );
+        restoreEnvChangesIfUnchanged({
+          env: deps.env,
+          before: envBeforeRead,
+          after: snapshotEnv(deps.env),
+        });
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
             path: configPath,
