@@ -118,7 +118,7 @@ describe("sessions_history redaction", () => {
     );
   });
 
-  it.each([-1, 1.5])("rejects invalid offset value %s", async (offset) => {
+  it.each([-1, 1.5, "1abc"])("rejects invalid offset value %s", async (offset) => {
     const tool = createHistoryToolWithMessage("hello");
 
     await expect(tool.execute("call-1", { sessionKey: "main", offset })).rejects.toThrow(
