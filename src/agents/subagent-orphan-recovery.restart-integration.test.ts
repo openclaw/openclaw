@@ -23,6 +23,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
 import {
   addSubagentRunForTests,
+  finalizeInterruptedSubagentRun,
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
@@ -213,15 +214,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
   it("finalizes only a stale predecessor when a fresh generation shares its child session", async () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:shared-generation";
-    await writeSubagentSessionEntry({
-      stateDir: tempStateDir!,
-      agentId: "main",
-      sessionKey: childSessionKey,
-      sessionId: "sess-shared-generation",
-      updatedAt: now,
-      abortedLastRun: true,
-      defaultSessionId: "sess-shared-generation",
-    });
     const staleRecord = makeRunRecord({
       runId: "run-stale-generation",
       childSessionKey,
@@ -238,30 +230,39 @@ describe("subagent orphan recovery — faithful restart path", () => {
       startedAt: now - 55_000,
       sessionStartedAt: now - 60_000,
     });
+    for (const record of [staleRecord, freshRecord]) {
+      expect(
+        createRunningTaskRun({
+          runtime: "subagent",
+          sourceId: record.runId,
+          ownerKey: record.requesterSessionKey,
+          scopeKind: "session",
+          childSessionKey,
+          runId: record.runId,
+          task: record.task,
+          deliveryStatus: "pending",
+          startedAt: record.startedAt,
+          lastEventAt: record.startedAt,
+        }),
+      ).not.toBeNull();
+    }
     addSubagentRunForTests(staleRecord);
     addSubagentRunForTests(freshRecord);
 
-    const result = await recoverOrphanedSubagentSessions({
-      getActiveRuns: () =>
-        new Map([
-          [staleRecord.runId, staleRecord],
-          [freshRecord.runId, freshRecord],
-        ]),
+    const updated = await finalizeInterruptedSubagentRun({
+      runId: staleRecord.runId,
+      error: "stale predecessor interrupted by restart",
+      endedAt: now,
     });
 
-    const agentCalls = vi
-      .mocked(callGateway)
-      .mock.calls.filter((args) => (args[0] as { method?: string })?.method === "agent");
     const runs = listSubagentRunsForRequester("agent:main:main");
-    const resumedAfter = runs.find((entry) => entry.runId === "resumed-run-id");
-    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 1 });
-    expect(agentCalls).toHaveLength(1);
-    expect(staleRecord.outcome?.status).toBe("error");
-    expect(freshRecord.endedAt).toBeUndefined();
-    expect(freshRecord.outcome).toBeUndefined();
+    expect(updated).toBe(1);
+    expect(callGateway).not.toHaveBeenCalled();
     expect(runs.some((entry) => entry.runId === staleRecord.runId)).toBe(false);
-    expect(resumedAfter).toBeDefined();
-    expect(resumedAfter?.endedAt).toBeTypeOf("number");
-    expect(resumedAfter?.outcome?.status).toBe("ok");
+    expect(runs).toContainEqual(
+      expect.objectContaining({ runId: freshRecord.runId, endedAt: undefined }),
+    );
+    expect(findTaskByRunId(staleRecord.runId)).toMatchObject({ status: "failed" });
+    expect(findTaskByRunId(freshRecord.runId)).toMatchObject({ status: "running" });
   });
 });

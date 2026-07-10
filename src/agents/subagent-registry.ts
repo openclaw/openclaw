@@ -460,6 +460,7 @@ type CompleteSubagentRunParams = {
   triggerCleanup: boolean;
   startedAt?: number;
   suppressSessionEffects?: boolean;
+  recoverInterrupted?: true;
 };
 
 async function completeSubagentRunWithRecoveryAttempt(
@@ -834,6 +835,12 @@ function resumeSubagentRun(runId: string) {
   }
   const entry = subagentRuns.get(runId);
   if (!entry) {
+    return;
+  }
+  if (entry.terminalOwner === "interrupted-recovery") {
+    // Startup orphan recovery replays this durable exact-run winner before it
+    // reads session/config state. Do not prune or resume it through announce.
+    resumedRuns.add(runId);
     return;
   }
   if (entry.cleanupCompletedAt) {
@@ -1791,11 +1798,14 @@ export async function finalizeInterruptedSubagentRun(params: {
   clearPendingLifecycleError(runId);
   clearPendingLifecycleTimeout(runId);
   const entry = subagentRuns.get(runId);
-  if (!entry || typeof entry.cleanupCompletedAt === "number") {
+  if (
+    !entry ||
+    (typeof entry.cleanupCompletedAt === "number" && entry.terminalOwner !== "interrupted-recovery")
+  ) {
     return 0;
   }
-  await completeSubagentRunWithRecovery(
-    {
+  try {
+    await completeSubagentRun({
       runId,
       endedAt,
       outcome: {
@@ -1806,10 +1816,17 @@ export async function finalizeInterruptedSubagentRun(params: {
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
-    },
-    "explicit-failed-mark",
-  );
-  return 1;
+      recoverInterrupted: true,
+    });
+    return 1;
+  } catch (error) {
+    log.warn("failed to durably finalize interrupted subagent run", {
+      runId,
+      childSessionKey: entry.childSessionKey,
+      error,
+    });
+    return 0;
+  }
 }
 
 export function resolveRequesterForChildSession(childSessionKey: string): {

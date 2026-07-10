@@ -13,8 +13,8 @@ import {
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../test-utils/env.js";
-import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
+import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   testing,
@@ -816,6 +816,43 @@ describe("subagent registry persistence", () => {
         endedReason: "subagent-killed",
         suppressAnnounceReason: "killed",
       }),
+    ]);
+  });
+
+  it("preserves restored interrupted-recovery owners for orphan replay", async () => {
+    const now = Date.now();
+    const runId = "run-interrupted-recovery-restore";
+    await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          [runId]: {
+            runId,
+            childSessionKey: "agent:main:subagent:interrupted-recovery-restore",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "replay interrupted terminal",
+            cleanup: "keep",
+            createdAt: now - 100,
+            startedAt: now - 50,
+            endedAt: now,
+            endedReason: "subagent-error",
+            outcome: { status: "error", error: "restart interrupted run" },
+            terminalOwner: "interrupted-recovery",
+            completion: { required: false, resultText: null, capturedAt: now },
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+
+    restartRegistry();
+    await flushQueuedRegistryWork();
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
+    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
+      expect.objectContaining({ runId, terminalOwner: "interrupted-recovery" }),
     ]);
   });
 

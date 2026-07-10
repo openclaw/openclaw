@@ -69,6 +69,7 @@ function reclassifyLegacyRestartInterruptedRun(runRecord: SubagentRunRecord): vo
   runRecord.endedAt = undefined;
   runRecord.endedReason = undefined;
   runRecord.outcome = undefined;
+  runRecord.terminalOwner = undefined;
 }
 
 /**
@@ -215,7 +216,7 @@ export async function recoverOrphanedSubagentSessions(params: {
       return result;
     }
 
-    const cfg = getRuntimeConfig();
+    let cfg: ReturnType<typeof getRuntimeConfig> | undefined;
     const storeCache = new Map<string, Record<string, SessionEntry>>();
 
     for (const [runId, runRecord] of activeRuns.entries()) {
@@ -224,12 +225,44 @@ export async function recoverOrphanedSubagentSessions(params: {
         continue;
       }
       const now = Date.now();
+      if (
+        runRecord.terminalOwner === "interrupted-recovery" &&
+        Number.isFinite(runRecord.endedAt) &&
+        runRecord.outcome?.status === "error" &&
+        runRecord.endedReason === "subagent-error" &&
+        runRecord.pauseReason !== "sessions_yield"
+      ) {
+        const recoveryError =
+          runRecord.outcome?.status === "error"
+            ? (runRecord.outcome.error ?? "subagent run interrupted by gateway restart")
+            : "subagent run interrupted by gateway restart";
+        try {
+          const updated = await finalizeInterruptedSubagentRun({
+            runId,
+            error: recoveryError,
+            endedAt: runRecord.endedAt,
+          });
+          if (updated === 0) {
+            result.failed++;
+            result.failedRuns.push({ runId, childSessionKey, error: recoveryError });
+          } else {
+            result.skipped++;
+          }
+        } catch (err: unknown) {
+          const error = formatErrorMessage(err);
+          log.warn(`replay interrupted terminal ${runId}: ${error}`);
+          result.failed++;
+          result.failedRuns.push({ runId, childSessionKey, error });
+        }
+        continue;
+      }
       if (resumedSessionKeys.has(childSessionKey)) {
         result.skipped++;
         continue;
       }
 
       try {
+        cfg ??= getRuntimeConfig();
         const agentId = resolveAgentIdFromSessionKey(childSessionKey);
         const storePath = resolveStorePath(cfg.session?.store, { agentId });
 
@@ -446,6 +479,8 @@ export async function recoverOrphanedSubagentSessions(params: {
 const MAX_RECOVERY_RETRIES = 3;
 /** Backoff multiplier between retries (exponential). */
 const RETRY_BACKOFF_MULTIPLIER = 2;
+/** Separate durable-terminal attempts after session recovery is exhausted. */
+const MAX_TERMINAL_FINALIZE_ATTEMPTS = 3;
 
 function buildRecoveryFailureMessage(params: { attempts: number; error?: string }): string {
   const base =
@@ -457,6 +492,35 @@ function buildRecoveryFailureMessage(params: { attempts: number; error?: string 
     return base;
   }
   return `${base} (${detail})`;
+}
+
+async function finalizeInterruptedRunWithRetry(params: {
+  runId: string;
+  error: string;
+  initialDelayMs: number;
+}): Promise<boolean> {
+  let delayMs = Math.max(1, params.initialDelayMs);
+  for (let attempt = 1; attempt <= MAX_TERMINAL_FINALIZE_ATTEMPTS; attempt += 1) {
+    try {
+      const updated = await finalizeInterruptedSubagentRun({
+        runId: params.runId,
+        error: params.error,
+      });
+      if (updated > 0) {
+        return true;
+      }
+    } catch {
+      // The outer scheduler owns this exact-run retry budget.
+    }
+    if (attempt < MAX_TERMINAL_FINALIZE_ATTEMPTS) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, delayMs);
+        timer.unref?.();
+      });
+      delayMs *= RETRY_BACKOFF_MULTIPLIER;
+    }
+  }
+  return false;
 }
 
 /**
@@ -494,17 +558,25 @@ export function scheduleOrphanRecovery(params: {
           return;
         }
         const attempts = attempt + 1;
-        await Promise.allSettled(
-          result.failedRuns.map((run) =>
-            finalizeInterruptedSubagentRun({
+        const terminalResults = await Promise.all(
+          result.failedRuns.map(async (run) => ({
+            runId: run.runId,
+            completed: await finalizeInterruptedRunWithRetry({
               runId: run.runId,
-              error: buildRecoveryFailureMessage({
-                attempts,
-                error: run.error,
-              }),
+              error: buildRecoveryFailureMessage({ attempts, error: run.error }),
+              initialDelayMs: delay,
             }),
-          ),
+          })),
         );
+        const incomplete = terminalResults
+          .filter((terminal) => !terminal.completed)
+          .map((terminal) => terminal.runId);
+        if (incomplete.length > 0) {
+          log.warn(
+            `orphan recovery exhausted with ${incomplete.length} interrupted terminal projection(s) incomplete`,
+            { runIds: incomplete },
+          );
+        }
       }).catch((err: unknown) => {
         if (attempt < maxRetries) {
           const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
