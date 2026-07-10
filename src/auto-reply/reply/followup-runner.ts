@@ -438,12 +438,14 @@ export function createFollowupRunner(params: {
    * session's current dispatcher. This ensures replies go back to
    * where the message originated.
    */
+  type FollowupDeliveryOutcome = "none" | "error" | "non_error";
+
   const sendFollowupPayloads = async (
     payloads: ReplyPayload[],
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
     options: { kind?: ReplyDispatchKind; mirror?: boolean; runId?: string } = {},
-  ): Promise<boolean> => {
+  ): Promise<FollowupDeliveryOutcome> => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
@@ -464,20 +466,30 @@ export function createFollowupRunner(params: {
     );
 
     if (sendablePayloads.length === 0) {
-      return false;
+      return "none";
     }
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       defaultRuntime.error?.(
         "followup queue: completed with payloads but no origin route or visible dispatcher is available",
       );
-      return false;
+      return "none";
     }
 
-    let deliveredAnyPayload = false;
+    let deliveryOutcome: FollowupDeliveryOutcome = "none";
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
     const replyKind = options.kind ?? "final";
+    const recordDelivery = (payload: ReplyPayload, delivered: boolean) => {
+      if (!delivered) {
+        return;
+      }
+      if (payload.isError !== true) {
+        deliveryOutcome = "non_error";
+      } else if (deliveryOutcome === "none") {
+        deliveryOutcome = "error";
+      }
+    };
     const sendDispatcherPayload = async (payload: ReplyPayload): Promise<boolean> => {
       if (!opts?.onBlockReply) {
         return false;
@@ -547,7 +559,7 @@ export function createFollowupRunner(params: {
           });
           if (opts?.onBlockReply) {
             if (origin && origin === provider) {
-              deliveredAnyPayload = (await sendDispatcherPayload(payload)) || deliveredAnyPayload;
+              recordDelivery(payload, await sendDispatcherPayload(payload));
             } else {
               crossChannelRouteFailureNeedsNotice = true;
             }
@@ -555,7 +567,7 @@ export function createFollowupRunner(params: {
             defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
           }
         } else if (!result.suppressed) {
-          deliveredAnyPayload = true;
+          recordDelivery(payload, true);
           const provider = resolveOriginMessageProvider({
             provider: queued.run.messageProvider,
           });
@@ -567,7 +579,7 @@ export function createFollowupRunner(params: {
           }
         }
       } else if (deliveryRoute === "dispatcher") {
-        deliveredAnyPayload = (await sendDispatcherPayload(payload)) || deliveredAnyPayload;
+        recordDelivery(payload, await sendDispatcherPayload(payload));
       }
     }
     if (
@@ -577,18 +589,18 @@ export function createFollowupRunner(params: {
     ) {
       if (queued.currentInboundEventKind === "room_event") {
         logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
-        return deliveredAnyPayload;
+        return deliveryOutcome;
       }
-      deliveredAnyPayload =
-        (await sendDispatcherPayload({
-          text:
-            "Follow-up completed, but OpenClaw could not deliver it to the originating " +
-            "channel. The reply content was not forwarded to this channel to avoid " +
-            "cross-channel misdelivery.",
-          isError: true,
-        })) || deliveredAnyPayload;
+      const failureNotice: ReplyPayload = {
+        text:
+          "Follow-up completed, but OpenClaw could not deliver it to the originating " +
+          "channel. The reply content was not forwarded to this channel to avoid " +
+          "cross-channel misdelivery.",
+        isError: true,
+      };
+      recordDelivery(failureNotice, await sendDispatcherPayload(failureNotice));
     }
-    return deliveredAnyPayload;
+    return deliveryOutcome;
   };
 
   const runFollowupTurn = async (queued: FollowupRun) => {
@@ -777,7 +789,7 @@ export function createFollowupRunner(params: {
       // bypasses the outer dispatcher that normally enforces sendPolicy.
       const sendRunPayloads: typeof sendFollowupPayloads = async (...args) => {
         if (sendPolicyDenied) {
-          return false;
+          return "none";
         }
         return sendFollowupPayloads(...args);
       };
@@ -1137,7 +1149,7 @@ export function createFollowupRunner(params: {
               ) {
                 return;
               }
-              const delivered = await sendRunPayloads(
+              const delivery = await sendRunPayloads(
                 [payload],
                 effectiveQueued,
                 {
@@ -1146,7 +1158,7 @@ export function createFollowupRunner(params: {
                 },
                 { kind: "tool", mirror: false, runId },
               );
-              if (payload.isError === true && delivered) {
+              if (payload.isError === true && delivery !== "none") {
                 markVisibleToolErrorProgress();
               }
             };
@@ -1930,14 +1942,11 @@ export function createFollowupRunner(params: {
         );
       }
 
-      if (
-        finalPayloads.some(
-          (payload) =>
-            payload.isError !== true && hasOutboundReplyContent(payload, { trimText: true }),
-        )
-      ) {
-        discardPendingFailedProgressDeliveries();
-      } else {
+      const hasCleanFinalPayload = finalPayloads.some(
+        (payload) =>
+          payload.isError !== true && hasOutboundReplyContent(payload, { trimText: true }),
+      );
+      if (!hasCleanFinalPayload) {
         const flushedVisibleFailure = await flushPendingFailedProgressDeliveries();
         if (
           flushedVisibleFailure &&
@@ -2073,7 +2082,7 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      await sendRunPayloads(
+      const finalDelivery = await sendRunPayloads(
         deliveryPayloads,
         effectiveQueued,
         {
@@ -2082,6 +2091,13 @@ export function createFollowupRunner(params: {
         },
         { runId },
       );
+      if (hasCleanFinalPayload) {
+        if (finalDelivery === "non_error") {
+          discardPendingFailedProgressDeliveries();
+        } else {
+          await flushPendingFailedProgressDeliveries();
+        }
+      }
     } catch (err) {
       failed = true;
       throw err;

@@ -3240,6 +3240,51 @@ describe("createFollowupRunner progress forwarding", () => {
     );
   });
 
+  it("flushes queued regular-verbose failed tool payloads when final routing is suppressed", async () => {
+    routeReplyMock.mockResolvedValueOnce({ ok: true, suppressed: true });
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onToolResult?: (payload: { text: string; isError?: boolean }) => Promise<void>;
+      }) => {
+        await args.onToolResult?.({
+          text: "🛠️ Exec: recovered helper failure",
+          isError: true,
+        });
+        return { payloads: [{ text: "suppressed final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toEqual(
+      expect.objectContaining({ text: "suppressed final reply" }),
+    );
+    expect(requireMockCallArg(routeReplyMock, 1).payload).toEqual(
+      expect.objectContaining({
+        text: "🛠️ Exec: recovered helper failure",
+        isError: true,
+      }),
+    );
+  });
+
   it("flushes queued regular-verbose failed tool payloads when no final payload is visible", async () => {
     const queued = createQueuedRun({
       originatingChannel: "discord",
