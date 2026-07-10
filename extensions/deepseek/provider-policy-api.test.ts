@@ -234,7 +234,7 @@ describe("deepseek provider-policy-api", () => {
     }
   });
 
-  it("preserves legacy alias metadata when any catalog-owned field is customized", () => {
+  it("preserves explicit zero cost when legacy alias limits differ from the shipped row", () => {
     const userCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     const providerConfig: ModelProviderConfig = {
       baseUrl: "https://api.deepseek.com",
@@ -255,32 +255,7 @@ describe("deepseek provider-policy-api", () => {
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
 
     expect(result.models[0].contextWindow).toBe(500_000);
-    expect(result.models[0].maxTokens).toBe(8_192);
-    expect(result.models[0].cost).toBe(userCost);
-  });
-
-  it("preserves an old maxTokens value when another field makes the row user-owned", () => {
-    const userCost = { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 };
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-chat",
-          name: "DeepSeek Chat",
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 500_000,
-          maxTokens: 8_192,
-          cost: userCost,
-        } as never,
-      ],
-    };
-
-    const result = normalizeConfig({ provider: "deepseek", providerConfig });
-
-    expect(result).toBe(providerConfig);
-    expect(result.models[0]).toMatchObject({ contextWindow: 500_000, maxTokens: 8_192 });
+    expect(result.models[0].maxTokens).toBe(384_000);
     expect(result.models[0].cost).toBe(userCost);
   });
 
