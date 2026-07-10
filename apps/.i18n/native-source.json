@@ -12522,6 +12522,70 @@
       "id": "native.apple.633f011b81108a8c"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 31,
+      "path": "apps/ios/Sources/Location/LocationSettingsPresentation.swift",
+      "source": "Location Services are off in iOS Settings.",
+      "surface": "apple",
+      "id": "native.apple.e5673992d3aeac64"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 36,
+      "path": "apps/ios/Sources/Location/LocationSettingsPresentation.swift",
+      "source": "iOS permission is required to share location.",
+      "surface": "apple",
+      "id": "native.apple.270f9edf88f41fbf"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 38,
+      "path": "apps/ios/Sources/Location/LocationSettingsPresentation.swift",
+      "source": "Location permission is denied in iOS Settings.",
+      "surface": "apple",
+      "id": "native.apple.8cb96b0bb1921610"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 40,
+      "path": "apps/ios/Sources/Location/LocationSettingsPresentation.swift",
+      "source": "Location permission is restricted on this device.",
+      "surface": "apple",
+      "id": "native.apple.d7da989dd737723c"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 42,
+      "path": "apps/ios/Sources/Location/LocationSettingsPresentation.swift",
+      "source": "iOS currently allows location only while using the app.",
+      "surface": "apple",
+      "id": "native.apple.cc1df565f1194db4"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 46,
+      "path": "apps/ios/Sources/Location/LocationSettingsPresentation.swift",
+      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "surface": "apple",
+      "id": "native.apple.f6b19113d5d8e7db"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 82,
+      "path": "apps/ios/Sources/Location/LocationSettingsPresentation.swift",
+      "source": "While Using the App",
+      "surface": "apple",
+      "id": "native.apple.2892e5b02c6789f0"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 84,
+      "path": "apps/ios/Sources/Location/LocationSettingsPresentation.swift",
+      "source": "Always",
+      "surface": "apple",
+      "id": "native.apple.f689e63e18ca692d"
+    },
+    {
       "kind": "conditional-branch",
       "line": 2942,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",

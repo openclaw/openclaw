@@ -28,22 +28,22 @@ struct LocationSettingsPresentation: Equatable {
         guard self.summary.needsAttention else { return nil }
 
         if !self.summary.locationServicesEnabled {
-            return "Location Services are off in iOS Settings."
+            return String(localized: "Location Services are off in iOS Settings.")
         }
 
         switch self.summary.authorizationStatus {
         case .notDetermined:
-            return "iOS permission is required to share location."
+            return String(localized: "iOS permission is required to share location.")
         case .denied:
-            return "Location permission is denied in iOS Settings."
+            return String(localized: "Location permission is denied in iOS Settings.")
         case .restricted:
-            return "Location permission is restricted on this device."
+            return String(localized: "Location permission is restricted on this device.")
         case .authorizedWhenInUse where self.selectedMode == .always:
-            return "iOS currently allows location only while using the app."
+            return String(localized: "iOS currently allows location only while using the app.")
         case .authorizedWhenInUse, .authorizedAlways:
             return nil
         default:
-            return "OpenClaw cannot determine the current iOS location permission."
+            return String(localized: "OpenClaw cannot determine the current iOS location permission.")
         }
     }
 
@@ -79,9 +79,9 @@ extension OpenClawLocationMode {
         case .off:
             nil
         case .whileUsing:
-            "While Using the App"
+            String(localized: "While Using the App")
         case .always:
-            "Always"
+            String(localized: "Always")
         }
     }
 }
