@@ -1,7 +1,7 @@
 // Browser tests cover invoke browser plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
+import nodePath from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -200,10 +200,10 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("serializes plural action downloads without reading nested page paths", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-proxy-action-"));
-    const firstPath = path.join(tempDir, "first.txt");
-    const secondPath = path.join(tempDir, "second.txt");
-    const nestedPagePath = path.join(tempDir, "page-controlled.txt");
+    const tempDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-browser-proxy-action-"));
+    const firstPath = nodePath.join(tempDir, "first.txt");
+    const secondPath = nodePath.join(tempDir, "second.txt");
+    const nestedPagePath = nodePath.join(tempDir, "page-controlled.txt");
     const result = {
       ok: true,
       downloads: [
@@ -252,9 +252,9 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("rejects an aggregate above the proxy transport budget", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-proxy-limit-"));
-    const firstPath = path.join(tempDir, "first.bin");
-    const secondPath = path.join(tempDir, "second.bin");
+    const tempDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-browser-proxy-limit-"));
+    const firstPath = nodePath.join(tempDir, "first.bin");
+    const secondPath = nodePath.join(tempDir, "second.bin");
     try {
       await Promise.all([fs.writeFile(firstPath, ""), fs.writeFile(secondPath, "")]);
       await Promise.all([
