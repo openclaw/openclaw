@@ -48,17 +48,27 @@ describe("release-note verification", () => {
       "",
       `This reverts commit ${"b".repeat(40)}.`,
     ].join("\n");
+    const squashRevert = [
+      "Revert chat session picker inline search (#85527)",
+      "",
+      '* Revert "fix(ui): keep chat session search inline (#85490)"',
+      "",
+      `This reverts commit ${"c".repeat(40)}.`,
+      "",
+      "* fix(ui): clear applied chat picker search on empty input",
+    ].join("\n");
     const explainedTopLevelRevert = [
       "revert: restore a provider default",
       "",
       "The replacement broke non-native endpoints.",
       "",
-      `This reverts commit ${"c".repeat(40)}.`,
+      `This reverts commit ${"d".repeat(40)}.`,
     ].join("\n");
 
     expect(standardRevertedHash(nestedRevert)).toBeUndefined();
     expect(standardRevertedHash(topLevelRevert)).toBe("b".repeat(40));
-    expect(standardRevertedHash(explainedTopLevelRevert)).toBe("c".repeat(40));
+    expect(standardRevertedHash(squashRevert)).toBe("c".repeat(40));
+    expect(standardRevertedHash(explainedTopLevelRevert)).toBe("d".repeat(40));
   });
 
   it("counts only top-level Highlights bullets and enforces the 5-8 policy input", () => {

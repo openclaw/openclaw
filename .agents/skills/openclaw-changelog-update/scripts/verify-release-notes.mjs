@@ -286,6 +286,7 @@ export function standardRevertedHash(message) {
     .trim()
     .split(/\n\s*\n/)
     .map((paragraph) => paragraph.trim());
+  const messageIsRevert = /^revert\b/i.test(paragraphs[0] ?? "");
   for (const [index, paragraph] of paragraphs.entries()) {
     const revertedHash = paragraph.match(/^This reverts commit ([0-9a-f]{7,40})\.$/i)?.[1];
     if (!revertedHash) {
@@ -293,7 +294,7 @@ export function standardRevertedHash(message) {
     }
     // GitHub squash messages can embed a reverted intermediate commit. Its
     // marker follows the corresponding bullet and does not revert the squash.
-    if (/^\*\s+Revert\b/i.test(paragraphs[index - 1] ?? "")) {
+    if (!messageIsRevert && /^\*\s+Revert\b/i.test(paragraphs[index - 1] ?? "")) {
       continue;
     }
     return revertedHash;
