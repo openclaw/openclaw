@@ -25,6 +25,13 @@ describe("parseDiffDetailsString", () => {
     ]);
   });
 
+  it("accepts the persisted history truncation marker", () => {
+    expect(parseDiffDetailsString("+12 kept line\n...(truncated)...")).toEqual([
+      { kind: "add", lineNo: 12, text: "kept line" },
+      { kind: "skip", text: "" },
+    ]);
+  });
+
   it.each([
     ["empty input", ""],
     ["whitespace-only input", "   \n  "],
@@ -76,6 +83,28 @@ describe("computeLineDiff", () => {
     expect(lines).toHaveLength(401);
     expect(lines.at(-1)).toEqual({ kind: "skip", text: "" });
   });
+
+  it("keeps a late change instead of spending the preview budget on context", () => {
+    const oldLines = Array.from({ length: 500 }, (_, index) => `line ${index}`);
+    const newLines = [...oldLines];
+    newLines[450] = "changed late";
+
+    const lines = computeLineDiff(oldLines.join("\n"), newLines.join("\n"));
+
+    expect(lines).toContainEqual({ kind: "add", text: "changed late" });
+    expect(lines).toContainEqual({ kind: "del", text: "line 450" });
+    expect(lines.length).toBeLessThanOrEqual(401);
+  });
+
+  it("shows only truncation when the change is beyond the input work budget", () => {
+    const oldLines = Array.from({ length: 700 }, (_, index) => `line ${index}`);
+    const newLines = [...oldLines];
+    newLines[650] = "outside budget";
+
+    expect(computeLineDiff(oldLines.join("\n"), newLines.join("\n"))).toEqual([
+      { kind: "skip", text: "" },
+    ]);
+  });
 });
 
 describe("buildWriteDiffLines", () => {
@@ -120,6 +149,22 @@ describe("joinDiffSections", () => {
       { kind: "skip", text: "" },
       { kind: "add", text: "new" },
     ]);
+  });
+
+  it("enforces one render-row budget across every section", () => {
+    const first = Array.from<unknown, DiffLine>({ length: 250 }, (_, index) => ({
+      kind: "add",
+      text: `first ${index}`,
+    }));
+    const second = Array.from<unknown, DiffLine>({ length: 250 }, (_, index) => ({
+      kind: "del",
+      text: `second ${index}`,
+    }));
+
+    const joined = joinDiffSections([first, second]);
+
+    expect(joined).toHaveLength(401);
+    expect(joined.at(-1)).toEqual({ kind: "skip", text: "" });
   });
 });
 

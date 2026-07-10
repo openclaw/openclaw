@@ -136,21 +136,6 @@
   color: var(--text);
 }
 
-.chat-tool-row__cmd--secondary {
-  flex: 0 100000 auto;
-  color: color-mix(in srgb, var(--muted) 85%, var(--text) 15%);
-}
-
-.chat-tool-row__title {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-  color: var(--text);
-}
-
 .chat-tool-row__verb {
   flex-shrink: 0;
   font-weight: 500;
@@ -279,6 +264,21 @@
 
 .chat-diff__row--del .chat-diff__sign {
   color: var(--destructive, #ef4444);
+}
+
+.chat-diff__row--file {
+  padding-block: 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--secondary) 85%, var(--bg) 15%);
+}
+
+.chat-diff__row--file:first-child {
+  border-top: 0;
+}
+
+.chat-diff__row--file .chat-diff__text {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted) 18%);
+  font-weight: 600;
 }
 
 .chat-diff__row--skip {
@@ -489,6 +489,12 @@
 .chat-tool-card--flush:hover > .chat-tool-card__actions,
 .chat-tool-card--flush:focus-within > .chat-tool-card__actions {
   opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .chat-tool-card--flush > .chat-tool-card__actions {
+    opacity: 1;
+  }
 }
 
 .chat-tool-card__actions {
@@ -863,10 +869,18 @@
 }
 
 .chat-activity-group__label {
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-activity-group__summary .collapse-chevron {
+  flex-shrink: 0;
 }
 
 /* Rows live in one bordered card with hairline separators. */
