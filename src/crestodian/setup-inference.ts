@@ -43,9 +43,12 @@ import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import type { ProviderAuthMethod, ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { buildCliPlannerConfig, buildCodexAppServerPlannerConfig } from "./assistant-backends.js";
 import { loadAuthoredSetupConfig } from "./onboarding-welcome.js";
-import { applyCrestodianSetup, createQuickstartNotePrompter } from "./setup-apply.js";
+import {
+  applyCrestodianModelSelection,
+  applyCrestodianSetup,
+  createQuickstartNotePrompter,
+} from "./setup-apply.js";
 
 /**
  * Inference is the one required onboarding step (docs/cli/crestodian.md
@@ -221,8 +224,9 @@ type SetupInferenceTestPlan = {
   model: string;
   modelRef: string;
   config: OpenClawConfig;
-  agentHarnessId?: string;
+  agentId?: string;
   agentDir?: string;
+  cleanupBundleMcpOnRunEnd?: boolean;
   authProfileId?: string;
   /** Model to persist as default on success; undefined keeps the current one. */
   persistModelRef?: string;
@@ -275,16 +279,6 @@ function mapFailoverReasonToSetupStatus(reason?: string | null): SetupInferenceS
   return "unknown";
 }
 
-const CODEX_CLI_RUNTIME_PATCH = {
-  agents: {
-    defaults: {
-      models: {
-        [CODEX_APP_SERVER_DEFAULT_MODEL_REF]: { agentRuntime: { id: "codex" } },
-      },
-    },
-  },
-} as const;
-
 async function buildTestPlan(params: {
   kind: InferenceBackendKind | "api-key";
   authChoice?: string;
@@ -307,6 +301,7 @@ async function buildTestPlan(params: {
         model: ref.model,
         modelRef,
         config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
       };
     }
     case "claude-cli": {
@@ -315,7 +310,8 @@ async function buildTestPlan(params: {
         runner: "cli",
         ...ref,
         modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, CLAUDE_CLI_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       };
     }
@@ -325,7 +321,8 @@ async function buildTestPlan(params: {
         runner: "cli",
         ...ref,
         modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, GEMINI_CLI_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       };
     }
@@ -335,9 +332,10 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
-        config: buildCodexAppServerPlannerConfig(workspaceDir),
-        agentHarnessId: "codex",
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         agentDir: params.agentDir,
+        cleanupBundleMcpOnRunEnd: true,
         persistModelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       };
     }
@@ -347,7 +345,8 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef: OPENAI_API_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, OPENAI_API_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: OPENAI_API_DEFAULT_MODEL_REF,
       };
     }
@@ -357,7 +356,8 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, ANTHROPIC_API_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
       };
     }
@@ -469,6 +469,7 @@ async function buildTestPlan(params: {
         modelRef,
         agentDir: params.agentDir,
         config: preparedConfig,
+        agentId: resolveDefaultAgentId(preparedConfig),
         authProfileId: matchingProfile.profileId,
         persistModelRef: modelRef,
         manualAuth: {
@@ -623,16 +624,27 @@ async function activateSetupInferenceUnredacted(
       return { ok: false, status: "unavailable", error: plan.error };
     }
 
-    let codexPluginPatch: unknown;
     let testPlan = plan;
+    if (plan.persistModelRef) {
+      const stagedConfig = await applyCrestodianModelSelection({
+        config: plan.config,
+        model: plan.persistModelRef,
+        ...(params.kind === "codex-cli" ? { agentRuntimeId: "codex" } : {}),
+      });
+      testPlan = {
+        ...plan,
+        config: stagedConfig,
+        agentId: resolveDefaultAgentId(stagedConfig),
+      };
+    }
+
+    let codexPluginPatch: unknown;
     if (params.kind === "codex-cli") {
       const { stripPendingPluginInstallRecords } =
         await import("../cli/plugins-install-record-commit.js");
       // This explicit Codex CLI choice owns its runtime independently of the
       // user's existing OpenAI provider route (which may use a custom base URL).
-      const codexInstallBase = stripPendingPluginInstallRecords(
-        applyMergePatch(cfg, CODEX_CLI_RUNTIME_PATCH) as OpenClawConfig,
-      );
+      const codexInstallBase = stripPendingPluginInstallRecords(testPlan.config);
       const enabledCodexBase = enablePluginInConfig(codexInstallBase, "codex");
       if (!enabledCodexBase.enabled) {
         return {
@@ -648,6 +660,7 @@ async function activateSetupInferenceUnredacted(
       const ensured = await ensureCodex({
         cfg: enabledCodexBase.config,
         model: plan.modelRef,
+        agentId: testPlan.agentId,
         prompter: createQuickstartNotePrompter(params.runtime),
         runtime: params.runtime,
         workspaceDir: tempDir,
@@ -701,12 +714,13 @@ async function activateSetupInferenceUnredacted(
       }
       // Enablement and the model-scoped runtime pin remain transient probe inputs.
       // Persist them only after completion; the managed install record is durable above.
-      const codexProbePatch = createMergePatch(cfg, enabledCodex.config);
       const stagedCodexConfig = stripPendingPluginInstallRecords(enabledCodex.config);
       codexPluginPatch = createMergePatch(cfg, stagedCodexConfig);
       testPlan = {
-        ...plan,
-        config: applyMergePatch(plan.config, codexProbePatch) as OpenClawConfig,
+        ...testPlan,
+        config: applyMergePatch(stagedCodexConfig, {
+          tools: { exec: { mode: "full" } },
+        }) as OpenClawConfig,
       };
     }
 
@@ -900,7 +914,7 @@ async function runSetupInferenceTest(params: {
       result = (await runCli({
         sessionId,
         sessionKey: `temp:setup-inference:${runId}`,
-        agentId: "crestodian",
+        agentId: plan.agentId ?? "crestodian",
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
@@ -921,7 +935,7 @@ async function runSetupInferenceTest(params: {
       result = (await runEmbedded({
         sessionId,
         sessionKey: `temp:setup-inference:${runId}`,
-        agentId: "crestodian",
+        agentId: plan.agentId ?? "crestodian",
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
@@ -933,13 +947,7 @@ async function runSetupInferenceTest(params: {
         ...(plan.authProfileId
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),
-        ...(plan.agentHarnessId
-          ? {
-              agentHarnessId: plan.agentHarnessId,
-              agentHarnessRuntimeOverride: plan.agentHarnessId,
-              cleanupBundleMcpOnRunEnd: true,
-            }
-          : {}),
+        ...(plan.cleanupBundleMcpOnRunEnd ? { cleanupBundleMcpOnRunEnd: true } : {}),
         timeoutMs,
         runId,
         lane: `session:probe-setup-inference:${plan.provider}`,

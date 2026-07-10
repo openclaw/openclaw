@@ -64,7 +64,7 @@ private func crestodianSessionID(from message: URLSessionWebSocketTask.Message) 
     return params["sessionId"] as? String
 }
 
-private func crestodianResponse(id: String) -> Data {
+private func crestodianResponse(id: String, action: String = "none") -> Data {
     Data(
         """
         {
@@ -74,7 +74,7 @@ private func crestodianResponse(id: String) -> Data {
           "payload": {
             "sessionId": "test-session",
             "reply": "ready",
-            "action": "none",
+            "action": "\(action)",
             "sensitive": false
           }
         }
@@ -84,6 +84,31 @@ private func crestodianResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingCrestodianChatTests {
+    @Test func `settings callback refreshes inference after assistant reply`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(crestodianResponse(id: id)))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = CrestodianOnboardingChatModel(gateway: gateway)
+        var refreshCount = 0
+        CrestodianSettings.configureChatCallbacks(
+            for: chat,
+            onReplyReceived: { refreshCount += 1 })
+
+        await chat.startIfNeeded()
+
+        #expect(chat.messages.map(\.text) == ["ready"])
+        #expect(refreshCount == 1)
+    }
+
     @Test func `gateway reset invalidates queued send and restart tasks`() async throws {
         let session = GatewayTestWebSocketSession()
         let url = try #require(URL(string: "ws://example.invalid"))
@@ -169,6 +194,51 @@ struct OnboardingCrestodianChatTests {
         #expect(sessionIDs.count == 2)
         #expect(sessionIDs.first == routeASessionID)
         #expect(sessionIDs.last != routeASessionID)
+    }
+
+    @Test func `route change while reply is in flight discards reply and action`() async throws {
+        let config = CrestodianGatewayConfig()
+        let requestGate = CrestodianRequestGate()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                _ = await requestGate.waitIfFirst()
+                task.emitReceiveSuccess(.data(crestodianResponse(id: id, action: "open-agent")))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: {
+                let token = await config.snapshotToken()
+                return (url: url, token: token, password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = CrestodianOnboardingChatModel(gateway: gateway)
+        var replyCount = 0
+        var handoffCount = 0
+        chat.onReplyReceived = { replyCount += 1 }
+        chat.onAgentHandoff = { handoffCount += 1 }
+
+        let startTask = Task { await chat.startIfNeeded() }
+        var requestStarted = false
+        for _ in 0..<1000 {
+            if session.latestTask()?.snapshotSendCount() == 2 {
+                requestStarted = true
+                break
+            }
+            await Task.yield()
+        }
+        try #require(requestStarted)
+        await config.setToken("b")
+        await requestGate.release()
+        await startTask.value
+
+        #expect(chat.messages.isEmpty)
+        #expect(replyCount == 0)
+        #expect(handoffCount == 0)
+        #expect(chat.errorMessage == "The Gateway connection changed. Restart Crestodian to reconnect.")
     }
 
     @Test func `cancelled initial request exposes restart and recovers`() async throws {

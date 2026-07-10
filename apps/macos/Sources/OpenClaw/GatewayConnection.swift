@@ -354,6 +354,15 @@ actor GatewayConnection {
         }
     }
 
+    func isCurrentRoute(_ route: Route) async -> Bool {
+        guard let cfg = try? await configProvider() else { return false }
+        return route.generation == self.routeGeneration &&
+            route.matches(cfg) &&
+            self.configuredURL == route.url &&
+            self.configuredToken == route.token &&
+            self.configuredPassword == route.password
+    }
+
     func supportsServerCapability(
         _ capability: GatewayServerCapability,
         ifCurrentRoute route: Route) async -> Bool?
@@ -394,13 +403,7 @@ actor GatewayConnection {
             params: [:],
             timeoutMs: 15000,
             ifCurrentRoute: route)
-        guard let cfg = try? await configProvider(),
-              route.generation == self.routeGeneration,
-              route.matches(cfg),
-              configuredURL == route.url,
-              configuredToken == route.token,
-              configuredPassword == route.password
-        else {
+        guard await self.isCurrentRoute(route) else {
             throw CancellationError()
         }
         return try Self.decodeConfiguredInferenceModel(data)

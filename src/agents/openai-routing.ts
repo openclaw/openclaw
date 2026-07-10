@@ -84,6 +84,7 @@ export function parseModelRefProvider(value: unknown): string | undefined {
 export function modelSelectionShouldEnsureCodexPlugin(params: {
   model?: string;
   config?: OpenClawConfig;
+  agentId?: string;
 }): boolean {
   const provider = parseModelRefProvider(params.model);
   if (provider !== OPENAI_PROVIDER_ID) {
@@ -97,6 +98,7 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
       config: params.config,
       provider,
       modelId,
+      agentId: params.agentId,
     }).policy?.id,
   );
   if (configuredRuntime && !isDefaultAgentRuntimeId(configuredRuntime)) {

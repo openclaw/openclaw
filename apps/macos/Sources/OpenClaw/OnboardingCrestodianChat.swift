@@ -181,6 +181,7 @@ final class CrestodianOnboardingChatModel {
                 timeoutMs: 190_000,
                 ifCurrentRoute: route)
             guard self.isCurrentRequest(generation) else { return }
+            guard await self.gateway.isCurrentRoute(route) else { throw CancellationError() }
             let result = try JSONDecoder().decode(ChatResult.self, from: data)
             guard self.isCurrentRequest(generation) else { return }
             self.expectsSensitiveReply = result.sensitive == true

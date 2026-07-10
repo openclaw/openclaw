@@ -11,6 +11,7 @@ enum CrestodianAvailability {
 /// The parent settings view exposes this pane only after inference is configured.
 struct CrestodianSettings: View {
     let isActive: Bool
+    let onReplyReceived: () -> Void
     @State private var chat = CrestodianOnboardingChatModel(
         welcomeVariant: nil,
         sessionPrefix: "mac-settings-crestodian")
@@ -35,10 +36,21 @@ struct CrestodianSettings: View {
         .settingsDetailContent()
         .task(id: self.isActive) {
             guard self.isActive else { return }
-            self.chat.onAgentHandoff = {
-                AppNavigationActions.openChat()
-            }
+            Self.configureChatCallbacks(
+                for: self.chat,
+                onReplyReceived: self.onReplyReceived)
             await self.chat.startIfNeeded()
         }
+    }
+
+    @MainActor
+    static func configureChatCallbacks(
+        for chat: CrestodianOnboardingChatModel,
+        onReplyReceived: @escaping () -> Void)
+    {
+        chat.onAgentHandoff = {
+            AppNavigationActions.openChat()
+        }
+        chat.onReplyReceived = onReplyReceived
     }
 }

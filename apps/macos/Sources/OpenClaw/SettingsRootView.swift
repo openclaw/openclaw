@@ -225,7 +225,11 @@ struct SettingsRootView: View {
         case .voiceWake:
             AnyView(VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake))
         case .crestodian:
-            AnyView(CrestodianSettings(isActive: self.selectedTab == tab)
+            AnyView(CrestodianSettings(
+                isActive: self.selectedTab == tab,
+                onReplyReceived: {
+                    self.scheduleInferenceRefresh(clearPrevious: false)
+                })
                 .id(self.crestodianChatIdentity))
         case .channels:
             AnyView(ChannelsSettings(isActive: self.selectedTab == tab))

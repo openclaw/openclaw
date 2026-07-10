@@ -54,7 +54,7 @@ for every attempt claimed by that harness.
 
 Core still forwards a compatible, explicitly selected or ordered OpenClaw auth
 profile and its scoped store when one exists. The harness must resolve that
-profile or its native credentials before opening the transport, keep secrets
+profile or its native credentials before issuing model requests, keep secrets
 scoped to the attempt, and surface actionable authentication failures. Do not
 set this capability on a harness that only sometimes owns authentication.
 
@@ -171,9 +171,10 @@ for compatibility.
 For operator setup, model prefix examples, and Codex-only configs, see
 [Codex Harness](/plugins/codex-harness).
 
-OpenClaw requires Codex app-server `0.142.0` or newer. The Codex plugin checks
-the app-server initialize handshake and blocks older or unversioned servers,
-so OpenClaw only runs against the protocol surface it has tested.
+The Codex plugin enforces the minimum app-server version documented in
+[Codex Harness](/plugins/codex-harness). It checks the initialize handshake and
+blocks older or unversioned servers, so OpenClaw only runs against the protocol
+surface it has tested.
 
 ### Tool-result middleware
 

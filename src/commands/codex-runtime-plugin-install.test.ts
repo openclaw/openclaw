@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -97,7 +98,7 @@ describe("Codex runtime plugin install repair", () => {
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
       codex: { source: "npm", installPath: process.cwd() },
     });
-    const cfg = {
+    const cfg: OpenClawConfig = {
       plugins: {
         allow: ["codex"],
         entries: { codex: { enabled: false } },
@@ -118,6 +119,45 @@ describe("Codex runtime plugin install repair", () => {
       installed: true,
       status: "installed",
       cfg: { plugins: { entries: { codex: { enabled: true } } } },
+    });
+  });
+
+  it("sees an agent-scoped Codex runtime pin behind a custom OpenAI route", async () => {
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      codex: { source: "npm", installPath: process.cwd() },
+    });
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "ops",
+            default: true,
+            model: { primary: "openai/gpt-5.5" },
+            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          openai: { baseUrl: "https://proxy.example.test/v1", models: [] },
+        },
+      },
+    };
+    const { ensureCodexRuntimePluginForModelSelection } =
+      await import("./codex-runtime-plugin-install.js");
+
+    const result = await ensureCodexRuntimePluginForModelSelection({
+      cfg,
+      model: "openai/gpt-5.5",
+      agentId: "ops",
+      prompter: {} as never,
+      runtime: {} as never,
+    });
+
+    expect(result).toMatchObject({
+      required: true,
+      installed: true,
+      status: "installed",
     });
   });
 });
