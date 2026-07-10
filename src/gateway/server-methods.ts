@@ -649,7 +649,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadNodeHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["node.pending.drain", "node.pending.enqueue"],
+    methods: ["node.pending.drain", "node.pending.work.ack", "node.pending.enqueue"],
     loadHandlers: loadNodePendingHandlers,
   }),
   ...createLazyCoreHandlers({

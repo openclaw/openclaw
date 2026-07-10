@@ -498,8 +498,8 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `node.invoke` forwards a command to a connected node.
     - `node.invoke.result` returns the result for an invoke request.
     - `node.event` carries node-originated events back into the gateway.
-    - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
-    - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
+    - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs for pending command actions.
+    - `node.pending.enqueue`, `node.pending.drain`, and `node.pending.work.ack` manage durable pending work for offline/disconnected nodes. Drain is a non-destructive read; nodes must acknowledge returned work ids with `node.pending.work.ack` (separate from action ack).
 
   </Accordion>
 

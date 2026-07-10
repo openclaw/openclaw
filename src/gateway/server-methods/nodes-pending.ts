@@ -3,10 +3,12 @@
 import {
   ErrorCodes,
   errorShape,
+  validateNodePendingAckParams,
   validateNodePendingDrainParams,
   validateNodePendingEnqueueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  ackNodePendingWork,
   drainNodePendingWork,
   enqueueNodePendingWork,
   type NodePendingWorkPriority,
@@ -54,11 +56,47 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params as { maxItems?: number };
+    // Non-destructive read: items remain until node.pending.work.ack.
     const drained = drainNodePendingWork(nodeId, {
       maxItems: p.maxItems,
       includeDefaultStatus: true,
     });
     respond(true, { nodeId, ...drained }, undefined);
+  },
+  "node.pending.work.ack": async ({ params, respond, client }) => {
+    if (!validateNodePendingAckParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.pending.work.ack",
+        validator: validateNodePendingAckParams,
+      });
+      return;
+    }
+    const nodeId = resolveClientNodeId(client);
+    if (!nodeId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node.pending.work.ack requires a connected device identity",
+        ),
+      );
+      return;
+    }
+    const p = params as { ids: string[] };
+    // Work-queue ack only — not the separate node.pending.ack action queue.
+    const acked = ackNodePendingWork(nodeId, p.ids);
+    respond(
+      true,
+      {
+        nodeId,
+        revision: acked.revision,
+        ackedIds: acked.ackedIds,
+        remainingCount: acked.remainingCount,
+      },
+      undefined,
+    );
   },
   "node.pending.enqueue": async ({ params, respond, context }) => {
     if (!validateNodePendingEnqueueParams(params)) {

@@ -210,6 +210,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.describe", scope: "operator.read" },
   { name: "node.pluginSurface.refresh", scope: "node" },
   { name: "node.pending.drain", scope: "node" },
+  { name: "node.pending.work.ack", scope: "node" },
   { name: "node.pending.enqueue", scope: "operator.write" },
   { name: "node.invoke", scope: "operator.write" },
   { name: "node.pending.pull", scope: "node" },

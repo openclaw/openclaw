@@ -101,6 +101,7 @@ describe("method scope resolution", () => {
 
   it("leaves node-only pending drain outside operator scopes", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toStrictEqual([]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.work.ack")).toStrictEqual([]);
   });
 
   it("classifies plugin session actions with a CLI-safe default operator scope", () => {
@@ -555,6 +556,7 @@ describe("plugin approval method registration", () => {
 describe("core gateway method classification", () => {
   it("treats node-role methods as classified even without operator scopes", () => {
     expect(isGatewayMethodClassified("node.pending.drain")).toBe(true);
+    expect(isGatewayMethodClassified("node.pending.work.ack")).toBe(true);
     expect(isGatewayMethodClassified("node.pending.pull")).toBe(true);
     expect(isGatewayMethodClassified("node.pluginSurface.refresh")).toBe(true);
   });

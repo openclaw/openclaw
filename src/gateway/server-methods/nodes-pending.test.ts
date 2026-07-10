@@ -6,6 +6,7 @@ import { nodePendingHandlers } from "./nodes-pending.js";
 
 const mocks = vi.hoisted(() => ({
   drainNodePendingWork: vi.fn(),
+  ackNodePendingWork: vi.fn(),
   enqueueNodePendingWork: vi.fn(),
   maybeWakeNodeWithApns: vi.fn(),
   maybeSendNodeWakeNudge: vi.fn(),
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../node-pending-work.js", () => ({
   drainNodePendingWork: mocks.drainNodePendingWork,
+  ackNodePendingWork: mocks.ackNodePendingWork,
   enqueueNodePendingWork: mocks.enqueueNodePendingWork,
 }));
 
@@ -56,6 +58,7 @@ function respondCall(respond: ReturnType<typeof vi.fn>): RespondCall | undefined
 describe("node.pending handlers", () => {
   beforeEach(() => {
     mocks.drainNodePendingWork.mockReset();
+    mocks.ackNodePendingWork.mockReset();
     mocks.enqueueNodePendingWork.mockReset();
     mocks.maybeWakeNodeWithApns.mockReset();
     mocks.maybeSendNodeWakeNudge.mockReset();
@@ -104,6 +107,57 @@ describe("node.pending handlers", () => {
       client: null,
       context: makeContext() as never,
       req: { type: "req", id: "req-node-pending-drain-missing", method: "node.pending.drain" },
+      isWebchatConnect: () => false,
+    });
+
+    const call = respondCall(respond);
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]?.message).toContain("connected device identity");
+  });
+
+  it("acks pending work for the connected node identity", async () => {
+    mocks.ackNodePendingWork.mockReturnValue({
+      revision: 5,
+      ackedIds: ["work-1"],
+      remainingCount: 0,
+    });
+    const respond = vi.fn();
+
+    await nodePendingHandlers["node.pending.work.ack"]({
+      params: { ids: ["work-1"] },
+      respond: respond as never,
+      client: { connect: { device: { id: "ios-node-1" } } } as never,
+      context: makeContext() as never,
+      req: { type: "req", id: "req-node-pending-work-ack", method: "node.pending.work.ack" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.ackNodePendingWork).toHaveBeenCalledWith("ios-node-1", ["work-1"]);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        nodeId: "ios-node-1",
+        revision: 5,
+        ackedIds: ["work-1"],
+        remainingCount: 0,
+      },
+      undefined,
+    );
+  });
+
+  it("rejects node.pending.work.ack without a connected device identity", async () => {
+    const respond = vi.fn();
+
+    await nodePendingHandlers["node.pending.work.ack"]({
+      params: { ids: ["work-1"] },
+      respond: respond as never,
+      client: null,
+      context: makeContext() as never,
+      req: {
+        type: "req",
+        id: "req-node-pending-work-ack-missing",
+        method: "node.pending.work.ack",
+      },
       isWebchatConnect: () => false,
     });
 

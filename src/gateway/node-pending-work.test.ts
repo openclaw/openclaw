@@ -3,6 +3,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ackNodePendingWork,
   drainNodePendingWork,
   enqueueNodePendingWork,
   getNodePendingWorkStateCountForTests,
@@ -25,7 +26,7 @@ describe("node pending work", () => {
     expect(drained.hasMore).toBe(false);
   });
 
-  it("dedupes explicit work by type until the node drains it", () => {
+  it("dedupes explicit work by type until the node acks it", () => {
     const first = enqueueNodePendingWork({ nodeId: "node-2", type: "location.request" });
     const second = enqueueNodePendingWork({ nodeId: "node-2", type: "location.request" });
 
@@ -35,11 +36,40 @@ describe("node pending work", () => {
 
     const drained = drainNodePendingWork("node-2");
     expect(drained.items.map((item) => item.type)).toEqual(["location.request", "status.request"]);
-    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+    // Drain is non-destructive: work stays queued until ack (or expiry).
+    expect(getNodePendingWorkStateCountForTests()).toBe(1);
 
     const afterDrain = enqueueNodePendingWork({ nodeId: "node-2", type: "location.request" });
-    expect(afterDrain.deduped).toBe(false);
-    expect(afterDrain.item.id).not.toBe(first.item.id);
+    expect(afterDrain.deduped).toBe(true);
+    expect(afterDrain.item.id).toBe(first.item.id);
+
+    const acked = ackNodePendingWork("node-2", [first.item.id]);
+    expect(acked.ackedIds).toEqual([first.item.id]);
+    expect(acked.remainingCount).toBe(0);
+    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+
+    const afterAck = enqueueNodePendingWork({ nodeId: "node-2", type: "location.request" });
+    expect(afterAck.deduped).toBe(false);
+    expect(afterAck.item.id).not.toBe(first.item.id);
+  });
+
+  it("redelivers explicit work when a drain response is discarded", () => {
+    const { item } = enqueueNodePendingWork({ nodeId: "node-lost", type: "location.request" });
+
+    const firstDrain = drainNodePendingWork("node-lost");
+    expect(firstDrain.items.map((entry) => entry.id)).toContain(item.id);
+    // Simulate lost res frame: discard payload, do not ack.
+    void firstDrain;
+
+    const secondDrain = drainNodePendingWork("node-lost");
+    expect(secondDrain.items.map((entry) => entry.id)).toContain(item.id);
+    expect(secondDrain.items.find((entry) => entry.id === item.id)?.type).toBe("location.request");
+    expect(getNodePendingWorkStateCountForTests()).toBe(1);
+
+    ackNodePendingWork("node-lost", [item.id]);
+    const afterAck = drainNodePendingWork("node-lost");
+    expect(afterAck.items.map((entry) => entry.id)).toEqual(["baseline-status"]);
+    expect(getNodePendingWorkStateCountForTests()).toBe(0);
   });
 
   it("keeps hasMore true when the baseline status item is deferred by maxItems", () => {
@@ -49,14 +79,26 @@ describe("node pending work", () => {
 
     expect(drained.items.map((item) => item.type)).toEqual(["location.request"]);
     expect(drained.hasMore).toBe(true);
-    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+    // Unacked work remains; baseline is still deferred until the explicit item is acked.
+    expect(getNodePendingWorkStateCountForTests()).toBe(1);
 
     const next = drainNodePendingWork("node-3", { maxItems: 1 });
-    expect(next.items.map((item) => item.id)).toEqual(["baseline-status"]);
-    expect(next.hasMore).toBe(false);
+    expect(next.items.map((item) => item.type)).toEqual(["location.request"]);
+    expect(next.hasMore).toBe(true);
+
+    const locationId = next.items[0]?.id;
+    expect(locationId).toBeTruthy();
+    if (!locationId) {
+      throw new Error("expected location work id");
+    }
+    ackNodePendingWork("node-3", [locationId]);
+
+    const afterAck = drainNodePendingWork("node-3", { maxItems: 1 });
+    expect(afterAck.items.map((item) => item.id)).toEqual(["baseline-status"]);
+    expect(afterAck.hasMore).toBe(false);
   });
 
-  it("keeps explicit work queued when maxItems defers it", () => {
+  it("keeps explicit work queued when maxItems defers it until ack", () => {
     enqueueNodePendingWork({ nodeId: "node-4", type: "status.request", priority: "normal" });
     enqueueNodePendingWork({ nodeId: "node-4", type: "location.request", priority: "high" });
 
@@ -65,10 +107,30 @@ describe("node pending work", () => {
     expect(firstDrain.hasMore).toBe(true);
     expect(getNodePendingWorkStateCountForTests()).toBe(1);
 
+    // Without ack, paging re-returns the highest-priority unacked item.
     const secondDrain = drainNodePendingWork("node-4", { maxItems: 1 });
-    expect(secondDrain.items.map((item) => item.type)).toEqual(["status.request"]);
-    expect(secondDrain.items.map((item) => item.id)).not.toEqual(["baseline-status"]);
-    expect(secondDrain.hasMore).toBe(false);
+    expect(secondDrain.items.map((item) => item.type)).toEqual(["location.request"]);
+    expect(secondDrain.hasMore).toBe(true);
+
+    const locationId = secondDrain.items[0]?.id;
+    expect(locationId).toBeTruthy();
+    if (!locationId) {
+      throw new Error("expected location work id");
+    }
+    ackNodePendingWork("node-4", [locationId]);
+
+    const afterLocationAck = drainNodePendingWork("node-4", { maxItems: 1 });
+    expect(afterLocationAck.items.map((item) => item.type)).toEqual(["status.request"]);
+    expect(afterLocationAck.items.map((item) => item.id)).not.toEqual(["baseline-status"]);
+    expect(afterLocationAck.hasMore).toBe(false);
+    expect(getNodePendingWorkStateCountForTests()).toBe(1);
+
+    const statusId = afterLocationAck.items[0]?.id;
+    expect(statusId).toBeTruthy();
+    if (!statusId) {
+      throw new Error("expected status work id");
+    }
+    ackNodePendingWork("node-4", [statusId]);
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
   });
 
@@ -79,6 +141,16 @@ describe("node pending work", () => {
 
     expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
+  });
+
+  it("ignores baseline status ids on ack", () => {
+    const { item } = enqueueNodePendingWork({
+      nodeId: "node-baseline-ack",
+      type: "location.request",
+    });
+    const acked = ackNodePendingWork("node-baseline-ack", ["baseline-status", item.id, "missing"]);
+    expect(acked.ackedIds).toEqual([item.id]);
+    expect(acked.remainingCount).toBe(0);
   });
 
   it("assigns default expiry to queued work without explicit ttl", () => {

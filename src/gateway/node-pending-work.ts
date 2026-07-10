@@ -164,7 +164,13 @@ export function enqueueNodePendingWork(params: {
   return { revision: state.revision, item, deduped: false };
 }
 
-/** Drains pending work for a node, including a baseline status request unless disabled. */
+/**
+ * Reads pending work for a node without deleting it.
+ *
+ * Explicit items stay queued until `ackNodePendingWork` removes them (or they
+ * expire). Deleting on drain used to drop work whenever the drain response
+ * frame was lost after reconnect.
+ */
 export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): DrainResult {
   const normalizedNodeId = nodeId.trim();
   if (!normalizedNodeId) {
@@ -178,7 +184,9 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   }
   const revision = state?.revision ?? 0;
   const maxItems = Math.min(MAX_ITEMS, Math.max(1, Math.trunc(opts.maxItems ?? DEFAULT_MAX_ITEMS)));
-  const explicitItems = state ? sortedItems(state) : [];
+  // Live state may have been pruned empty above; re-read after prune.
+  const liveState = stateByNodeId.get(normalizedNodeId);
+  const explicitItems = liveState ? sortedItems(liveState) : [];
   const items = explicitItems.slice(0, maxItems);
   const hasExplicitStatus = explicitItems.some((item) => item.type === "status.request");
   const includeBaseline = opts.includeDefaultStatus !== false && !hasExplicitStatus;
@@ -187,19 +195,61 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   }
   const explicitReturnedCount = items.filter((item) => item.id !== DEFAULT_STATUS_ITEM_ID).length;
   const baselineIncluded = items.some((item) => item.id === DEFAULT_STATUS_ITEM_ID);
-  if (state && explicitReturnedCount > 0) {
-    for (const item of items) {
-      if (item.id !== DEFAULT_STATUS_ITEM_ID) {
-        state.itemsById.delete(item.id);
-      }
-    }
-    state.revision += 1;
-    pruneStateIfEmpty(normalizedNodeId, state);
-  }
   return {
-    revision: state?.revision ?? revision,
+    revision: liveState?.revision ?? revision,
     items,
     hasMore: explicitItems.length > explicitReturnedCount || (includeBaseline && !baselineIncluded),
+  };
+}
+
+type AckResult = {
+  revision: number;
+  ackedIds: string[];
+  remainingCount: number;
+};
+
+/**
+ * Removes previously drained explicit pending-work items by id.
+ *
+ * Distinct from `node.pending.ack` (pending command actions). Baseline status
+ * ids are ignored so synthetic drain-only items cannot poison the queue.
+ */
+export function ackNodePendingWork(
+  nodeId: string,
+  ids: readonly string[],
+  opts: { nowMs?: number } = {},
+): AckResult {
+  const normalizedNodeId = nodeId.trim();
+  if (!normalizedNodeId) {
+    return { revision: 0, ackedIds: [], remainingCount: 0 };
+  }
+  const nowMs = resolveDateTimestampMs(opts.nowMs ?? Date.now());
+  const state = stateByNodeId.get(normalizedNodeId);
+  if (!state) {
+    return { revision: 0, ackedIds: [], remainingCount: 0 };
+  }
+  pruneExpired(state, nowMs);
+  const ackedIds: string[] = [];
+  let changed = false;
+  for (const rawId of ids) {
+    const id = rawId.trim();
+    if (!id || id === DEFAULT_STATUS_ITEM_ID) {
+      continue;
+    }
+    if (state.itemsById.delete(id)) {
+      ackedIds.push(id);
+      changed = true;
+    }
+  }
+  if (changed) {
+    state.revision += 1;
+  }
+  pruneStateIfEmpty(normalizedNodeId, state);
+  const liveState = stateByNodeId.get(normalizedNodeId);
+  return {
+    revision: liveState?.revision ?? (changed ? state.revision : 0),
+    ackedIds,
+    remainingCount: liveState?.itemsById.size ?? 0,
   };
 }
 

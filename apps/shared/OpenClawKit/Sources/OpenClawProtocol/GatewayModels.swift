@@ -1639,6 +1639,34 @@ public struct NodePendingDrainResult: Codable, Sendable {
     }
 }
 
+/// Result of `node.pending.work.ack` for the durable pending-work queue
+/// (distinct from `node.pending.ack` for pending command actions).
+public struct NodePendingWorkAckResult: Codable, Sendable {
+    public let nodeid: String
+    public let revision: Int
+    public let ackedids: [String]
+    public let remainingcount: Int
+
+    public init(
+        nodeid: String,
+        revision: Int,
+        ackedids: [String],
+        remainingcount: Int)
+    {
+        self.nodeid = nodeid
+        self.revision = revision
+        self.ackedids = ackedids
+        self.remainingcount = remainingcount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case revision
+        case ackedids = "ackedIds"
+        case remainingcount = "remainingCount"
+    }
+}
+
 public struct NodePendingEnqueueParams: Codable, Sendable {
     public let nodeid: String
     public let type: String
