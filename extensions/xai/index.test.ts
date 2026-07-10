@@ -503,6 +503,12 @@ describe("xai provider plugin", () => {
         expected: true,
       },
       {
+        label: "exposes by default for the shipped xAI provider alias with auth",
+        provider: "x-ai",
+        hasAuth: true,
+        expected: true,
+      },
+      {
         label: "exposes when explicitly enabled for an xAI model with auth",
         provider: "xai",
         enabled: true,
