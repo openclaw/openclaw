@@ -2278,6 +2278,24 @@ describe("runCli exit behavior", () => {
     expect(commanderParseAsyncMock).toHaveBeenCalledWith(["node", "openclaw", "gateway", "run"]);
   });
 
+  it("does not start gateway when deferred activation rejects", async () => {
+    waitForDeferredGatewayActivationMock.mockRejectedValueOnce(
+      new Error("deferred activation interrupted by SIGTERM"),
+    );
+    await expect(runCli(["node", "openclaw", "gateway", "run"])).rejects.toThrow(
+      "deferred activation interrupted by SIGTERM",
+    );
+    expect(loadDotEnvMock).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(pinRuntimePathsMock).not.toHaveBeenCalled();
+    expect(pinConfigDirMock).not.toHaveBeenCalled();
+    expect(normalizeEnvMock).not.toHaveBeenCalled();
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(addGatewayRunCommandMock).not.toHaveBeenCalled();
+    expect(commanderParseAsyncMock).not.toHaveBeenCalled();
+    expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["root help", ["node", "openclaw", "--help"]],
     ["version", ["node", "openclaw", "--version"]],
