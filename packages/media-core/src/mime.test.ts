@@ -6,6 +6,7 @@ import {
   detectMime,
   extensionForMime,
   FILE_TYPE_SNIFF_MAX_BYTES,
+  getFileExtension,
   imageMimeFromFormat,
   isAudioFileName,
   isGifMedia,
@@ -190,6 +191,23 @@ describe("mime detection", () => {
 
     expect(sliceMimeSniffBuffer(small)).toBe(small);
     expect(sliceMimeSniffBuffer(large)).toHaveLength(FILE_TYPE_SNIFF_MAX_BYTES);
+  });
+});
+
+describe("getFileExtension", () => {
+  it.each([
+    {
+      filePath: "https://cdn.example.com/render.mp4%2Fpreview",
+      expected: ".mp4%2fpreview",
+    },
+    {
+      filePath: "https://cdn.example.com/render.mp4%5Cpreview",
+      expected: ".mp4%5cpreview",
+    },
+    { filePath: "https://cdn.example.com/bad%ZZ%2Emp4", expected: undefined },
+    { filePath: "https://cdn.example.com/render%2Emp4/", expected: undefined },
+  ] as const)("extracts $expected from $filePath", ({ filePath, expected }) => {
+    expect(getFileExtension(filePath)).toBe(expected);
   });
 });
 

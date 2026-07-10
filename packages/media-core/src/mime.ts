@@ -144,13 +144,13 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   try {
     if (/^https?:\/\//i.test(filePath)) {
       const url = new URL(filePath);
-      const pathname = url.pathname;
-      let filename = pathname.split("/").pop() ?? pathname;
+      let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
       try {
-        // Keep encoded separators literal so URL object keys do not become path boundaries.
-        filename = decodeURIComponent(filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C"));
+        // Decode only the URL filename while keeping encoded separators literal.
+        const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
+        filename = decodeURIComponent(decodable);
       } catch {
-        // fall back to the raw URL filename when percent encoding is malformed
+        // Preserve the raw filename when its own percent encoding is malformed.
       }
       return path.posix.extname(filename).toLowerCase() || undefined;
     }
