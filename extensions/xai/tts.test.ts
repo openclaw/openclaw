@@ -24,13 +24,15 @@ const { FakeWebSocket } = vi.hoisted(() => {
 
     readonly listeners = new Map<string, Listener[]>();
     readonly headers?: Record<string, string>;
+    readonly maxPayload?: number;
     readonly url?: string;
     readyState = MockWebSocket.CONNECTING;
     sent: string[] = [];
 
-    constructor(url?: string, options?: { headers?: Record<string, string> }) {
+    constructor(url?: string, options?: { headers?: Record<string, string>; maxPayload?: number }) {
       this.url = url;
       this.headers = options?.headers;
+      this.maxPayload = options?.maxPayload;
       MockWebSocket.instances.push(this);
     }
 
@@ -302,10 +304,12 @@ describe("xai tts", () => {
         language: "en",
         responseFormat: "mp3",
         timeoutMs: 5_000,
+        maxBytes: 3_000,
       });
       const ws = FakeWebSocket.instances.at(0);
       expect(ws?.url).toContain("wss://api.x.ai/v1/tts");
       expect(ws?.headers?.Authorization).toBe("Bearer ok-key");
+      expect(ws?.maxPayload).toBe(5_024);
       ws?.emit("open");
       expect(ws?.sent).toEqual([
         JSON.stringify({ type: "text.delta", delta: "hello" }),

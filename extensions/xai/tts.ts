@@ -211,6 +211,9 @@ export async function xaiTTSStream(params: {
     responseFormat,
     speed,
   });
+  // Bound the encoded JSON frame before ws buffers it. Base64 expands audio by
+  // roughly 4/3; the fixed allowance covers the event envelope and metadata.
+  const maxPayload = Math.ceil(maxBytes / 3) * 4 + 1024;
 
   return await new Promise((resolve, reject) => {
     let connectSettled = false;
@@ -283,6 +286,7 @@ export async function xaiTTSStream(params: {
 
     try {
       ws = new WebSocket(wsUrl, {
+        maxPayload,
         headers: {
           Authorization: `Bearer ${apiKey}`,
           ...xaiUserAgentHeaderFor(baseUrl),
