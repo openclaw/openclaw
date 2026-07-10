@@ -12879,7 +12879,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Home Network",
       "surface": "apple",
-      "id": "native.apple.e9933183d4c61d75"
+      "id": "native.apple.95e2c98254da2aba"
     },
     {
       "kind": "ui-named-argument",
@@ -12887,7 +12887,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "LAN or Tailscale host",
       "surface": "apple",
-      "id": "native.apple.3b04240d73093b7d"
+      "id": "native.apple.d9a6d673aa6693ee"
     },
     {
       "kind": "ui-named-argument",
@@ -12895,7 +12895,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Remote Domain",
       "surface": "apple",
-      "id": "native.apple.3dab2fb7dcdb2eec"
+      "id": "native.apple.431d02f8b68a96cf"
     },
     {
       "kind": "ui-named-argument",
@@ -12903,7 +12903,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "VPS with domain",
       "surface": "apple",
-      "id": "native.apple.916202fd5dddac9a"
+      "id": "native.apple.7021301971f631bf"
     },
     {
       "kind": "ui-named-argument",
@@ -12911,7 +12911,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Same Machine (Dev)",
       "surface": "apple",
-      "id": "native.apple.1c67c6b6932e10d5"
+      "id": "native.apple.7451f8d052016642"
     },
     {
       "kind": "ui-named-argument",
@@ -12919,7 +12919,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "For local iOS app development",
       "surface": "apple",
-      "id": "native.apple.d857cff4bf15dddf"
+      "id": "native.apple.22e740296a762256"
     },
     {
       "kind": "ui-call",
@@ -12927,7 +12927,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Manual Connection",
       "surface": "apple",
-      "id": "native.apple.7e7dea40bc285144"
+      "id": "native.apple.e1b1ccbfc9e73df8"
     },
     {
       "kind": "ui-call",
@@ -12935,7 +12935,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Continue",
       "surface": "apple",
-      "id": "native.apple.0f75d1601eda9988"
+      "id": "native.apple.b7dc527c2a7e95cb"
     },
     {
       "kind": "ui-call",
@@ -12943,7 +12943,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Developer mode",
       "surface": "apple",
-      "id": "native.apple.f75dcf899060428f"
+      "id": "native.apple.93d3e17fabd5e082"
     },
     {
       "kind": "ui-named-argument",
@@ -12951,7 +12951,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Connection Failed",
       "surface": "apple",
-      "id": "native.apple.dea6c78b042767d1"
+      "id": "native.apple.e8b90e582100294d"
     },
     {
       "kind": "ui-named-argument",
@@ -12959,7 +12959,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Needs attention",
       "surface": "apple",
-      "id": "native.apple.c6effee0e4e35909"
+      "id": "native.apple.9e208d090ce2e84f"
     },
     {
       "kind": "ui-named-argument",
@@ -12967,7 +12967,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Ready to Connect",
       "surface": "apple",
-      "id": "native.apple.e7dbdca5e9ad9b2e"
+      "id": "native.apple.e71e20089bcc4cfb"
     },
     {
       "kind": "ui-call",
@@ -12991,7 +12991,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Security",
       "surface": "apple",
-      "id": "native.apple.9e80e6f284d7aaa2"
+      "id": "native.apple.cf616b515da5bc19"
     },
     {
       "kind": "conditional-branch",
@@ -12999,7 +12999,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Plaintext (local network)",
       "surface": "apple",
-      "id": "native.apple.83a5d811a9a29a3b"
+      "id": "native.apple.4014217851d06190"
     },
     {
       "kind": "ui-call",
@@ -13023,7 +13023,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Use Manual Setup",
       "surface": "apple",
-      "id": "native.apple.fbf23bbf45941125"
+      "id": "native.apple.db7b52a1bbc6fac5"
     },
     {
       "kind": "ui-call",
@@ -13031,7 +13031,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Setup Link",
       "surface": "apple",
-      "id": "native.apple.d16a7b18bac5f094"
+      "id": "native.apple.7dbdf9a439f64f08"
     },
     {
       "kind": "conditional-branch",
@@ -13039,7 +13039,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
       "surface": "apple",
-      "id": "native.apple.9008693310786ef7"
+      "id": "native.apple.6bfb611862fb1687"
     },
     {
       "kind": "conditional-branch",
@@ -13047,7 +13047,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
       "surface": "apple",
-      "id": "native.apple.72d861b087481c0c"
+      "id": "native.apple.3329c7f367f10c78"
     },
     {
       "kind": "ui-call",
@@ -13055,7 +13055,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "No gateways found yet.",
       "surface": "apple",
-      "id": "native.apple.f690920a428f47ca"
+      "id": "native.apple.2f00ef4bc35ecb8d"
     },
     {
       "kind": "ui-call",
@@ -13063,7 +13063,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Restart Discovery",
       "surface": "apple",
-      "id": "native.apple.5d9b1c19441b7ebf"
+      "id": "native.apple.94c9697fb748d05d"
     },
     {
       "kind": "ui-call",
@@ -13071,7 +13071,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Discovered Gateways",
       "surface": "apple",
-      "id": "native.apple.7baa30b8dcf4b43f"
+      "id": "native.apple.07ebd3b75969629f"
     },
     {
       "kind": "ui-call",
@@ -22935,7 +22935,7 @@
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "delivery unconfirmed",
       "surface": "apple",
-      "id": "native.apple.a4be1b32b0824a2c"
+      "id": "native.apple.2b45abdc56b2caed"
     },
     {
       "kind": "conditional-branch",
@@ -22943,7 +22943,7 @@
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "queued after route change",
       "surface": "apple",
-      "id": "native.apple.dcc7d2bce2a56720"
+      "id": "native.apple.722f1f90b97e8e45"
     },
     {
       "kind": "ui-localized-call",
