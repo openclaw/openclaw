@@ -2432,6 +2432,193 @@ describe("release source inventory", () => {
       expect(assertCompleteReleaseSourceInventory(inventory)).toBe(inventory);
     }));
 
+  it("does not attribute comparison PR member patches already present in common ancestry", () =>
+    withRepository((cwd) => {
+      const rootFiles = {
+        "CHANGELOG.md": "# Changelog\n",
+        "shared.txt": "old\n",
+      };
+      const root = createCommit(cwd, {
+        files: rootFiles,
+        subject: "chore: root",
+        timestamp: 10,
+      });
+      const sharedFiles = {
+        ...rootFiles,
+        "shared.txt": "common\n",
+      };
+      const shared = createCommit(cwd, {
+        files: sharedFiles,
+        parents: [root],
+        subject: "fix: land shared state",
+        timestamp: 20,
+      });
+      const sourceTarget = createCommit(cwd, {
+        files: { ...sharedFiles, "release.txt": "release\n" },
+        parents: [shared],
+        subject: "fix: release work",
+        timestamp: 40,
+      });
+      const pullRequestDuplicate = createCommit(cwd, {
+        files: sharedFiles,
+        parents: [root],
+        subject: "fix: re-author shared state",
+        timestamp: 15,
+      });
+      const pullRequestHead = createCommit(cwd, {
+        files: { ...sharedFiles, "pull-request.txt": "new\n" },
+        parents: [pullRequestDuplicate],
+        subject: "fix: add post-fork work",
+        timestamp: 25,
+      });
+      const mainParent = createCommit(cwd, {
+        files: { ...sharedFiles, "main.txt": "main\n" },
+        parents: [shared],
+        subject: "fix: advance main",
+        timestamp: 30,
+      });
+      const mergeCommit = createCommit(cwd, {
+        files: {
+          ...sharedFiles,
+          "main.txt": "main\n",
+          "pull-request.txt": "new\n",
+        },
+        parents: [mainParent],
+        subject: "fix: merge post-fork work",
+        timestamp: 35,
+      });
+      const records = [
+        {
+          baseBranch: "main",
+          baseCommit: root,
+          headCommit: pullRequestHead,
+          mergeCommit,
+          mergedAt: "1970-01-01T00:00:35.000Z",
+          number: 202,
+        },
+      ];
+      const members = summarizeTeamUniverseMembers([202]);
+      const recordEvidence = summarizeTeamUniverseRecords(records);
+      const query = teamUniverseWindowQuery({
+        base: "main",
+        end: "1970-01-01T00:00:40Z",
+        repository: "openclaw/openclaw",
+        start: "1970-01-01T00:00:10Z",
+      });
+      const comparison = {
+        baseBranch: "main",
+        count: 1,
+        pullRequests: members.members,
+        query,
+        records: recordEvidence.records,
+        recordsSha256: recordEvidence.sha256,
+        repository: "openclaw/openclaw",
+        segments: [
+          {
+            count: 1,
+            pullRequests: members.members,
+            query,
+            recordsSha256: recordEvidence.sha256,
+            sha256: members.sha256,
+            window: { endTimestamp: 40_000, startTimestamp: 10_000 },
+          },
+        ],
+        sha256: members.sha256,
+        window: { endTimestamp: 40_000, startTimestamp: 10_000 },
+      };
+
+      const inventory = buildReleaseSourceInventory(
+        {
+          baseRef: root,
+          comparisonBaseBranch: "main",
+          cwd,
+          sourceTargetRef: sourceTarget,
+        },
+        completeEvidence(new Map(), new Map(), {
+          comparison,
+          pullRequestCommits: new Map([[202, [pullRequestDuplicate, pullRequestHead]]]),
+        }),
+      );
+
+      expect(inventory.comparison).toMatchObject({
+        comparisonOnly: { members: [202] },
+        partitionEvidence: {
+          postFork: {
+            records: [
+              expect.objectContaining({
+                patchEquivalentCommits: [],
+                pullRequest: 202,
+                suppressedCommonAncestryPatchMatches: expect.arrayContaining([
+                  expect.objectContaining({
+                    candidateCommit: pullRequestDuplicate,
+                    commonAncestrySurvivalProof: expect.objectContaining({
+                      sharedAncestryCommit: shared,
+                      sourceTarget,
+                    }),
+                    targetCommit: sourceTarget,
+                  }),
+                ]),
+              }),
+            ],
+          },
+        },
+        partitions: {
+          postForkNotBackported: { members: [202] },
+        },
+        unclassified: { count: 0 },
+      });
+      expect(assertCompleteReleaseSourceInventory(inventory)).toBe(inventory);
+
+      const removed = createCommit(cwd, {
+        files: {
+          ...rootFiles,
+          "release.txt": "release\n",
+        },
+        parents: [sourceTarget],
+        subject: "revert: remove shared state",
+        timestamp: 41,
+      });
+      const reapplied = createCommit(cwd, {
+        files: {
+          ...sharedFiles,
+          "release.txt": "release\n",
+        },
+        parents: [removed],
+        subject: "fix: reapply shared state",
+        timestamp: 42,
+      });
+      const reappliedQuery = teamUniverseWindowQuery({
+        base: "main",
+        end: "1970-01-01T00:00:42Z",
+        repository: "openclaw/openclaw",
+        start: "1970-01-01T00:00:10Z",
+      });
+      const reappliedComparison = {
+        ...comparison,
+        query: reappliedQuery,
+        segments: comparison.segments.map((segment) => ({
+          ...segment,
+          query: reappliedQuery,
+          window: { ...segment.window, endTimestamp: 42_000 },
+        })),
+        window: { ...comparison.window, endTimestamp: 42_000 },
+      };
+      expect(() =>
+        buildReleaseSourceInventory(
+          {
+            baseRef: root,
+            comparisonBaseBranch: "main",
+            cwd,
+            sourceTargetRef: reapplied,
+          },
+          completeEvidence(new Map(), new Map(), {
+            comparison: reappliedComparison,
+            pullRequestCommits: new Map([[202, [pullRequestDuplicate, pullRequestHead]]]),
+          }),
+        ),
+      ).toThrow("comparison-only pull request #202 has target provenance");
+    }));
+
   it("owns an exact source merge commit from immutable comparison metadata", () =>
     withRepository((cwd) => {
       const rootFiles = {
@@ -2495,7 +2682,7 @@ describe("release source inventory", () => {
         const recordEvidence = summarizeTeamUniverseRecords(comparisonRecords);
         const query = teamUniverseWindowQuery({
           base: "main",
-          end: "1970-01-01T00:00:30Z",
+          end: "1970-01-01T00:00:20Z",
           repository: "openclaw/openclaw",
           start: "1970-01-01T00:00:10Z",
         });
@@ -2514,11 +2701,11 @@ describe("release source inventory", () => {
               query,
               recordsSha256: recordEvidence.sha256,
               sha256: members.sha256,
-              window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+              window: { endTimestamp: 20_000, startTimestamp: 10_000 },
             },
           ],
           sha256: members.sha256,
-          window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+          window: { endTimestamp: 20_000, startTimestamp: 10_000 },
         };
       };
       const comparison = comparisonFor(records);
@@ -2597,7 +2784,7 @@ describe("release source inventory", () => {
           },
           completeEvidence(new Map(), new Map(), { comparison: lateComparison }),
         ),
-      ).toThrow("merged after the source target cutoff");
+      ).toThrow("merged pull request comparison resolver returned invalid PR metadata");
 
       const duplicateOwnerComparison = comparisonFor([
         ...records,
@@ -2728,7 +2915,7 @@ describe("release source inventory", () => {
           baseCommit: root,
           headCommit: postForkHead,
           mergeCommit: postForkMerge,
-          mergedAt: "1970-01-01T00:00:26.000Z",
+          mergedAt: "1970-01-01T00:00:19.000Z",
           number: 202,
         },
         {
@@ -2736,7 +2923,7 @@ describe("release source inventory", () => {
           baseCommit: root,
           headCommit: pathspecHead,
           mergeCommit: pathspecMerge,
-          mergedAt: "1970-01-01T00:00:27.000Z",
+          mergedAt: "1970-01-01T00:00:19.000Z",
           number: 203,
         },
       ];
@@ -2744,7 +2931,7 @@ describe("release source inventory", () => {
       const recordEvidence = summarizeTeamUniverseRecords(records);
       const query = teamUniverseWindowQuery({
         base: "main",
-        end: "1970-01-01T00:00:30Z",
+        end: "1970-01-01T00:00:20Z",
         repository: "openclaw/openclaw",
         start: "1970-01-01T00:00:10Z",
       });
@@ -2763,11 +2950,11 @@ describe("release source inventory", () => {
             query,
             recordsSha256: recordEvidence.sha256,
             sha256: members.sha256,
-            window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+            window: { endTimestamp: 20_000, startTimestamp: 10_000 },
           },
         ],
         sha256: members.sha256,
-        window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+        window: { endTimestamp: 20_000, startTimestamp: 10_000 },
       };
       const evidence = completeEvidence(
         new Map([
@@ -3130,12 +3317,12 @@ describe("release source inventory", () => {
         mergedAt: "1970-01-01T00:00:40.000Z",
         number: 202,
       };
-      const comparisonFor = (nextRecord = record) => {
+      const comparisonFor = (nextRecord = record, endTimestamp = 50) => {
         const members = summarizeTeamUniverseMembers([nextRecord.number]);
         const recordEvidence = summarizeTeamUniverseRecords([nextRecord]);
         const query = teamUniverseWindowQuery({
           base: "main",
-          end: "1970-01-01T00:00:50Z",
+          end: new Date(endTimestamp * 1000).toISOString().replace(".000Z", "Z"),
           repository: "openclaw/openclaw",
           start: "1970-01-01T00:00:10Z",
         });
@@ -3154,11 +3341,11 @@ describe("release source inventory", () => {
               query,
               recordsSha256: recordEvidence.sha256,
               sha256: members.sha256,
-              window: { endTimestamp: 50_000, startTimestamp: 10_000 },
+              window: { endTimestamp: endTimestamp * 1000, startTimestamp: 10_000 },
             },
           ],
           sha256: members.sha256,
-          window: { endTimestamp: 50_000, startTimestamp: 10_000 },
+          window: { endTimestamp: endTimestamp * 1000, startTimestamp: 10_000 },
         };
       };
       const defaultPullRequestCommits = [branchSetup, member, temporary, cleanup, head];
@@ -3734,10 +3921,17 @@ describe("release source inventory", () => {
       });
       expect(() =>
         build({
+          comparison: comparisonFor(
+            {
+              ...record,
+              mergedAt: "1970-01-01T00:00:35.000Z",
+            },
+            35,
+          ),
           finalTargetRef: postMergeChangelogTail,
           targetRef: preMergeSourceTarget,
         }),
-      ).toThrow("is not an isolated direct exact-member overlap");
+      ).not.toThrow();
     }));
 
   it("rejects a shifted duplicate member hidden behind an ancestral PR base", () =>
@@ -4267,7 +4461,7 @@ describe("release source inventory", () => {
           baseCommit: root,
           headCommit: renamed,
           mergeCommit: renamed,
-          mergedAt: "1970-01-01T00:00:25.000Z",
+          mergedAt: "1970-01-01T00:00:21.000Z",
           number: 202,
         },
       ];
@@ -4275,7 +4469,7 @@ describe("release source inventory", () => {
       const recordEvidence = summarizeTeamUniverseRecords(records);
       const query = teamUniverseWindowQuery({
         base: "main",
-        end: "1970-01-01T00:00:30Z",
+        end: "1970-01-01T00:00:22Z",
         repository: "openclaw/openclaw",
         start: "1970-01-01T00:00:10Z",
       });
@@ -4294,11 +4488,11 @@ describe("release source inventory", () => {
             query,
             recordsSha256: recordEvidence.sha256,
             sha256: members.sha256,
-            window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+            window: { endTimestamp: 22_000, startTimestamp: 10_000 },
           },
         ],
         sha256: members.sha256,
-        window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+        window: { endTimestamp: 22_000, startTimestamp: 10_000 },
       };
 
       expect(() =>
@@ -4388,7 +4582,7 @@ describe("release source inventory", () => {
           baseCommit: root,
           headCommit: head,
           mergeCommit: head,
-          mergedAt: "1970-01-01T00:00:25.000Z",
+          mergedAt: "1970-01-01T00:00:22.000Z",
           number: 202,
         },
       ];
@@ -4396,7 +4590,7 @@ describe("release source inventory", () => {
       const recordEvidence = summarizeTeamUniverseRecords(records);
       const query = teamUniverseWindowQuery({
         base: "main",
-        end: "1970-01-01T00:00:30Z",
+        end: "1970-01-01T00:00:23Z",
         repository: "openclaw/openclaw",
         start: "1970-01-01T00:00:10Z",
       });
@@ -4415,11 +4609,11 @@ describe("release source inventory", () => {
             query,
             recordsSha256: recordEvidence.sha256,
             sha256: members.sha256,
-            window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+            window: { endTimestamp: 23_000, startTimestamp: 10_000 },
           },
         ],
         sha256: members.sha256,
-        window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+        window: { endTimestamp: 23_000, startTimestamp: 10_000 },
       };
 
       expect(() =>
@@ -4486,7 +4680,7 @@ describe("release source inventory", () => {
           baseCommit: root,
           headCommit: head,
           mergeCommit: head,
-          mergedAt: "1970-01-01T00:00:25.000Z",
+          mergedAt: "1970-01-01T00:00:21.000Z",
           number: 202,
         },
       ];
@@ -4494,7 +4688,7 @@ describe("release source inventory", () => {
       const recordEvidence = summarizeTeamUniverseRecords(records);
       const query = teamUniverseWindowQuery({
         base: "main",
-        end: "1970-01-01T00:00:30Z",
+        end: "1970-01-01T00:00:22Z",
         repository: "openclaw/openclaw",
         start: "1970-01-01T00:00:10Z",
       });
@@ -4513,11 +4707,11 @@ describe("release source inventory", () => {
             query,
             recordsSha256: recordEvidence.sha256,
             sha256: members.sha256,
-            window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+            window: { endTimestamp: 22_000, startTimestamp: 10_000 },
           },
         ],
         sha256: members.sha256,
-        window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+        window: { endTimestamp: 22_000, startTimestamp: 10_000 },
       };
 
       expect(() =>
@@ -4600,7 +4794,7 @@ describe("release source inventory", () => {
           baseCommit: root,
           headCommit: pullRequestHead,
           mergeCommit: pullRequestHead,
-          mergedAt: "1970-01-01T00:00:25.000Z",
+          mergedAt: "1970-01-01T00:00:22.000Z",
           number: 202,
         },
       ];
@@ -4608,7 +4802,7 @@ describe("release source inventory", () => {
       const recordEvidence = summarizeTeamUniverseRecords(records);
       const query = teamUniverseWindowQuery({
         base: "main",
-        end: "1970-01-01T00:00:30Z",
+        end: "1970-01-01T00:00:23Z",
         repository: "openclaw/openclaw",
         start: "1970-01-01T00:00:10Z",
       });
@@ -4627,11 +4821,11 @@ describe("release source inventory", () => {
             query,
             recordsSha256: recordEvidence.sha256,
             sha256: members.sha256,
-            window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+            window: { endTimestamp: 23_000, startTimestamp: 10_000 },
           },
         ],
         sha256: members.sha256,
-        window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+        window: { endTimestamp: 23_000, startTimestamp: 10_000 },
       };
 
       expect(() =>
@@ -4699,7 +4893,7 @@ describe("release source inventory", () => {
           baseCommit: root,
           headCommit: head,
           mergeCommit: head,
-          mergedAt: "1970-01-01T00:00:25.000Z",
+          mergedAt: "1970-01-01T00:00:21.000Z",
           number: 202,
         },
       ];
@@ -4707,7 +4901,7 @@ describe("release source inventory", () => {
       const recordEvidence = summarizeTeamUniverseRecords(records);
       const query = teamUniverseWindowQuery({
         base: "main",
-        end: "1970-01-01T00:00:30Z",
+        end: "1970-01-01T00:00:22Z",
         repository: "openclaw/openclaw",
         start: "1970-01-01T00:00:10Z",
       });
@@ -4726,11 +4920,11 @@ describe("release source inventory", () => {
             query,
             recordsSha256: recordEvidence.sha256,
             sha256: members.sha256,
-            window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+            window: { endTimestamp: 22_000, startTimestamp: 10_000 },
           },
         ],
         sha256: members.sha256,
-        window: { endTimestamp: 30_000, startTimestamp: 10_000 },
+        window: { endTimestamp: 22_000, startTimestamp: 10_000 },
       };
 
       expect(() =>
@@ -5717,6 +5911,65 @@ describe("release source inventory", () => {
         maxCommits: 1,
       });
       expect(assertCompleteReleaseSourceInventory(inventory)).toBe(inventory);
+
+      const emptyMembers = summarizeTeamUniverseMembers([]);
+      const emptyRecords = summarizeTeamUniverseRecords([]);
+      const comparisonQuery = teamUniverseWindowQuery({
+        base: "main",
+        end: "1970-01-01T00:00:20Z",
+        repository: "openclaw/openclaw",
+        start: "1970-01-01T00:00:10Z",
+      });
+      const comparison = {
+        baseBranch: "main",
+        count: 0,
+        pullRequests: emptyMembers.members,
+        query: comparisonQuery,
+        records: emptyRecords.records,
+        recordsSha256: emptyRecords.sha256,
+        repository: "openclaw/openclaw",
+        segments: [
+          {
+            count: 0,
+            pullRequests: emptyMembers.members,
+            query: comparisonQuery,
+            recordsSha256: emptyRecords.sha256,
+            sha256: emptyMembers.sha256,
+            window: { endTimestamp: 20_000, startTimestamp: 10_000 },
+          },
+        ],
+        sha256: emptyMembers.sha256,
+        window: { endTimestamp: 20_000, startTimestamp: 10_000 },
+      };
+      let requestedComparisonWindow:
+        | {
+            endTimestamp: number;
+            startTimestamp: number;
+          }
+        | undefined;
+      const comparisonEvidence = completeEvidence(new Map());
+      comparisonEvidence.resolveComparisonPullRequests = (window) => {
+        requestedComparisonWindow = window;
+        return comparison;
+      };
+      const comparisonInventory = buildReleaseSourceInventory(
+        {
+          baseRef: root,
+          comparisonBaseBranch: "main",
+          cwd,
+          finalTargetRef: finalTarget,
+          sourceTargetRef: sourceTarget,
+        },
+        comparisonEvidence,
+      );
+      expect(requestedComparisonWindow).toMatchObject({
+        endTimestamp: 20_000,
+        startTimestamp: 10_000,
+      });
+      expect(comparisonInventory.comparison).toMatchObject({
+        records: { count: 0 },
+        unclassified: { count: 0 },
+      });
 
       const partitionedInventory = buildReleaseSourceInventory(
         {

@@ -126,7 +126,9 @@ every human `Thanks @...` attribution.
      hashes. This mode never infers an integration source from patch similarity
      alone
    - `--comparison-base main` runs the canonical merged-main search over the
-     exact raw merge-base timestamp through the final target timestamp. GitHub
+     exact raw merge-base timestamp through the immutable source-target
+     timestamp. A later CHANGELOG-only final target never widens the
+     contribution universe. GitHub
      Search windows are split and paginated with exact record/member hashes;
      each record binds the immutable base, head, and merge commit.
      The team universe must reconcile disjointly as canonical source PRs,

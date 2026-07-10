@@ -23,10 +23,10 @@ on:
         description: Stable or correction changelog heading, for example 2026.7.1 or 2026.7.1-1
         required: true
         type: string
-      max_changelog_tail:
-        description: Maximum CHANGELOG.md-only commits from source_sha to release_sha
+      shipped_refs_json:
+        description: Additional cumulative shipped tags as a JSON string array; base_ref is always included
         required: true
-        default: "1"
+        default: "[]"
         type: string
       provenance_json:
         description: Immutable provenance arrays for exact, adapted, integrated, partial, comparison-overlap, and ref evidence
@@ -35,6 +35,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
   issues: read
   pull-requests: read
@@ -57,20 +58,30 @@ jobs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       artifact_member: ${{ steps.ledger.outputs.artifact_member }}
       artifact_name: ${{ steps.ledger.outputs.artifact_name }}
+      artifact_size_bytes: ${{ steps.artifact.outputs.artifact_size_bytes }}
       artifact_url: ${{ steps.upload.outputs.artifact-url }}
       manifest_bytes: ${{ steps.ledger.outputs.manifest_bytes }}
       manifest_sha256: ${{ steps.ledger.outputs.manifest_sha256 }}
       publicationAuthority: ${{ steps.ledger.outputs.publicationAuthority }}
+      release_ref: ${{ inputs.release_ref }}
       release_sha: ${{ steps.ledger.outputs.release_sha }}
+      repository: ${{ github.repository }}
+      run_attempt: ${{ github.run_attempt }}
+      run_id: ${{ github.run_id }}
       source_sha: ${{ steps.ledger.outputs.source_sha }}
       tooling_commit: ${{ steps.ledger.outputs.tooling_commit }}
       tooling_tree: ${{ steps.ledger.outputs.tooling_tree }}
+      workflow_path: .github/workflows/release-ledger.yml
+      workflow_ref: ${{ github.workflow_ref }}
+      workflow_sha: ${{ github.workflow_sha }}
     steps:
       - name: Authorize trusted dispatch
         env:
           RUN_ATTEMPT: ${{ github.run_attempt }}
           WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REF_IDENTITY: ${{ github.workflow_ref }}
           WORKFLOW_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           [[ "$RUN_ATTEMPT" == "1" ]] || {
@@ -83,6 +94,14 @@ jobs:
           }
           [[ "$WORKFLOW_REF" == "refs/heads/main" ]] || {
             echo "Release Ledger must be dispatched from trusted main." >&2
+            exit 1
+          }
+          [[ "$WORKFLOW_REF_IDENTITY" == "openclaw/openclaw/.github/workflows/release-ledger.yml@refs/heads/main" ]] || {
+            echo "Release Ledger workflow identity is not the trusted main workflow." >&2
+            exit 1
+          }
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "Release Ledger workflow SHA must be a full lowercase commit SHA." >&2
             exit 1
           }
 
@@ -109,6 +128,16 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Provide trusted ghx compatibility shim
+        run: |
+          set -euo pipefail
+          gh_path="$(command -v gh)"
+          [[ -x "$gh_path" ]]
+          shim_dir="$RUNNER_TEMP/release-ledger-bin"
+          mkdir -p "$shim_dir"
+          ln -s "$gh_path" "$shim_dir/ghx"
+          echo "$shim_dir" >> "$GITHUB_PATH"
+
       - name: Validate trusted workflow and release refs
         id: refs
         env:
@@ -118,9 +147,11 @@ jobs:
           RELEASE_SHA: ${{ inputs.release_sha }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          SHIPPED_REFS_JSON: ${{ inputs.shipped_refs_json }}
           WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REF_IDENTITY: ${{ github.workflow_ref }}
           WORKFLOW_REPOSITORY: ${{ github.repository }}
-          WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           export GIT_CONFIG_GLOBAL=/dev/null
@@ -140,6 +171,10 @@ jobs:
           }
           [[ "$WORKFLOW_REF" == "refs/heads/main" ]] || {
             echo "Release Ledger must be dispatched from trusted main." >&2
+            exit 1
+          }
+          [[ "$WORKFLOW_REF_IDENTITY" == "openclaw/openclaw/.github/workflows/release-ledger.yml@refs/heads/main" ]] || {
+            echo "Release Ledger workflow identity is not the trusted main workflow." >&2
             exit 1
           }
           [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
@@ -307,11 +342,11 @@ jobs:
         env:
           BASE_REF: ${{ inputs.base_ref }}
           GH_TOKEN: ${{ github.token }}
-          MAX_CHANGELOG_TAIL: ${{ inputs.max_changelog_tail }}
           PROVENANCE_JSON: ${{ inputs.provenance_json }}
           RELEASE_REF: ${{ inputs.release_ref }}
           RELEASE_SHA: ${{ inputs.release_sha }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          SHIPPED_REFS_JSON: ${{ inputs.shipped_refs_json }}
           TOOLING_COMMIT: ${{ steps.refs.outputs.tooling_commit }}
           TOOLING_TREE: ${{ steps.refs.outputs.tooling_tree }}
           VERSION: ${{ inputs.version }}
@@ -356,7 +391,7 @@ jobs:
           const toolingCommit = process.env.TOOLING_COMMIT;
           const toolingTree = process.env.TOOLING_TREE;
           const version = process.env.VERSION;
-          const maxChangelogTailText = process.env.MAX_CHANGELOG_TAIL;
+          const maxChangelogTail = 1;
           for (const [name, value] of Object.entries({
             releaseSha,
             sourceSha,
@@ -369,9 +404,25 @@ jobs:
             versionPattern.test(version ?? ""),
             "version must match YYYY.M.PATCH or YYYY.M.PATCH-N",
           );
-          assert(/^(?:0|[1-9][0-9]*)$/u.test(maxChangelogTailText ?? ""), "max_changelog_tail must be a nonnegative integer");
-          const maxChangelogTail = Number(maxChangelogTailText);
-          assert(Number.isSafeInteger(maxChangelogTail), "max_changelog_tail is outside the safe integer range");
+          const shippedTagPattern =
+            /^v[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(?:-[1-9][0-9]*)?$/u;
+          const additionalShippedRefs = JSON.parse(process.env.SHIPPED_REFS_JSON);
+          assert(
+            Array.isArray(additionalShippedRefs) &&
+              additionalShippedRefs.every(
+                (entry) => typeof entry === "string" && shippedTagPattern.test(entry),
+              ),
+            "shipped_refs_json must be an array of stable or correction release tags",
+          );
+          assert(
+            new Set(additionalShippedRefs).size === additionalShippedRefs.length,
+            "shipped_refs_json must not contain duplicates",
+          );
+          assert(
+            !additionalShippedRefs.includes(base),
+            "shipped_refs_json must not repeat base_ref",
+          );
+          const shippedRefs = [base, ...additionalShippedRefs].toSorted();
 
           const provenance = JSON.parse(process.env.PROVENANCE_JSON);
           const provenanceKeys = [
@@ -521,9 +572,8 @@ jobs:
             toolingCommit,
             "--tooling-tree",
             toolingTree,
-            "--shipped-ref",
-            base,
           ];
+          for (const shippedRef of shippedRefs) args.push("--shipped-ref", shippedRef);
           for (const entry of provenance.pullRequests) args.push("--provenance-pr", entry);
           for (const entry of provenance.adaptedPullRequests) args.push("--provenance-pr-adapted", entry);
           for (const entry of provenance.comparisonPullRequestMemberOverlaps) {
@@ -600,7 +650,7 @@ jobs:
             provenanceRefs,
             releaseTags: [],
             seedRef: null,
-            shippedRefs: [base],
+            shippedRefs,
             sourceTarget: sourceSha,
             target: releaseSha,
             toolingCommit,
@@ -820,11 +870,61 @@ jobs:
           path: .local/release-ledger-manifest.json
           retention-days: 90
 
+      - name: Bind uploaded artifact metadata
+        id: artifact
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_NAME: ${{ steps.ledger.outputs.artifact_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/release-ledger-artifact.json"
+          for attempt in 1 2 3 4 5; do
+            if gh api "repos/${REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" > "$metadata"; then
+              break
+            fi
+            if [[ "$attempt" == "5" ]]; then
+              echo "Uploaded release ledger artifact metadata did not become readable." >&2
+              exit 1
+            fi
+            sleep "$attempt"
+          done
+          node --input-type=module - "$metadata" <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const metadata = JSON.parse(readFileSync(process.argv[2], "utf8"));
+          const artifactId = Number(process.env.ARTIFACT_ID);
+          if (
+            !Number.isSafeInteger(artifactId) ||
+            artifactId <= 0 ||
+            metadata.id !== artifactId ||
+            metadata.name !== process.env.ARTIFACT_NAME ||
+            metadata.digest !== process.env.ARTIFACT_DIGEST ||
+            metadata.expired !== false ||
+            metadata.workflow_run?.id !== Number(process.env.RUN_ID) ||
+            metadata.workflow_run?.head_sha !== process.env.WORKFLOW_SHA ||
+            !Number.isSafeInteger(metadata.size_in_bytes) ||
+            metadata.size_in_bytes <= 0
+          ) {
+            throw new Error("Uploaded release ledger artifact metadata is not immutable.");
+          }
+          writeFileSync(
+            process.env.GITHUB_OUTPUT,
+            `artifact_size_bytes=${metadata.size_in_bytes}\n`,
+            { flag: "a" },
+          );
+          NODE
+
       - name: Summarize ledger evidence
         env:
           ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
           ARTIFACT_MEMBER: ${{ steps.ledger.outputs.artifact_member }}
+          ARTIFACT_SIZE_BYTES: ${{ steps.artifact.outputs.artifact_size_bytes }}
           MANIFEST_BYTES: ${{ steps.ledger.outputs.manifest_bytes }}
           MANIFEST_SHA256: ${{ steps.ledger.outputs.manifest_sha256 }}
           RELEASE_SHA: ${{ steps.ledger.outputs.release_sha }}
@@ -840,5 +940,5 @@ jobs:
             echo "- Source SHA: \`$SOURCE_SHA\`"
             echo "- Trusted tooling: \`$TOOLING_COMMIT\` / \`$TOOLING_TREE\`"
             echo "- Manifest: \`sha256:$MANIFEST_SHA256\` ($MANIFEST_BYTES bytes)"
-            echo "- Artifact: \`release-ledger-evidence\` member \`$ARTIFACT_MEMBER\` (id \`$ARTIFACT_ID\`, digest \`$ARTIFACT_DIGEST\`)"
+            echo "- Artifact: \`release-ledger-evidence\` member \`$ARTIFACT_MEMBER\` (id \`$ARTIFACT_ID\`, $ARTIFACT_SIZE_BYTES bytes, digest \`$ARTIFACT_DIGEST\`)"
           } >> "$GITHUB_STEP_SUMMARY"

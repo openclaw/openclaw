@@ -2018,13 +2018,13 @@ export function buildReleaseSourceInventory(
     comparisonUniverse = normalizeComparisonUniverse(
       resolveComparisonPullRequests({
         baseBranch: comparisonBaseBranch,
-        endTimestamp: finalTargetTimestamp,
+        endTimestamp: targetTimestamp,
         repository,
         startTimestamp,
       }),
       {
         baseBranch: comparisonBaseBranch,
-        endTimestamp: finalTargetTimestamp,
+        endTimestamp: targetTimestamp,
         repository,
         startTimestamp,
       },
@@ -3663,8 +3663,10 @@ export function buildReleaseSourceInventory(
     const comparisonCandidatesByPullRequest = new Map();
     const patchMatchesByPullRequest = new Map();
     const suppressedAmbiguousPatchMatchesByPullRequest = new Map();
+    const suppressedCommonAncestryPatchMatchesByPullRequest = new Map();
     const pullRequestCleanupContexts = new Map();
     const branchLocalCleanupCache = new Map();
+    const commonAncestrySurvivalProofCache = new Map();
     const addPatchMatch = (number, match) => {
       const matches = patchMatchesByPullRequest.get(number) ?? [];
       matches.push(match);
@@ -3674,6 +3676,11 @@ export function buildReleaseSourceInventory(
       const matches = suppressedAmbiguousPatchMatchesByPullRequest.get(number) ?? [];
       matches.push(match);
       suppressedAmbiguousPatchMatchesByPullRequest.set(number, matches);
+    };
+    const addSuppressedCommonAncestryPatchMatch = (number, match) => {
+      const matches = suppressedCommonAncestryPatchMatchesByPullRequest.get(number) ?? [];
+      matches.push(match);
+      suppressedCommonAncestryPatchMatchesByPullRequest.set(number, matches);
     };
     const aggregateBaseStateProofFor = (number) => {
       const context = pullRequestCleanupContexts.get(number);
@@ -3738,6 +3745,48 @@ export function buildReleaseSourceInventory(
       branchLocalCleanupCache.set(cacheKey, Boolean(isCleanup));
       return Boolean(isCleanup);
     };
+    const commonAncestrySurvivalProofFor = (candidate) => {
+      const context = pullRequestCleanupContexts.get(candidate.number);
+      if (!context) {
+        return undefined;
+      }
+      const cacheKey = `${candidate.number}:${candidate.kind}:${candidate.commit}`;
+      if (commonAncestrySurvivalProofCache.has(cacheKey)) {
+        return commonAncestrySurvivalProofCache.get(cacheKey);
+      }
+      const pathHistoryOutput = git(cwd, [
+        "rev-list",
+        "--first-parent",
+        "--reverse",
+        `${context.sharedAncestryCommit}..${sourceTarget}`,
+        "--",
+        ...candidate.paths,
+      ]).trim();
+      const pathHistory = [
+        context.sharedAncestryCommit,
+        ...(pathHistoryOutput === "" ? [] : pathHistoryOutput.split("\n")),
+      ];
+      extendGraphWithCommitsAndParents(cwd, graph, pathHistory);
+      const survivalRecords = pathHistory.map((commit) =>
+        candidatePatchTreeProof(cwd, graph, commit, candidate),
+      );
+      const proof = survivalRecords.every(Boolean)
+        ? {
+            paths: setSummary(candidate.paths),
+            sharedAncestryCommit: context.sharedAncestryCommit,
+            sourceTarget,
+            survival: recordSummary(
+              survivalRecords.map((record) => ({
+                commit: record.targetCommit,
+                proofMethod: record.proofMethod,
+                tree: record.targetTree,
+              })),
+            ),
+          }
+        : undefined;
+      commonAncestrySurvivalProofCache.set(cacheKey, proof);
+      return proof;
+    };
     for (const number of postForkNotBackported) {
       const metadata = searchMetadata.get(number);
       const pullRequestCommits = postForkCommitLists.get(number);
@@ -3752,12 +3801,20 @@ export function buildReleaseSourceInventory(
         `comparison-only pull request #${number}`,
       );
       const aggregatePaths = changedPaths(cwd, aggregateBaseCommit, metadata.headCommit);
+      const sharedAncestryCommit = uniqueMergeBase(
+        cwd,
+        sourceTarget,
+        metadata.mergeCommit,
+        `comparison-only pull request #${number} and source target`,
+      );
+      extendGraphWithCommitsAndParents(cwd, graph, [sharedAncestryCommit]);
       pullRequestCleanupContexts.set(number, {
         aggregateBaseStateProofComputed: false,
         aggregatePaths: new Set(aggregatePaths),
         baseCommit: aggregateBaseCommit,
         headCommit: metadata.headCommit,
         members: pullRequestCommitSet,
+        sharedAncestryCommit,
       });
       for (const candidateCommit of [...new Set([metadata.mergeCommit, ...pullRequestCommits])]) {
         const patch = commitFirstParentPatch(cwd, graph, candidateCommit);
@@ -3783,6 +3840,14 @@ export function buildReleaseSourceInventory(
             candidateKind: `${candidate.kind}-final-tree`,
             ...treeProof,
           };
+          const commonAncestrySurvivalProof = commonAncestrySurvivalProofFor(candidate);
+          if (commonAncestrySurvivalProof) {
+            addSuppressedCommonAncestryPatchMatch(number, {
+              ...match,
+              commonAncestrySurvivalProof,
+            });
+            continue;
+          }
           const context = pullRequestCleanupContexts.get(number);
           const candidateIsInAggregate = candidate.paths.every((path) =>
             context.aggregatePaths.has(path),
@@ -3822,6 +3887,14 @@ export function buildReleaseSourceInventory(
             candidateKind: "pull-request-aggregate-final-tree",
             ...treeProof,
           };
+          const commonAncestrySurvivalProof = commonAncestrySurvivalProofFor(aggregateCandidate);
+          if (commonAncestrySurvivalProof) {
+            addSuppressedCommonAncestryPatchMatch(number, {
+              ...match,
+              commonAncestrySurvivalProof,
+            });
+            continue;
+          }
           const isAmbiguous = treeProof.proofStrength === "ambiguous-target-provenance";
           const aggregateProof = isAmbiguous ? aggregateBaseStateProofFor(number) : undefined;
           if (isAmbiguous && aggregateProof?.sourceExclusivePathCommits.count === 0) {
@@ -3844,12 +3917,21 @@ export function buildReleaseSourceInventory(
           exactCandidatePatchEquivalent(cwd, graph, commit.commit, candidate) &&
           !candidateIsBranchLocalCleanup(candidate)
         ) {
-          addPatchMatch(candidate.number, {
+          const match = {
             candidateBaseCommit: candidate.parent,
             candidateCommit: candidate.commit,
             candidateKind: candidate.kind,
             targetCommit: commit.commit,
-          });
+          };
+          const commonAncestrySurvivalProof = commonAncestrySurvivalProofFor(candidate);
+          if (commonAncestrySurvivalProof) {
+            addSuppressedCommonAncestryPatchMatch(candidate.number, {
+              ...match,
+              commonAncestrySurvivalProof,
+            });
+          } else {
+            addPatchMatch(candidate.number, match);
+          }
         }
       }
     }
@@ -4451,6 +4533,13 @@ export function buildReleaseSourceInventory(
           left.targetCommit.localeCompare(right.targetCommit) ||
           left.candidateCommit.localeCompare(right.candidateCommit),
       );
+      const suppressedCommonAncestryPatchMatches = (
+        suppressedCommonAncestryPatchMatchesByPullRequest.get(number) ?? []
+      ).toSorted(
+        (left, right) =>
+          left.targetCommit.localeCompare(right.targetCommit) ||
+          left.candidateCommit.localeCompare(right.candidateCommit),
+      );
       const context = pullRequestCleanupContexts.get(number);
       const reviewedMemberOverlap = comparisonPullRequestMemberOverlapEvidence.get(number);
       if (
@@ -4479,6 +4568,9 @@ export function buildReleaseSourceInventory(
         pullRequestCommits,
         ...(reviewedMemberOverlap ? { reviewedMemberOverlap } : {}),
         ...(suppressedAmbiguousPatchMatches.length > 0 ? { suppressedAmbiguousPatchMatches } : {}),
+        ...(suppressedCommonAncestryPatchMatches.length > 0
+          ? { suppressedCommonAncestryPatchMatches }
+          : {}),
       };
     });
     const associatedBoundarySet = new Set(associatedBoundary);

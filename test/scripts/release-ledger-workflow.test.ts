@@ -74,10 +74,10 @@ describe("release ledger producer workflow", () => {
     expect(parsed.on?.workflow_call).toBeUndefined();
     expect(parsed.on?.workflow_dispatch?.inputs).toMatchObject({
       base_ref: { required: true, type: "string" },
-      max_changelog_tail: { default: "1", required: true, type: "string" },
       provenance_json: { required: true, type: "string" },
       release_ref: { required: true, type: "string" },
       release_sha: { required: true, type: "string" },
+      shipped_refs_json: { default: "[]", required: true, type: "string" },
       source_sha: { required: true, type: "string" },
       version: { required: true, type: "string" },
     });
@@ -93,6 +93,7 @@ describe("release ledger producer workflow", () => {
     });
     expect(Object.keys(parsed.on?.workflow_dispatch?.inputs ?? {})).toHaveLength(7);
     expect(parsed.permissions).toEqual({
+      actions: "read",
       contents: "read",
       issues: "read",
       "pull-requests": "read",
@@ -111,18 +112,24 @@ describe("release ledger producer workflow", () => {
     expect(authorization.env).toEqual({
       RUN_ATTEMPT: "${{ github.run_attempt }}",
       WORKFLOW_REF: "${{ github.ref }}",
+      WORKFLOW_REF_IDENTITY: "${{ github.workflow_ref }}",
       WORKFLOW_REPOSITORY: "${{ github.repository }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
     });
     expect(authorization.run).toContain('[[ "$RUN_ATTEMPT" == "1" ]]');
     expect(authorization.run).toContain('[[ "$WORKFLOW_REF" == "refs/heads/main" ]]');
+    expect(authorization.run).toContain(
+      '[[ "$WORKFLOW_REF_IDENTITY" == "openclaw/openclaw/.github/workflows/release-ledger.yml@refs/heads/main" ]]',
+    );
     expect(authorization.run).toContain('[[ "$WORKFLOW_REPOSITORY" == "openclaw/openclaw" ]]');
 
     const guard = step(producer, "Validate trusted workflow and release refs");
     expect(guard.env).toMatchObject({
       RUN_ATTEMPT: "${{ github.run_attempt }}",
       WORKFLOW_REF: "${{ github.ref }}",
+      WORKFLOW_REF_IDENTITY: "${{ github.workflow_ref }}",
       WORKFLOW_REPOSITORY: "${{ github.repository }}",
-      WORKFLOW_SHA: "${{ github.sha }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
     });
     expect(guard.run).toContain('[[ "$RUN_ATTEMPT" == "1" ]]');
     expect(guard.run).toContain('[[ "$WORKFLOW_REF" == "refs/heads/main" ]]');
@@ -156,6 +163,10 @@ describe("release ledger producer workflow", () => {
       uses: SETUP_NODE_V6,
       with: { "node-version": "${{ env.NODE_VERSION }}" },
     });
+    const ghx = step(producer, "Provide trusted ghx compatibility shim");
+    expect(ghx.run).toContain('gh_path="$(command -v gh)"');
+    expect(ghx.run).toContain('ln -s "$gh_path" "$shim_dir/ghx"');
+    expect(ghx.run).toContain('echo "$shim_dir" >> "$GITHUB_PATH"');
 
     const refs = step(producer, "Validate trusted workflow and release refs");
     expect(refs.run).toContain(
@@ -209,6 +220,8 @@ describe("release ledger producer workflow", () => {
     expect(run).toContain('manifest.status === "pass"');
     expect(run).toContain("manifest.target === sourceSha");
     expect(run).toContain("manifest.finalTarget === releaseSha");
+    expect(run).toContain("const maxChangelogTail = 1");
+    expect(run).toContain("const shippedRefs = [base, ...additionalShippedRefs].toSorted()");
     expect(run).toContain("manifest.seedAuthorization === null");
     expect(run).toContain(
       "JSON.stringify(manifest.invocation) === JSON.stringify(expectedInvocation)",
@@ -260,14 +273,22 @@ describe("release ledger producer workflow", () => {
       artifact_id: "${{ steps.upload.outputs.artifact-id }}",
       artifact_member: "${{ steps.ledger.outputs.artifact_member }}",
       artifact_name: "${{ steps.ledger.outputs.artifact_name }}",
+      artifact_size_bytes: "${{ steps.artifact.outputs.artifact_size_bytes }}",
       artifact_url: "${{ steps.upload.outputs.artifact-url }}",
       manifest_bytes: "${{ steps.ledger.outputs.manifest_bytes }}",
       manifest_sha256: "${{ steps.ledger.outputs.manifest_sha256 }}",
       publicationAuthority: "${{ steps.ledger.outputs.publicationAuthority }}",
+      release_ref: "${{ inputs.release_ref }}",
       release_sha: "${{ steps.ledger.outputs.release_sha }}",
+      repository: "${{ github.repository }}",
+      run_attempt: "${{ github.run_attempt }}",
+      run_id: "${{ github.run_id }}",
       source_sha: "${{ steps.ledger.outputs.source_sha }}",
       tooling_commit: "${{ steps.ledger.outputs.tooling_commit }}",
       tooling_tree: "${{ steps.ledger.outputs.tooling_tree }}",
+      workflow_path: ".github/workflows/release-ledger.yml",
+      workflow_ref: "${{ github.workflow_ref }}",
+      workflow_sha: "${{ github.workflow_sha }}",
     });
 
     const revalidate = step(producer, "Revalidate live release ref");
@@ -288,6 +309,16 @@ describe("release ledger producer workflow", () => {
       path: ".local/release-ledger-manifest.json",
       "retention-days": 90,
     });
+    const artifact = step(producer, "Bind uploaded artifact metadata");
+    expect(artifact.env).toMatchObject({
+      ARTIFACT_DIGEST: "${{ steps.upload.outputs.artifact-digest }}",
+      ARTIFACT_ID: "${{ steps.upload.outputs.artifact-id }}",
+      ARTIFACT_NAME: "${{ steps.ledger.outputs.artifact_name }}",
+      RUN_ID: "${{ github.run_id }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    });
+    expect(artifact.run).toContain('node --input-type=module - "$metadata"');
+    expect(artifact.run).toContain("artifact_size_bytes=");
     const summary = step(producer, "Summarize ledger evidence");
     expect(summary.run).toContain("Publication authority: false");
     expect(summary.run).toContain("release-ledger-evidence");
