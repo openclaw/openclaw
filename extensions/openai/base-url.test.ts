@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalizeCodexResponsesBaseUrl,
+  classifyOpenAIBaseUrl,
   isOpenAIApiBaseUrl,
   isOpenAICodexBaseUrl,
   OPENAI_API_BASE_URL,
@@ -20,6 +21,28 @@ describe("openai base URL helpers", () => {
     expect(isOpenAIApiBaseUrl("https://proxy.example.com/v1")).toBe(false);
     expect(isOpenAIApiBaseUrl("https://chatgpt.com/backend-api")).toBe(false);
     expect(isOpenAIApiBaseUrl(undefined)).toBe(false);
+  });
+
+  it("classifies only exact HTTPS native endpoints as official", () => {
+    expect(classifyOpenAIBaseUrl(undefined)).toBe("unresolved");
+    expect(classifyOpenAIBaseUrl("https://api.openai.com/v1")).toBe("platform");
+    expect(classifyOpenAIBaseUrl("https://api.openai.com:443/v1")).toBe("platform");
+    expect(classifyOpenAIBaseUrl("https://api.openai.com./v1")).toBe("platform");
+    expect(classifyOpenAIBaseUrl("https://chatgpt.com/backend-api/codex/responses")).toBe(
+      "chatgpt",
+    );
+    expect(classifyOpenAIBaseUrl("https://proxy.example.test/v1?tenant=one")).toBe("custom");
+    for (const invalid of [
+      "http://api.openai.com/v1",
+      "https://api.openai.com:8443/v1",
+      "https://user@api.openai.com/v1",
+      "https://api.openai.com/v1/models",
+      "https://api.openai.com/v1?proxy=1",
+      "https://chatgpt.com/backend-api/codex#fragment",
+      "not a URL",
+    ]) {
+      expect(classifyOpenAIBaseUrl(invalid)).toBe("invalid");
+    }
   });
 
   it("recognizes Codex ChatGPT backend routes", () => {
