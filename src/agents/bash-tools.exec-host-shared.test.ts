@@ -637,7 +637,9 @@ describe("buildExecApprovalPendingToolResult", () => {
       nodeId: "node-mac-1",
     });
     const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(text).toContain("Open the approval inbox with `openclaw dashboard --no-open`.");
+    expect(text).toContain(
+      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
     expect(text).toContain(
       "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
     );

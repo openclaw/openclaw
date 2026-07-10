@@ -90,7 +90,8 @@ function buildGenericNativeExecApprovalFallbackText(params?: {
   const clients = resolveNativeExecApprovalClientList({
     excludeChannel: params?.excludeChannel,
   });
-  let manualRecovery = "Open the approval inbox with `openclaw dashboard --no-open`.";
+  let manualRecovery =
+    "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.";
   if (params?.host === "node") {
     const nodeId = normalizeOptionalString(params.nodeId) ?? "<id|name|ip>";
     manualRecovery += ` Inspect the node's effective exec policy with \`openclaw approvals get --node ${nodeId}\`.`;

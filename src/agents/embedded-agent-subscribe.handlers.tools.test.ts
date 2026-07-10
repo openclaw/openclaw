@@ -2187,7 +2187,9 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       "tool result text",
     );
     expect(text).toContain("no interactive approval client is currently available");
-    expect(text).toContain("Open the approval inbox with `openclaw dashboard --no-open`.");
+    expect(text).toContain(
+      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
     expect(text).toContain(
       "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
     );
