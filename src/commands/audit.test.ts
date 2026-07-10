@@ -1,5 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { testApi } from "./audit.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { auditListCommand, testApi } from "./audit.js";
+
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+}));
+
+const runtime: RuntimeEnv = {
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
+};
 
 describe("audit command parsing", () => {
   it("parses ISO and millisecond timestamps", () => {
@@ -15,6 +30,23 @@ describe("audit command parsing", () => {
 
   it.each(["--after", "--before"])("rejects impossible calendar dates for %s", (flag) => {
     expect(() => testApi.parseAuditTimestamp("2026-02-30T00:00:00Z", flag)).toThrow(flag);
+  });
+
+  it.each(["--after", "--before"])("rejects parseable non-ISO values for %s", (flag) => {
+    for (const input of ["-1", "July 1, 2026"]) {
+      expect(Number.isNaN(Date.parse(input))).toBe(false);
+      expect(() => testApi.parseAuditTimestamp(input, flag)).toThrow(flag);
+    }
+  });
+
+  it.each([
+    { flag: "--after", options: { after: "2026-02-30T00:00:00Z" } },
+    { flag: "--before", options: { before: "July 1, 2026" } },
+  ])("rejects invalid $flag before calling the Gateway", async ({ flag, options }) => {
+    mocks.callGateway.mockClear();
+
+    await expect(auditListCommand(options, runtime)).rejects.toThrow(flag);
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("keeps the original local-time result for timezone-less timestamps", () => {
