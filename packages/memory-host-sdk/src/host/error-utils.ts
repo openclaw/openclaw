@@ -45,7 +45,14 @@ function redactMatch(match: string, groups: string[]): string {
   }
   const token = groups.findLast((value) => typeof value === "string" && value.length > 0) ?? match;
   const masked = maskToken(token);
-  return token === match ? masked : match.replace(token, masked);
+  if (token === match) {
+    return masked;
+  }
+  const tokenOffset = match.lastIndexOf(token);
+  if (tokenOffset < 0) {
+    return "***";
+  }
+  return `${match.slice(0, tokenOffset)}${masked}${match.slice(tokenOffset + token.length)}`;
 }
 
 function redactSensitiveText(text: string): string {
