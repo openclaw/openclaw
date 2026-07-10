@@ -19,6 +19,18 @@ export function resetMemoryBatchFailureState(
   };
 }
 
+/**
+ * Coerces a caller-supplied attempt count into a safe positive-integer
+ * increment. Provider errors may carry non-finite (NaN/Infinity from JSON
+ * overflow), fractional, zero, negative, or unsafe-integer `batchAttempts`
+ * metadata; without normalization such values poison the failure counter
+ * (NaN makes `count >= limit` never trip, Infinity disables on one failure
+ * through an invalid count). Any malformed value falls back to one attempt.
+ */
+function normalizeFailureAttempts(value: number | undefined): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 1;
+}
+
 export function recordMemoryBatchFailure(
   state: MemoryBatchFailureState,
   params: {
@@ -33,7 +45,7 @@ export function recordMemoryBatchFailure(
   }
   const increment = params.forceDisable
     ? MEMORY_BATCH_FAILURE_LIMIT
-    : Math.max(1, params.attempts ?? 1);
+    : normalizeFailureAttempts(params.attempts);
   const count = state.count + increment;
   const enabled = !(params.forceDisable || count >= MEMORY_BATCH_FAILURE_LIMIT);
   return {

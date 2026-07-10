@@ -62,6 +62,60 @@ describe("memory batch state", () => {
     });
   });
 
+  it("honors valid positive safe-integer attempt counts", () => {
+    expect(
+      recordMemoryBatchFailure(
+        { enabled: true, count: 0 },
+        { provider: "openai", message: "batch failed", attempts: 2 },
+      ),
+    ).toEqual({
+      enabled: false,
+      count: 2,
+      lastError: "batch failed",
+      lastProvider: "openai",
+    });
+  });
+
+  it("treats malformed attempt counts as one failed attempt", () => {
+    const malformed = [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      1.5,
+      0,
+      -3,
+      Number.MAX_SAFE_INTEGER + 1,
+    ];
+    for (const attempts of malformed) {
+      expect(
+        recordMemoryBatchFailure(
+          { enabled: true, count: 0 },
+          { provider: "openai", message: "batch failed", attempts },
+        ),
+      ).toEqual({
+        enabled: true,
+        count: 1,
+        lastError: "batch failed",
+        lastProvider: "openai",
+      });
+    }
+  });
+
+  it("still disables batching after repeated malformed-attempt failures", () => {
+    let state = recordMemoryBatchFailure(
+      { enabled: true, count: 0 },
+      { provider: "openai", message: "first", attempts: Number.NaN },
+    );
+    expect(state.enabled).toBe(true);
+    expect(state.count).toBe(1);
+    state = recordMemoryBatchFailure(state, {
+      provider: "openai",
+      message: "second",
+      attempts: Number.NaN,
+    });
+    expect(state.enabled).toBe(false);
+    expect(state.count).toBe(MEMORY_BATCH_FAILURE_LIMIT);
+  });
+
   it("leaves disabled state unchanged", () => {
     expect(
       recordMemoryBatchFailure(
