@@ -539,7 +539,7 @@ extension OnboardingView {
     private func resetRemoteProbeFeedback() {
         self.remoteProbeState = .idle
         self.remoteAuthIssue = nil
-        self.resetGatewayBoundAIState()
+        self.restartGatewayBoundAISetup()
     }
 
     static func remoteAuthPromptStyle(

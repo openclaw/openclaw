@@ -234,9 +234,28 @@ struct OnboardingView: View {
     /// server-side on that success). "Configure later" on the connection page
     /// remains the explicit skip path.
     var isAISetupBlocking: Bool {
-        self.activePageIndex == self.aiPageIndex &&
-            self.state.connectionMode != .unconfigured &&
-            !self.aiSetup.connected
+        Self.shouldBlockAISetup(
+            currentPage: self.currentPage,
+            pageOrder: self.pageOrder,
+            aiPageIndex: self.aiPageIndex,
+            connectionMode: self.state.connectionMode,
+            connected: self.aiSetup.connected)
+    }
+
+    static func shouldBlockAISetup(
+        currentPage: Int,
+        pageOrder: [Int],
+        aiPageIndex: Int,
+        connectionMode: AppState.ConnectionMode,
+        connected: Bool) -> Bool
+    {
+        guard connectionMode != .unconfigured,
+              !connected,
+              let aiPageCursor = pageOrder.firstIndex(of: aiPageIndex)
+        else {
+            return false
+        }
+        return currentPage >= aiPageCursor
     }
 
     var canAdvance: Bool {

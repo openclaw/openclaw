@@ -64,9 +64,13 @@ struct OnboardingAISetupTests {
             domain: "Gateway",
             code: 5,
             userInfo: [NSLocalizedDescriptionKey: "gateway request timed out"])
+        let decodeError = DecodingError.dataCorrupted(.init(
+            codingPath: [],
+            debugDescription: "invalid activation response"))
 
-        #expect(!OnboardingAISetupModel.activationMayStillBeRunning(after: responseError))
-        #expect(OnboardingAISetupModel.activationMayStillBeRunning(after: timeout))
+        #expect(OnboardingAISetupModel.activationReconciliationMode(after: responseError) == .none)
+        #expect(OnboardingAISetupModel.activationReconciliationMode(after: decodeError) == .immediate)
+        #expect(OnboardingAISetupModel.activationReconciliationMode(after: timeout) == .polling)
     }
 
     @Test func `gateway change clears route-bound setup state`() {

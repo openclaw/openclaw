@@ -137,6 +137,27 @@ struct OnboardingViewSmokeTests {
         #expect(monitoredPage == view.activePageIndex)
     }
 
+    @Test func `gateway route reset returns later pages to inference setup`() throws {
+        let order = OnboardingView.pageOrder(
+            for: .remote,
+            showOnboardingChat: false,
+            requiresCLIInstall: false)
+        let permissionsCursor = try #require(order.firstIndex(of: 5))
+        let aiCursor = try #require(order.firstIndex(of: 3))
+        let resetCursor = OnboardingView.pageCursorAfterGatewayReset(
+            currentPage: permissionsCursor,
+            pageOrder: order,
+            aiPageIndex: 3)
+
+        #expect(resetCursor == aiCursor)
+        #expect(OnboardingView.shouldBlockAISetup(
+            currentPage: resetCursor,
+            pageOrder: order,
+            aiPageIndex: 3,
+            connectionMode: .remote,
+            connected: false))
+    }
+
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {
         let override = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")

@@ -242,12 +242,23 @@ final class OnboardingAISetupModel {
         setupComplete && configuredModel == expectedModel
     }
 
-    static func activationMayStillBeRunning(after error: Error) -> Bool {
-        // A structured response or connection-policy failure proves the request did not
-        // disappear mid-flight. Poll only errors whose server-side outcome is unknown.
-        !(error is GatewayResponseError ||
+    enum ActivationReconciliationMode: Equatable {
+        case none
+        case immediate
+        case polling
+    }
+
+    static func activationReconciliationMode(after error: Error) -> ActivationReconciliationMode {
+        // Decode failures happen after the side-effectful RPC returned bytes, so check persisted
+        // state once. Only transport-unknown outcomes need the bounded polling window.
+        if error is DecodingError { return .immediate }
+        if error is GatewayResponseError ||
             error is GatewayConnectAuthError ||
-            error is GatewayTLSValidationError)
+            error is GatewayTLSValidationError
+        {
+            return .none
+        }
+        return .polling
     }
 
     /// Candidates the automatic ladder may try: skip definitively logged-out
@@ -298,22 +309,26 @@ final class OnboardingAISetupModel {
             }
         } catch {
             guard token == self.attemptToken else { return }
-            // Activating a CLI candidate can install a provider plugin (Codex), and
-            // server-side work can outlive a dropped client socket.
-            // A transport error means "outcome unknown", not "failed": re-read
-            // server state before reporting failure.
-            if Self.activationMayStillBeRunning(after: error),
-               await self.reconcileActivationAfterTransportDrop(
-                   kind: kind,
-                   token: token,
-                   deadline: reconciliationDeadline)
-            {
-                return
+            // Activation can persist config before a response is decoded, and Codex plugin
+            // setup can outlive a dropped socket. Re-read state with an error-specific budget.
+            switch Self.activationReconciliationMode(after: error) {
+            case .none:
+                break
+            case .immediate:
+                if await self.reconcilePersistedActivation(kind: kind, token: token) { return }
+            case .polling:
+                if await self.reconcileActivationAfterTransportDrop(
+                    kind: kind,
+                    token: token,
+                    deadline: reconciliationDeadline)
+                {
+                    return
+                }
             }
             guard token == self.attemptToken else { return }
             self.statuses[kind] = .failed(Self.transportFailure(error.localizedDescription))
-            // Outcome is still unknown after a transport failure. Do not start another
-            // provider that could race a late server-side Codex completion.
+            // Do not start another provider after an RPC or protocol failure: setup may
+            // already have applied, or a late Codex completion could race the next attempt.
             self.phase = .ready
         }
     }
@@ -327,9 +342,6 @@ final class OnboardingAISetupModel {
         token: UUID,
         deadline: ContinuousClock.Instant) async -> Bool
     {
-        guard let expected = self.candidates.first(where: { $0.kind == kind })?.modelRef else {
-            return false
-        }
         let clock = ContinuousClock()
         var delayMs: UInt64 = 2000
         while clock.now < deadline {
@@ -340,28 +352,33 @@ final class OnboardingAISetupModel {
             }
             guard token == self.attemptToken else { return false }
             delayMs = min(delayMs * 2, 15000)
-            guard let data = try? await GatewayConnection.shared.request(
-                method: "crestodian.setup.detect",
-                params: [:],
-                timeoutMs: 10000,
-                retryTransportFailures: true)
-            else { continue }
-            guard token == self.attemptToken else { return false }
-            guard let result = try? JSONDecoder().decode(DetectResult.self, from: data) else { continue }
-            if Self.activationIsPersisted(
-                expectedModel: expected,
-                setupComplete: result.setupComplete,
-                configuredModel: result.configuredModel)
-            {
-                self.finishConnected(
-                    kind: kind,
-                    result: ActivateResult(ok: true, modelRef: expected, latencyMs: nil, status: nil, error: nil))
-                return true
-            }
+            if await self.reconcilePersistedActivation(kind: kind, token: token) { return true }
             // A healthy detect can race the still-running activation whose socket dropped;
             // keep polling instead of falling through to another provider.
         }
         return false
+    }
+
+    private func reconcilePersistedActivation(kind: String, token: UUID) async -> Bool {
+        guard let expected = self.candidates.first(where: { $0.kind == kind })?.modelRef,
+              let data = try? await GatewayConnection.shared.request(
+                  method: "crestodian.setup.detect",
+                  params: [:],
+                  timeoutMs: 10000,
+                  retryTransportFailures: true),
+              token == self.attemptToken,
+              let result = try? JSONDecoder().decode(DetectResult.self, from: data),
+              Self.activationIsPersisted(
+                  expectedModel: expected,
+                  setupComplete: result.setupComplete,
+                  configuredModel: result.configuredModel)
+        else {
+            return false
+        }
+        self.finishConnected(
+            kind: kind,
+            result: ActivateResult(ok: true, modelRef: expected, latencyMs: nil, status: nil, error: nil))
+        return true
     }
 
     func submitManualKey() {
