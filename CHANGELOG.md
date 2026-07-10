@@ -25,7 +25,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **macOS inference onboarding:** hide Crestodian until inference works, expose copyable expandable setup errors, detect authenticated Codex and Claude CLI routes, persist managed Codex install ownership across failed probes, and reset route-bound setup and chat state after Gateway changes. (#102614, #102637)
 - **OpenCode Zen model catalog:** refresh the provider-owned static seed for Claude Sonnet 5, Grok 4.5, Hy3 Free, Kimi K2.7 Code, and MiniMax M3 with verified routing, pricing, limits, and input capabilities, remove retired free-tier rows, and expose the same catalog through unauthenticated model listing. (#103184)
 - **Gateway startup migrations:** release the shared migration lease before exiting when the selected config changes during startup, allowing immediate retries instead of blocking readiness until the five-minute lease expires. (#103145)
 - **Apple timeout recovery:** return promptly from shared operation deadlines and caller cancellation even when platform work ignores cancellation, while isolating late Gateway handshakes and cleaning up location and permission waiters. (#103066) Thanks @NianJiuZst.
