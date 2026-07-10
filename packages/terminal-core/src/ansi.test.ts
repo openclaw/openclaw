@@ -4,6 +4,7 @@ import {
   sanitizeForLog,
   splitGraphemes,
   stripAnsi,
+  stripAnsiForStreamChunk,
   stripAnsiSequences,
   truncateToVisibleWidth,
   visibleWidth,
@@ -97,8 +98,8 @@ describe("terminal ansi helpers", () => {
     "can preserve pending %s at a stream chunk boundary",
     (_label, introducer) => {
       const input = `before${introducer}31;`;
-      expect(stripAnsi(input, { preserveIncompleteCsi: true })).toBe(input);
-      expect(stripAnsiSequences(input, { preserveIncompleteCsi: true })).toBe(input);
+      expect(stripAnsiForStreamChunk(input)).toBe(input);
+      expect(stripAnsiForStreamChunk(input, { compatibilityGrammar: true })).toBe(input);
     },
   );
 

@@ -74,8 +74,8 @@ function stripAnsiInternal(
   let index = 0;
 
   while (index < input.length) {
-    const code = input.charCodeAt(index);
-    if (code !== 0x1b && code !== 0x9b && code !== 0x9d) {
+    const introducerCode = input.charCodeAt(index);
+    if (introducerCode !== 0x1b && introducerCode !== 0x9b && introducerCode !== 0x9d) {
       index += 1;
       continue;
     }
@@ -163,24 +163,35 @@ function stripAnsiInternal(
   return output.join("");
 }
 
-export function stripAnsi(input: string, options?: { preserveIncompleteCsi?: boolean }): string {
+export function stripAnsi(input: string): string {
   if (!hasAnsiIntroducer(input)) {
     return input;
   }
-  return stripAnsiInternal(input, { ...options, compatibilityGrammar: false });
+  return stripAnsiInternal(input, { compatibilityGrammar: false });
 }
 
-export function stripAnsiSequences(
-  input: string,
-  options?: { preserveIncompleteCsi?: boolean },
-): string {
+export function stripAnsiSequences(input: string): string {
   if (typeof input !== "string") {
     throw new TypeError(`Expected a \`string\`, got \`${typeof input}\``);
   }
   if (!hasAnsiIntroducer(input)) {
     return input;
   }
-  return stripAnsiInternal(input, { ...options, compatibilityGrammar: true });
+  return stripAnsiInternal(input, { compatibilityGrammar: true });
+}
+
+/** Preserve pending CSI visibly because an output chunk boundary is not true EOF. */
+export function stripAnsiForStreamChunk(
+  input: string,
+  options?: { compatibilityGrammar?: boolean },
+): string {
+  if (!hasAnsiIntroducer(input)) {
+    return input;
+  }
+  return stripAnsiInternal(input, {
+    compatibilityGrammar: options?.compatibilityGrammar === true,
+    preserveIncompleteCsi: true,
+  });
 }
 
 export function splitGraphemes(input: string): string[] {
