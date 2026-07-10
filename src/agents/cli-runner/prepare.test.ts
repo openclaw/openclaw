@@ -2834,6 +2834,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         taskSuggestionDeliveryMode: undefined,
         requireExplicitMessageTarget: false,
         senderIsOwner: undefined,
+        nodeExecAllowed: true,
+        execSession: undefined,
+        trigger: undefined,
+        approvalReviewerDeviceId: undefined,
+        channelContext: undefined,
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");
@@ -2992,6 +2997,13 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         timeoutMs: 1_000,
         runId: "run-test-room-event-tools",
         config: createCliBackendConfig(),
+        sessionEntry: {
+          execHost: "node",
+          execSecurity: "allowlist",
+          execAsk: "on-miss",
+          execNode: "mac-a",
+        } as never,
+        trigger: "user",
         currentInboundEventKind: "room_event",
         messageChannel: "telegram",
         clientCaps: ["tool-events", "inline-widgets"],
@@ -3002,6 +3014,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sourceReplyDeliveryMode: "message_tool_only",
         taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
+        approvalReviewerDeviceId: "reviewer-device",
+        channelContext: {
+          sender: { id: "sender-1", displayName: "not-forwarded" },
+          chat: { id: "chat-1", title: "not-forwarded" },
+        },
       });
 
       expect(context.preparedBackend.env).toMatchObject({
@@ -3024,6 +3041,19 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
           senderIsOwner: false,
+          nodeExecAllowed: true,
+          execSession: {
+            execHost: "node",
+            execSecurity: "allowlist",
+            execAsk: "on-miss",
+            execNode: "mac-a",
+          },
+          trigger: "user",
+          approvalReviewerDeviceId: "reviewer-device",
+          channelContext: {
+            sender: { id: "sender-1" },
+            chat: { id: "chat-1" },
+          },
         },
         runtimeOwnerToken: "loopback-owner-token",
       });

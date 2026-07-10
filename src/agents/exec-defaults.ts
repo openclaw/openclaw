@@ -24,6 +24,12 @@ import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 
+/** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
+export type ExecSessionDefaults = Pick<
+  SessionEntry,
+  "execHost" | "execSecurity" | "execAsk" | "execNode"
+>;
+
 // Resolved exec config layers come from global config, agent config, legacy
 // session fields, and per-call overrides.
 type ResolvedExecConfig = {
@@ -46,7 +52,7 @@ type LayeredExecPolicy = {
 
 function applySessionLegacyExecPolicyLayer(
   base: LayeredExecPolicy,
-  sessionEntry?: SessionEntry,
+  sessionEntry?: ExecSessionDefaults,
 ): LayeredExecPolicy {
   const security = normalizeExecSecurity(sessionEntry?.execSecurity);
   const ask = normalizeExecAsk(sessionEntry?.execAsk);
@@ -63,7 +69,7 @@ function applySessionLegacyExecPolicyLayer(
 // resolveExecDefaults stay aligned on agent/global/session precedence.
 function resolveExecConfigState(params: {
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: ExecSessionDefaults;
   execOverrides?: ExecOverridesConfig;
   agentId?: string;
   sessionKey?: string;
@@ -119,7 +125,7 @@ function resolveExecSandboxAvailability(params: {
 /** Returns whether the current exec policy allows requesting host node execution. */
 export function canExecRequestNode(params: {
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: ExecSessionDefaults;
   execOverrides?: ExecOverridesConfig;
   agentId?: string;
   sessionKey?: string;
@@ -140,7 +146,7 @@ export function canExecRequestNode(params: {
 /** Resolves effective exec host, mode, approval policy, and node availability. */
 export function resolveExecDefaults(params: {
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: ExecSessionDefaults;
   execOverrides?: ExecOverridesConfig;
   agentId?: string;
   sessionKey?: string;

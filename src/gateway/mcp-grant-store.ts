@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
+import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
@@ -20,6 +22,12 @@ export type McpLoopbackRequestContext = {
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean;
+  /** Capability minted only for Gateway-launched CLI backends. */
+  nodeExecAllowed?: boolean;
+  execSession?: ExecSessionDefaults;
+  trigger?: string;
+  approvalReviewerDeviceId?: string;
+  channelContext?: PluginHookChannelContext;
 };
 
 export interface McpAttachGrant {

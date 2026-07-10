@@ -7,9 +7,21 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 type CreateOpenClawToolsArg = {
   clientCaps?: string[];
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
+  inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   pluginToolDenylist?: string[];
   sandboxed?: boolean;
+};
+
+type LazyExecToolDefaults = {
+  host?: string;
+  allowBackground?: boolean;
+  node?: string;
+};
+
+type LazyExecToolPresentation = {
+  description?: string;
+  parameters?: Record<string, unknown>;
 };
 
 const hoisted = vi.hoisted(() => {
@@ -21,8 +33,16 @@ const hoisted = vi.hoisted(() => {
       execute: vi.fn(),
     };
   }
+  const createLazyExecToolMock = vi.fn(
+    (_defaults: LazyExecToolDefaults, presentation?: LazyExecToolPresentation) => ({
+      ...makeTool("exec"),
+      description: presentation?.description ?? "exec tool",
+      parameters: presentation?.parameters ?? { type: "object", properties: {} },
+    }),
+  );
   return {
     makeTool,
+    createLazyExecToolMock,
     createOpenClawToolsMock: vi.fn((_args: CreateOpenClawToolsArg) => [
       makeTool("read"),
       makeTool("sessions_spawn"),
@@ -37,16 +57,24 @@ vi.mock("../agents/openclaw-tools.js", () => ({
   createOpenClawTools: (args: CreateOpenClawToolsArg) => hoisted.createOpenClawToolsMock(args),
 }));
 
+vi.mock("../agents/lazy-exec-tool.js", () => ({
+  createLazyExecTool: (defaults: LazyExecToolDefaults, presentation?: LazyExecToolPresentation) =>
+    hoisted.createLazyExecToolMock(defaults, presentation),
+  resolveExecToolConfig: vi.fn(() => ({})),
+}));
+
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 describe("resolveGatewayScopedTools excludeToolNames", () => {
   beforeEach(() => {
     hoisted.createOpenClawToolsMock.mockClear();
+    hoisted.createLazyExecToolMock.mockClear();
   });
 
   function readCreateToolsArgs(index = 0): {
     clientCaps?: string[];
     cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
+    inheritedToolAllowlist?: string[];
     inheritedToolDenylist?: string[];
     pluginToolDenylist?: string[];
     sandboxed?: boolean;
@@ -58,6 +86,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     return args as {
       clientCaps?: string[];
       cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
+      inheritedToolAllowlist?: string[];
       inheritedToolDenylist?: string[];
       pluginToolDenylist?: string[];
       sandboxed?: boolean;
@@ -138,6 +167,118 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const args = readCreateToolsArgs();
     expect(args.pluginToolDenylist).toEqual(["exec"]);
     expect(args.inheritedToolDenylist).toEqual(["exec"]);
+  });
+
+  it("adds a synchronous node-forced exec tool to allowed owner loopback scopes", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("read"),
+      hoisted.makeTool("exec"),
+      hoisted.makeTool("nodes"),
+    ]);
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name).filter((name) => name === "exec")).toEqual([
+      "exec",
+    ]);
+    expect(hoisted.createLazyExecToolMock).toHaveBeenCalledOnce();
+    expect(hoisted.createLazyExecToolMock.mock.calls[0]?.[0]).toMatchObject({
+      host: "node",
+      allowBackground: false,
+    });
+    const presentation = hoisted.createLazyExecToolMock.mock.calls[0]?.[1];
+    expect(presentation?.description).toContain("node-only");
+    const schemaProperties = presentation?.parameters?.properties;
+    expect(
+      Object.keys(schemaProperties && typeof schemaProperties === "object" ? schemaProperties : {}),
+    ).toEqual(["command", "workdir", "env", "timeout", "host", "node"]);
+    const hostSchema = (
+      schemaProperties && typeof schemaProperties === "object"
+        ? (schemaProperties as Record<string, unknown>).host
+        : undefined
+    ) as { enum?: unknown } | undefined;
+    expect(hostSchema?.enum).toEqual(["node"]);
+  });
+
+  it("omits all exec variants when host policy forbids node execution", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("read"),
+      hoisted.makeTool("exec"),
+      hoisted.makeTool("nodes"),
+    ]);
+    const gatewayOnly = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+      execSession: { execHost: "gateway" },
+    });
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("read"),
+      hoisted.makeTool("exec"),
+      hoisted.makeTool("nodes"),
+    ]);
+    const sandboxAuto = resolveGatewayScopedTools({
+      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } } as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+    });
+
+    expect(gatewayOnly.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(sandboxAuto.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(hoisted.createLazyExecToolMock).not.toHaveBeenCalled();
+  });
+
+  it("does not honor the internal node-exec flag on HTTP surfaces", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("read"),
+      hoisted.makeTool("exec"),
+      hoisted.makeTool("nodes"),
+    ]);
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "http",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(hoisted.createLazyExecToolMock).not.toHaveBeenCalled();
+  });
+
+  it("filters node exec through the existing gateway deny policy", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: { gateway: { tools: { deny: ["exec"] } } } as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+  });
+
+  it("does not inherit node-only exec as a generic child or cron capability", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: { tools: { allow: ["exec", "sessions_spawn", "cron"] } } as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toContain("exec");
+    expect(readCreateToolsArgs().inheritedToolAllowlist).not.toContain("exec");
+    expect(readCreateToolsArgs().cronCreatorToolAllowlist).not.toContainEqual({ name: "exec" });
   });
 
   it("passes sandbox context and inherited sandbox denies into loopback tools", () => {

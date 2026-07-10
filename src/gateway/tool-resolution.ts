@@ -6,6 +6,9 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../agents/agent-tools.policy.js";
+import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
+import { resolveExecDefaults, type ExecSessionDefaults } from "../agents/exec-defaults.js";
+import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import {
@@ -36,7 +39,9 @@ import type {
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { logWarn } from "../logger.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
@@ -71,6 +76,12 @@ export function resolveGatewayScopedTools(params: {
   excludeToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
   gatewayRequestedTools?: string[];
+  /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
+  includeNodeExecTool?: boolean;
+  execSession?: ExecSessionDefaults;
+  trigger?: string;
+  approvalReviewerDeviceId?: string;
+  channelContext?: PluginHookChannelContext;
 }) {
   const {
     agentId,
@@ -182,7 +193,7 @@ export function resolveGatewayScopedTools(params: {
     explicitDenylist.length > 0 ||
     excludedToolNames.length > 0;
 
-  const allTools = createOpenClawTools({
+  const openClawTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
@@ -227,6 +238,80 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolAllowlist,
     inheritedToolDenylist,
   });
+  const nodeExecSurface = params.surface === "loopback" && params.includeNodeExecTool === true;
+  const nodeExecCandidate = nodeExecSurface
+    ? resolveExecDefaults({
+        cfg: params.cfg,
+        sessionEntry: params.execSession,
+        agentId,
+        sessionKey: params.sessionKey,
+        sandboxAvailable: sandboxRuntime.sandboxed,
+      })
+    : undefined;
+  const includeNodeExecTool = nodeExecCandidate?.canRequestNode === true;
+  const execConfig = includeNodeExecTool
+    ? resolveExecToolConfig({ cfg: params.cfg, agentId })
+    : undefined;
+  // CLI backends already own their local shell. This extra surface is deliberately
+  // fixed to node so it cannot become a second path to Gateway-local execution.
+  const baseTools = nodeExecSurface
+    ? openClawTools.filter((tool) => tool.name.trim().toLowerCase() !== "exec")
+    : openClawTools;
+  const allTools = includeNodeExecTool
+    ? [
+        ...baseTools,
+        createLazyExecTool(
+          {
+            host: "node",
+            mode: nodeExecCandidate.mode,
+            security: nodeExecCandidate.security,
+            ask: nodeExecCandidate.ask,
+            trigger: params.trigger,
+            node: nodeExecCandidate.node,
+            pathPrepend: execConfig?.pathPrepend,
+            safeBins: execConfig?.safeBins,
+            strictInlineEval: execConfig?.strictInlineEval,
+            commandHighlighting: execConfig?.commandHighlighting,
+            safeBinTrustedDirs: execConfig?.safeBinTrustedDirs,
+            safeBinProfiles: execConfig?.safeBinProfiles,
+            reviewer: execConfig?.reviewer,
+            config: params.cfg,
+            agentId,
+            cwd: workspaceDir,
+            allowBackground: false,
+            scopeKey: params.sessionKey,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            sessionStore: params.cfg.session?.store,
+            mainKey: params.cfg.session?.mainKey,
+            sessionScope: params.cfg.session?.scope,
+            eventRouting: resolveEventSessionRoutingPolicy({
+              cfg: params.cfg,
+              sessionKey: params.sessionKey,
+              channel: params.messageProvider,
+              accountId: params.accountId,
+            }),
+            messageProvider: params.messageProvider,
+            currentChannelId: params.currentChannelId ?? params.agentTo,
+            currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
+            channelContext: params.channelContext,
+            accountId: params.accountId,
+            approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+            backgroundMs: execConfig?.backgroundMs,
+            timeoutSec: execConfig?.timeoutSec,
+            approvalRunningNoticeMs: execConfig?.approvalRunningNoticeMs,
+            notifyOnExit: execConfig?.notifyOnExit,
+            notifyOnExitEmptySuccess: execConfig?.notifyOnExitEmptySuccess,
+          },
+          {
+            description:
+              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. Set node when multiple nodes are available.",
+            displaySummary: "Run commands on a connected node",
+            parameters: nodeExecSchema,
+          },
+        ),
+      ]
+    : baseTools;
 
   const policyFiltered = applyToolPolicyPipeline({
     tools: allTools,
@@ -265,12 +350,19 @@ export function resolveGatewayScopedTools(params: {
     ...excludedToolNames,
   ]);
   const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+  // The loopback exec tool is node-only. Do not let a raw `exec` capability get
+  // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
+  const inheritableTools = includeNodeExecTool
+    ? tools.filter((tool) => tool.name.trim().toLowerCase() !== "exec")
+    : tools;
   if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, tools);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
   }
   if (shouldCaptureCronCreatorToolAllowlist) {
-    replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, tools, (tool) =>
-      getPluginToolMeta(tool),
+    replaceWithEffectiveCronCreatorToolAllowlist(
+      cronCreatorToolAllowlist,
+      inheritableTools,
+      (tool) => getPluginToolMeta(tool),
     );
   }
 

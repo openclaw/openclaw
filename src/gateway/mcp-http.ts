@@ -7,6 +7,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -246,6 +247,11 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           senderIsOwner: requestContext.senderIsOwner,
+          nodeExecAllowed: requestContext.nodeExecAllowed,
+          execSession: requestContext.execSession,
+          trigger: requestContext.trigger,
+          approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
+          channelContext: requestContext.channelContext,
         });
 
         logMcpLoopbackTraffic("request", {
@@ -276,6 +282,17 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
                 agentId: scopedTools.agentId,
                 config: cfg,
                 sessionKey: requestContext.sessionKey,
+                sessionId: requestContext.sessionId,
+                approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
+                channelId: requestContext.currentChannelId,
+                turnSourceChannel: requestContext.messageProvider,
+                turnSourceTo: requestContext.currentChannelId,
+                turnSourceAccountId: requestContext.accountId,
+                turnSourceThreadId: requestContext.currentThreadTs,
+                loopDetection: resolveToolLoopDetectionConfig({
+                  cfg,
+                  agentId: scopedTools.agentId,
+                }),
               },
               signal: requestAbort.signal,
               onToolCallPrepared: cliCaptureHandle

@@ -1,3 +1,4 @@
+import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import type {
@@ -6,6 +7,7 @@ import type {
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import {
   buildMcpToolSchema,
   type McpLoopbackTool,
@@ -46,6 +48,11 @@ type McpLoopbackScopeParams = {
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean | undefined;
+  nodeExecAllowed?: boolean;
+  execSession?: ExecSessionDefaults;
+  trigger?: string;
+  approvalReviewerDeviceId?: string;
+  channelContext?: PluginHookChannelContext;
 };
 
 /** Resolves loopback-visible tools after applying gateway scope and native-tool exclusions. */
@@ -53,10 +60,15 @@ export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
   agentId: string | undefined;
   tools: McpLoopbackTool[];
 } {
+  const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
+  if (params.nodeExecAllowed === true) {
+    excludeToolNames.delete("exec");
+  }
   const scoped = resolveGatewayScopedTools({
     ...params,
     surface: "loopback",
-    excludeToolNames: NATIVE_TOOL_EXCLUDE,
+    excludeToolNames,
+    includeNodeExecTool: params.nodeExecAllowed === true,
   });
   return {
     agentId: scoped.agentId,
@@ -86,6 +98,15 @@ export class McpLoopbackToolCache {
       params.sourceReplyDeliveryMode ?? "",
       params.taskSuggestionDeliveryMode ?? "",
       params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
+      params.nodeExecAllowed === true ? "node-exec" : "",
+      params.execSession?.execHost ?? "",
+      params.execSession?.execSecurity ?? "",
+      params.execSession?.execAsk ?? "",
+      params.execSession?.execNode ?? "",
+      params.trigger ?? "",
+      params.approvalReviewerDeviceId ?? "",
+      params.channelContext?.sender?.id ?? "",
+      params.channelContext?.chat?.id ?? "",
       params.senderIsOwner === true
         ? "owner"
         : params.senderIsOwner === false

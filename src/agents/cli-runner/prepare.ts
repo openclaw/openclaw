@@ -159,6 +159,32 @@ function normalizeOptionalMcpContextValue(value: string | undefined): string | u
   return value?.trim() || undefined;
 }
 
+function buildCliMcpExecSession(
+  sessionEntry: RunCliAgentParams["sessionEntry"],
+): McpLoopbackRequestContext["execSession"] {
+  const execSession = {
+    execHost: normalizeOptionalMcpContextValue(sessionEntry?.execHost),
+    execSecurity: normalizeOptionalMcpContextValue(sessionEntry?.execSecurity),
+    execAsk: normalizeOptionalMcpContextValue(sessionEntry?.execAsk),
+    execNode: normalizeOptionalMcpContextValue(sessionEntry?.execNode),
+  };
+  return Object.values(execSession).some(Boolean) ? execSession : undefined;
+}
+
+function buildCliMcpChannelContext(
+  channelContext: RunCliAgentParams["channelContext"],
+): McpLoopbackRequestContext["channelContext"] {
+  const senderId = normalizeOptionalMcpContextValue(channelContext?.sender?.id);
+  const chatId = normalizeOptionalMcpContextValue(channelContext?.chat?.id);
+  if (!senderId && !chatId) {
+    return undefined;
+  }
+  return {
+    ...(senderId ? { sender: { id: senderId } } : {}),
+    ...(chatId ? { chat: { id: chatId } } : {}),
+  };
+}
+
 function buildCliMcpGrantContext(params: {
   run: RunCliAgentParams;
   config: OpenClawConfig;
@@ -172,6 +198,8 @@ function buildCliMcpGrantContext(params: {
   const clientCaps = uniqueStrings(
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
   );
+  const execSession = buildCliMcpExecSession(params.run.sessionEntry);
+  const channelContext = buildCliMcpChannelContext(params.run.channelContext);
   return {
     sessionKey,
     sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
@@ -191,6 +219,13 @@ function buildCliMcpGrantContext(params: {
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,
     senderIsOwner: params.run.senderIsOwner === true,
+    nodeExecAllowed: true,
+    ...(execSession ? { execSession } : {}),
+    ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
+    ...(normalizeOptionalMcpContextValue(params.run.approvalReviewerDeviceId)
+      ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
+      : {}),
+    ...(channelContext ? { channelContext } : {}),
   };
 }
 
@@ -811,6 +846,13 @@ export async function prepareCliRunContext(
             taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
             senderIsOwner: undefined,
+            nodeExecAllowed: true,
+            execSession: buildCliMcpExecSession(params.sessionEntry),
+            trigger: params.trigger,
+            approvalReviewerDeviceId: normalizeOptionalMcpContextValue(
+              params.approvalReviewerDeviceId,
+            ),
+            channelContext: buildCliMcpChannelContext(params.channelContext),
           }).tools
         : [];
     const promptToolNamesHash =
