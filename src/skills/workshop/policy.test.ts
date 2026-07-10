@@ -1,5 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  setRuntimeConfigSnapshot,
+} from "../../config/config.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import {
   createOpenClawTestState,
@@ -104,9 +108,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
     });
     const approvalDescription = result?.requireApproval?.description ?? "";
 
-    expect(approvalDescription.length).toBeLessThanOrEqual(
-      PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
-    );
+    expect(approvalDescription.length).toBeLessThanOrEqual(PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH);
     expect(approvalDescription).toContain(`Proposal ID: ${proposal.record.id}`);
     expect(approvalDescription).toContain(`Description: ${description}`);
     expect(approvalDescription).toContain("Support files: 0");
@@ -187,6 +189,31 @@ describe("resolveSkillWorkshopToolApproval", () => {
         toolParams: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("keeps approval pending when runtime config loading throws", async () => {
+    const sharedAgentDir = testState.agentDir("shared");
+    await testState.writeConfig({
+      agents: {
+        list: [
+          { id: "alpha", agentDir: sharedAgentDir },
+          { id: "beta", agentDir: sharedAgentDir },
+        ],
+      },
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      expect(() => getRuntimeConfig()).toThrow(/duplicate agentDir/i);
+      const result = await resolveSkillWorkshopToolApproval({
+        toolName: "skill_workshop",
+        toolParams: { action: "quarantine", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      });
+
+      expect(result?.requireApproval?.title).toBe("Quarantine workspace skill proposal");
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("keeps explicit lifecycle hook config ahead of runtime config", async () => {
