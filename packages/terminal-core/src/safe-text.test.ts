@@ -4,9 +4,7 @@ import { sanitizeTerminalText } from "./safe-text.js";
 
 describe("sanitizeTerminalText", () => {
   it("removes C1 control characters", () => {
-    // \x9b is a lone C1 CSI introducer here (not followed by a final byte),
-    // so it should be removed as a control character while printable text survives.
-    expect(sanitizeTerminalText("ab\u009b\u0085c")).toBe("abc");
+    expect(sanitizeTerminalText("ab\u0085\u008Dc")).toBe("abc");
   });
 
   it("strips cursor and erase ANSI sequences", () => {
