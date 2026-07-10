@@ -7,6 +7,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -113,6 +115,9 @@ describe("task-registry store runtime", () => {
     ORIGINAL_ENV.restore();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests({ persist: false });
+    loggingState.rawConsole = null;
+    setLoggerOverride(null);
+    resetLogger();
   });
 
   it("uses the configured task store for restore and save", () => {
@@ -175,6 +180,34 @@ describe("task-registry store runtime", () => {
     } finally {
       warnLogs.cleanup();
     }
+  });
+
+  it("includes restore parser failures in compact console warnings", () => {
+    const warn = vi.fn();
+    const invalidValue = "future-invalid-status";
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn,
+      error: vi.fn(),
+    };
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => {
+          throw new Error(
+            `Invalid persisted task delivery status: ${JSON.stringify(invalidValue)}`,
+          );
+        },
+        saveSnapshot: () => {},
+      },
+    });
+
+    expect(findTaskByRunId("run-restored")).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(
+      `Failed to restore task registry: Invalid persisted task delivery status: "${invalidValue}"`,
+    );
   });
 
   it("uses scoped owner lookups for fresh owner task reads", () => {
