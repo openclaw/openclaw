@@ -145,7 +145,7 @@ const APPLE_VIEW_TYPE = /\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)[^:{\n]*:\s*[^{\n]*\
 const APPLE_VIEW_FUNCTION =
   /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^{}]*?\)\s*(?:async\s*)?(?:throws\s*)?->\s*some\s+View\b/gu;
 const APPLE_ALERT_FUNCTION = /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)[^{]*\{[^{}]{0,600}\bNSAlert\s*\(/gu;
-const APPLE_BUILTIN_UI_TYPES = new Set([
+const APPLE_BUILTIN_UI_CALLS = new Set([
   "Alert",
   "Button",
   "ControlGroup",
@@ -166,6 +166,7 @@ const APPLE_BUILTIN_UI_TYPES = new Set([
   "TextEditor",
   "TextField",
   "Toggle",
+  "searchable",
 ]);
 const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
@@ -548,7 +549,16 @@ function decodeMultilineLiteral(raw: string): string {
     .filter((line) => line.trim())
     .map((line) => line.match(/^[ \t]*/u)?.[0].length ?? 0);
   const indent = indents.length > 0 ? Math.min(...indents) : 0;
-  return lines.map((line) => line.slice(Math.min(indent, line.length))).join("\n");
+  const deindented = lines.map((line) => line.slice(Math.min(indent, line.length)));
+  return deindented
+    .map((line, index) => {
+      if (index === deindented.length - 1) {
+        return line;
+      }
+      const trailingBackslashes = line.match(/\\+$/u)?.[0].length ?? 0;
+      return trailingBackslashes % 2 === 1 ? line.slice(0, -1) : `${line}\n`;
+    })
+    .join("");
 }
 
 function decodeLiteral(raw: string, kind: string): string {
@@ -972,7 +982,7 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
     source: string;
     surface: NativeI18nSurface;
   }> = sources;
-  const uiCallNames = new Set([...APPLE_BUILTIN_UI_TYPES, ...ANDROID_BUILTIN_UI_CALLS]);
+  const uiCallNames = new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]);
   for (const { source, surface } of typedSources) {
     if (surface === "android") {
       for (const match of source.matchAll(ANDROID_COMPOSABLE_FUNCTION)) {

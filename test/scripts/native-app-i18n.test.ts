@@ -151,6 +151,14 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatSheets.swift") &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Search sessions",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);
     expect(entries.some((entry) => entry.source === "Use Manual Gateway")).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
@@ -211,6 +219,34 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === '{"includeSecrets":true}')).toBe(false);
     expect(entries.some((entry) => entry.source === "builtIn")).toBe(false);
     expect(entries.some((entry) => entry.source === "State:  \\(stateDir)")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Let the agent move the pointer, click, and type on this Mac. Requires Accessibility permission and stays disarmed until an operator arms it. High risk.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.path.endsWith("Info.plist"))).toBe(true);
     expect(NATIVE_I18N_LOCALES).toHaveLength(21);
     expect(NATIVE_I18N_LOCALES).toContain("sv");
