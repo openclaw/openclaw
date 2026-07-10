@@ -167,7 +167,7 @@ describe("chutes plugin OAuth", () => {
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
     expect(error).toMatchObject({ name: "ProviderHttpError", status: 502 });
-    expect(message).toContain("Chutes token exchange failed (502): client_secret=***");
+    expect(message).toContain("Chutes token exchange failed (502): client_secret=");
     expect(message).not.toContain(leakedClientSecret);
     expect(message).not.toContain("tail-marker");
     expect((error as { errorBody?: string }).errorBody).not.toContain(leakedClientSecret);

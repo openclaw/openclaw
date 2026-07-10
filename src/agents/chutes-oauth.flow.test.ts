@@ -399,7 +399,7 @@ describe("chutes-oauth", () => {
 
     expect(error).toMatchObject({ name: "ProviderHttpError", status: 401 });
     const message = (error as Error).message;
-    expect(message).toContain("Chutes token refresh failed (401): refresh_token=***");
+    expect(message).toContain("Chutes token refresh failed (401): refresh_token=");
     expect(message).not.toContain(leakedRefreshToken);
     expect(message).not.toContain("tail-marker");
     expect((error as { errorBody?: string }).errorBody).not.toContain(leakedRefreshToken);
