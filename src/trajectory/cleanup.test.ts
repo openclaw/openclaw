@@ -294,7 +294,9 @@ describe("trajectory cleanup", () => {
 
         // Let the delete turn's synchronous claim+retire run and reach the
         // paused unlink before attempting a concurrent claim.
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(() => resolve());
+        });
         expect(order).toEqual(["unlink-start"]);
 
         const acquirePromise = acquireTrajectoryWriterLease({
@@ -308,7 +310,9 @@ describe("trajectory cleanup", () => {
         // The claim must queue behind the per-path lock, not run concurrently
         // with the paused unlink (P1-A) — give it every chance to (wrongly)
         // resolve early before asserting it hasn't.
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(() => resolve());
+        });
         expect(order).toEqual(["unlink-start"]);
 
         releaseUnlink();
