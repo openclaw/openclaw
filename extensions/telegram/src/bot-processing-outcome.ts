@@ -16,6 +16,7 @@ type TelegramSpooledReplayFrame = {
 
 export type TelegramSpooledReplayDeferredParticipant = {
   key: string;
+  abortSignal: AbortSignal;
   task: Promise<TelegramMessageProcessingResult>;
   settle: (result: TelegramMessageProcessingResult) => void;
 };
@@ -58,9 +59,10 @@ export function recordTelegramMessageProcessingResult(
   }
 }
 
-function createTelegramSpooledReplayParticipant(
+export function createTelegramSpooledReplayParticipant(
   key: string,
 ): TelegramSpooledReplayDeferredParticipant {
+  const abortController = new AbortController();
   let settled = false;
   let resolveTask: (result: TelegramMessageProcessingResult) => void = () => {};
   const task = new Promise<TelegramMessageProcessingResult>((resolve) => {
@@ -68,12 +70,16 @@ function createTelegramSpooledReplayParticipant(
   });
   return {
     key,
+    abortSignal: abortController.signal,
     task,
     settle: (result) => {
       if (settled) {
         return;
       }
       settled = true;
+      if (result.kind !== "completed") {
+        abortController.abort(result.kind === "failed-retryable" ? result.error : result.kind);
+      }
       resolveTask(result);
     },
   };

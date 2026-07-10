@@ -248,6 +248,12 @@ type DispatchTelegramMessageParams = {
   suppressFailureFallback?: boolean;
   /** Fires after recovery-relevant session/run state is durably persisted. */
   onTurnAdopted?: () => void | Promise<void>;
+  /** Marks a queued follow-up whose adoption will happen at reply-lane admission. */
+  onTurnDeferred?: () => void;
+  /** Releases a deferred turn that completed without ever owning the reply lane. */
+  onTurnAbandoned?: () => void;
+  /** Cancels queued/model work when ingress ownership fails before adoption. */
+  turnAbortSignal?: AbortSignal;
 };
 
 type TelegramDispatchResult = { kind: "completed" } | { kind: "failed-retryable"; error: unknown };
@@ -788,6 +794,9 @@ export const dispatchTelegramMessage = async ({
   retryDispatchErrors = false,
   suppressFailureFallback = false,
   onTurnAdopted,
+  onTurnDeferred,
+  onTurnAbandoned,
+  turnAbortSignal,
 }: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ context });
@@ -872,7 +881,11 @@ export const dispatchTelegramMessage = async ({
   let activeReplyFenceKey = replyFenceKey.activeKey;
   let replyFenceGeneration: number | undefined;
   const replyAbortController = new AbortController();
+  const replyAbortSignal = turnAbortSignal
+    ? AbortSignal.any([replyAbortController.signal, turnAbortSignal])
+    : replyAbortController.signal;
   let replyAbortControllerQueued = false;
+  let queuedTurnAdmitted = false;
   let dispatchWasSuperseded;
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
@@ -2615,26 +2628,39 @@ export const dispatchTelegramMessage = async ({
                 replyOptions: {
                   skillFilter,
                   disableBlockStreaming,
-                  abortSignal: replyAbortController.signal,
+                  abortSignal: replyAbortSignal,
                   ...(onTurnAdopted ? { onTurnAdopted } : {}),
                   sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
                   queuedDeliveryCorrelations: isRoomEvent
                     ? [{ begin: beginDeliveryCorrelation }]
                     : undefined,
-                  queuedFollowupLifecycle: isRoomEvent
-                    ? {
-                        onEnqueued: () => {
-                          replyAbortControllerQueued = true;
-                        },
-                        onComplete: () => {
-                          replyAbortControllerQueued = false;
-                          releaseTelegramReplyFenceAbortController(
-                            activeReplyFenceKey,
-                            replyAbortController,
-                          );
-                        },
-                      }
-                    : undefined,
+                  queuedFollowupLifecycle:
+                    isRoomEvent || onTurnAdopted || onTurnDeferred || onTurnAbandoned
+                      ? {
+                          onEnqueued: () => {
+                            if (isRoomEvent) {
+                              replyAbortControllerQueued = true;
+                            }
+                            onTurnDeferred?.();
+                          },
+                          onAdmitted: async () => {
+                            await onTurnAdopted?.();
+                            queuedTurnAdmitted = true;
+                          },
+                          onComplete: () => {
+                            if (isRoomEvent) {
+                              replyAbortControllerQueued = false;
+                              releaseTelegramReplyFenceAbortController(
+                                activeReplyFenceKey,
+                                replyAbortController,
+                              );
+                            }
+                            if (!queuedTurnAdmitted) {
+                              onTurnAbandoned?.();
+                            }
+                          },
+                        }
+                      : undefined,
                   suppressTyping: isRoomEvent,
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream

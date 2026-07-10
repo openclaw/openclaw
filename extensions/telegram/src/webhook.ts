@@ -51,7 +51,7 @@ import {
 } from "./spooled-update-retry-policy.js";
 import {
   claimNextTelegramSpooledUpdate,
-  completeTelegramSpooledUpdate,
+  completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
@@ -558,6 +558,7 @@ async function waitForWebhookSpooledDeferredWork(params: {
 
 async function handleWebhookSpooledUpdate(params: {
   accountId: string;
+  abortSignal?: AbortSignal;
   bot: ReturnType<typeof createTelegramBot>;
   log: (line: string) => void;
   update: ClaimedTelegramSpooledUpdate;
@@ -642,13 +643,15 @@ async function handleWebhookSpooledUpdate(params: {
       return {};
     }
   }
-  try {
-    await completeTelegramSpooledUpdate(params.update);
-  } catch (err) {
-    params.log(
-      `[telegram][diag] webhook spooled update ${params.update.updateId} completed but processing marker cleanup failed: ${formatErrorMessage(err)}`,
-    );
-  }
+  await completeTelegramSpooledUpdateWithRetry({
+    update: params.update,
+    abortSignal: params.abortSignal,
+    onRetry: ({ attempt, delayMs, error }) => {
+      params.log(
+        `[telegram][diag] webhook spooled update ${params.update.updateId} completion retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}: ${formatErrorMessage(error)}`,
+      );
+    },
+  });
   return {};
 }
 
@@ -689,6 +692,10 @@ export async function startTelegramWebhook(opts: {
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const spoolDir = opts.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: opts.accountId });
   let shutDown = false;
+  const shutdownAbortController = new AbortController();
+  const webhookAbortSignal = opts.abortSignal
+    ? AbortSignal.any([shutdownAbortController.signal, opts.abortSignal])
+    : shutdownAbortController.signal;
   const telegramAccountConfig = opts.config
     ? mergeTelegramAccountConfig(opts.config, opts.accountId ?? "default")
     : undefined;
@@ -803,6 +810,7 @@ export async function startTelegramWebhook(opts: {
         let retainLaneGuardTask: Promise<unknown> | undefined;
         void handleWebhookSpooledUpdate({
           accountId: opts.accountId ?? "default",
+          abortSignal: webhookAbortSignal,
           bot,
           log,
           update: claimedUpdate,
@@ -977,6 +985,7 @@ export async function startTelegramWebhook(opts: {
       return;
     }
     shutDown = true;
+    shutdownAbortController.abort();
     if (drainTimer) {
       clearInterval(drainTimer);
     }

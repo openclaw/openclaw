@@ -96,6 +96,11 @@ export function shouldSkipQueueItem<T>(params: {
   return params.dedupe(params.item, params.items);
 }
 
+type DrainQueueItemOptions<T> = {
+  shouldRestoreOnError?: (item: T) => boolean;
+  onDiscard?: (item: T) => void;
+};
+
 /** Apply overflow policy before enqueueing another item. */
 export function applyQueueDropPolicy<T>(params: {
   queue: QueueState<T>;
@@ -179,13 +184,22 @@ export function removeQueuedItemsByRef<T>(items: T[], processed: readonly T[]): 
 export async function drainNextQueueItem<T>(
   items: T[],
   run: (item: T) => Promise<void>,
+  options?: DrainQueueItemOptions<T>,
 ): Promise<boolean> {
-  const next = items[0];
+  const next = items.shift();
   if (!next) {
     return false;
   }
-  await run(next);
-  removeQueuedItemsByRef(items, [next]);
+  try {
+    await run(next);
+  } catch (error) {
+    if (options?.shouldRestoreOnError?.(next) ?? true) {
+      items.unshift(next);
+    } else {
+      options?.onDiscard?.(next);
+    }
+    throw error;
+  }
   return true;
 }
 
@@ -196,6 +210,7 @@ async function drainCollectItemIfNeeded<T>(params: {
   setForceIndividualCollect?: (next: boolean) => void;
   items: T[];
   run: (item: T) => Promise<void>;
+  reserveOptions?: DrainQueueItemOptions<T>;
 }): Promise<"skipped" | "drained" | "empty"> {
   if (!params.forceIndividualCollect && !params.isCrossChannel) {
     return "skipped";
@@ -204,7 +219,7 @@ async function drainCollectItemIfNeeded<T>(params: {
     // Once cross-channel items appear, future collection stays individual to preserve ordering.
     params.setForceIndividualCollect?.(true);
   }
-  const drained = await drainNextQueueItem(params.items, params.run);
+  const drained = await drainNextQueueItem(params.items, params.run, params.reserveOptions);
   return drained ? "drained" : "empty";
 }
 
@@ -214,6 +229,7 @@ export async function drainCollectQueueStep<T>(params: {
   isCrossChannel: boolean;
   items: T[];
   run: (item: T) => Promise<void>;
+  reserveOptions?: DrainQueueItemOptions<T>;
 }): Promise<"skipped" | "drained" | "empty"> {
   return await drainCollectItemIfNeeded({
     forceIndividualCollect: params.collectState.forceIndividualCollect,
@@ -223,6 +239,7 @@ export async function drainCollectQueueStep<T>(params: {
     },
     items: params.items,
     run: params.run,
+    reserveOptions: params.reserveOptions,
   });
 }
 

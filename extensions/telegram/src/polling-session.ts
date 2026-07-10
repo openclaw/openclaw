@@ -38,7 +38,7 @@ import {
 } from "./spooled-update-retry-policy.js";
 import {
   claimNextTelegramSpooledUpdate,
-  completeTelegramSpooledUpdate,
+  completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
@@ -628,6 +628,7 @@ export class TelegramPollingSession {
 
   async #handleClaimedSpooledUpdate(params: {
     bot: TelegramBot;
+    onTurnAdopted: () => void;
     stopClaimRefresh: () => void;
     update: ClaimedTelegramSpooledUpdate;
   }): Promise<boolean> {
@@ -649,18 +650,26 @@ export class TelegramPollingSession {
       this.#registerDeferredSpooledUpdate({
         deferredWork: replay.deferredWork,
         laneKey: this.#spooledUpdateLaneKey(params.update),
+        onTurnAdopted: params.onTurnAdopted,
         stopClaimRefresh: params.stopClaimRefresh,
         update: params.update,
       });
       return true;
     }
     try {
-      params.stopClaimRefresh();
-      await completeTelegramSpooledUpdate(params.update);
+      await completeTelegramSpooledUpdateWithRetry({
+        update: params.update,
+        abortSignal: this.opts.abortSignal,
+        onRetry: ({ attempt, delayMs, error }) => {
+          this.opts.log(
+            `[telegram][diag] spooled update ${params.update.updateId} completion retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}: ${formatErrorMessage(error)}`,
+          );
+        },
+      });
       return true;
     } catch (err) {
       this.opts.log(
-        `[telegram][diag] spooled update ${params.update.updateId} completed but processing marker cleanup failed: ${formatErrorMessage(err)}`,
+        `[telegram][diag] spooled update ${params.update.updateId} completed but could not tombstone its claimed spool row: ${formatErrorMessage(err)}`,
       );
       return false;
     }
@@ -669,6 +678,7 @@ export class TelegramPollingSession {
   #registerDeferredSpooledUpdate(params: {
     deferredWork: TelegramSpooledReplayDeferredParticipant;
     laneKey: string;
+    onTurnAdopted: () => void;
     stopClaimRefresh: () => void;
     update: ClaimedTelegramSpooledUpdate;
   }): void {
@@ -682,6 +692,13 @@ export class TelegramPollingSession {
       deferredSpooledUpdateClaimsByKey.delete(claimKey);
     }
     let settled = false;
+    const releaseState = (): void => {
+      state.stopClaimRefresh();
+      if (deferredSpooledUpdateClaimsByKey.get(claimKey) === state) {
+        deferredSpooledUpdateClaimsByKey.delete(claimKey);
+      }
+      this.#deferredSpooledUpdateClaimKeys.delete(claimKey);
+    };
     const finish = async (result: TelegramMessageProcessingResult): Promise<void> => {
       if (settled) {
         return;
@@ -690,12 +707,13 @@ export class TelegramPollingSession {
       if (state.timer) {
         clearTimeout(state.timer);
       }
-      state.stopClaimRefresh();
-      if (deferredSpooledUpdateClaimsByKey.get(claimKey) === state) {
-        deferredSpooledUpdateClaimsByKey.delete(claimKey);
+      if (result.kind === "completed") {
+        // Claim refresh must continue through tombstone retry, but durable
+        // adoption transfers cancellation ownership away from ingress.
+        params.onTurnAdopted();
       }
-      this.#deferredSpooledUpdateClaimKeys.delete(claimKey);
       if (result.kind === "failed-retryable") {
+        releaseState();
         if (state.timedOutMessage) {
           await this.#failTimedOutDeferredSpooledUpdate(state);
           return;
@@ -707,11 +725,21 @@ export class TelegramPollingSession {
         return;
       }
       try {
-        await completeTelegramSpooledUpdate(params.update);
+        await completeTelegramSpooledUpdateWithRetry({
+          update: params.update,
+          abortSignal: this.opts.abortSignal,
+          onRetry: ({ attempt, delayMs, error }) => {
+            this.opts.log(
+              `[telegram][diag] spooled update ${params.update.updateId} buffered completion retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}: ${formatErrorMessage(error)}`,
+            );
+          },
+        });
       } catch (err) {
         this.opts.log(
-          `[telegram][diag] spooled update ${params.update.updateId} completed after buffered processing but processing marker cleanup failed: ${formatErrorMessage(err)}`,
+          `[telegram][diag] spooled update ${params.update.updateId} completed after buffered processing but could not tombstone its claimed spool row: ${formatErrorMessage(err)}`,
         );
+      } finally {
+        releaseState();
       }
     };
     const state: DeferredSpooledUpdateClaimState = {
@@ -969,10 +997,14 @@ export class TelegramPollingSession {
         blockedLaneKeys.add(laneKey);
         continue;
       }
+      let abortReplyWorkOnClaimRefreshFailure = true;
       const stopClaimRefresh = this.#startSpooledUpdateClaimRefresh(
         claimedUpdate,
         params.isDrainHealthy,
         () => {
+          if (!abortReplyWorkOnClaimRefreshFailure) {
+            return;
+          }
           const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
             accountId: this.opts.accountId,
             sequentialKey: laneKey,
@@ -987,6 +1019,9 @@ export class TelegramPollingSession {
       );
       const handler = this.#handleClaimedSpooledUpdate({
         bot: params.bot,
+        onTurnAdopted: () => {
+          abortReplyWorkOnClaimRefreshFailure = false;
+        },
         stopClaimRefresh,
         update: claimedUpdate,
       });

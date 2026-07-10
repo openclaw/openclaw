@@ -1269,6 +1269,7 @@ export async function runReplyAgent(params: {
       followupRun.prompt,
       {
         steeringMode: "all",
+        ...(opts?.onTurnAdopted ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
         ...(followupRun.userTurnTranscriptRecorder
           ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
@@ -1276,6 +1277,17 @@ export async function runReplyAgent(params: {
       },
     );
     if (steerOutcome.queued) {
+      try {
+        await opts?.onTurnAdopted?.();
+      } catch (error) {
+        // Transcript-backed steering is already irrevocably queued here.
+        // Replaying ingress would duplicate the injected user turn.
+        logVerbose(
+          `queue: active session ${steerSessionId} adoption finalizer failed after transcript commit: ${String(
+            error,
+          )}`,
+        );
+      }
       if (followupRun.currentInboundAudio === true) {
         activeReplyOperation?.markAcceptedSteeredInboundAudio();
       }
