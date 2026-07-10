@@ -16,7 +16,10 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -978,6 +981,14 @@ export function attachGatewayUpgradeHandler(opts: {
         ) {
           return;
         }
+      }
+      // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
+      // Core Gateway upgrades must stop at the HTTP boundary so a client cannot hold an
+      // untracked pre-connect socket after suspension or restart admission closes.
+      if (isGatewayWorkAdmissionClosed()) {
+        writeUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+        socket.destroy();
+        return;
       }
       const preauthBudgetKey = requestClientIp;
       if (wss.listenerCount("connection") === 0) {
