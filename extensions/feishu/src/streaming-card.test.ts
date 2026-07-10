@@ -589,7 +589,14 @@ describe("FeishuStreamingSession", () => {
     const previous = "> Thinking one\n\n---\n\nanswer";
     const next = "> Thinking two\n\n---\n\nanswer more";
     let sentTextWhenSettingsClosed: string | undefined;
-    let session!: FeishuStreamingSession;
+    const state: StreamingSessionState = {
+      cardId: "card_rejected_pending_reasoning_close",
+      messageId: "om_rejected_pending_reasoning_close",
+      sequence: 1,
+      currentText: previous,
+      sentText: previous,
+      hasNote: false,
+    };
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
         return jsonResponse({
@@ -605,27 +612,19 @@ describe("FeishuStreamingSession", () => {
       }
       if (url.pathname.includes("/settings")) {
         settingsBodies.push(body);
-        sentTextWhenSettingsClosed = (session as unknown as { state: StreamingSessionState }).state
-          .sentText;
+        sentTextWhenSettingsClosed = state.sentText;
       }
       return jsonResponse({ code: 0, msg: "ok" });
     });
     const log = vi.fn();
-    session = new FeishuStreamingSession(
+    const session = new FeishuStreamingSession(
       {} as never,
       { appId: "app_rejected_pending_reasoning_close", appSecret: "secret" },
       log,
       deps,
     );
     setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_rejected_pending_reasoning_close",
-        messageId: "om_rejected_pending_reasoning_close",
-        sequence: 1,
-        currentText: previous,
-        sentText: previous,
-        hasNote: false,
-      },
+      state,
       lastUpdateTime: 2_900,
     });
 
