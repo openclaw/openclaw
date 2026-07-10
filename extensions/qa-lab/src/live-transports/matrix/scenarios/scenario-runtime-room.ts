@@ -43,6 +43,7 @@ import {
   runDriverTopLevelMentionScenario,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
+  truncateMatrixQaPreview,
   waitForMembershipEvent,
   type MatrixQaScenarioContext,
   type MatrixQaSyncState,
@@ -597,8 +598,8 @@ async function runMatrixStreamingPreviewScenario(
   return {
     artifacts: {
       driverEventId,
-      previewFormattedBodyPreview: preview.event.formattedBody?.slice(0, 200),
-      previewBodyPreview: preview.event.body?.slice(0, 200),
+      previewFormattedBodyPreview: truncateMatrixQaPreview(preview.event.formattedBody),
+      previewBodyPreview: truncateMatrixQaPreview(preview.event.body),
       previewEventId: preview.event.eventId,
       previewMentions: preview.event.mentions,
       reply: finalReply,
@@ -922,9 +923,11 @@ async function runMatrixToolProgressScenario(
       return {
         artifacts: {
           driverEventId,
-          previewBodyPreview: progressAfterFinal.event.body?.slice(0, 200),
+          previewBodyPreview: truncateMatrixQaPreview(progressAfterFinal.event.body),
           previewEventId: progressPreviewEventId,
-          previewFormattedBodyPreview: progressAfterFinal.event.formattedBody?.slice(0, 200),
+          previewFormattedBodyPreview: truncateMatrixQaPreview(
+            progressAfterFinal.event.formattedBody,
+          ),
           previewMentions: progressAfterFinal.event.mentions,
           reply: finalReply,
           token: params.finalText,
@@ -1086,9 +1089,9 @@ async function runMatrixToolProgressScenario(
   return {
     artifacts: {
       driverEventId,
-      previewBodyPreview: progress.event.body?.slice(0, 200),
+      previewBodyPreview: truncateMatrixQaPreview(progress.event.body),
       previewEventId: previewRootEventId,
-      previewFormattedBodyPreview: progress.event.formattedBody?.slice(0, 200),
+      previewFormattedBodyPreview: truncateMatrixQaPreview(progress.event.formattedBody),
       previewMentions: progress.event.mentions,
       reply: finalReply,
       token: params.finalText,

@@ -1,5 +1,6 @@
 // QA Lab Matrix plugin module implements scenario runtime shared behavior.
 import { randomUUID } from "node:crypto";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import type { MatrixQaFaultProxyObserver } from "../substrate/fault-proxy.js";
@@ -67,6 +68,13 @@ export type MatrixQaScenarioContext = {
 
 const NO_REPLY_WINDOW_MS = 8_000;
 const NO_REPLY_WINDOW_ENV = "OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS";
+const MATRIX_QA_PREVIEW_LIMIT = 200;
+
+export function truncateMatrixQaPreview(value: string | null | undefined) {
+  return value === undefined || value === null
+    ? undefined
+    : truncateUtf16Safe(value, MATRIX_QA_PREVIEW_LIMIT);
+}
 
 export function resolveMatrixQaNoReplyWindowMs(timeoutMs: number) {
   const raw = process.env[NO_REPLY_WINDOW_ENV]?.trim();
@@ -189,7 +197,7 @@ export function buildMatrixReplyArtifact(
 ): MatrixQaReplyArtifact {
   const replyBody = event.body?.trim();
   return {
-    bodyPreview: replyBody?.slice(0, 200),
+    bodyPreview: truncateMatrixQaPreview(replyBody),
     eventId: event.eventId,
     mentions: event.mentions,
     relatesTo: event.relatesTo,
@@ -200,7 +208,7 @@ export function buildMatrixReplyArtifact(
 
 export function buildMatrixNoticeArtifact(event: MatrixQaObservedEvent) {
   return {
-    bodyPreview: event.body?.trim().slice(0, 200),
+    bodyPreview: truncateMatrixQaPreview(event.body?.trim()),
     eventId: event.eventId,
     sender: event.sender,
   };

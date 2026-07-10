@@ -21,6 +21,7 @@ import {
   isMatrixQaExactMarkerReply,
   isMatrixQaMessageLikeKind,
   primeMatrixQaActorCursor,
+  truncateMatrixQaPreview,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
@@ -43,7 +44,7 @@ function buildMatrixQaAttachmentDetailLines(params: {
     `${params.label} msgtype: ${params.attachmentEvent.msgtype ?? "<none>"}`,
     `${params.label} attachment kind: ${params.attachmentEvent.attachment?.kind ?? "<none>"}`,
     `${params.label} attachment filename: ${params.attachmentEvent.attachment?.filename ?? "<none>"}`,
-    `${params.label} body preview: ${params.attachmentEvent.body?.slice(0, 200) ?? "<none>"}`,
+    `${params.label} body preview: ${truncateMatrixQaPreview(params.attachmentEvent.body) ?? "<none>"}`,
   ];
 }
 
@@ -124,7 +125,7 @@ export async function runImageUnderstandingAttachmentScenario(context: MatrixQaS
   const reply = buildMatrixReplyArtifact(matched.event);
   return {
     artifacts: {
-      attachmentCaptionPreview: attachmentEvent.event.attachment?.caption?.slice(0, 200),
+      attachmentCaptionPreview: truncateMatrixQaPreview(attachmentEvent.event.attachment?.caption),
       attachmentFilename: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
       driverEventId,
       reply,
@@ -441,7 +442,7 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
   );
   return {
     artifacts: {
-      attachmentBodyPreview: matchedEvent.body?.slice(0, 200),
+      attachmentBodyPreview: truncateMatrixQaPreview(matchedEvent.body),
       attachmentEventId: matchedEvent.eventId,
       attachmentFilename: attachment.filename,
       attachmentKind: attachment.kind,
