@@ -293,6 +293,7 @@ export const rotateTranscriptAfterCompactionMock: Mock<
 > = vi.fn(async () => ({
   rotated: false,
 }));
+export const rotateTranscriptFileAfterCompactionMock = vi.fn((_params?: unknown) => undefined);
 export const enqueueCommandInLaneMock = vi.fn((_lane: unknown, task: () => unknown) => task());
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
@@ -494,6 +495,7 @@ export function resetCompactSessionStateMocks(): void {
   resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
   rotateTranscriptAfterCompactionMock.mockReset();
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
+  rotateTranscriptFileAfterCompactionMock.mockReset();
   enqueueCommandInLaneMock.mockReset();
   enqueueCommandInLaneMock.mockImplementation((_lane: unknown, task: () => unknown) => task());
   listRegisteredPluginAgentPromptGuidanceMock.mockReset();
@@ -590,6 +592,7 @@ export async function loadCompactHooksHarness(): Promise<{
   testing: typeof import("./compact.js").testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
+  SessionManager: typeof import("../sessions/session-manager.js").SessionManager;
 }> {
   resetCompactHooksHarnessMocks();
   vi.resetModules();
@@ -741,6 +744,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../session-file-repair.js", () => ({
+    invalidateSessionFileRepairCache: vi.fn(),
     repairSessionFileIfNeeded: vi.fn(async () => {}),
   }));
 
@@ -902,6 +906,12 @@ export async function loadCompactHooksHarness(): Promise<{
     return {
       ...actual,
       rotateTranscriptAfterCompaction: rotateTranscriptAfterCompactionMock,
+      rotateTranscriptFileAfterCompaction: async (
+        params: Parameters<typeof actual.rotateTranscriptFileAfterCompaction>[0],
+      ) => {
+        rotateTranscriptFileAfterCompactionMock(params);
+        return await actual.rotateTranscriptFileAfterCompaction(params);
+      },
     };
   });
 
@@ -1050,16 +1060,19 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  const [compactModule, compactQueuedModule, transcriptEvents] = await Promise.all([
-    import("./compact.js"),
-    import("./compact.queued.js"),
-    import("../../sessions/transcript-events.js"),
-  ]);
+  const [compactModule, compactQueuedModule, transcriptEvents, sessionManagerModule] =
+    await Promise.all([
+      import("./compact.js"),
+      import("./compact.queued.js"),
+      import("../../sessions/transcript-events.js"),
+      import("../sessions/session-manager.js"),
+    ]);
 
   return {
     ...compactModule,
     compactEmbeddedAgentSession: compactQueuedModule.compactEmbeddedAgentSession,
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
+    SessionManager: sessionManagerModule.SessionManager,
   };
 }

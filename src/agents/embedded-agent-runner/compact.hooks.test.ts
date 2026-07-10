@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 // Hook integration coverage for direct and queued embedded compaction.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
@@ -41,6 +44,7 @@ import {
   selectAgentHarnessForPreparedModelProvidersMock,
   selectAgentHarnessMock,
   shouldPreferExplicitConfigApiKeyAuthMock,
+  rotateTranscriptFileAfterCompactionMock,
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
   sessionAbortCompactionMock,
@@ -61,6 +65,7 @@ let compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmb
 let compactTesting: typeof import("./compact.js").testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
+let HarnessSessionManager: typeof import("../sessions/session-manager.js").SessionManager;
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
@@ -307,6 +312,7 @@ beforeAll(async () => {
   compactTesting = loaded.testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
+  HarnessSessionManager = loaded.SessionManager;
 });
 
 beforeEach(() => {
@@ -3845,6 +3851,74 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         active.activeSessionKey,
         active.activeSessionFile,
       );
+    }
+  });
+
+  it("keeps the session cache warm through queued successor rotation", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "compact-cache-caller-test-"));
+    const manager = HarnessSessionManager.create(dir, dir);
+    const firstKeptId = manager.appendMessage({
+      role: "user",
+      content: "kept user",
+      timestamp: 1,
+    });
+    manager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "kept assistant" }],
+        timestamp: 2,
+      }),
+    );
+    manager.appendCompaction("Summary of old work.", firstKeptId, 5000);
+    const sessionFile = manager.getSessionFile();
+    if (!sessionFile) {
+      throw new Error("expected compact caller session file");
+    }
+    // The normal embedded-run lifecycle opens the manager before queued
+    // compaction. Rotation must consume that retained canonical snapshot.
+    HarnessSessionManager.open(sessionFile);
+
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    contextEngineCompactMock.mockImplementationOnce(async () => {
+      // Checkpoint capture reads before engine compaction. Measure only the
+      // post-engine interval that owns successor rotation.
+      readFileSpy.mockClear();
+      return {
+        ok: true,
+        compacted: true,
+        reason: undefined,
+        result: { summary: "engine-summary", tokensAfter: 50 },
+      };
+    });
+    try {
+      const result = await compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          sessionId: manager.getSessionId(),
+          sessionKey: undefined,
+          sessionFile,
+          workspaceDir: dir,
+          config: {
+            agents: {
+              defaults: {
+                compaction: {
+                  truncateAfterCompaction: true,
+                },
+              },
+            },
+          },
+        }),
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.compacted).toBe(true);
+      expect(rotateTranscriptFileAfterCompactionMock).toHaveBeenCalledWith({ sessionFile });
+      expect(
+        readFileSpy.mock.calls.some(
+          ([file]) => typeof file === "string" && path.resolve(file) === path.resolve(sessionFile),
+        ),
+      ).toBe(false);
+    } finally {
+      readFileSpy.mockRestore();
+      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 

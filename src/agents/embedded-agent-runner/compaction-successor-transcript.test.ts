@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   rotateTranscriptAfterCompaction,
@@ -116,10 +116,186 @@ function createCompactedSession(sessionDir: string): {
   };
 }
 
+type DifferentialFixture =
+  | "malformed rows"
+  | "duplicate IDs"
+  | "invalid leaf controls"
+  | "opaque parent rows";
+
+function buildDifferentialFixture(kind: DifferentialFixture, cwd: string): string {
+  const timestamp = (second: number) => `2026-04-27T12:00:${String(second).padStart(2, "0")}.000Z`;
+  const rows: unknown[] = [
+    {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "source-session",
+      timestamp: timestamp(0),
+      cwd,
+    },
+    {
+      type: "message",
+      id: "old-user",
+      parentId: null,
+      timestamp: timestamp(1),
+      message: { role: "user", content: "old user", timestamp: 1 },
+    },
+    {
+      type: "message",
+      id: "old-assistant",
+      parentId: "old-user",
+      timestamp: timestamp(2),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "old assistant" }],
+        timestamp: 2,
+      },
+    },
+    {
+      type: "message",
+      id: "kept-user",
+      parentId: "old-assistant",
+      timestamp: timestamp(3),
+      message: { role: "user", content: "kept user", timestamp: 3 },
+    },
+    {
+      type: "message",
+      id: "kept-assistant",
+      parentId: "kept-user",
+      timestamp: timestamp(4),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "kept assistant" }],
+        timestamp: 4,
+      },
+    },
+  ];
+
+  let compactionParentId = "kept-assistant";
+  if (kind === "malformed rows") {
+    rows.push("not valid json {{{");
+    rows.push({
+      type: "message",
+      id: "malformed-parent",
+      parentId: "kept-assistant",
+      timestamp: timestamp(5),
+      message: { role: "assistant", content: 42, timestamp: 5 },
+    });
+    compactionParentId = "malformed-parent";
+  } else if (kind === "duplicate IDs") {
+    rows.push({
+      type: "message",
+      id: "kept-assistant",
+      parentId: "kept-user",
+      timestamp: timestamp(5),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "duplicate should be ignored" }],
+        timestamp: 5,
+      },
+    });
+  } else if (kind === "invalid leaf controls") {
+    rows.push({
+      type: "leaf",
+      id: "invalid-leaf",
+      parentId: "kept-assistant",
+      timestamp: timestamp(5),
+      targetId: "missing-target",
+      appendParentId: "missing-parent",
+      appendMode: "side",
+    });
+    compactionParentId = "invalid-leaf";
+  } else {
+    rows.push({
+      type: "plugin-owned-state",
+      id: "opaque-parent",
+      parentId: "kept-assistant",
+      timestamp: timestamp(5),
+      payload: { cursor: 1 },
+    });
+    compactionParentId = "opaque-parent";
+  }
+
+  rows.push(
+    {
+      type: "compaction",
+      id: "compaction",
+      parentId: compactionParentId,
+      timestamp: timestamp(6),
+      summary: "Summary of old work.",
+      firstKeptEntryId: "kept-user",
+      tokensBefore: 5000,
+    },
+    {
+      type: "message",
+      id: "post-user",
+      parentId: "compaction",
+      timestamp: timestamp(7),
+      message: { role: "user", content: "post user", timestamp: 7 },
+    },
+    {
+      type: "message",
+      id: "post-assistant",
+      parentId: "post-user",
+      timestamp: timestamp(8),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "post assistant" }],
+        timestamp: 8,
+      },
+    },
+  );
+  return `${rows.map((row) => (typeof row === "string" ? row : JSON.stringify(row))).join("\n")}\n`;
+}
+
+async function rotateDifferentialFixture(params: {
+  dir: string;
+  kind: DifferentialFixture;
+  warm: boolean;
+}): Promise<unknown> {
+  const sessionFile = path.join(
+    params.dir,
+    `${params.kind.replaceAll(" ", "-")}-${params.warm ? "warm" : "cold"}.jsonl`,
+  );
+  await fs.writeFile(sessionFile, buildDifferentialFixture(params.kind, params.dir));
+  if (params.warm) {
+    SessionManager.open(sessionFile, params.dir, params.dir);
+  }
+
+  const result = await rotateTranscriptFileAfterCompaction({
+    sessionFile,
+    now: () => new Date("2026-04-27T13:00:00.000Z"),
+  });
+  const successorFile = requireString(result.sessionFile, "differential successor file");
+  const persisted = (await fs.readFile(successorFile, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const header = persisted[0];
+  const context = SessionManager.open(successorFile).buildSessionContext();
+  return {
+    result: {
+      rotated: result.rotated,
+      compactionEntryId: result.compactionEntryId,
+      leafId: result.leafId,
+      entriesWritten: result.entriesWritten,
+    },
+    header: {
+      type: header?.type,
+      version: header?.version,
+      timestamp: header?.timestamp,
+      cwd: header?.cwd,
+    },
+    entries: persisted.slice(1),
+    messages: context.messages,
+  };
+}
+
 describe("rotateTranscriptAfterCompaction", () => {
   it("can rotate a persisted transcript without opening a manager", async () => {
     const dir = await createTmpDir();
-    const { sessionFile } = createCompactedSession(dir);
+    const { sessionFile: cachedSessionFile } = createCompactedSession(dir);
+    const sessionFile = path.join(dir, "cold-session.jsonl");
+    await fs.copyFile(cachedSessionFile, sessionFile);
 
     // File-only rotation is used after the active manager has moved on; opening
     // a new manager here would hide bugs in the direct persistence path.
@@ -184,6 +360,94 @@ describe("rotateTranscriptAfterCompaction", () => {
         timestamp: 6,
       },
     ]);
+  });
+
+  it("reuses a complete cached transcript without reading the source file", async () => {
+    const dir = await createTmpDir();
+    const { sessionFile } = createCompactedSession(dir);
+    SessionManager.open(sessionFile);
+
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    try {
+      const result = await rotateTranscriptFileAfterCompaction({
+        sessionFile,
+        now: () => new Date("2026-04-27T12:00:00.000Z"),
+      });
+
+      expect(result.rotated).toBe(true);
+      expect(
+        readFileSpy.mock.calls.some(
+          ([file]) => typeof file === "string" && path.resolve(file) === path.resolve(sessionFile),
+        ),
+      ).toBe(false);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("falls back to the canonical reader when the cached transcript changed", async () => {
+    const dir = await createTmpDir();
+    const { sessionFile } = createCompactedSession(dir);
+    SessionManager.open(sessionFile);
+    await fs.appendFile(sessionFile, "\n");
+
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    try {
+      const result = await rotateTranscriptFileAfterCompaction({ sessionFile });
+
+      expect(result.rotated).toBe(true);
+      expect(
+        readFileSpy.mock.calls.some(
+          ([file]) => typeof file === "string" && path.resolve(file) === path.resolve(sessionFile),
+        ),
+      ).toBe(true);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("falls back after a same-size source file replacement", async () => {
+    const dir = await createTmpDir();
+    const { sessionFile } = createCompactedSession(dir);
+    SessionManager.open(sessionFile);
+    const original = await fs.readFile(sessionFile, "utf8");
+    const replacement = original.replace("post assistant", "evil assistant");
+    expect(replacement).not.toBe(original);
+    expect(Buffer.byteLength(replacement)).toBe(Buffer.byteLength(original));
+    const replacementFile = path.join(dir, "replacement.jsonl");
+    await fs.writeFile(replacementFile, replacement, "utf8");
+    await fs.rename(replacementFile, sessionFile);
+
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    try {
+      const result = await rotateTranscriptFileAfterCompaction({ sessionFile });
+      const successorFile = requireString(result.sessionFile, "successor session file");
+
+      expect(result.rotated).toBe(true);
+      expect(
+        readFileSpy.mock.calls.some(
+          ([file]) => typeof file === "string" && path.resolve(file) === path.resolve(sessionFile),
+        ),
+      ).toBe(true);
+      expect(await fs.readFile(successorFile, "utf8")).toContain("evil assistant");
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    "malformed rows",
+    "duplicate IDs",
+    "invalid leaf controls",
+    "opaque parent rows",
+  ] as const)("matches canonical cold rotation for %s", async (kind) => {
+    const dir = await createTmpDir();
+    const cold = await rotateDifferentialFixture({ dir, kind, warm: false });
+    const warm = await rotateDifferentialFixture({ dir, kind, warm: true });
+
+    expect(warm).toEqual(cold);
+    expect(JSON.stringify(warm)).toContain("post assistant");
+    expect(JSON.stringify(warm)).not.toContain("duplicate should be ignored");
   });
 
   it("keeps the paired tool result without replaying summarized custom context", async () => {

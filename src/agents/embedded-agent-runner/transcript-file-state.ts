@@ -18,6 +18,7 @@ import {
   type SessionEntry,
   type SessionHeader,
 } from "../sessions/index.js";
+import { tryReadCachedSessionEntries } from "../sessions/session-manager-cache-internal.js";
 
 // Mutable view over a session JSONL transcript. The runner uses this layer to
 // tolerate old or partially malformed rows before appending new canonical rows.
@@ -960,10 +961,8 @@ export class TranscriptFileState {
   }
 }
 
-/** Read a transcript file, migrate old rows, and drop only unrecoverable entries. */
-export async function readTranscriptFileState(sessionFile: string): Promise<TranscriptFileState> {
-  const raw = await fs.readFile(sessionFile, "utf-8");
-  const fileEntries = (parseSessionEntries(raw) as unknown[]).map(fileEntryOrMigrationSlot);
+function createTranscriptFileState(parsedEntries: readonly unknown[]): TranscriptFileState {
+  const fileEntries = parsedEntries.map(fileEntryOrMigrationSlot);
   const headerBeforeMigration =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const headerVersionBeforeMigration = sessionHeaderVersion(headerBeforeMigration);
@@ -972,6 +971,20 @@ export async function readTranscriptFileState(sessionFile: string): Promise<Tran
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   return createReadableTranscriptFileState({ fileEntries, header, migrated });
+}
+
+/** Reuse parsed rows while applying the same validation and repair as a cold read. */
+export function readCachedTranscriptFileState(
+  sessionFile: string,
+): TranscriptFileState | undefined {
+  const cachedEntries = tryReadCachedSessionEntries(sessionFile);
+  return cachedEntries ? createTranscriptFileState(cachedEntries) : undefined;
+}
+
+/** Read a transcript file, migrate old rows, and drop only unrecoverable entries. */
+export async function readTranscriptFileState(sessionFile: string): Promise<TranscriptFileState> {
+  const raw = await fs.readFile(sessionFile, "utf-8");
+  return createTranscriptFileState(parseSessionEntries(raw) as unknown[]);
 }
 
 /** Rewrite the full transcript through the private-file store. */

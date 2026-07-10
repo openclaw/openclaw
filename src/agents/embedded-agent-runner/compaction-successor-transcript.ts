@@ -10,6 +10,7 @@ import type { CompactionEntry, SessionEntry, SessionHeader } from "../sessions/i
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
 import { stripThinkingSignaturesFromMessage } from "./thinking.js";
 import {
+  readCachedTranscriptFileState,
   readTranscriptFileState,
   TranscriptFileState,
   writeTranscriptFileAtomic,
@@ -91,7 +92,9 @@ export async function rotateTranscriptFileAfterCompaction(params: {
   sessionFile: string;
   now?: () => Date;
 }): Promise<CompactionTranscriptRotation> {
-  const state = await readTranscriptFileState(params.sessionFile);
+  const state =
+    readCachedTranscriptFileState(params.sessionFile) ??
+    (await readTranscriptFileState(params.sessionFile));
   return rotateTranscriptAfterCompaction({
     sessionManager: state,
     sessionFile: params.sessionFile,

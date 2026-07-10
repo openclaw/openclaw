@@ -63,6 +63,14 @@ import {
 } from "../runtime/index.js";
 import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import {
+  type CachedSessionEntries,
+  isSameSessionFileSnapshot,
+  readSessionFileSnapshot,
+  readSessionFileSnapshotIfExists,
+  type SessionFileSnapshot,
+  sessionEntriesCache,
+} from "./session-manager-cache-internal.js";
 
 export { CURRENT_SESSION_VERSION };
 
@@ -506,46 +514,10 @@ function loadEntriesFromFileWithSnapshot(filePath: string): {
   throw new Error(`session file changed repeatedly while loading: ${resolvedPath}`);
 }
 
-interface SessionFileSnapshot {
-  dev: bigint;
-  ino: bigint;
-  size: bigint;
-  mtimeNs: bigint;
-  ctimeNs: bigint;
-}
-
-interface CachedSessionEntries {
-  snapshot: SessionFileSnapshot;
-  entries: FileEntry[];
-  endsWithNewline: boolean;
-}
-
 const MAX_CACHED_SESSION_FILES = 8;
 // Bound approximate retained payload bytes as well as file count; parsed JSON
 // has higher overhead than the transcript bytes used for this conservative cap.
 const MAX_CACHED_SESSION_BYTES = 32n * 1024n * 1024n;
-const sessionEntriesCache = new Map<string, CachedSessionEntries>();
-
-function readSessionFileSnapshot(filePath: string): SessionFileSnapshot {
-  const fileStat = statSync(filePath, { bigint: true });
-  return {
-    dev: fileStat.dev,
-    ino: fileStat.ino,
-    size: fileStat.size,
-    mtimeNs: fileStat.mtimeNs,
-    ctimeNs: fileStat.ctimeNs,
-  };
-}
-
-function isSameSessionFileSnapshot(left: SessionFileSnapshot, right: SessionFileSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.size === right.size &&
-    left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs
-  );
-}
 
 function rememberSessionEntries(
   filePath: string,
@@ -855,14 +827,6 @@ function messageSerializesOwnedValues(
     return hasOwnProperty(message, "details");
   }
   return false;
-}
-
-function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot | undefined {
-  try {
-    return readSessionFileSnapshot(filePath);
-  } catch {
-    return undefined;
-  }
 }
 
 function sessionFileNeedsAppendSeparator(
