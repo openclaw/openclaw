@@ -201,9 +201,9 @@ export function createProfileSelectionOps({
       if (lastResolved && lastResolved !== "AMBIGUOUS") {
         return lastResolved;
       }
-      // Chrome MCP identity is authoritative. Once a selected target disappears,
-      // require a fresh explicit choice instead of guessing another tab.
-      if (last && capabilities.usesChromeMcp) {
+      // Sticky selection is an identity promise. If it disappears without a proven
+      // alias migration, require a fresh explicit choice instead of guessing a tab.
+      if (last) {
         return null;
       }
       // Prefer a real page tab first (avoid service workers/background targets).
