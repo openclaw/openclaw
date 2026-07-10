@@ -294,6 +294,9 @@ conversation bindings, or any non-Codex harness.
                 marketplaceName: "openai-curated",
                 pluginName: "google-calendar",
                 allow_destructive_actions: false,
+                tools: {
+                  "google_calendar.read_event": { enabled: false },
+                },
               },
             },
           },
@@ -329,6 +332,15 @@ conversation bindings, or any non-Codex harness.
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the
   same `true`, `false`, `"auto"`, or `"ask"` policies.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.tools`: exact,
+  case-sensitive Codex per-app tool overrides as
+  `Record<string, { enabled: boolean }>`. Keys must be non-empty and trimmed;
+  rule objects reject `app` and other unknown properties. OpenClaw copies the
+  complete map to every admitted app proven to be owned by that plugin, and
+  Codex performs exact raw-name-then-title matching inside each app. This is an
+  override map, not an allowlist; unknown selectors can be configured but have
+  no effect until an exact match exists. Any `enabled: true` is blocked when
+  the effective `allow_destructive_actions` value is `false`.
 
 Each admitted plugin app that uses `"ask"` routes that app's approval requests
 to the human reviewer. Other apps and non-app thread approvals keep their

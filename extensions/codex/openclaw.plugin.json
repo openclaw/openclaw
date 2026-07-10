@@ -127,6 +127,22 @@
                 },
                 "allow_destructive_actions": {
                   "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }]
+                },
+                "tools": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["enabled"],
+                    "properties": {
+                      "enabled": { "type": "boolean" }
+                    }
+                  }
                 }
               }
             }

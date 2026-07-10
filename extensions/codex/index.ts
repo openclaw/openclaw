@@ -137,10 +137,14 @@ export default definePluginEntry({
               if (!declared || typeof declared !== "object") {
                 return Promise.resolve({
                   enabled: (codexPlugins as Record<string, unknown>).enabled === true,
+                  allow_destructive_actions: (codexPlugins as Record<string, unknown>)
+                    .allow_destructive_actions as boolean | "auto" | "ask" | undefined,
                 });
               }
               return Promise.resolve({
                 enabled: (codexPlugins as Record<string, unknown>).enabled === true,
+                allow_destructive_actions: (codexPlugins as Record<string, unknown>)
+                  .allow_destructive_actions as boolean | "auto" | "ask" | undefined,
                 plugins: declared as Record<string, never>,
               });
             },
