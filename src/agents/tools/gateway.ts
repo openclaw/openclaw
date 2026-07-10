@@ -263,8 +263,17 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
     return undefined;
   }
   try {
+    if (isNodeApprovalReplay) {
+      // Replay must reuse the identity present when the approval was registered.
+      // Creating one here could turn a device-less record into a different identity.
+      const identity = loadDeviceIdentityIfPresent();
+      if (!identity) {
+        throw new Error("device identity is not persisted");
+      }
+      return identity;
+    }
     const identity = loadOrCreateDeviceIdentity();
-    // Approval registration and replay can use separate gateway connections.
+    // Approval registration and wait can use separate gateway connections.
     // Reject loadOrCreate's unpersisted fallback so both sides bind the same id.
     const persistedIdentity = loadDeviceIdentityIfPresent();
     if (persistedIdentity?.deviceId !== identity.deviceId) {
@@ -273,8 +282,6 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
     return identity;
   } catch (error) {
     if (isNodeApprovalReplay) {
-      // Never downgrade node exec replay to the device-less backend bridge.
-      // Repair stable identity first so replay stays bound to the approving device.
       throw new Error(
         [
           "approved node gateway calls require a stable device identity.",

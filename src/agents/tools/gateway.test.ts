@@ -382,17 +382,8 @@ describe("gateway tool defaults", () => {
     expect(call).not.toHaveProperty("approvalRuntimeToken");
   });
 
-  it.each([
-    { name: "missing persisted identity", persistedDeviceIdentity: null },
-    {
-      name: "different persisted identity",
-      persistedDeviceIdentity: {
-        ...mocks.deviceIdentity,
-        deviceId: "other-device",
-      },
-    },
-  ])("fails approved node system.run closed for $name", async ({ persistedDeviceIdentity }) => {
-    mocks.persistedDeviceIdentity = persistedDeviceIdentity;
+  it("fails approved node system.run closed without a persisted identity", async () => {
+    mocks.persistedDeviceIdentity = null;
 
     await expect(
       callGatewayTool(
@@ -408,6 +399,25 @@ describe("gateway tool defaults", () => {
       ),
     ).rejects.toThrow("approved node gateway calls require a stable device identity");
     expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("reuses an existing replay identity without trying to create one", async () => {
+    mocks.deviceIdentityError = new Error("must not create identity during replay");
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.run",
+        params: { approved: true, runId: "approval-id" },
+        idempotencyKey: "invoke-1",
+      },
+      { scopes: ["operator.write", "operator.approvals"] },
+    );
+
+    expect(capturedGatewayCall().deviceIdentity).toEqual(mocks.deviceIdentity);
   });
 
   it("does not mark direct cron helper calls with agent runtime identity", async () => {
