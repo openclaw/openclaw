@@ -1495,6 +1495,12 @@ export function resolveAllowedModelSelection(
   if (!fallback) {
     return null;
   }
+  const safeRequested = sanitizeForLog(`${params.provider}/${params.model}`);
+  const safeSubstituted = sanitizeForLog(`${fallback.provider}/${fallback.id}`);
+  getLog().warn(
+    `Model "${safeRequested}" not in allowlist; substituting "${safeSubstituted}". ` +
+      `Add "${safeRequested}" to agents.defaults.models to avoid silent substitution.`,
+  );
   return normalizeSelectionRef(fallback.provider, fallback.id);
 }
 
