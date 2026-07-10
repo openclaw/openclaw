@@ -1306,14 +1306,17 @@ describe("/model chat UX", () => {
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
   });
 
-  it("persists provider-compatible runtime overrides for mixed-content messages", async () => {
+  it.each([
+    ["openai/gpt-4o", "openai", "gpt-4o"],
+    ["codex/gpt-5.5", "codex", "gpt-5.5"],
+  ])("persists provider-compatible runtime overrides for %s", async (modelKey, provider, model) => {
     const { persisted, sessionEntry } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o --runtime codex hello",
-      allowedModelKeys: ["openai/gpt-4o"],
+      command: `/model ${modelKey} --runtime codex hello`,
+      allowedModelKeys: [modelKey],
     });
 
-    expect(sessionEntry.providerOverride).toBe("openai");
-    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.providerOverride).toBe(provider);
+    expect(sessionEntry.modelOverride).toBe(model);
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
     expect(persisted.runtimeChange).toEqual({ kind: "set", runtime: "codex" });
   });
@@ -1441,6 +1444,16 @@ describe("/model chat UX", () => {
       agentRuntimeOverride: "openclaw",
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects the Codex runtime for providers the harness does not support", async () => {
+    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model anthropic/claude-opus-4-6 --runtime codex hello",
+      allowedModelKeys: ["anthropic/claude-opus-4-6"],
+    });
+
+    expect(persisted.errorText).toBe('Runtime "codex" is not supported for anthropic.');
+    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
   });
 
   it("rejects unsupported mixed thinking before mutating the model/runtime transaction", async () => {

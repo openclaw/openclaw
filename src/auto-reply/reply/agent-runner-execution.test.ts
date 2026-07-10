@@ -86,6 +86,19 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
     ).toBeUndefined();
   });
 
+  it.each([
+    { provider: "openai", expected: "codex" },
+    { provider: "codex", expected: "codex" },
+    { provider: "anthropic", expected: undefined },
+  ])("resolves Codex runtime compatibility for $provider", ({ provider, expected }) => {
+    expect(
+      resolveSessionRuntimeOverrideForProvider({
+        provider,
+        entry: { agentRuntimeOverride: "codex" },
+      }),
+    ).toBe(expected);
+  });
+
   it("keeps CLI runtime pins only when the runtime serves the selected provider", () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
