@@ -29,6 +29,10 @@ const JUNE_2026_PATCH_FLOOR = 5;
  */
 
 /**
+ * @typedef {"npm-readback" | "npm-mirror" | "npm-tag-repair"} PublishedNpmVersionRoute
+ */
+
+/**
  * @typedef {object} NpmDistTagMirrorAuth
  * @property {boolean} hasAuth
  * @property {"node-auth-token" | "npm-token" | "none"} source
@@ -263,6 +267,25 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
     publishTag: "latest",
     mirrorDistTags: ["beta"],
   };
+}
+
+/**
+ * @param {{
+ *   packageVersion: string;
+ *   publishPlan: NpmPublishPlan;
+ *   distTags: Record<string, string | undefined>;
+ * }} params
+ * @returns {PublishedNpmVersionRoute}
+ */
+export function resolvePublishedNpmVersionRoute(params) {
+  if (params.distTags[params.publishPlan.publishTag] !== params.packageVersion) {
+    return "npm-tag-repair";
+  }
+  return params.publishPlan.mirrorDistTags.some(
+    (distTag) => params.distTags[distTag] !== params.packageVersion,
+  )
+    ? "npm-mirror"
+    : "npm-readback";
 }
 
 /**

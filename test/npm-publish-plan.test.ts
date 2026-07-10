@@ -4,6 +4,7 @@ import {
   collectReleaseVersionFloorErrors,
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
+  resolvePublishedNpmVersionRoute,
   shouldRequireNpmDistTagMirrorAuth,
 } from "../scripts/lib/npm-publish-plan.mjs";
 
@@ -21,6 +22,59 @@ describe("collectReleaseVersionFloorErrors", () => {
     expect(collectReleaseVersionFloorErrors("2026.6.4-alpha.1")).toEqual([]);
     expect(collectReleaseVersionFloorErrors("2026.6.5-beta.2")).toEqual([]);
     expect(collectReleaseVersionFloorErrors("2026.7.1")).toEqual([]);
+  });
+});
+
+describe("resolvePublishedNpmVersionRoute", () => {
+  it.each([
+    {
+      label: "beta",
+      version: "2026.7.1-beta.3",
+      distTags: { beta: "2026.7.1-beta.2" },
+    },
+    {
+      label: "alpha",
+      version: "2026.7.1-alpha.3",
+      distTags: { alpha: "2026.7.1-alpha.2" },
+    },
+    {
+      label: "latest with a current beta mirror",
+      version: "2026.7.1",
+      distTags: { latest: "2026.6.11", beta: "2026.7.1" },
+    },
+  ])("requires tag repair when the primary $label selector is stale", ({ version, distTags }) => {
+    expect(
+      resolvePublishedNpmVersionRoute({
+        packageVersion: version,
+        publishPlan: resolveNpmPublishPlan(version),
+        distTags,
+      }),
+    ).toBe("npm-tag-repair");
+  });
+
+  it("requires mirror repair only after the primary selector matches", () => {
+    const version = "2026.7.1";
+    expect(
+      resolvePublishedNpmVersionRoute({
+        packageVersion: version,
+        publishPlan: resolveNpmPublishPlan(version),
+        distTags: { latest: version, beta: "2026.7.1-beta.3" },
+      }),
+    ).toBe("npm-mirror");
+  });
+
+  it.each([
+    ["beta", "2026.7.1-beta.3", { beta: "2026.7.1-beta.3" }],
+    ["alpha", "2026.7.1-alpha.3", { alpha: "2026.7.1-alpha.3" }],
+    ["stable", "2026.7.1", { latest: "2026.7.1", beta: "2026.7.1" }],
+  ])("accepts complete %s registry readback", (_label, version, distTags) => {
+    expect(
+      resolvePublishedNpmVersionRoute({
+        packageVersion: version,
+        publishPlan: resolveNpmPublishPlan(version),
+        distTags,
+      }),
+    ).toBe("npm-readback");
   });
 });
 

@@ -67,12 +67,16 @@ describe("plugin npm extended-stable workflow", () => {
   });
 
   it("exposes a closed preflight-only mode", () => {
-    expect(workflow().on?.workflow_dispatch?.inputs?.preflight_only).toEqual({
+    const inputs = workflow().on?.workflow_dispatch?.inputs;
+    expect(inputs?.preflight_only).toEqual({
       description: "Prepare and verify immutable plugin npm artifacts without publishing",
       required: true,
       default: false,
       type: "boolean",
     });
+    expect(inputs?.ref?.description).toBe(
+      "Exact commit SHA; preflight accepts main/release ancestry, while publish mode also supports canonical extended-stable or matching Tideclaw alpha branches",
+    );
   });
 
   it("uses one override for check, plan, preview, pack, and publish", () => {
@@ -107,10 +111,22 @@ describe("plugin npm extended-stable workflow", () => {
   });
 
   it("binds preflight to an exact source SHA without release-publish approval", () => {
-    const trusted = step(
-      workflow().jobs?.preview_plugins_npm,
+    const preview = workflow().jobs?.preview_plugins_npm;
+    const previewSteps = preview?.steps ?? [];
+    const trusted = step(preview, "Validate ref is on a trusted publish branch");
+    expect(previewSteps.slice(0, 4).map((candidate) => candidate.name)).toEqual([
+      "Checkout",
+      "Resolve checked-out ref",
       "Validate ref is on a trusted publish branch",
-    );
+      "Setup Node environment",
+    ]);
+    const trustedIndex = previewSteps.indexOf(trusted);
+    expect(trustedIndex).toBe(2);
+    for (const candidate of previewSteps.slice(0, trustedIndex)) {
+      expect(candidate.uses?.startsWith("./"), candidate.name).not.toBe(true);
+      expect(candidate.run ?? "", candidate.name).not.toMatch(/\b(?:bun|npm|pnpm)\b/u);
+    }
+    expect(step(preview, "Setup Node environment").uses).toBe("./.github/actions/setup-node-env");
     expect(trusted.env).toMatchObject({
       PREFLIGHT_ONLY:
         "${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only || false }}",
@@ -127,6 +143,14 @@ describe("plugin npm extended-stable workflow", () => {
       '[[ "$(git rev-parse HEAD)" != "$(git rev-parse "${SOURCE_REF}^{commit}")" ]]',
     );
     expect(trusted.run).toContain("preflight must not include release_publish_run_id");
+    const preflightBranchRejection = trusted.run?.indexOf(
+      "Plugin npm preflight target must be reachable from main or release/*.",
+    );
+    const tideclawBranch = trusted.run?.indexOf(
+      'if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/',
+    );
+    expect(preflightBranchRejection).toBeGreaterThan(-1);
+    expect(tideclawBranch).toBeGreaterThan(preflightBranchRejection ?? Number.MAX_SAFE_INTEGER);
   });
 
   it("prepares and independently reads back immutable package evidence", () => {
@@ -136,6 +160,9 @@ describe("plugin npm extended-stable workflow", () => {
     expect(preview?.strategy?.matrix?.plugin).toContain("all_matrix");
 
     const prepare = step(preview, "Prepare immutable npm preflight artifact");
+    expect(prepare.env?.ARTIFACT_NAME).toBe(
+      "plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}",
+    );
     expect(prepare.run).toContain('bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}"');
     expect(prepare.run).toContain('path.join(process.env.ARTIFACT_DIR, "preflight-manifest.json")');
     expect(prepare.run).toContain('kind: "openclaw-plugin-npm-preflight"');
@@ -148,6 +175,9 @@ describe("plugin npm extended-stable workflow", () => {
     expect(prepare.run).toContain("packageJsonSha256: process.env.PACKED_PACKAGE_JSON_SHA256");
     expect(prepare.run).toContain("npmIntegrity: actualIntegrity");
     expect(prepare.run).toContain("npmShasum: actualShasum");
+    expect(prepare.run).toContain(
+      'trustPolicy: "workflow-main-and-target-main-or-release-ancestor"',
+    );
     expect(prepare.run).toContain("npmPublish: false");
     expect(prepare.run).toContain("environmentApproval: false");
     expect(prepare.run).toContain("oidcWrite: false");
@@ -182,12 +212,17 @@ describe("plugin npm extended-stable workflow", () => {
     expect(readback.run).toContain(
       "Packed plugin identity, package hashes, or install route changed",
     );
+    expect(readback.run).toContain(
+      'trustPolicy: "workflow-main-and-target-main-or-release-ancestor"',
+    );
+    expect(readback.run).not.toContain("target-main-release-or-tideclaw");
 
     const route = step(verify, "Verify npm publication route readiness");
     expect(route.run).toContain("encodeURIComponent(packageName)");
+    expect(route.run).toContain("resolvePublishedNpmVersionRoute");
+    expect(route.run).toContain('distTags: packument["dist-tags"] ?? {}');
     expect(route.run).toContain('observations.push("npm-token-bootstrap")');
     expect(route.run).toContain('observations.push("npm-oidc")');
-    expect(route.run).toContain('"npm-readback" : "npm-mirror"');
 
     const evidence = step(verify, "Record validation-only result");
     expect(evidence.run).toContain('schema: "openclaw.plugin-npm-package-evidence/v2"');
@@ -198,6 +233,7 @@ describe("plugin npm extended-stable workflow", () => {
     );
     expect(evidence.run).toContain("id: Number(process.env.PUBLICATION_ARTIFACT_ID)");
     expect(evidence.run).toContain("tarballSha256: process.env.TARBALL_SHA256");
+    expect(evidence.run).toContain("tag-repair");
     const evidenceUpload = step(verify, "Upload immutable plugin npm preflight evidence");
     expect(evidenceUpload.with?.name).toBe(
       "plugin-npm-package-${{ matrix.plugin.extensionId }}-${{ matrix.plugin.version }}",
