@@ -345,12 +345,12 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     result: unknown,
     options?: { suppressResponse?: boolean; willContinue?: boolean },
   ): Promise<void> {
-    if (this.closed || this.completedToolCalls.has(callId)) {
+    if (this.completedToolCalls.has(callId)) {
       return;
     }
     const shouldAllowProviderResponse =
       options?.suppressResponse !== true && options?.willContinue !== true;
-    if (shouldAllowProviderResponse && this.outputPlaybackDelayMs() > 0) {
+    if (!this.closed && shouldAllowProviderResponse && this.outputPlaybackDelayMs() > 0) {
       this.scheduleDelayedToolResult({ callId, result, ...(options ? { options } : {}) });
       return;
     }
@@ -382,7 +382,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (!this.outputContext) {
       return 0;
     }
-    return Math.max(0, Math.ceil((this.outputQueue.queuedUntil - this.outputContext.currentTime) * 1000));
+    return Math.max(
+      0,
+      Math.ceil((this.outputQueue.queuedUntil - this.outputContext.currentTime) * 1000),
+    );
   }
 
   private scheduleDelayedToolResult(pending: DelayedToolResult): void {
@@ -404,9 +407,11 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       return;
     }
     this.discardDelayedToolResult(pending);
-    void this.sendToolResultNow(pending.callId, pending.result, pending.options).catch((error: unknown) => {
-      this.reportToolResultSubmissionError(error);
-    });
+    void this.sendToolResultNow(pending.callId, pending.result, pending.options).catch(
+      (error: unknown) => {
+        this.reportToolResultSubmissionError(error);
+      },
+    );
   }
 
   private flushDelayedToolResults(): void {

@@ -623,6 +623,7 @@ describe("xai provider plugin", () => {
 
       expect(tool).toEqual(expected ? expect.objectContaining({ name: toolName }) : null);
     });
+  });
 
   it("declares setup auto-enable reasons for plugin-owned tool config", () => {
     const probe = registerXaiAutoEnableProbe();
