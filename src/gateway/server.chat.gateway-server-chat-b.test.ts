@@ -1454,11 +1454,12 @@ describe("gateway server chat", () => {
           },
         },
       });
-      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry }] = await Promise.all([
-        import("../config/sessions/session-accessor.js"),
-        import("./session-utils.js"),
-      ]);
-      const seededSession = loadSessionEntry("main");
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry: loadGatewaySessionEntry }] =
+        await Promise.all([
+          import("../config/sessions/session-accessor.js"),
+          import("./session-utils.js"),
+        ]);
+      const seededSession = loadGatewaySessionEntry("main");
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();

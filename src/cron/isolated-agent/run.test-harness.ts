@@ -786,7 +786,7 @@ function installPatchSessionEntryStore(): void {
         rows.get(key) ??
         (usesRealAccessorStore(scope.storePath)
           ? actualLoadSessionEntry(scope as never)
-          : undefined);
+          : loadSessionEntryMock(scope.storePath, scope.sessionKey));
       const writeBase = existingEntry ?? options.fallbackEntry;
       if (!writeBase) {
         return null;

@@ -52,10 +52,6 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
 }));
 
-function resolveSyncRealpath(filePath: string): string {
-  return fs.realpathSync.native(filePath);
-}
-
 function closeSessionSqliteDatabasesForTest(): void {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();

@@ -1708,15 +1708,20 @@ async function runConcurrentMultiClientLifecycle(
     timeoutMs: 20_000,
   });
   try {
+    await requireHistoryContains(
+      historyClient,
+      context.concurrentResetSessionKey,
+      "concurrent reset seed",
+    );
     const sendPromise = sendGatewayUserMessage(
       primaryClient,
       context.concurrentSendSessionKey,
       CONCURRENT_SEND_TEXT,
     );
-    const historyPromise = requireHistoryContains(
-      historyClient,
-      context.concurrentResetSessionKey,
-      "concurrent reset seed",
+    const historyPromise = historyClient.request(
+      "chat.history",
+      { sessionKey: context.concurrentResetSessionKey, limit: 50 },
+      { timeoutMs: 20_000 },
     );
     const resetPromise = resetSession(lifecycleClient, context.concurrentResetSessionKey);
 
