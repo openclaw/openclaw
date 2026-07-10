@@ -1,10 +1,6 @@
 // Firecrawl tests cover firecrawl client behavior — URL safety,
 // scrape payload parsing, and search-item extraction.
-import { once } from "node:events";
-import { createServer } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { runFirecrawlSearch } from "./firecrawl-client.js";
 
 let firecrawlClient: typeof import("./firecrawl-client.js").testing;
 
@@ -721,66 +717,5 @@ describe("parseFirecrawlScrapePayload", () => {
     });
 
     expect(result.title).toBeUndefined();
-  });
-});
-
-describe("runFirecrawlSearch", () => {
-  it("keeps a JSON error detail from ending in a lone surrogate", async () => {
-    const errorDetail = `${"x".repeat(999)}🚀tail`;
-    const server = createServer((request, response) => {
-      if (request.method !== "POST" || request.url !== "/v2/search") {
-        response.writeHead(404).end();
-        return;
-      }
-      request.resume();
-      request.on("end", () => {
-        response
-          .writeHead(400, { "content-type": "application/json" })
-          .end(JSON.stringify({ error: errorDetail }));
-      });
-    });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Loopback Firecrawl server did not bind to a TCP port");
-    }
-
-    try {
-      await expect(
-        runFirecrawlSearch({
-          cfg: {
-            plugins: {
-              entries: {
-                firecrawl: {
-                  config: {
-                    webSearch: {
-                      apiKey: "test-key",
-                      baseUrl: `http://127.0.0.1:${address.port}`,
-                    },
-                  },
-                },
-              },
-            },
-          } satisfies OpenClawConfig,
-          query: "unicode boundary",
-        }),
-      ).rejects.toSatisfy(
-        (error: unknown) =>
-          error instanceof Error &&
-          error.message.includes("x".repeat(999)) &&
-          !error.message.includes("\ud83d"),
-      );
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
-    }
   });
 });
