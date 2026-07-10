@@ -158,3 +158,39 @@ export function fileProbeTextMatches(text: string): boolean {
 export function imageProbeTextMatches(text: string): boolean {
   return /\bok\b/i.test(text);
 }
+
+function formatImageProbeText(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "<empty>";
+  }
+  const clipped = normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+  return JSON.stringify(clipped);
+}
+
+/** Retries one ambiguous image reply without weakening the strict OK matcher. */
+export async function runLiveModelImageProbeWithRetry(params: {
+  run: (attempt: 1 | 2) => Promise<string>;
+  onRetry: (firstText: string) => void;
+}): Promise<string> {
+  const firstText = await params.run(1);
+  if (imageProbeTextMatches(firstText)) {
+    return firstText;
+  }
+
+  params.onRetry(firstText);
+  const retryText = await params.run(2);
+  if (imageProbeTextMatches(retryText)) {
+    return retryText;
+  }
+
+  // Preserve the existing empty-response skip only when neither attempt produced a signal.
+  if (firstText.length === 0 && retryText.length === 0) {
+    return retryText;
+  }
+  throw new Error(
+    "image probe did not return ok after retry " +
+      `(attempt 1: ${formatImageProbeText(firstText)}; ` +
+      `attempt 2: ${formatImageProbeText(retryText)})`,
+  );
+}

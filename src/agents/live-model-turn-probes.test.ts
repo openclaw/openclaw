@@ -1,5 +1,5 @@
 // Covers live model extra-probe builders, matchers, and route skip lists.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,
@@ -9,6 +9,7 @@ import {
   isLiveModelProbeEnabled,
   LIVE_MODEL_FILE_PROBE_TOKEN,
   modelSupportsImageInput,
+  runLiveModelImageProbeWithRetry,
   shouldSkipLiveModelExtraProbes,
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
@@ -174,5 +175,68 @@ describe("live model turn probes", () => {
     expect(fileProbeTextMatches("amber")).toBe(false);
     expect(imageProbeTextMatches("OK")).toBe(true);
     expect(imageProbeTextMatches("blue")).toBe(false);
+    expect(imageProbeTextMatches('" or "Reply with exactly')).toBe(false);
+  });
+
+  it("retries one mismatched image reply and accepts only a matching retry", async () => {
+    const run = vi
+      .fn<(attempt: 1 | 2) => Promise<string>>()
+      .mockResolvedValueOnce("blue")
+      .mockResolvedValueOnce("OK");
+    const onRetry = vi.fn();
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry })).resolves.toBe("OK");
+    expect(run.mock.calls).toEqual([[1], [2]]);
+    expect(onRetry).toHaveBeenCalledWith("blue");
+  });
+
+  it("does not retry an image reply that already matches", async () => {
+    const run = vi.fn<(attempt: 1 | 2) => Promise<string>>().mockResolvedValue("OK");
+    const onRetry = vi.fn();
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry })).resolves.toBe("OK");
+    expect(run.mock.calls).toEqual([[1]]);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("fails when the image retry also does not match", async () => {
+    const run = vi
+      .fn<(attempt: 1 | 2) => Promise<string>>()
+      .mockResolvedValueOnce("blue")
+      .mockResolvedValueOnce('" or "Reply with exactly');
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: vi.fn() })).rejects.toThrow(
+      "image probe did not return ok after retry",
+    );
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not turn a mismatched image reply into an empty-response skip", async () => {
+    const run = vi
+      .fn<(attempt: 1 | 2) => Promise<string>>()
+      .mockResolvedValueOnce("blue")
+      .mockResolvedValueOnce("");
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: vi.fn() })).rejects.toThrow(
+      "attempt 2: <empty>",
+    );
+  });
+
+  it("retains the empty-response skip only after two empty attempts", async () => {
+    const run = vi.fn<(attempt: 1 | 2) => Promise<string>>().mockResolvedValue("");
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: vi.fn() })).resolves.toBe("");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails when an empty image reply is followed by a mismatch", async () => {
+    const run = vi
+      .fn<(attempt: 1 | 2) => Promise<string>>()
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("blue");
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: vi.fn() })).rejects.toThrow(
+      "attempt 1: <empty>",
+    );
   });
 });
