@@ -102,7 +102,10 @@ describe("resolveConfig", () => {
 
 describe("createMxcPluginConfigSchema", () => {
   test("publishes the same timeout cap in the plugin schema", () => {
-    expect(createMxcPluginConfigSchema().jsonSchema.properties?.timeoutSeconds).toEqual({
+    const jsonSchema = createMxcPluginConfigSchema().jsonSchema as {
+      properties?: { timeoutSeconds?: unknown };
+    };
+    expect(jsonSchema.properties?.timeoutSeconds).toEqual({
       type: "number",
       minimum: 1,
       maximum: MAX_TIMER_TIMEOUT_SECONDS,

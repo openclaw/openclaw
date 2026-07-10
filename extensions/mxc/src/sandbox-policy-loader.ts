@@ -337,12 +337,15 @@ function formatSandboxPolicyIssue(sourceLabel: string, issue: z.ZodIssue | undef
 }
 
 function formatIssuePath(pathSegments: readonly PropertyKey[]): string {
-  return pathSegments.reduce((label, segment) => {
+  let label = "";
+  for (const segment of pathSegments) {
     if (typeof segment === "number") {
-      return `${label}[${segment}]`;
+      label += `[${segment}]`;
+      continue;
     }
-    return `${label}.${String(segment)}`;
-  }, "");
+    label += `.${String(segment)}`;
+  }
+  return label;
 }
 
 function formatError(err: unknown): string {

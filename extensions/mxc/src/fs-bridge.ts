@@ -135,7 +135,7 @@ class MxcFsBridge implements SandboxFsBridge {
 
     const stats = await root.stat(target.mountRelativePath);
     return {
-      type: stats.isDirectory() ? "directory" : stats.isFile() ? "file" : "other",
+      type: stats.isDirectory ? "directory" : stats.isFile ? "file" : "other",
       size: stats.size,
       mtimeMs: stats.mtimeMs,
     };
