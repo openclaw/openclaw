@@ -85,7 +85,7 @@ export function getSlackListenerUploadCompletionClient(params: {
     ),
   );
   // Completion is one-shot. Clone Bolt's public transport options and team
-  // scope, but never inherit the listener client's network retry policy.
+  // scope, but never inherit its retry policy or request deadline.
   const client = new WebClient(
     token,
     resolveSlackWriteClientOptions({
@@ -94,6 +94,7 @@ export function getSlackListenerUploadCompletionClient(params: {
       slackApiUrl: params.listenerClient.slackApiUrl,
       teamId,
       retryConfig: SLACK_WRITE_RETRY_OPTIONS,
+      timeout: 0,
     }),
   );
   slackListenerUploadCompletionClientCache.set(params.listenerClient, { teamId, client });

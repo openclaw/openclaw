@@ -48,7 +48,10 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
-async function startSlackApiServer(requests: SlackApiRequest[]): Promise<{
+async function startSlackApiServer(
+  requests: SlackApiRequest[],
+  responseDelayMs = 0,
+): Promise<{
   baseUrl: string;
   close(): Promise<void>;
 }> {
@@ -59,17 +62,24 @@ async function startSlackApiServer(requests: SlackApiRequest[]): Promise<{
       url: request.url,
     });
     request.resume();
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(
-      `${JSON.stringify({
-        ok: true,
-        team: "Mock Slack",
-        team_id: "TMOCK",
-        url: "https://mock.slack.test/",
-        user: "mock-bot",
-        user_id: "UMOCK",
-      })}\n`,
-    );
+    const sendResponse = () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        `${JSON.stringify({
+          ok: true,
+          team: "Mock Slack",
+          team_id: "TMOCK",
+          url: "https://mock.slack.test/",
+          user: "mock-bot",
+          user_id: "UMOCK",
+        })}\n`,
+      );
+    };
+    if (responseDelayMs > 0) {
+      setTimeout(sendResponse, responseDelayMs);
+    } else {
+      sendResponse();
+    }
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -127,7 +137,6 @@ describe("Slack Web API routing", () => {
         },
         slackApiUrl: `${server.baseUrl}/api/`,
         retryConfig: { retries: 2 },
-        timeout: 1000,
       };
       const listenerClient = new WebClient("listener-fixture", clientOptions);
       const completionClient = getSlackListenerUploadCompletionClient({
@@ -169,6 +178,41 @@ describe("Slack Web API routing", () => {
       });
       expect(new URLSearchParams(requests[0]?.body).get("team_id")).toBe("TENTERPRISE1");
       expect(requests[0]?.authorization).not.toContain("stale-fixture");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not inherit the listener request timeout for upload completion", async () => {
+    for (const key of TEST_ENV_KEYS) {
+      delete process.env[key];
+    }
+    const requests: SlackApiRequest[] = [];
+    const server = await startSlackApiServer(requests, 80);
+    try {
+      const clientOptions = {
+        slackApiUrl: `${server.baseUrl}/api/`,
+        retryConfig: { retries: 2 },
+        timeout: 20,
+      };
+      const listenerClient = new WebClient("listener-fixture", clientOptions);
+      const completionClient = getSlackListenerUploadCompletionClient({
+        listenerClient,
+        teamId: "TENTERPRISE1",
+        clientOptions,
+      });
+      expect(completionClient).toBeDefined();
+      if (!completionClient) {
+        throw new Error("missing Enterprise upload completion client");
+      }
+
+      const result = await completionClient.files.completeUploadExternal({
+        files: [{ id: "F123", title: "proof.txt" }],
+        channel_id: "C123",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(requests).toHaveLength(1);
     } finally {
       await server.close();
     }

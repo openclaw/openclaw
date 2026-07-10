@@ -118,7 +118,7 @@ type SlackSendOpts = {
   metadata?: MessageMetadata;
   /** Opaque durable intent id used to reconcile ambiguous platform outcomes. */
   deliveryQueueId?: string;
-  /** Refresh durable timing after the per-target queue and before Slack API work. */
+  /** Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;

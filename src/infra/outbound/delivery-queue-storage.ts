@@ -208,7 +208,7 @@ export async function markDeliveryPlatformSendAttemptStarted(
   }));
 }
 
-/** Refresh the attempt timestamp after provider serialization and immediately before I/O. */
+/** Refresh the attempt timestamp before recipient-visible or finalizing platform I/O. */
 export async function markDeliveryPlatformSendDispatched(
   id: string,
   stateDir?: string,
