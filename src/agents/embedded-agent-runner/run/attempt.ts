@@ -307,7 +307,6 @@ import {
   validateReplayTurns,
 } from "../replay-history.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
-import type { EmbeddedRunReplayMetadata } from "../replay-state.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import {
   clearActiveEmbeddedRun,
@@ -5795,13 +5794,9 @@ export async function runEmbeddedAttempt(
       const replayMetadata = replayMetadataFromState(
         observeReplayMetadata(getReplayState(), observedReplayMetadata),
       );
-      // Derive current-attempt replay metadata independently from the
-      // current attempt's observable fields (toolMetasNormalized records
-      // per-tool replaySafe from handleToolExecutionEnd).  This is a
-      // clean source — it does not depend on accumulated replay state,
-      // so same-attempt unsafe tools are always detected regardless of
-      // prior-turn history.
-      const currentAttemptReplayMetadata: EmbeddedRunReplayMetadata = buildAttemptReplayMetadata({
+      // Keep current-attempt effects separate from cumulative replay state so
+      // a later clean provider failure remains retryable.
+      const currentAttemptReplayMetadata = buildAttemptReplayMetadata({
         toolMetas: toolMetasNormalized,
         didSendViaMessagingTool: didSendViaMessagingTool(),
         messagingToolSentTexts: getMessagingToolSentTexts(),

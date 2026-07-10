@@ -421,6 +421,9 @@ function normalizeEmbeddedRunAttemptResult(
       | null;
     didDeliverSourceReplyViaMessageTool?: boolean | null;
     itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
+    currentAttemptReplayMetadata?:
+      | EmbeddedRunAttemptForRunner["currentAttemptReplayMetadata"]
+      | null;
   };
   return {
     ...attempt,
@@ -439,10 +442,6 @@ function normalizeEmbeddedRunAttemptResult(
       activeCount: 0,
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
-    // Per-attempt metadata: only populated when the attempt producer (attempt.ts)
-    // explicitly sets it from observedReplayMetadata before accumulation.
-    // Legacy harnesses that do not emit this field trigger the ?? fallback in
-    // shouldRetrySilentErrorAssistantTurn, keeping the conservative behavior.
     currentAttemptReplayMetadata: raw.currentAttemptReplayMetadata ?? undefined,
   };
 }
@@ -3292,7 +3291,7 @@ async function runEmbeddedAgentInternal(
               promptFailoverReason === "timeout" &&
               !attempt.codexAppServerFailure &&
               attempt.promptTimeoutOutcome?.replayInvalid !== true &&
-              resolveAttemptReplayMetadata(attempt).replaySafe;
+              attempt.replayMetadata.replaySafe;
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({

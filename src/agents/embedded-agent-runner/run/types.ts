@@ -249,12 +249,10 @@ export type EmbeddedRunAttemptResult = {
   yieldDetected?: boolean;
   replayMetadata: EmbeddedRunReplayMetadata;
   /**
-   * Replay metadata for the current attempt only, before accumulation with
-   * prior session state. Used by the silent-error retry gate to distinguish
-   * "this model call failed before tools ran" from "prior turns had side
-   * effects." Absent when the attempt returned before tool execution started.
+   * Replay metadata for this attempt before prior session state is accumulated.
+   * Older harnesses may omit it and retain conservative cumulative retry gating.
    */
-  currentAttemptReplayMetadata?: EmbeddedRunReplayMetadata | null;
+  currentAttemptReplayMetadata?: EmbeddedRunReplayMetadata;
   itemLifecycle: {
     startedCount: number;
     completedCount: number;

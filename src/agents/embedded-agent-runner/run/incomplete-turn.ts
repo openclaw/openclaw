@@ -536,12 +536,12 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (hasAttemptTerminalState(params.attempt)) {
     return false;
   }
-  // Prefer current-attempt metadata to decide whether this specific model
-  // call had side effects. Falls back to cumulative replayMetadata for
-  // harnesses that do not yet populate currentAttemptReplayMetadata.
-  const currentAttemptMeta =
-    params.attempt.currentAttemptReplayMetadata ?? params.attempt.replayMetadata;
-  if (currentAttemptMeta?.hadPotentialSideEffects) {
+  // Current-attempt evidence avoids blocking on prior committed effects; older
+  // harnesses retain the cumulative, fail-closed behavior.
+  const retryReplayMetadata = resolveAttemptReplayMetadata({
+    replayMetadata: params.attempt.currentAttemptReplayMetadata ?? params.attempt.replayMetadata,
+  });
+  if (retryReplayMetadata.hadPotentialSideEffects) {
     return false;
   }
 
