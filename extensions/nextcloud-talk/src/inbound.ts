@@ -98,9 +98,9 @@ async function deliverNextcloudTalkReply(params: {
   roomToken: string;
   accountId: string;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
-}): Promise<void> {
+}): Promise<{ visibleReplySent: boolean }> {
   const { cfg, payload, roomToken, accountId, statusSink } = params;
-  await deliverFormattedTextWithAttachments({
+  const visibleReplySent = await deliverFormattedTextWithAttachments({
     payload,
     send: async ({ text, replyToId }) => {
       await sendMessageNextcloudTalk(roomToken, text, {
@@ -111,6 +111,7 @@ async function deliverNextcloudTalkReply(params: {
       statusSink?.({ lastOutboundAt: Date.now() });
     },
   });
+  return { visibleReplySent };
 }
 
 export async function handleNextcloudTalkInbound(params: {
@@ -370,7 +371,7 @@ export async function handleNextcloudTalkInbound(params: {
               text: sanitizeAssistantVisibleText(payload.text),
             },
       deliver: async (payload) => {
-        await deliverNextcloudTalkReply({
+        return await deliverNextcloudTalkReply({
           cfg: config,
           payload,
           roomToken,

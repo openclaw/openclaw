@@ -338,7 +338,7 @@ describe("nextcloud-talk inbound behavior", () => {
     ) as {
       delivery?: {
         preparePayload?: (payload: OutboundReplyPayload) => OutboundReplyPayload;
-        deliver?: (payload: OutboundReplyPayload) => Promise<void>;
+        deliver?: (payload: OutboundReplyPayload) => Promise<{ visibleReplySent: boolean }>;
       };
     };
     const preparePayload = assembledRequest.delivery?.preparePayload;
@@ -360,7 +360,10 @@ describe("nextcloud-talk inbound behavior", () => {
       mediaUrls: ["https://example.com/a.png"],
       replyToId: "reply-1",
     });
-    await deliver(preparedPayload);
+    await expect(deliver(preparedPayload)).resolves.toEqual({ visibleReplySent: true });
+    await expect(
+      deliver(preparePayload({ text: "⚠️ 🛠️ `search repos (agent)` failed" })),
+    ).resolves.toEqual({ visibleReplySent: false });
 
     expect(sendMessageNextcloudTalkMock).toHaveBeenCalledTimes(1);
     expect(requireFirstSendMessageCall()).toEqual([
