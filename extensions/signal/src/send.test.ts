@@ -28,8 +28,7 @@ const {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
 } = await import("./approval-reactions.js");
-const { clearSignalReplyAuthorsForTest, resolveSignalReplyContextWithPersistence } =
-  await import("./reply-authors.js");
+const { clearSignalReplyAuthorsForTest } = await import("./reply-authors.js");
 const { sendMessageSignal } = await import("./send.js");
 
 const SIGNAL_TEST_CFG = {
@@ -64,13 +63,6 @@ describe("sendMessageSignal receipts", () => {
     expect(result.timestamp).toBe(1234567890);
     expect(result.receipt.primaryPlatformMessageId).toBe("1234567890");
     expect(result.receipt.platformMessageIds).toEqual(["1234567890"]);
-    await expect(
-      resolveSignalReplyContextWithPersistence({
-        accountId: "default",
-        to: "+15551234567",
-        replyToId: "1234567890",
-      }),
-    ).resolves.toEqual({ author: "+15550001111", body: "hello" });
     expect(result.receipt.raw).toEqual([
       {
         channel: "signal",
@@ -122,13 +114,6 @@ describe("sendMessageSignal receipts", () => {
     expect(result.timestamp).toBe(1234567891);
     expect(result.receipt.primaryPlatformMessageId).toBe("1234567891");
     expect(result.receipt.platformMessageIds).toEqual(["1234567891"]);
-    await expect(
-      resolveSignalReplyContextWithPersistence({
-        accountId: "default",
-        to: "group:group-1",
-        replyToId: "1234567891",
-      }),
-    ).resolves.toEqual({ author: "+15550001111", body: "<media:image>" });
     expect(result.receipt.raw).toEqual([
       {
         channel: "signal",

@@ -151,7 +151,7 @@ export function createReplyDeliveryContext(
 /** Create a payload filter that strips reply targets according to reply-to mode. */
 export function createReplyToModeFilter(
   mode: ReplyToMode,
-  opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
+  opts: { allowExplicitReplyTagsWhenOff?: boolean; hasRepliedRef?: { value: boolean } } = {},
 ) {
   let hasThreaded = false;
   return (payload: ReplyPayload): ReplyPayload => {
@@ -174,7 +174,7 @@ export function createReplyToModeFilter(
     if (mode === "all") {
       return payload;
     }
-    if (isSingleUseReplyToMode(mode) && hasThreaded) {
+    if (isSingleUseReplyToMode(mode) && (hasThreaded || opts.hasRepliedRef?.value)) {
       // Status notices are transient messages that should always
       // appear in-thread, even after the first assistant block has already
       // consumed the "first" slot.  Let them keep their replyToId.
@@ -189,6 +189,9 @@ export function createReplyToModeFilter(
     // hasThreaded so the real assistant reply still gets replyToId.
     if (isSingleUseReplyToMode(mode) && !isStatusNotice) {
       hasThreaded = true;
+      if (opts.hasRepliedRef) {
+        opts.hasRepliedRef.value = true;
+      }
     }
     return payload;
   };
@@ -226,6 +229,7 @@ export function resolveBatchedReplyThreadingPolicy(
 export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
   channel?: OriginatingChannelType,
+  hasRepliedRef?: { value: boolean },
 ) {
   const normalized = normalizeOptionalLowercaseString(channel);
   const isWebchat = normalized === "webchat";
@@ -234,5 +238,6 @@ export function createReplyToModeFilterForChannel(
   const allowExplicitReplyTagsWhenOff = normalized ? true : isWebchat;
   return createReplyToModeFilter(mode, {
     allowExplicitReplyTagsWhenOff,
+    hasRepliedRef,
   });
 }

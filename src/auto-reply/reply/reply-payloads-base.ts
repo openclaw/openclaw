@@ -104,6 +104,7 @@ type ReplyThreadingParams = {
   replyToChannel?: OriginatingChannelType;
   currentMessageId?: string;
   replyThreading?: ReplyThreadingPolicy;
+  hasRepliedRef?: { value: boolean };
 };
 
 /** Resolves reply targets and filters empty payloads before channel delivery. */
@@ -128,6 +129,7 @@ export function applyReplyThreading(params: ReplyThreadingParams): ReplyPayload[
   const applyReplyToMode = createReplyToModeFilterForChannel(
     params.replyToMode,
     params.replyToChannel,
+    params.hasRepliedRef,
   );
   return resolveReplyThreadingPayloads(params).map(applyReplyToMode);
 }

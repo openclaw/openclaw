@@ -1387,7 +1387,12 @@ export async function runReplyAgent(params: {
     sessionCtx.AccountId,
     sessionCtx.ChatType,
   );
-  const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
+  const replyState = opts?.hasRepliedRef ?? { value: false };
+  const applyReplyToMode = createReplyToModeFilterForChannel(
+    replyToMode,
+    replyToChannel,
+    replyState,
+  );
   const cfg = followupRun.run.config;
   const replyMediaContext = createReplyMediaContext({
     cfg,
@@ -1639,7 +1644,7 @@ export async function runReplyAgent(params: {
         followupRun,
         promptForEstimate: followupRun.prompt,
         sessionCtx,
-        opts,
+        opts: { ...opts, hasRepliedRef: replyState },
         defaultModel,
         agentCfgContextTokens,
         resolvedVerboseLevel,
@@ -1737,7 +1742,7 @@ export async function runReplyAgent(params: {
         sessionCtx,
         replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         replyOperation,
-        opts,
+        opts: { ...opts, hasRepliedRef: replyState },
         typingSignals,
         blockReplyPipeline,
         blockStreamingEnabled,
@@ -2063,6 +2068,7 @@ export async function runReplyAgent(params: {
     const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(
       replyToMode,
       replyToChannel,
+      replyState,
     );
     const applyFinalReplyToMode = (payload: ReplyPayload) => {
       const isDisabledReasoningLane =

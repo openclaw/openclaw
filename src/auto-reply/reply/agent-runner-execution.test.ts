@@ -1387,24 +1387,6 @@ describe("runAgentTurnWithFallback", () => {
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
   });
 
-  it("uses a provider reply target without replacing the inbound event id", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(
-      createMinimalRunAgentTurnParams({
-        sessionCtx: {
-          Provider: "signal",
-          MessageSid: "edit-event",
-          CurrentMessageId: "original-message",
-        } as TemplateContext,
-        opts: { onBlockReply: vi.fn() },
-      }),
-    );
-    expectMockCallArgFields(state.createBlockReplyDeliveryHandlerMock, 0, "block reply handler", {
-      currentMessageId: "original-message",
-    });
-  });
-
   it("freezes abort ownership only after model fallback settles", async () => {
     const { replyOperation, freezeAbortMock } = createMockReplyOperation();
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {

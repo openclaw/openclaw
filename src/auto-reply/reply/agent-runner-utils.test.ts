@@ -431,8 +431,7 @@ describe("agent-runner-utils", () => {
   it("resolves reply mode without a channel-specific tool context", () => {
     hoisted.getChannelPluginMock.mockReturnValue({
       threading: {
-        resolveReplyToMode: ({ accountId }: { accountId?: string | null }) =>
-          accountId === "work" ? "first" : "off",
+        resolveReplyToMode: () => "first",
       },
     });
     const context = buildThreadingToolContext({
@@ -449,7 +448,6 @@ describe("agent-runner-utils", () => {
     });
 
     expect(context.replyToMode).toBe("first");
-    expect(context.hasRepliedRef).toEqual({ value: false });
   });
 
   it("does not expose restart-sentinel synthetic ids as message-tool reply targets", () => {

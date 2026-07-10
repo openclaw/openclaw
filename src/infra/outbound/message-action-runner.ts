@@ -1164,6 +1164,19 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     ensureOutboundSessionEntry,
   });
   const resolvedReplyToId = readStringParam(params, "replyTo");
+  const commitImplicitReply = () => {
+    if (
+      !dryRun &&
+      !replyToIsExplicit &&
+      resolvedReplyToId &&
+      input.toolContext?.replyToMode === "first"
+    ) {
+      const hasRepliedRef = input.toolContext.hasRepliedRef;
+      if (hasRepliedRef) {
+        hasRepliedRef.value = true;
+      }
+    }
+  };
   throwIfAborted(abortSignal);
 
   const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
@@ -1219,6 +1232,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     }),
   });
   if (gatewayPluginAction) {
+    commitImplicitReply();
     return gatewayPluginAction;
   }
 
@@ -1290,6 +1304,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     replyToMode: replyToIsExplicit ? undefined : input.toolContext?.replyToMode,
     threadId: resolvedThreadId ?? undefined,
   });
+  commitImplicitReply();
 
   return {
     kind: "send",

@@ -1091,14 +1091,13 @@ describe("mcp loopback server", () => {
 
   it("caps loopback tool cache cardinality by evicting oldest contexts", () => {
     const cache = new McpLoopbackToolCache();
-    const replyState = { value: false };
     const baseParams = {
       accountId: undefined,
       cfg: { session: { mainKey: "main" } } as never,
       currentChannelId: "telegram:chat123",
       currentInboundAudio: undefined,
       currentMessageId: undefined,
-      hasRepliedRef: replyState,
+      hasRepliedRef: { value: false as boolean },
       currentThreadTs: "thread-1",
       inboundEventKind: "room_event",
       messageProvider: "telegram",
@@ -1114,15 +1113,14 @@ describe("mcp loopback server", () => {
       });
     }
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(257);
-    expect(getScopedToolsCall(0).hasRepliedRef).toBe(replyState);
-    replyState.value = true;
+    baseParams.hasRepliedRef.value = true;
 
     cache.resolve({
       ...baseParams,
       currentMessageId: "message-0",
     });
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(258);
-    expect(getScopedToolsCall(257).hasRepliedRef).toBe(replyState);
+    expect(getScopedToolsCall(257).hasRepliedRef).toBe(baseParams.hasRepliedRef);
 
     cache.resolve({
       ...baseParams,

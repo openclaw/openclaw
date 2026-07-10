@@ -110,12 +110,6 @@ export function resolveAndApplyOutboundReplyToId(
 ): string | undefined {
   const explicitReplyToId = readStringParam(actionParams, "replyTo");
   if (explicitReplyToId) {
-    if (context.toolContext?.replyToMode === "first") {
-      const hasRepliedRef = context.toolContext.hasRepliedRef;
-      if (hasRepliedRef) {
-        hasRepliedRef.value = true;
-      }
-    }
     return explicitReplyToId;
   }
   if (suppressesImplicitThreading(actionParams)) {
@@ -146,10 +140,6 @@ export function resolveAndApplyOutboundReplyToId(
     const hasRepliedRef = context.toolContext?.hasRepliedRef;
     if (hasRepliedRef?.value) {
       return undefined;
-    }
-    // First-reply mode consumes the current inbound message once across batched sends.
-    if (hasRepliedRef) {
-      hasRepliedRef.value = true;
     }
   }
 

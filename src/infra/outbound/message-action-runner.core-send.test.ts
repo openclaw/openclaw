@@ -191,6 +191,7 @@ describe("runMessageAction core send routing", () => {
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
+    const replyState = { value: false };
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -228,6 +229,12 @@ describe("runMessageAction core send routing", () => {
         target: "-1001234567890:topic:42",
         message: "topic hello",
       },
+      toolContext: {
+        currentChannelId: "telegram:-1001234567890:topic:42",
+        currentMessageId: "message-1",
+        replyToMode: "first",
+        hasRepliedRef: replyState,
+      },
       dryRun: true,
     });
 
@@ -238,6 +245,7 @@ describe("runMessageAction core send routing", () => {
     expect(result.to).toBe("telegram:-1001234567890:topic:42");
     expect(payload.to).toBe("telegram:-1001234567890:topic:42");
     expect(payload.dryRun).toBe(true);
+    expect(replyState.value).toBe(false);
   });
 
   it("preserves an explicit provider reply target with its canonical thread root", async () => {

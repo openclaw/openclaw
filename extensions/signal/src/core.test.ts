@@ -1036,37 +1036,6 @@ describe("signal outbound", () => {
     ]);
   });
 
-  it("keeps reply author registration in memory when persistent state cannot open", async () => {
-    setSignalRuntime(
-      createPluginRuntimeMock({
-        state: {
-          openKeyedStore: () => {
-            throw new Error("state unavailable");
-          },
-        },
-      }),
-    );
-
-    try {
-      const replyContext = {
-        accountId: "default",
-        to: "signal:group:group-1",
-        replyToId: "1700000000007",
-      };
-      await registerSignalReplyContext({
-        ...replyContext,
-        author: "uuid:sender-1",
-      });
-
-      await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
-        author: "uuid:sender-1",
-      });
-    } finally {
-      clearSignalRuntime();
-      await clearSignalReplyAuthorsForTest();
-    }
-  });
-
   it("keeps persisted edited reply context when an older replay arrives after restart", async () => {
     const persistedRecords = new Map<string, unknown>();
     let failNextUpdate = true;

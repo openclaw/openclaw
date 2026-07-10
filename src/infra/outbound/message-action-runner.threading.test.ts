@@ -391,7 +391,7 @@ describe("message action threading helpers", () => {
     expect(actionParams.replyTo).toBeUndefined();
   });
 
-  it("consumes first-mode inherited reply threading only once", () => {
+  it("leaves first-mode consumption pending until delivery succeeds", () => {
     const actionParams: Record<string, unknown> = {
       channel: "workspace",
       target: "channel:C123",
@@ -427,8 +427,8 @@ describe("message action threading helpers", () => {
     );
 
     expect(firstResolved).toBe("msg-42");
-    expect(secondResolved).toBeUndefined();
-    expect(hasRepliedRef.value).toBe(true);
+    expect(secondResolved).toBe("msg-42");
+    expect(hasRepliedRef.value).toBe(false);
   });
 
   it("consumes first-mode threading once for a channel-normalized target alias", () => {
@@ -468,12 +468,12 @@ describe("message action threading helpers", () => {
     );
 
     expect(firstResolved).toBe("msg-42");
-    expect(secondResolved).toBeUndefined();
-    expect(hasRepliedRef.value).toBe(true);
+    expect(secondResolved).toBe("msg-42");
+    expect(hasRepliedRef.value).toBe(false);
     expect(matchesToolContextTarget).toHaveBeenCalledTimes(2);
   });
 
-  it("consumes first-mode when the first send uses an explicit replyTo", () => {
+  it("does not consume first-mode when a send uses an explicit replyTo", () => {
     const hasRepliedRef = { value: false };
     const explicitResolved = resolveAndApplyOutboundReplyToId(
       {
@@ -511,8 +511,8 @@ describe("message action threading helpers", () => {
     );
 
     expect(explicitResolved).toBe("explicit-1");
-    expect(inheritedResolved).toBeUndefined();
-    expect(hasRepliedRef.value).toBe(true);
+    expect(inheritedResolved).toBe("msg-42");
+    expect(hasRepliedRef.value).toBe(false);
   });
 
   it("does not inherit reply threading across providers even when target ids match", () => {

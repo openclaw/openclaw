@@ -2016,6 +2016,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes local chart presentations through core delivery", async () => {
+      const replyState = { value: false };
       const presentation = {
         blocks: [
           {
@@ -2071,6 +2072,7 @@ describe("runMessageAction plugin dispatch", () => {
           currentChannelId: "channel:test-card",
           currentMessageId: "reply-1",
           replyToMode: "first",
+          hasRepliedRef: replyState,
         },
         gateway: {
           clientName: "cli",
@@ -2081,6 +2083,7 @@ describe("runMessageAction plugin dispatch", () => {
 
       expect(result.kind).toBe("send");
       expect(result.handledBy).toBe("core");
+      expect(replyState.value).toBe(true);
       expect(handleAction).not.toHaveBeenCalled();
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
