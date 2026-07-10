@@ -122,7 +122,7 @@ _clawdock_ensure_dir() {
   fi
 
   # Auto-detect from common paths
-  local candidate found_path=""
+  local candidate found_path="" response
   for candidate in "${CLAWDOCK_COMMON_PATHS[@]}"; do
     if [[ -f "${candidate}/docker-compose.yml" ]]; then
       found_path="$candidate"

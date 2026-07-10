@@ -42,10 +42,12 @@ describe("scripts/clawdock/clawdock-helpers.sh", () => {
               [
                 'path_before="$PATH"',
                 'candidate="caller-value"',
+                'response="caller-response"',
                 "source scripts/clawdock/clawdock-helpers.sh || exit 1",
                 '_clawdock_ensure_dir < "$CLAWDOCK_CONFIRM_FILE" || exit 1',
                 '[[ "$PATH" == "$path_before" ]] || exit 1',
                 '[[ "$candidate" == "caller-value" ]] || exit 1',
+                '[[ "$response" == "caller-response" ]] || exit 1',
                 '[[ "$CLAWDOCK_DIR" == "$HOME/openclaw" ]] || exit 1',
               ].join("\n"),
             ],
