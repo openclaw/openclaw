@@ -839,7 +839,7 @@ describe("processGatewayAllowlist", () => {
     const result = await runGatewayAllowlist({ command });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ execCommandOverride: undefined });
+    expect(result).toEqual({ execCommandOverride: command });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
         authorization: expect.objectContaining({
@@ -1150,6 +1150,15 @@ describe("processGatewayAllowlist", () => {
       askFallback: "deny",
     });
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        aggregated: "done",
+      }),
+    });
 
     const result = await runGatewayAllowlist({
       command,
@@ -1172,6 +1181,9 @@ describe("processGatewayAllowlist", () => {
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       }),
     );
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
         authorization: expect.objectContaining({ source: "explicit-approval" }),
@@ -1416,6 +1428,7 @@ describe("processGatewayAllowlist", () => {
         { resolution: null, argv: ["openclaw", "config", "get", "security.audit.suppressions"] },
       ],
       segmentAllowlistEntries: [],
+      segmentSatisfiedBy: [null],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -1445,6 +1458,7 @@ describe("processGatewayAllowlist", () => {
         },
       ],
       segmentAllowlistEntries: [],
+      segmentSatisfiedBy: [null],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -2017,7 +2031,18 @@ EOF`,
   });
 
   it("binds explicit allow-always persistence to its evaluated policy snapshot", async () => {
+    const { command, authorizationPlan, segments } = await planAllowlistedNodeVersion();
     hasDurableExecApprovalMock.mockReturnValue(false);
+    requiresExecApprovalMock.mockReturnValue(true);
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segments,
+      segmentAllowlistEntries: [],
+      segmentSatisfiedBy: [null],
+      authorizationPlan,
+    });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: "allowlist",
@@ -2034,7 +2059,7 @@ EOF`,
 
     await expect(
       runGatewayAllowlist({
-        command: "pwd",
+        command,
         ask: "on-miss",
         turnSourceChannel: "webchat",
       }),
@@ -2046,7 +2071,7 @@ EOF`,
           source: "explicit-approval",
           security: "allowlist",
           ask: "on-miss",
-          allowlistSatisfied: true,
+          allowlistSatisfied: false,
           policySnapshot: {
             security: "full",
             ask: "off",
@@ -2058,7 +2083,7 @@ EOF`,
           requireExactCommandApproval: false,
           requireDurableAllowlistApproval: false,
         },
-        allowAlwaysDecision: expect.any(Object),
+        allowAlwaysDecision: expect.objectContaining({ kind: "patterns" }),
       }),
     );
     expect(runExecProcessMock).not.toHaveBeenCalled();
@@ -2245,6 +2270,7 @@ EOF`,
 
   it("revalidates a full timeout fallback without reapplying always-ask", async () => {
     requiresExecApprovalMock.mockReturnValue(true);
+    hasDurableExecApprovalMock.mockReturnValue(false);
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
