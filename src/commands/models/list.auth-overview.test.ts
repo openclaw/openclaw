@@ -201,9 +201,10 @@ describe("resolveProviderAuthOverview", () => {
     const baseConfig = {
       models: {
         providers: {
-          openai: {
-            apiKey: "models-json-key",
-            models: [],
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "models-json-key",
+              models: [],
           },
         },
       },

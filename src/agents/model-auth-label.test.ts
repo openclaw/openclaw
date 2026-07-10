@@ -385,7 +385,12 @@ describe("resolveModelAuthLabel", () => {
       cfg: {
         models: {
           providers: {
-            openai: { auth: "api-key", apiKey: "sk-literal-secret-key", models: [] },
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              auth: "api-key",
+              apiKey: "sk-literal-secret-key",
+              models: [],
+            },
           },
         },
       },
