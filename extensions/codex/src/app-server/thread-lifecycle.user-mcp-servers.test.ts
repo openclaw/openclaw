@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
   readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
@@ -487,6 +488,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
 
   it("starts a new thread when a user MCP Authorization bearer changes without storing the bearer", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
     const workspaceDir = path.join(tempDir, "workspace");
     const createConfig = (authorization: string) =>
       ({
@@ -549,7 +551,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     );
   });
 
-  it("fails closed instead of sending auth-profile bearers to a remote app-server", async () => {
+  it("fails closed instead of sending MCP OAuth bearers to a remote app-server", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const request = vi.fn(async (_method: string, _params: unknown) => {
@@ -578,9 +580,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
           connectionClass: "remote",
         },
       }),
-    ).rejects.toThrow(
-      "Cannot project mcp.servers.ducktape.oauth.authProfileId into Codex app-server",
-    );
+    ).rejects.toThrow("MCP OAuth bearer projection is only supported for local app-server");
     expect(request).not.toHaveBeenCalled();
   });
 

@@ -12,7 +12,7 @@ import { tryReadJson } from "../../infra/json-files.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
-import { resolveMcpAuthProfileBundleConfig } from "../mcp-auth-profile.js";
+import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import {
   findClaudeMcpConfigPath,
@@ -240,7 +240,7 @@ export async function prepareCliBundleMcpConfig(params: {
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
-  const resolvedAuthProfileConfig = await resolveMcpAuthProfileBundleConfig({
+  const resolvedBearerConfig = await resolveMcpBearerBundleConfig({
     config: mergedConfig,
     cfg: params.config,
     agentDir: params.agentDir,
@@ -250,8 +250,8 @@ export async function prepareCliBundleMcpConfig(params: {
   return await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
-    mergedConfig: resolvedAuthProfileConfig.config,
-    env: resolvedAuthProfileConfig.env,
+    mergedConfig: resolvedBearerConfig.config,
+    env: resolvedBearerConfig.env,
   });
 }
 

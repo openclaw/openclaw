@@ -5,7 +5,15 @@ import crypto from "node:crypto";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
-import { loadAuthProfileStoreForSecretsRuntime, resolveApiKeyForProfile } from "./auth-profiles.js";
+import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
+import { loadAuthProfileStoreForSecretsRuntime } from "./auth-profiles/store.js";
+import {
+  buildMcpHttpFetch,
+  withoutMcpAuthorizationHeader,
+  withSameOriginMcpHttpHeaders,
+} from "./mcp-http-fetch.js";
+import { resolveMcpOAuthAccessToken, type McpOAuthConfig } from "./mcp-oauth.js";
+import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 type McpAuthProfileOptions = {
   cfg?: OpenClawConfig;
@@ -45,6 +53,14 @@ export function resolveMcpAuthProfileId(rawServer: unknown): string | undefined 
   return typeof authProfileId === "string" && authProfileId.trim().length > 0
     ? authProfileId.trim()
     : undefined;
+}
+
+/** Returns whether a server needs an OpenClaw-managed bearer projected externally. */
+export function requiresMcpBearerProjection(rawServer: unknown): boolean {
+  if (!isRecord(rawServer) || rawServer.auth !== "oauth") {
+    return false;
+  }
+  return Boolean(resolveMcpAuthProfileId(rawServer) || typeof rawServer.url === "string");
 }
 
 async function resolveMcpAuthProfileBearerToken(
@@ -92,6 +108,46 @@ async function resolveMcpAuthProfileBearerToken(
   return resolved.credential.access;
 }
 
+async function resolveMcpBearerToken(params: {
+  serverName: string;
+  server: BundleMcpServerConfig;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Promise<string | undefined> {
+  const authProfileId = resolveMcpAuthProfileId(params.server);
+  if (authProfileId) {
+    return await resolveMcpAuthProfileBearerToken({
+      serverName: params.serverName,
+      profileId: authProfileId,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    });
+  }
+  if (params.server.auth !== "oauth") {
+    return undefined;
+  }
+  const resolved = resolveMcpTransportConfig(params.serverName, params.server);
+  if (!resolved || resolved.kind !== "http") {
+    return undefined;
+  }
+  const fetchFn = withSameOriginMcpHttpHeaders({
+    fetchFn: buildMcpHttpFetch({
+      sslVerify: resolved.sslVerify,
+      clientCert: resolved.clientCert,
+      clientKey: resolved.clientKey,
+      resourceUrl: resolved.url,
+    }),
+    headers: withoutMcpAuthorizationHeader(resolved.headers),
+    resourceUrl: resolved.url,
+  });
+  return await resolveMcpOAuthAccessToken({
+    serverName: params.serverName,
+    serverUrl: resolved.url,
+    config: resolved.oauth as McpOAuthConfig | undefined,
+    fetchFn,
+  });
+}
+
 /** Wraps HTTP MCP fetch with same-origin, refreshed bearer injection. */
 export function withMcpAuthProfileBearer(
   params: {
@@ -137,8 +193,8 @@ function stripOpenClawOnlyOAuthConfig(server: BundleMcpServerConfig): BundleMcpS
   return next;
 }
 
-/** Resolves auth-profile backed MCP servers into env-backed bearer headers for CLI runtimes. */
-export async function resolveMcpAuthProfileBundleConfig(
+/** Resolves OAuth-backed MCP servers into bearer headers for external runtimes. */
+export async function resolveMcpBearerBundleConfig(
   params: {
     config: BundleMcpConfig;
     env?: Record<string, string>;
@@ -150,17 +206,15 @@ export async function resolveMcpAuthProfileBundleConfig(
   const tokenProjection = params.tokenProjection ?? "env";
 
   for (const [serverName, server] of Object.entries(params.config.mcpServers)) {
-    const authProfileId = resolveMcpAuthProfileId(server);
-    if (!authProfileId) {
-      continue;
-    }
-
-    const token = await resolveMcpAuthProfileBearerToken({
+    const token = await resolveMcpBearerToken({
       serverName,
-      profileId: authProfileId,
+      server,
       cfg: params.cfg,
       agentDir: params.agentDir,
     });
+    if (!token) {
+      continue;
+    }
     let authorization: string;
     if (tokenProjection === "literal") {
       authorization = `Bearer ${token}`;

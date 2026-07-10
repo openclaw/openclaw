@@ -1,21 +1,65 @@
 /** Tests auth-profile backed MCP bearer projection. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveMcpAuthProfileBundleConfig, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
+import { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 
 const authMocks = vi.hoisted(() => ({
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
+  resolveMcpOAuthAccessToken: vi.fn(),
 }));
 
-vi.mock("./auth-profiles.js", () => ({
+vi.mock("./auth-profiles/store.js", () => ({
   loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
+}));
+
+vi.mock("./auth-profiles/oauth.js", () => ({
   resolveApiKeyForProfile: authMocks.resolveApiKeyForProfile,
+}));
+
+vi.mock("./mcp-oauth.js", () => ({
+  resolveMcpOAuthAccessToken: authMocks.resolveMcpOAuthAccessToken,
 }));
 
 describe("mcp auth profile bearer projection", () => {
   beforeEach(() => {
     authMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
     authMocks.resolveApiKeyForProfile.mockReset();
+    authMocks.resolveMcpOAuthAccessToken.mockReset();
+  });
+
+  it("projects existing MCP-native OAuth credentials without an auth profile", async () => {
+    authMocks.resolveMcpOAuthAccessToken.mockResolvedValueOnce("native-access-token");
+
+    const resolved = await resolveMcpBearerBundleConfig({
+      config: {
+        mcpServers: {
+          docs: {
+            url: "https://mcp.example.com/mcp",
+            type: "http",
+            auth: "oauth",
+            oauth: { scope: "docs.read" },
+          },
+        },
+      },
+    });
+
+    expect(resolved.config.mcpServers.docs).toMatchObject({
+      url: "https://mcp.example.com/mcp",
+      headers: {
+        Authorization: expect.stringMatching(/^Bearer \$\{OPENCLAW_MCP_AUTH_[A-F0-9]{12}_TOKEN}$/),
+      },
+    });
+    expect(resolved.config.mcpServers.docs?.auth).toBeUndefined();
+    expect(resolved.config.mcpServers.docs?.oauth).toBeUndefined();
+    expect(Object.values(resolved.env ?? {})).toEqual(["native-access-token"]);
+    expect(authMocks.resolveMcpOAuthAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverName: "docs",
+        serverUrl: "https://mcp.example.com/mcp",
+        config: { scope: "docs.read" },
+        fetchFn: expect.any(Function),
+      }),
+    );
   });
 
   it("resolves refreshable OAuth profiles into env-backed CLI bearer headers", async () => {
@@ -45,7 +89,7 @@ describe("mcp auth profile bearer projection", () => {
       },
     });
 
-    const resolved = await resolveMcpAuthProfileBundleConfig({
+    const resolved = await resolveMcpBearerBundleConfig({
       config: {
         mcpServers: {
           ducktape: {
@@ -77,6 +121,7 @@ describe("mcp auth profile bearer projection", () => {
         profileId: "ducktape:mcp",
       }),
     );
+    expect(authMocks.resolveMcpOAuthAccessToken).not.toHaveBeenCalled();
   });
 
   it("rejects static token profiles instead of pretending they are refreshable", async () => {
@@ -93,7 +138,7 @@ describe("mcp auth profile bearer projection", () => {
     });
 
     await expect(
-      resolveMcpAuthProfileBundleConfig({
+      resolveMcpBearerBundleConfig({
         config: {
           mcpServers: {
             ducktape: {
@@ -137,7 +182,7 @@ describe("mcp auth profile bearer projection", () => {
       },
     });
 
-    const resolved = await resolveMcpAuthProfileBundleConfig({
+    const resolved = await resolveMcpBearerBundleConfig({
       config: {
         mcpServers: {
           google: {

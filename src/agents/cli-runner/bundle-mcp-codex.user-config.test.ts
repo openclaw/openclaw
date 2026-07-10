@@ -9,17 +9,26 @@ import {
 const authMocks = vi.hoisted(() => ({
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
+  resolveMcpOAuthAccessToken: vi.fn(),
 }));
 
-vi.mock("../auth-profiles.js", () => ({
+vi.mock("../auth-profiles/store.js", () => ({
   loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
+}));
+
+vi.mock("../auth-profiles/oauth.js", () => ({
   resolveApiKeyForProfile: authMocks.resolveApiKeyForProfile,
+}));
+
+vi.mock("../mcp-oauth.js", () => ({
+  resolveMcpOAuthAccessToken: authMocks.resolveMcpOAuthAccessToken,
 }));
 
 describe("buildCodexUserMcpServersThreadConfigPatch", () => {
   beforeEach(() => {
     authMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
     authMocks.resolveApiKeyForProfile.mockReset();
+    authMocks.resolveMcpOAuthAccessToken.mockReset();
   });
 
   it("returns undefined when cfg has no mcp.servers (regression: #80814)", () => {
@@ -402,6 +411,54 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
       },
     });
     expect(JSON.stringify(patch)).not.toContain("refresh-token-must-not-project");
+  });
+
+  it("projects MCP-native OAuth credentials into local Codex runtime config", async () => {
+    authMocks.resolveMcpOAuthAccessToken.mockResolvedValueOnce("native-access-token");
+
+    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
+      mcp: {
+        servers: {
+          docs: {
+            transport: "streamable-http",
+            url: "https://mcp.example.com/mcp",
+            auth: "oauth",
+            oauth: { scope: "docs.read" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(patch).toStrictEqual({
+      mcp_servers: {
+        docs: {
+          url: "https://mcp.example.com/mcp",
+          http_headers: { Authorization: "Bearer native-access-token" },
+        },
+      },
+    });
+  });
+
+  it("fails closed for MCP-native OAuth projection to a remote Codex app-server", async () => {
+    await expect(
+      buildCodexUserMcpServersThreadConfigPatchForRuntime(
+        {
+          mcp: {
+            servers: {
+              docs: {
+                transport: "streamable-http",
+                url: "https://mcp.example.com/mcp",
+                auth: "oauth",
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        { allowLiteralOAuthProjection: false },
+      ),
+    ).rejects.toThrow(
+      "MCP OAuth bearer projection is only supported for local app-server connections",
+    );
+    expect(authMocks.resolveMcpOAuthAccessToken).not.toHaveBeenCalled();
   });
 
   it("preserves tool filters while projecting auth-profile backed MCP bearers at runtime", async () => {
