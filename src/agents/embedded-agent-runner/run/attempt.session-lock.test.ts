@@ -2048,6 +2048,9 @@ describe("embedded attempt session lock lifecycle", () => {
 
   it("rejects a same-size rewrite racing the byte-identical snapshot", async () => {
     const sessionFile = await createTempSessionFile();
+    const oldTime = new Date("2020-01-01T00:00:00.000Z");
+    await fs.utimes(sessionFile, oldTime, oldTime);
+    const before = await fs.stat(sessionFile, { bigint: true });
     const originalBytes = await fs.readFile(sessionFile);
     const release = vi.fn(async () => {});
     const controller = await createEmbeddedAttemptSessionLockController({
@@ -2057,6 +2060,16 @@ describe("embedded attempt session lock lifecycle", () => {
 
     await controller.releaseForPrompt();
     await fs.writeFile(sessionFile, originalBytes);
+    // Force the first rewrite past the fingerprint fast path even on filesystems
+    // that coalesce timestamps; the next path stat is snapshot validation.
+    const rewrittenTime = new Date("2021-01-01T00:00:00.000Z");
+    await fs.utimes(sessionFile, rewrittenTime, rewrittenTime);
+    const after = await fs.stat(sessionFile, { bigint: true });
+
+    expect(after.dev).toBe(before.dev);
+    expect(after.ino).toBe(before.ino);
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeNs).not.toBe(before.mtimeNs);
 
     const realStat = fs.stat.bind(fs);
     let armedStatCalls = 0;
