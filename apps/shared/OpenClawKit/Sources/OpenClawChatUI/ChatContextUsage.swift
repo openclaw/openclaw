@@ -142,11 +142,12 @@ struct ChatMessageUsagePresentation: Equatable {
         // Context pressure mirrors the Control UI prompt size. Output is response data;
         // input plus cache reads/writes is the context the model received for this run.
         let promptTokens = Double(input ?? 0) + Double(cacheRead ?? 0) + Double(cacheWrite ?? 0)
-        let contextPercent: Int? = if let contextWindowTokens, contextWindowTokens > 0, promptTokens > 0 {
+        let contextPercent: Int?
+        if let contextWindowTokens, contextWindowTokens > 0, promptTokens > 0 {
             let roundedPercent = (promptTokens / Double(contextWindowTokens) * 100).rounded()
-            Int(min(100, roundedPercent))
+            contextPercent = Int(min(100, roundedPercent))
         } else {
-            nil
+            contextPercent = nil
         }
         let pressure = self.pressure(for: contextPercent)
         if let contextPercent {

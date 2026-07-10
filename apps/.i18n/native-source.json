@@ -22187,7 +22187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 154,
+      "line": 155,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatContextUsage.swift",
       "source": "ctx",
       "surface": "apple",
@@ -22195,7 +22195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 157,
+      "line": 158,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatContextUsage.swift",
       "source": "\\(contextPercent) percent of context used",
       "surface": "apple",
@@ -22203,7 +22203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 159,
+      "line": 160,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatContextUsage.swift",
       "source": "Warning: \\(contextPercent) percent of context used",
       "surface": "apple",
@@ -22211,7 +22211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 161,
+      "line": 162,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatContextUsage.swift",
       "source": "Critical: \\(contextPercent) percent of context used",
       "surface": "apple",
@@ -22219,7 +22219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 223,
+      "line": 224,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatContextUsage.swift",
       "source": "\\(percent)%",
       "surface": "apple",
@@ -22227,7 +22227,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 230,
+      "line": 231,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatContextUsage.swift",
       "source": "Context usage",
       "surface": "apple",
