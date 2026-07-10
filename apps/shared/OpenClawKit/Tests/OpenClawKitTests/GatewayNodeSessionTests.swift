@@ -2596,6 +2596,24 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `server event subscription filters before buffering`() async {
+        let gateway = GatewayNodeSession()
+        let subscription = await gateway.makeServerEventSubscription(
+            bufferingNewest: 1,
+            matching: { $0.event == "target" })
+        defer { subscription.cancel() }
+        let stream = subscription.events
+
+        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "target"))
+        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+
+        var iterator = stream.makeAsyncIterator()
+        let event = await iterator.next()
+        #expect(event?.event == "target")
+    }
+
+    @Test
     func `emits synthetic seq gap after reconnect snapshot`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()

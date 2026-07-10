@@ -665,10 +665,6 @@ extension VoiceWakeManager {
         self.audioSessionIsActive = isActive
     }
 
-    func _test_setStartInFlight(_ isStarting: Bool) {
-        self.isStarting = isStarting
-    }
-
     func _test_isSuppressedByPushToTalk() -> Bool {
         self.suppressionReasons.contains(.pushToTalk)
     }

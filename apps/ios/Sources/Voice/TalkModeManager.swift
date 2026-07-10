@@ -40,11 +40,25 @@ private struct ActivePushToTalk {
     let gatewayContext: PushToTalkGatewayContext
 }
 
+private enum ChatCompletionState {
+    case final
+    case aborted
+    case error
+    case timeout
+}
+
+private struct ChatCompletionResult {
+    var state: ChatCompletionState
+    var assistantText: String?
+}
+
 @MainActor
 private final class TranscriptStreamingOwner {
     var task: Task<Void, Never>?
     var speechGeneration: Int?
     var terminalStatus: String?
+    /// Subscribed before chat.send so a fast terminal cannot outrun its owner.
+    var completionEvents: AsyncStream<EventFrame>?
 }
 
 private enum PushToTalkGatewayContext {
@@ -1763,17 +1777,32 @@ final class TalkModeManager: NSObject {
 
         do {
             let startedAt = Date().timeIntervalSince1970
+            let runId = UUID().uuidString
+            let completionSubscription = await gateway.makeServerEventSubscription(
+                bufferingNewest: 200,
+                matching: { Self.matchesChatEvent($0, runId: runId) })
+            defer { completionSubscription.cancel() }
+            let completionEvents = completionSubscription.events
+            guard await gateway.currentRoute() == gatewayRoute else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
+            streamingOwner.completionEvents = completionEvents
             self.logger.info(
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send start sessionKey=\(sessionKey) chars=\(prompt.count)")
+            guard self.isCurrentTranscriptProcessing(generation) else { return }
             let acknowledgement = try await sendChat(
                 prompt,
                 gateway: gateway,
                 sessionKey: sessionKey,
-                gatewayRoute: gatewayRoute)
+                gatewayRoute: gatewayRoute,
+                idempotencyKey: runId)
             guard self.isCurrentTranscriptProcessing(generation) else { return }
-            let runId = acknowledgement.runId
+            guard acknowledgement.runId == runId else {
+                throw NSError(
+                    domain: "TalkModeManager",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Gateway returned a mismatched chat run ID"])
+            }
             let normalizedStatus = Self.normalizedChatSendStatus(acknowledgement.status)
             self.logger.info(
                 "chat.send ok runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
@@ -1844,10 +1873,12 @@ final class TalkModeManager: NSObject {
                         transcriptProcessingGeneration: generation)
                 }
             }
+            guard let completionEvents = streamingOwner.completionEvents else { return nil }
             completion = await self.waitForChatCompletion(
                 runId: runId,
                 gateway: gateway,
                 gatewayRoute: gatewayRoute,
+                stream: completionEvents,
                 timeoutSeconds: 120)
             guard self.isCurrentTranscriptProcessing(generation) else { return nil }
             guard await gateway.currentRoute() == gatewayRoute else { return nil }
@@ -2212,84 +2243,16 @@ final class TalkModeManager: NSObject {
             includeVoiceDirectiveHint: false)
     }
 
-    private enum ChatCompletionState: CustomStringConvertible {
-        case final
-        case aborted
-        case error
-        case timeout
-
-        var description: String {
-            switch self {
-            case .final: "final"
-            case .aborted: "aborted"
-            case .error: "error"
-            case .timeout: "timeout"
-            }
-        }
-    }
-
-    private struct ChatCompletionResult {
-        var state: ChatCompletionState
-        var assistantText: String?
-    }
-
-    private nonisolated static func lifecycleCompletionState(
-        data: [String: AnyCodable]) -> ChatCompletionState?
-    {
-        func lowerString(_ key: String) -> String? {
-            (data[key]?.value as? String)?.lowercased()
-        }
-        func hasHardTimeoutMetadata() -> Bool {
-            let timeoutPhase = lowerString("timeoutPhase")
-            return timeoutPhase == "preflight" ||
-                timeoutPhase == "provider" ||
-                timeoutPhase == "post_turn"
-        }
-        func isCancellation(status: String?, stopReason: String?) -> Bool {
-            let cancellationValues = Set([
-                "aborted", "cancelled", "canceled", "killed",
-            ])
-            let cancellationStopReasons = cancellationValues.union([
-                "auth-revoked", "restart", "rpc", "user",
-            ])
-            return status.map(cancellationValues.contains) == true ||
-                stopReason.map(cancellationStopReasons.contains) == true ||
-                (data["aborted"]?.value as? Bool == true && stopReason == "stop")
-        }
-
-        let phase = lowerString("phase")
-        let status = lowerString("status")
-        let stopReason = lowerString("stopReason")
-        let aborted = data["aborted"]?.value as? Bool == true
-        let statusIsTimeout = status == "timeout" || status == "timed_out"
-        let isTerminalPhase = phase == "end" || phase == "error" || phase == "aborted"
-        let terminalStatuses = Set([
-            "ok", "completed", "success", "error", "failed", "aborted",
-            "cancelled", "canceled", "killed", "timeout", "timed_out",
-        ])
-        guard isTerminalPhase || status.map(terminalStatuses.contains) == true else { return nil }
-        // An explicit timeout phase is authoritative. Without one, cancellation
-        // metadata must win so providerStarted cannot turn a user stop into timeout fallback.
-        if hasHardTimeoutMetadata() {
-            return .timeout
-        }
-        if phase == "aborted" || isCancellation(status: status, stopReason: stopReason) {
-            return .aborted
-        }
-        if statusIsTimeout || stopReason == "timeout" || stopReason == "timed_out" {
-            return .timeout
-        }
-        if phase == "error" || status == "error" || status == "failed" {
-            return .error
-        }
-        if aborted {
-            return .timeout
-        }
-        return .final
-    }
-
     private static func normalizedChatSendStatus(_ status: String) -> String {
         status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private nonisolated static func matchesChatEvent(_ event: EventFrame, runId: String) -> Bool {
+        guard event.event == "chat", let payload = event.payload else { return false }
+        let chatEvent = try? GatewayPayloadDecoding.decode(
+            payload,
+            as: OpenClawChatEventPayload.self)
+        return chatEvent?.runId == runId
     }
 
     private static func isTerminalChatSendSuccess(_ status: String) -> Bool {
@@ -2312,14 +2275,15 @@ final class TalkModeManager: NSObject {
         _ message: String,
         gateway: GatewayNodeSession,
         sessionKey: String,
-        gatewayRoute: GatewayNodeSessionRoute) async throws -> OpenClawChatSendResponse
+        gatewayRoute: GatewayNodeSessionRoute,
+        idempotencyKey: String) async throws -> OpenClawChatSendResponse
     {
         let payload: [String: Any] = [
             "sessionKey": sessionKey,
             "message": message,
             "thinking": "low",
             "timeoutMs": 30000,
-            "idempotencyKey": UUID().uuidString,
+            "idempotencyKey": idempotencyKey,
         ]
         let data = try JSONSerialization.data(withJSONObject: payload)
         guard let json = String(bytes: data, encoding: .utf8) else {
@@ -2341,10 +2305,10 @@ final class TalkModeManager: NSObject {
         runId: String,
         gateway: GatewayNodeSession,
         gatewayRoute: GatewayNodeSessionRoute,
+        stream: AsyncStream<EventFrame>,
         timeoutSeconds: Int = 120) async -> ChatCompletionResult
     {
-        let stream = await gateway.subscribeServerEvents(bufferingNewest: 200)
-        return await withTaskGroup(of: ChatCompletionResult.self) { group in
+        await withTaskGroup(of: ChatCompletionResult.self) { group in
             group.addTask { [runId] in
                 var latestAssistantText: String?
                 for await evt in stream {
@@ -2357,46 +2321,26 @@ final class TalkModeManager: NSObject {
                     if Task.isCancelled {
                         return ChatCompletionResult(state: .timeout, assistantText: latestAssistantText)
                     }
-                    guard let payload = evt.payload else { continue }
-                    if evt.event == "chat" {
-                        guard let chatEvent = try? GatewayPayloadDecoding.decode(
-                            payload,
-                            as: OpenClawChatEventPayload.self)
-                        else {
-                            continue
-                        }
-                        guard chatEvent.runId == runId else { continue }
-                        if let text = OpenClawChatEventText.assistantText(from: chatEvent) {
-                            latestAssistantText = text
-                        }
-                        switch chatEvent.state {
-                        case "final":
-                            return ChatCompletionResult(state: .final, assistantText: latestAssistantText)
-                        case "aborted":
-                            return ChatCompletionResult(state: .aborted, assistantText: nil)
-                        case "error":
-                            return ChatCompletionResult(state: .error, assistantText: nil)
-                        default:
-                            break
-                        }
-                    } else if evt.event == "agent" {
-                        guard let agentEvent = try? GatewayPayloadDecoding.decode(
-                            payload,
-                            as: OpenClawAgentEventPayload.self)
-                        else {
-                            continue
-                        }
-                        guard agentEvent.runId == runId else { continue }
-                        if agentEvent.stream == "assistant",
-                           let text = agentEvent.data["text"]?.value as? String
-                        {
-                            latestAssistantText = text
-                        } else if agentEvent.stream == "lifecycle" {
-                            if let state = Self.lifecycleCompletionState(data: agentEvent.data) {
-                                let assistantText = state == .final ? latestAssistantText : nil
-                                return ChatCompletionResult(state: state, assistantText: assistantText)
-                            }
-                        }
+                    guard let payload = evt.payload,
+                          let chatEvent = try? GatewayPayloadDecoding.decode(
+                              payload,
+                              as: OpenClawChatEventPayload.self),
+                          chatEvent.runId == runId
+                    else {
+                        continue
+                    }
+                    if let text = OpenClawChatEventText.assistantText(from: chatEvent) {
+                        latestAssistantText = text
+                    }
+                    switch chatEvent.state {
+                    case "final":
+                        return ChatCompletionResult(state: .final, assistantText: latestAssistantText)
+                    case "aborted":
+                        return ChatCompletionResult(state: .aborted, assistantText: nil)
+                    case "error":
+                        return ChatCompletionResult(state: .error, assistantText: nil)
+                    default:
+                        break
                     }
                 }
                 return ChatCompletionResult(state: .timeout, assistantText: latestAssistantText)
@@ -3116,7 +3060,11 @@ final class TalkModeManager: NSObject {
         speechGeneration: Int,
         transcriptProcessingGeneration generation: UInt64) async
     {
-        let stream = await gateway.subscribeServerEvents(bufferingNewest: 200)
+        let subscription = await gateway.makeServerEventSubscription(
+            bufferingNewest: 200,
+            matching: { Self.matchesChatEvent($0, runId: runId) })
+        defer { subscription.cancel() }
+        let stream = subscription.events
         guard self.isCurrentTranscriptProcessing(generation) else { return }
         for await evt in stream {
             guard self.isCurrentTranscriptProcessing(generation) else { return }
@@ -3124,15 +3072,16 @@ final class TalkModeManager: NSObject {
             guard self.isCurrentTranscriptProcessing(generation),
                   self.isCurrentSpeechGeneration(speechGeneration)
             else { return }
-            guard evt.event == "agent", let payload = evt.payload else { continue }
-            guard let agentEvent = try? GatewayPayloadDecoding.decode(
+            guard let payload = evt.payload else { continue }
+            guard let chatEvent = try? GatewayPayloadDecoding.decode(
                 payload,
-                as: OpenClawAgentEventPayload.self)
+                as: OpenClawChatEventPayload.self)
             else {
                 continue
             }
-            guard agentEvent.runId == runId, agentEvent.stream == "assistant" else { continue }
-            guard let text = agentEvent.data["text"]?.value as? String else { continue }
+            guard chatEvent.runId == runId else { continue }
+            guard chatEvent.state == "delta" || chatEvent.state == "final" else { continue }
+            guard let text = OpenClawChatEventText.assistantText(from: chatEvent) else { continue }
             let segments = self.incrementalSpeechBuffer.ingest(text: text, isFinal: false)
             if let lang = incrementalSpeechBuffer.directive?.language {
                 self.incrementalSpeechLanguage = ElevenLabsTTSClient.validatedLanguage(lang)
@@ -4299,10 +4248,6 @@ extension TalkModeManager {
         since: Double? = nil) -> String?
     {
         self.latestAssistantText(messages: messages, runId: runId, since: since)
-    }
-
-    static func _test_lifecycleCompletionState(data: [String: AnyCodable]) -> String? {
-        self.lifecycleCompletionState(data: data)?.description
     }
 
     func _test_applyOpenAIRealtimeSelectionDefaults() {
