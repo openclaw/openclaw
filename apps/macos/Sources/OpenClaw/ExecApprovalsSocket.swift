@@ -74,7 +74,7 @@ struct ExecApprovalPromptRequest: Codable {
         // approval option; explicit ask=always and allowedDecisions payloads are the
         // policy-carrying shapes that remove it.
         guard allowAlwaysEligible else { return [.allowOnce, .deny] }
-        ask == ExecAsk.always.rawValue
+        return ask == ExecAsk.always.rawValue
             ? [.allowOnce, .deny]
             : [.allowOnce, .allowAlways, .deny]
     }
