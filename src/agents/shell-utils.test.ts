@@ -25,7 +25,9 @@ describe("sanitizeBinaryOutput", () => {
 
   it("preserves printable text after an incomplete ANSI sequence", () => {
     expect(sanitizeBinaryOutput("\u001b]unterminated")).toBe("\\x1b]unterminated");
-    expect(sanitizeBinaryOutput("\u009bdone")).toBe("\\x9bdone");
+    // \\x9b followed by a C0 control (not a CSI final byte) is an incomplete
+    // sequence; the introducer is escaped and printable text survives.
+    expect(sanitizeBinaryOutput("\u009b\u0001done")).toBe("\\x9b\\x01done");
   });
 
   it("escapes residual C0, DEL, and C1 controls", () => {
