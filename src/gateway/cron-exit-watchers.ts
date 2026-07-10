@@ -81,10 +81,15 @@ export function createCronExitWatchers(params: {
     fired: boolean;
     terminalPersisting: boolean;
     cancelled: boolean;
+    lifecycleSettled: boolean;
     command: string;
     cwd: string | undefined;
   };
   const active = new Map<string, WatcherSlot>();
+  // A cancelled child can keep running until the supervisor observes exit.
+  // Retain those slots separately so replacement arms can own the job id while
+  // suspension still sees every predecessor that is settling.
+  const settlingCancelledSlots = new Set<WatcherSlot>();
 
   const cancel = (jobId: string) => {
     const slot = active.get(jobId);
@@ -92,6 +97,9 @@ export function createCronExitWatchers(params: {
       return;
     }
     slot.cancelled = true;
+    if (!slot.lifecycleSettled) {
+      settlingCancelledSlots.add(slot);
+    }
     // Terminal persistence is user-visible state. Keep the slot as a suspend
     // blocker until that write settles even when hot reload cancels the watcher.
     if (!slot.terminalPersisting) {
@@ -120,6 +128,7 @@ export function createCronExitWatchers(params: {
       fired: false,
       terminalPersisting: false,
       cancelled: false,
+      lifecycleSettled: false,
       command,
       cwd,
     };
@@ -152,8 +161,14 @@ export function createCronExitWatchers(params: {
       }
       if (!owns()) {
         // Cancelled or re-armed (changed command/cwd) while the spawn was in
-        // flight — kill this now-orphaned child instead of leaking it.
+        // flight — kill this now-orphaned child instead of leaking it. Wait for
+        // supervisor settlement so suspension cannot snapshot a live child.
         run.cancel("manual-cancel");
+        try {
+          await run.wait();
+        } catch {
+          // The watcher was already cancelled; settlement, not outcome, matters.
+        }
         return;
       }
       slot.run = run;
@@ -220,7 +235,13 @@ export function createCronExitWatchers(params: {
           "cron-exit: fireOnExit after exit failed",
         );
       }
-    })();
+    })().finally(() => {
+      slot.lifecycleSettled = true;
+      settlingCancelledSlots.delete(slot);
+      if (slot.cancelled && active.get(job.id) === slot) {
+        active.delete(job.id);
+      }
+    });
   };
 
   const reconcile = (jobs: CronJob[]) => {
@@ -261,8 +282,13 @@ export function createCronExitWatchers(params: {
     cancel,
     cancelAll,
     activeJobIds: () =>
-      Array.from(active.entries())
-        .filter(([, slot]) => !slot.fired)
-        .map(([jobId]) => jobId),
+      Array.from(
+        new Set([
+          ...Array.from(active.entries())
+            .filter(([, slot]) => !slot.fired)
+            .map(([jobId]) => jobId),
+          ...Array.from(settlingCancelledSlots, (slot) => slot.job.id),
+        ]),
+      ),
   };
 }

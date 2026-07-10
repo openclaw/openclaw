@@ -449,6 +449,40 @@ describe("subagent registry seam flow", () => {
     });
   });
 
+  it("keeps killed session timing root-admitted after task finalization", async () => {
+    let finishTiming: (() => void) | undefined;
+    mocks.patchSessionEntry.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        finishTiming = resolve;
+      });
+      return null;
+    });
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) =>
+      request.method === "agent.wait" ? { status: "pending" } : {},
+    );
+    const runId = "run-kill-tail-admission";
+    mod.registerSubagentRun({
+      runId,
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persist killed session state",
+      cleanup: "keep",
+      spawnMode: "session",
+    });
+    await waitForFast(() => expect(mocks.callGateway).toHaveBeenCalled());
+
+    expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+    await waitForFast(() => expect(finishTiming).toBeTypeOf("function"));
+    expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "cancelled" });
+    // Bookkeeping can launch additional tracked cleanup tails; the held timing
+    // write must keep at least one independent root visible until it settles.
+    expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+
+    finishTiming?.();
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
   it("lists active and pending-delivery child sessions for maintenance preservation", () => {
     const now = Date.now();
     mod.addSubagentRunForTests({

@@ -804,33 +804,40 @@ export async function handleGatewayRequest(
     );
     return;
   }
-  if (methodRegistry.isControlPlaneWrite(req.method)) {
-    const budget = consumeControlPlaneWriteBudget({ client });
-    if (!budget.allowed) {
-      // Control-plane writes mutate gateway-wide state; rate limit before handler lookup so
-      // plugin and aux write methods share the same protection.
-      const actor = resolveControlPlaneActor(client);
-      context.logGateway.warn(
-        `control-plane write rate-limited method=${req.method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
-      );
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `rate limit exceeded for ${req.method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
-          {
-            retryable: true,
-            retryAfterMs: budget.retryAfterMs,
-            details: {
-              method: req.method,
-              limit: "3 per 60s",
-            },
-          },
-        ),
-      );
-      return;
+  const rejectRateLimitedControlPlaneWrite = (): boolean => {
+    if (!methodRegistry.isControlPlaneWrite(req.method)) {
+      return false;
     }
+    const budget = consumeControlPlaneWriteBudget({ client });
+    if (budget.allowed) {
+      return false;
+    }
+    const actor = resolveControlPlaneActor(client);
+    context.logGateway.warn(
+      `control-plane write rate-limited method=${req.method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
+    );
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `rate limit exceeded for ${req.method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
+        {
+          retryable: true,
+          retryAfterMs: budget.retryAfterMs,
+          details: {
+            method: req.method,
+            limit: "3 per 60s",
+          },
+        },
+      ),
+    );
+    return true;
+  };
+  const isSuspendPrepare = req.method === "gateway.suspend.prepare";
+  if (isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
+    // Preparation must stay protected even before it owns the root admission that it closes.
+    return;
   }
   const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
   if (!handler) {
@@ -877,6 +884,12 @@ export async function handleGatewayRequest(
         },
       ),
     );
+    return;
+  }
+  if (!isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
+    // A closed admission must reject first so refused writes do not exhaust the controller's
+    // budget and strand it behind rate limiting after suspension resumes.
+    rootWorkAdmission?.release();
     return;
   }
   const invokeHandler = () =>

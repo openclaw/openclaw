@@ -289,7 +289,9 @@ describe("createCronExitWatchers", () => {
     // The orphaned child is killed and the job never fires.
     expect(fake.runCancels.length).toBe(1);
     expect(fireOnExit).not.toHaveBeenCalled();
-    expect(w.activeJobIds()).toEqual([]);
+    expect(w.activeJobIds()).toEqual(["job-a"]);
+    fake.runs[0].deferred.resolve({ exitCode: null, reason: "manual-cancel" });
+    await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
   });
 
   it("does not arm a watcher for time-based or disabled jobs", async () => {
@@ -325,8 +327,8 @@ describe("createCronExitWatchers", () => {
     expect(supervisor.spawn).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels the watcher when the job is removed from the set", async () => {
-    const { supervisor, cancelled } = makeFakeSupervisor();
+  it("keeps a cancelled watcher blocking until the supervised child settles", async () => {
+    const { supervisor, cancelled, runs } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
       persistCompletion: vi.fn(async () => {}),
@@ -337,7 +339,10 @@ describe("createCronExitWatchers", () => {
     await flush();
     w.reconcile([]);
     expect(cancelled).toContain("cron-exit:job-a");
-    expect(w.activeJobIds()).toEqual([]);
+    expect(w.activeJobIds()).toEqual(["job-a"]);
+
+    runs[0].deferred.resolve({ exitCode: null, reason: "manual-cancel" });
+    await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
   });
 
   it("does not fire a job whose watcher was cancelled before exit", async () => {
