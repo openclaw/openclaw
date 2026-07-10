@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -361,6 +362,13 @@ export async function handleNextcloudTalkInbound(params: {
     dispatchReplyWithBufferedBlockDispatcher:
       core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
+      preparePayload: (payload) =>
+        payload.text === undefined
+          ? payload
+          : {
+              ...payload,
+              text: sanitizeAssistantVisibleText(payload.text),
+            },
       deliver: async (payload) => {
         await deliverNextcloudTalkReply({
           cfg: config,

@@ -1,7 +1,7 @@
 // Nextcloud Talk tests cover inbound.behavior plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { OutboundReplyPayload, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
@@ -99,6 +99,23 @@ function requireFirstSendMessageCall(): [unknown, unknown, unknown] {
     throw new Error("expected Nextcloud Talk send call");
   }
   return call as [unknown, unknown, unknown];
+}
+
+type CapturedReplyDelivery = {
+  preparePayload: (payload: OutboundReplyPayload) => OutboundReplyPayload;
+  deliver: (payload: OutboundReplyPayload) => Promise<void>;
+};
+
+function requireFirstReplyDelivery(mock: ReturnType<typeof vi.fn>): CapturedReplyDelivery {
+  const assembledRequest = requireFirstMockArg(mock, "Nextcloud Talk assembled request") as {
+    delivery?: Partial<CapturedReplyDelivery>;
+  };
+  const preparePayload = assembledRequest.delivery?.preparePayload;
+  const deliver = assembledRequest.delivery?.deliver;
+  if (!preparePayload || !deliver) {
+    throw new Error("expected Nextcloud Talk reply delivery hooks");
+  }
+  return { preparePayload, deliver };
 }
 
 function createAccount(
@@ -306,5 +323,99 @@ describe("nextcloud-talk inbound behavior", () => {
       "Nextcloud Talk assembled request",
     ) as { replyPipeline?: unknown };
     expect(assembledRequest.replyPipeline).toEqual({});
+  });
+
+  it("sanitizes inbound replies before local delivery while preserving reply metadata", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+    sendMessageNextcloudTalkMock.mockResolvedValue(undefined);
+
+    const config = { channels: { "nextcloud-talk": {} } } as CoreConfig;
+    await handleNextcloudTalkInbound({
+      message: createMessage(),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["user-1"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config,
+      runtime: createRuntimeEnv(),
+    });
+
+    const delivery = requireFirstReplyDelivery(
+      coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
+    );
+    const cases = [
+      {
+        text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+        expected: "Done.",
+      },
+      {
+        text: '<tool_call>{"name":"exec"}</tool_call>Meeting notes sent.',
+        expected: "Meeting notes sent.",
+      },
+      {
+        text: [
+          "Checking now.",
+          "<function_response>",
+          'Searching for: "agenda"',
+          "</function_response>",
+          "Meeting notes sent.",
+        ].join("\n"),
+        expected: "Checking now.\n\nMeeting notes sent.",
+      },
+      {
+        text: "The agenda has 3 open action items.",
+        expected: "The agenda has 3 open action items.",
+      },
+    ];
+    for (const testCase of cases) {
+      expect(delivery.preparePayload({ text: testCase.text })).toEqual({
+        text: testCase.expected,
+      });
+    }
+
+    const mediaOnlyPayload = { mediaUrl: "https://example.com/a.png" };
+    expect(delivery.preparePayload(mediaOnlyPayload)).toBe(mediaOnlyPayload);
+
+    const preparedPayload = delivery.preparePayload({
+      text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+      mediaUrls: ["https://example.com/a.png"],
+      replyToId: "reply-1",
+    });
+    await delivery.deliver(preparedPayload);
+    await delivery.deliver(
+      delivery.preparePayload({
+        text: '<tool_call>{"name":"exec"}</tool_call>Meeting notes sent.',
+      }),
+    );
+
+    expect(sendMessageNextcloudTalkMock).toHaveBeenCalledTimes(2);
+    expect(requireFirstSendMessageCall()).toEqual([
+      "room-1",
+      "Done.\n\nAttachment: https://example.com/a.png",
+      {
+        cfg: config,
+        accountId: "default",
+        replyTo: "reply-1",
+      },
+    ]);
+    expect(sendMessageNextcloudTalkMock).toHaveBeenNthCalledWith(
+      2,
+      "room-1",
+      "Meeting notes sent.",
+      {
+        cfg: config,
+        accountId: "default",
+        replyTo: undefined,
+      },
+    );
   });
 });
