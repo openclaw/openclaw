@@ -93,6 +93,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -160,6 +161,7 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import {
   type ChatAbortControllerEntry,
@@ -208,6 +210,7 @@ import type {
 } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
 function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
   return status === "failed" || status === "timeout" || status === "killed";
@@ -1036,7 +1039,10 @@ function dispatchAgentRunFromGateway(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
-  onSettled?: (outcome: { terminalOutcome: AgentRunTerminalOutcome }) => Promise<boolean> | boolean;
+  onSettled?: (outcome: {
+    terminalOutcome: AgentRunTerminalOutcome;
+    onRecovered?: () => void;
+  }) => Promise<boolean> | boolean;
 }) {
   const shouldTrackTask = params.taskTrackingMode === "cli";
   let taskTracked = false;
@@ -1071,6 +1077,7 @@ function dispatchAgentRunFromGateway(params: {
   }
   const settle = async (outcome: {
     terminalOutcome: AgentRunTerminalOutcome;
+    onRecovered?: () => void;
   }): Promise<boolean> => {
     try {
       return (await params.onSettled?.(outcome)) ?? true;
@@ -1119,9 +1126,18 @@ function dispatchAgentRunFromGateway(params: {
         timeoutPhase: timeoutAttribution.timeoutPhase,
         providerStarted: timeoutAttribution.providerStarted,
       });
-      const settled = await settle({
-        terminalOutcome,
-      });
+      const persistTerminalDedupe = () => {
+        setGatewayDedupeEntries({
+          dedupe: params.context.dedupe,
+          keys: params.dedupeKeys,
+          entry: {
+            ts: Date.now(),
+            ok: true,
+            payload,
+          },
+        });
+      };
+      const settled = await settle({ terminalOutcome, onRecovered: persistTerminalDedupe });
       if (!settled) {
         const summary = "failed to persist cron continuation settlement";
         const error = errorShape(ErrorCodes.UNAVAILABLE, summary);
@@ -1134,15 +1150,7 @@ function dispatchAgentRunFromGateway(params: {
         params.respond(false, failedPayload, error, { runId: params.runId, error: summary });
         return;
       }
-      setGatewayDedupeEntries({
-        dedupe: params.context.dedupe,
-        keys: params.dedupeKeys,
-        entry: {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        },
-      });
+      persistTerminalDedupe();
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
       params.respond(true, payload, undefined, { runId: params.runId });
@@ -1173,17 +1181,23 @@ function dispatchAgentRunFromGateway(params: {
         summary: aborted ? "aborted" : renderedErr,
         ...(aborted ? { stopReason, timeoutPhase: "gateway_draining" as const } : {}),
       };
-      const settled = await settle({ terminalOutcome });
-      setGatewayDedupeEntries({
-        dedupe: params.context.dedupe,
-        keys: params.dedupeKeys,
-        entry: {
-          ts: Date.now(),
-          ok: aborted && settled,
-          payload,
-          ...(aborted ? {} : { error }),
-        },
+      const persistTerminalDedupe = (settlementPersisted: boolean) => {
+        setGatewayDedupeEntries({
+          dedupe: params.context.dedupe,
+          keys: params.dedupeKeys,
+          entry: {
+            ts: Date.now(),
+            ok: aborted && settlementPersisted,
+            payload,
+            ...(aborted ? {} : { error }),
+          },
+        });
+      };
+      const settled = await settle({
+        terminalOutcome,
+        onRecovered: () => persistTerminalDedupe(true),
       });
+      persistTerminalDedupe(settled);
       params.respond(aborted && settled, payload, aborted && settled ? undefined : error, {
         runId: params.runId,
         ...(aborted ? {} : { error: formatForLog(err) }),
@@ -1216,6 +1230,13 @@ function shouldSuppressAgentPromptPersistence(params: {
 function yieldAfterAgentAcceptedAck(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 10);
+  });
+}
+
+function waitForCronContinuationReleaseRecovery(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setSafeTimeout(resolve, delayMs);
+    timer.unref?.();
   });
 }
 
@@ -1778,6 +1799,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           mediaTaskIdsBefore: ReadonlySet<string>;
         }
       | undefined;
+    let cronContinuationReleaseRecoveryScheduled = false;
     const releaseCronContinuationClaim = async (outcome?: {
       terminalOutcome: AgentRunTerminalOutcome;
     }): Promise<boolean> => {
@@ -1787,12 +1809,21 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       const baseSessionKey = parseCronRunScopeSuffix(claim.sessionKey).baseSessionKey;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
-        let released = false;
         try {
-          await updateSessionStore(
-            claim.storePath,
-            (store) => {
-              let current = store[claim.sessionKey];
+          const released = await applySessionEntryReplacements({
+            activeSessionKey: claim.sessionKey,
+            requireWriteSuccess: true,
+            sessionKeys:
+              baseSessionKey && baseSessionKey !== claim.sessionKey
+                ? [claim.sessionKey, baseSessionKey]
+                : [claim.sessionKey],
+            skipMaintenance: false,
+            storePath: claim.storePath,
+            update: (entries) => {
+              const entriesByKey = new Map(
+                entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+              );
+              let current = entriesByKey.get(claim.sessionKey);
               const marker = current?.cronRunContinuation;
               if (
                 !current ||
@@ -1800,14 +1831,13 @@ export const agentHandlers: GatewayRequestHandlers = {
                 marker.ownerRunId !== runId ||
                 marker.lifecycleRevision !== claim.lifecycleRevision
               ) {
-                return;
+                return { result: false };
               }
               const continuationCommittedWork =
                 outcome?.terminalOutcome.reason === "completed" ||
                 hasNewGeneratedMediaTaskForSessionKey(claim.sessionKey, claim.mediaTaskIdsBefore);
               if (!continuationCommittedWork) {
                 current = structuredClone(claim.initialEntry);
-                store[claim.sessionKey] = current;
               } else if (outcome?.terminalOutcome) {
                 const terminalOutcome = outcome.terminalOutcome;
                 current.status =
@@ -1818,17 +1848,21 @@ export const agentHandlers: GatewayRequestHandlers = {
                       : "failed";
                 current.endedAt = terminalOutcome.endedAt ?? Date.now();
               }
-              const baseEntry = baseSessionKey ? store[baseSessionKey] : undefined;
+              const baseEntry = baseSessionKey ? entriesByKey.get(baseSessionKey) : undefined;
               const canPersistToBase =
                 baseSessionKey !== undefined &&
                 baseSessionKey !== claim.sessionKey &&
                 baseEntry?.lifecycleRevision === claim.lifecycleRevision;
+              const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
               if (continuationCommittedWork && canPersistToBase && baseEntry && baseSessionKey) {
                 const nextBaseEntry = withoutCronRunContinuation(current);
-                store[baseSessionKey] = mergeSessionSnapshotChanges({
-                  initial: withoutCronRunContinuation(claim.initialEntry),
-                  next: nextBaseEntry,
-                  current: baseEntry,
+                replacements.push({
+                  sessionKey: baseSessionKey,
+                  entry: mergeSessionSnapshotChanges({
+                    initial: withoutCronRunContinuation(claim.initialEntry),
+                    next: nextBaseEntry,
+                    current: baseEntry,
+                  }),
                 });
               }
               const releaseSourceMarker = continuationCommittedWork
@@ -1849,10 +1883,10 @@ export const agentHandlers: GatewayRequestHandlers = {
                   releasedMarker.basePersisted === true || canPersistToBase || baseWasSuperseded,
               };
               current.updatedAt = Date.now();
-              released = true;
+              replacements.push({ sessionKey: claim.sessionKey, entry: current });
+              return { replacements, result: true };
             },
-            { activeSessionKey: claim.sessionKey, requireWriteSuccess: true },
-          );
+          });
           cronContinuationClaim = undefined;
           if (released) {
             if (baseSessionKey) {
@@ -1870,6 +1904,51 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
       }
       return false;
+    };
+    const scheduleCronContinuationReleaseRecovery = (
+      outcome?: { terminalOutcome: AgentRunTerminalOutcome },
+      onRecovered?: () => void,
+    ): void => {
+      const claim = cronContinuationClaim;
+      if (!claim || cronContinuationReleaseRecoveryScheduled) {
+        return;
+      }
+      cronContinuationReleaseRecoveryScheduled = true;
+      const ownerLifecycleGeneration = lifecycleGeneration;
+      // Keep the failed settlement recoverable without retaining the process or
+      // transferring claim ownership beyond this request's gateway generation.
+      void (async () => {
+        for (const delayMs of CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS) {
+          await waitForCronContinuationReleaseRecovery(delayMs);
+          if (
+            cronContinuationClaim !== claim ||
+            getAgentEventLifecycleGeneration() !== ownerLifecycleGeneration
+          ) {
+            return;
+          }
+          if (await releaseCronContinuationClaim(outcome)) {
+            try {
+              onRecovered?.();
+            } catch (error) {
+              context.logGateway.warn(
+                `failed to refresh recovered cron continuation dedupe ${runId}: ${formatForLog(error)}`,
+              );
+            }
+            return;
+          }
+        }
+        context.logGateway.warn(`cron continuation release recovery exhausted for ${runId}`);
+      })();
+    };
+    const releaseCronContinuationClaimWithRecovery = async (
+      outcome?: { terminalOutcome: AgentRunTerminalOutcome },
+      onRecovered?: () => void,
+    ): Promise<boolean> => {
+      const released = await releaseCronContinuationClaim(outcome);
+      if (!released && cronContinuationClaim) {
+        scheduleCronContinuationReleaseRecovery(outcome, onRecovered);
+      }
+      return released;
     };
 
     try {
@@ -3725,18 +3804,23 @@ export const agentHandlers: GatewayRequestHandlers = {
                   }),
                 });
                 if (restoredCronContinuationLifecycleRevision && resolvedSessionKey) {
-                  let persistedSelectedModel = false;
-                  await updateSessionStore(
-                    lifecycleStorePath,
-                    (store) => {
-                      const current = store[resolvedSessionKey];
+                  const persistedSelectedModel = await applySessionEntryReplacements({
+                    activeSessionKey: resolvedSessionKey,
+                    requireWriteSuccess: true,
+                    sessionKeys: [resolvedSessionKey],
+                    skipMaintenance: false,
+                    storePath: lifecycleStorePath,
+                    update: (entries) => {
+                      const current = entries.find(
+                        (entry) => entry.sessionKey === resolvedSessionKey,
+                      )?.entry;
                       const marker = current?.cronRunContinuation;
                       if (
                         marker?.phase !== "continuing" ||
                         marker.ownerRunId !== runId ||
                         marker.lifecycleRevision !== restoredCronContinuationLifecycleRevision
                       ) {
-                        return;
+                        return { result: false };
                       }
                       const executionProvider =
                         resolveCliRuntimeExecutionProvider({
@@ -3745,18 +3829,29 @@ export const agentHandlers: GatewayRequestHandlers = {
                           agentId: activeSessionAgentId,
                           modelId: model,
                         }) ?? provider;
+                      const cronRunContinuation = { ...marker };
                       if (isCliProvider(executionProvider, cfgForAgent ?? cfg)) {
-                        marker.cliExecutionProvider = executionProvider;
+                        cronRunContinuation.cliExecutionProvider = executionProvider;
                       } else {
-                        delete marker.cliExecutionProvider;
+                        delete cronRunContinuation.cliExecutionProvider;
                       }
-                      current.modelProvider = provider;
-                      current.model = model;
-                      current.updatedAt = Date.now();
-                      persistedSelectedModel = true;
+                      return {
+                        replacements: [
+                          {
+                            sessionKey: resolvedSessionKey,
+                            entry: {
+                              ...current,
+                              cronRunContinuation,
+                              modelProvider: provider,
+                              model,
+                              updatedAt: Date.now(),
+                            },
+                          },
+                        ],
+                        result: true,
+                      };
                     },
-                    { activeSessionKey: resolvedSessionKey, requireWriteSuccess: true },
-                  );
+                  });
                   if (!persistedSelectedModel) {
                     throw new Error("cron run continuation changed before model execution");
                   }
@@ -3787,8 +3882,8 @@ export const agentHandlers: GatewayRequestHandlers = {
             abortController: activeRunAbort.controller,
             cleanupAbortController: cleanupAdmittedRun,
             onSettled: restoredCronContinuation
-              ? async ({ terminalOutcome }) =>
-                  await releaseCronContinuationClaim({ terminalOutcome })
+              ? async ({ terminalOutcome, onRecovered }) =>
+                  await releaseCronContinuationClaimWithRecovery({ terminalOutcome }, onRecovered)
               : undefined,
             respond,
             context,
@@ -3819,7 +3914,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         } finally {
           if (!dispatched) {
             try {
-              await releaseCronContinuationClaim();
+              await releaseCronContinuationClaimWithRecovery();
             } finally {
               cleanupAdmittedRun({ force: true });
             }
@@ -3829,7 +3924,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     } finally {
       if (!gatewayAdmissionTransferred) {
         gatewayWorkAdmission?.release();
-        await releaseCronContinuationClaim();
+        await releaseCronContinuationClaimWithRecovery();
       }
       clearUnacceptedAgentDedupe();
     }

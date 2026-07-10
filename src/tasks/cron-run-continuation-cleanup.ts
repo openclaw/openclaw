@@ -5,9 +5,29 @@ import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "./task-status-access.js";
+
+function canRemoveCronRunContinuation(marker: SessionEntry["cronRunContinuation"]): boolean {
+  if (!marker || marker.basePersisted !== true) {
+    return false;
+  }
+  if (marker.phase === "ready") {
+    return !marker.ownerRunId;
+  }
+  if (marker.phase !== "continuing" || !marker.ownerRunId) {
+    return false;
+  }
+  // A retired Gateway owner cannot settle this claim; basePersisted above
+  // guarantees deleting its exact alias does not discard the stable session.
+  const ownerLifecycleGeneration = marker.ownerLifecycleGeneration?.trim();
+  return Boolean(
+    ownerLifecycleGeneration && ownerLifecycleGeneration !== getAgentEventLifecycleGeneration(),
+  );
+}
 
 export async function removeCronRunContinuationSessionIfIdle(sessionKey: string): Promise<void> {
   if (
@@ -27,7 +47,7 @@ export async function removeCronRunContinuationSessionIfIdle(sessionKey: string)
     hydrateSkillPromptRefs: false,
   });
   const marker = entry?.cronRunContinuation;
-  if (!entry || marker?.phase !== "ready" || marker.ownerRunId || marker.basePersisted !== true) {
+  if (!entry || !canRemoveCronRunContinuation(marker)) {
     return;
   }
   await deleteSessionEntryLifecycle({

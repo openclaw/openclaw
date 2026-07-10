@@ -4359,44 +4359,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("lets the gateway own readiness for a running cron continuation", async () => {
-    const callGateway = createGatewayMock({
-      result: { payloads: [{ text: "continued" }] },
-    });
-    const running = {
-      ...readyCronContinuationEntry("run-123"),
-      cronRunContinuation: { lifecycleRevision: "revision-1", phase: "running" as const },
-    };
-    const delivery = await deliverSlackChannelAnnouncement({
-      callGateway,
-      queueEmbeddedAgentMessageWithOutcome: createQueueOutcomeMock(false),
-      sessionId: "run-123",
-      isActive: false,
-      requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
-      requesterSessionEntries: [running],
-      expectsCompletionMessage: true,
-      directIdempotencyKey: "announce-running-cron-owner",
-      sourceTool: "image_generate",
-      internalEvents: [
-        {
-          type: "task_completion",
-          source: "image_generation",
-          childSessionKey: "image_generate:task-123",
-          childSessionId: "task-123",
-          announceType: "image generation task",
-          taskLabel: "daily media",
-          status: "ok",
-          statusLabel: "completed successfully",
-          result: "Generated image.",
-          replyInstruction: "Continue the cron task.",
-        },
-      ],
-    });
-
-    expect(delivery).toMatchObject({ delivered: true, path: "direct" });
-    expectGatewayAgentParams(callGateway, { sessionId: "run-123" });
-  });
-
   it("refreshes a rotated cron session before retrying a concurrent media wake", async () => {
     const unavailable = Object.assign(new Error("cron run continuation is not ready"), {
       gatewayCode: "UNAVAILABLE",

@@ -21,7 +21,6 @@ import {
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
   setCliSessionBindingMock,
-  updateSessionStoreMock,
   runCliAgentMock,
 } from "./run.test-harness.js";
 

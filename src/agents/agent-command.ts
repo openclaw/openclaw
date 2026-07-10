@@ -2018,9 +2018,7 @@ async function agentCommandInternal(
         modelId: model,
         workspaceDir,
       });
-      let liveSwitchMediaTaskIds = sessionKey
-        ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
-        : new Set<string>();
+      let liveSwitchMediaTaskIds: ReadonlySet<string> = new Set();
       for (;;) {
         try {
           liveSwitchMediaTaskIds = sessionKey

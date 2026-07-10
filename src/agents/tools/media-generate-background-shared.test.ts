@@ -20,6 +20,9 @@ const detachedTaskRuntimeMocks = vi.hoisted(() => ({
 const taskRegistryDeliveryRuntimeMocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
 }));
+const cronContinuationCleanupMocks = vi.hoisted(() => ({
+  removeCronRunContinuationSessionIfIdle: vi.fn(async () => {}),
+}));
 const sessionMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn<() => SessionEntry | undefined>(() => undefined),
 }));
@@ -33,6 +36,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => ({
 }));
 vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
+vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
 
 import {
   createMediaGenerationTaskLifecycle,
@@ -50,6 +54,7 @@ beforeEach(() => {
   detachedTaskRuntimeMocks.failTaskRunByRunId.mockClear();
   detachedTaskRuntimeMocks.recordTaskRunProgressByRunId.mockClear();
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
+  cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle.mockClear();
   sessionMocks.loadSessionEntry.mockReset().mockReturnValue(undefined);
 });
 
@@ -169,6 +174,88 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         terminalResult: undefined,
       }),
     );
+  });
+
+  it("cleans a one-shot exact cron continuation after detached media settles", async () => {
+    const sessionKey = "agent:main:cron:one-shot:run:run-123";
+    const scheduled: Array<() => Promise<void>> = [];
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: true,
+      path: "direct",
+    });
+    const lifecycle = createImageMediaLifecycle();
+    const handle = lifecycle.createTaskRun({ sessionKey, prompt: "proof image" });
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle,
+      handle,
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+      progressSummary: "Generating image",
+      toolName: "Image generation",
+      onWakeFailure: vi.fn(),
+      run: async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        paths: ["/tmp/proof.png"],
+        wakeResult: "generated",
+      }),
+    });
+
+    await scheduled[0]?.();
+
+    expect(detachedTaskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledOnce();
+    expect(
+      cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle,
+    ).toHaveBeenCalledWith(sessionKey);
+  });
+
+  it("cleans a stale exact cron continuation after generated-media direct fallback", async () => {
+    const sessionKey = "agent:main:cron:one-shot:run:run-123";
+    const scheduled: Array<() => Promise<void>> = [];
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_unavailable",
+      error: "cron run continuation owner was lost during gateway restart",
+    });
+    taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
+    const lifecycle = createImageMediaLifecycle();
+    const handle = lifecycle.createTaskRun({
+      sessionKey,
+      requesterOrigin: { channel: "discord", to: "channel:123" },
+      prompt: "proof image",
+    });
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle,
+      handle,
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+      progressSummary: "Generating image",
+      toolName: "Image generation",
+      onWakeFailure: vi.fn(),
+      run: async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        paths: ["/tmp/proof.png"],
+        wakeResult: "generated",
+        mediaUrls: ["/tmp/proof.png"],
+      }),
+    });
+
+    await scheduled[0]?.();
+
+    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrls: ["/tmp/proof.png"] }),
+    );
+    expect(
+      cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle,
+    ).toHaveBeenCalledWith(sessionKey);
   });
 
   it("keeps pending cron media active until a handoff retry delivers it", async () => {

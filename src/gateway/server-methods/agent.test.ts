@@ -114,6 +114,17 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
+vi.mock("../../config/sessions/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/store.js")>(
+    "../../config/sessions/store.js",
+  );
+  return {
+    ...actual,
+    updateSessionStore: (...args: Parameters<typeof actual.updateSessionStore>) =>
+      mocks.updateSessionStore(...args),
+  };
+});
+
 vi.mock("../../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
   agentCommandFromIngress: mocks.agentCommand,
@@ -566,6 +577,32 @@ function cronMediaCompletionEvent(): AgentInternalEvent {
     statusLabel: "completed successfully",
     result: "MEDIA:/tmp/header.png",
     replyInstruction: "Continue the original cron task.",
+  };
+}
+
+function setupCronContinuationReleaseFixture() {
+  const sessionKey = "agent:main:cron:job-1:run:run-1";
+  const entry: SessionEntry = {
+    sessionId: "run-1",
+    updatedAt: Date.now(),
+    lifecycleRevision: "revision-1",
+    modelProvider: "openai",
+    model: "gpt-5.4",
+    cronRunContinuation: {
+      lifecycleRevision: "revision-1",
+      phase: "ready",
+      basePersisted: true,
+    },
+  };
+  mocks.loadSessionEntry.mockReturnValue({
+    cfg: {},
+    storePath: "/tmp/sessions.json",
+    canonicalKey: sessionKey,
+    entry,
+  });
+  return {
+    sessionKey,
+    store: { [sessionKey]: structuredClone(entry) } as Record<string, SessionEntry>,
   };
 }
 
@@ -3491,7 +3528,7 @@ describe("gateway agent handler", () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";
     const baseSessionKey = "agent:main:cron:job-1";
-    const entry = {
+    const entry: SessionEntry = {
       sessionId: "run-1",
       updatedAt: Date.now(),
       lifecycleRevision: "revision-1",
@@ -3513,7 +3550,7 @@ describe("gateway agent handler", () => {
       entry,
     });
     const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = structuredClone(entry);
-    const store = {
+    const store: Record<string, SessionEntry> = {
       [baseSessionKey]: baseEntry,
       [sessionKey]: structuredClone(entry),
     };
@@ -3571,62 +3608,112 @@ describe("gateway agent handler", () => {
     }
   });
 
-  it("does not report terminal success when continuation release cannot persist", async () => {
-    mocks.agentCommand.mockClear();
-    const sessionKey = "agent:main:cron:job-1:run:run-1";
-    const entry: SessionEntry = {
-      sessionId: "run-1",
-      updatedAt: Date.now(),
-      lifecycleRevision: "revision-1",
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready" as const,
-        basePersisted: true,
-      },
-    };
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      canonicalKey: sessionKey,
-      entry,
-    });
-    const store: Record<string, SessionEntry> = { [sessionKey]: structuredClone(entry) };
-    let releaseAttempts = 0;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
-        releaseAttempts += 1;
-        throw new Error("disk unavailable");
-      }
-      return await updater(store);
-    });
-    mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "continued" }], meta: {} });
-
-    const respond = await invokeAgent(
-      {
+  it("recovers a continuation release after reporting a durable write failure", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.agentCommand.mockClear();
+      const { sessionKey, store } = setupCronContinuationReleaseFixture();
+      const context = makeContext();
+      let releaseAttempts = 0;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
+          releaseAttempts += 1;
+          if (releaseAttempts <= 3) {
+            throw new Error("disk unavailable");
+          }
+        }
+        return await updater(store);
+      });
+      mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "continued" }], meta: {} });
+      const request = {
         message: "media completion",
         sessionKey,
         internalEvents: [cronMediaCompletionEvent()],
         idempotencyKey: "cron-media-release-fails",
-      },
-      { reqId: "cron-media-release-fails", client: cronContinuationGatewayClient() },
-    );
+      };
 
-    expect(releaseAttempts).toBe(3);
-    expect(store[sessionKey].cronRunContinuation).toMatchObject({
-      phase: "continuing",
-      ownerRunId: "cron-media-release-fails",
-    });
-    expect(respond).toHaveBeenLastCalledWith(
-      false,
-      expect.objectContaining({
-        status: "error",
-        summary: "failed to persist cron continuation settlement",
-      }),
-      expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
-      expect.objectContaining({ runId: "cron-media-release-fails" }),
-    );
+      const respond = await invokeAgent(request, {
+        reqId: "cron-media-release-fails",
+        client: cronContinuationGatewayClient(),
+        context,
+      });
+
+      expect(releaseAttempts).toBe(3);
+      expect(store[sessionKey].cronRunContinuation).toMatchObject({
+        phase: "continuing",
+        ownerRunId: "cron-media-release-fails",
+      });
+      expect(respond).toHaveBeenLastCalledWith(
+        false,
+        expect.objectContaining({
+          status: "error",
+          summary: "failed to persist cron continuation settlement",
+        }),
+        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
+        expect.objectContaining({ runId: "cron-media-release-fails" }),
+      );
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(releaseAttempts).toBe(4);
+      expect(store[sessionKey].cronRunContinuation).toEqual({
+        lifecycleRevision: "revision-1",
+        phase: "ready",
+        basePersisted: true,
+      });
+      const retryRespond = await invokeAgent(request, {
+        reqId: "cron-media-release-retry",
+        client: cronContinuationGatewayClient(),
+        context,
+      });
+      expect(retryRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "ok", summary: "completed" }),
+        undefined,
+        { cached: true },
+      );
+      expect(mocks.agentCommand).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops continuation release recovery after gateway generation rotation", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sessionKey, store } = setupCronContinuationReleaseFixture();
+      let releaseAttempts = 0;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
+          releaseAttempts += 1;
+          throw new Error("disk unavailable");
+        }
+        return await updater(store);
+      });
+      mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "continued" }], meta: {} });
+
+      await invokeAgent(
+        {
+          message: "media completion",
+          sessionKey,
+          internalEvents: [cronMediaCompletionEvent()],
+          idempotencyKey: "cron-media-release-rotates",
+        },
+        { reqId: "cron-media-release-rotates", client: cronContinuationGatewayClient() },
+      );
+      expect(releaseAttempts).toBe(3);
+
+      mocks.lifecycleGeneration = "post-restart-generation";
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(releaseAttempts).toBe(3);
+      expect(store[sessionKey].cronRunContinuation).toMatchObject({
+        phase: "continuing",
+        ownerRunId: "cron-media-release-rotates",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("releases a claimed cron continuation when the request exits before dispatch", async () => {

@@ -12,6 +12,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
+import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
@@ -288,6 +289,22 @@ function recordMediaGenerationTaskProgress(params: {
   });
 }
 
+function clearMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle): void {
+  clearGeneratedMediaTaskActivity(handle.runId);
+  clearAgentRunContext(handle.runId);
+  // A one-shot cron job can be deleted before detached media settles, leaving no
+  // later timer tick to reap its exact continuation row.
+  void removeCronRunContinuationSessionIfIdle(handle.requesterSessionKey).catch(
+    (error: unknown) => {
+      log.warn("Failed to remove settled cron media continuation", {
+        taskId: handle.taskId,
+        runId: handle.runId,
+        error: formatErrorMessage(error),
+      });
+    },
+  );
+}
+
 /** Periodically refreshes task progress while a media generation operation runs. */
 export async function withMediaGenerationTaskKeepalive<T>(params: {
   handle: MediaGenerationTaskHandle | null;
@@ -341,8 +358,7 @@ function completeMediaGenerationTaskRun(params: {
       terminalOutcome: params.terminalResult?.terminalOutcome,
     });
   } finally {
-    clearGeneratedMediaTaskActivity(params.handle.runId);
-    clearAgentRunContext(params.handle.runId);
+    clearMediaGenerationTaskRunContext(params.handle);
   }
 }
 
@@ -368,8 +384,7 @@ function failMediaGenerationTaskRun(params: {
       terminalSummary: errorText,
     });
   } finally {
-    clearGeneratedMediaTaskActivity(params.handle.runId);
-    clearAgentRunContext(params.handle.runId);
+    clearMediaGenerationTaskRunContext(params.handle);
   }
 }
 

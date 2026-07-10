@@ -498,25 +498,25 @@ export type SessionEntryPatchResult = {
   entry: SessionEntry;
 };
 
-export type RestartRecoveryLifecycleEntry = {
-  /** Exact persisted key for the restart recovery candidate row. */
+export type SessionEntryReplacementSnapshot = {
+  /** Exact persisted key for the candidate row. */
   sessionKey: string;
   /** Detached entry snapshot; mutating it does not persist unless returned as a replacement. */
   entry: SessionEntry;
 };
 
-export type RestartRecoveryLifecycleReplacement = {
+export type SessionEntryReplacement = {
   /** Exact persisted key to replace. Missing keys are ignored. */
   sessionKey: string;
-  /** Full replacement row to persist for this restart recovery lifecycle step. */
+  /** Full replacement row to persist for this transaction. */
   entry: SessionEntry;
 };
 
-export type RestartRecoveryLifecycleUpdate<T> = {
+export type SessionEntryReplacementUpdate<T> = {
   /** Caller-owned result returned after replacements are persisted. */
   result: T;
   /** Exact rows to replace inside the storage transaction. */
-  replacements?: Iterable<RestartRecoveryLifecycleReplacement>;
+  replacements?: Iterable<SessionEntryReplacement>;
 };
 
 /** File-backed checkpoint transcript fork produced by the checkpoint storage boundary. */
@@ -2003,28 +2003,42 @@ export async function applySessionPatchProjection<
 }
 
 /**
- * Applies restart-recovery lifecycle replacements without exposing the backing
- * store shape. The file backend runs selection and replacement under one writer
- * lock; the SQLite backend can map the same callback to a transaction.
+ * Applies explicit entry replacements without exposing the backing store shape.
+ * The file backend runs selection and replacement under one writer lock; the
+ * SQLite backend can map the same callback to a transaction.
  */
-export async function applyRestartRecoveryLifecycle<T>(params: {
+export async function applySessionEntryReplacements<T>(params: {
+  activeSessionKey?: string;
+  /** Limits snapshots and replacement authority to these exact persisted keys. */
+  sessionKeys?: readonly string[];
   storePath: string;
   update: (
-    entries: RestartRecoveryLifecycleEntry[],
-  ) => Promise<RestartRecoveryLifecycleUpdate<T>> | RestartRecoveryLifecycleUpdate<T>;
+    entries: SessionEntryReplacementSnapshot[],
+  ) => Promise<SessionEntryReplacementUpdate<T>> | SessionEntryReplacementUpdate<T>;
   requireWriteSuccess?: boolean;
   skipMaintenance?: boolean;
 }): Promise<T> {
   const writerResult = await updateSessionStore(
     params.storePath,
     async (store) => {
-      const entries = Object.entries(store).map(([sessionKey, entry]) => ({
-        sessionKey,
-        entry: structuredClone(entry),
-      }));
+      const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;
+      const entries = selectedKeys
+        ? [...selectedKeys].flatMap((sessionKey) => {
+            const entry = store[sessionKey];
+            return entry ? [{ sessionKey, entry: structuredClone(entry) }] : [];
+          })
+        : Object.entries(store).map(([sessionKey, entry]) => ({
+            sessionKey,
+            entry: structuredClone(entry),
+          }));
       const operation = await params.update(entries);
       let changed = false;
       for (const replacement of operation.replacements ?? []) {
+        if (selectedKeys && !selectedKeys.has(replacement.sessionKey)) {
+          throw new Error(
+            `Session entry replacement is outside the selected key set: ${replacement.sessionKey}`,
+          );
+        }
         if (!Object.hasOwn(store, replacement.sessionKey)) {
           continue;
         }
@@ -2034,6 +2048,7 @@ export async function applyRestartRecoveryLifecycle<T>(params: {
       return { changed, result: operation.result };
     },
     {
+      activeSessionKey: params.activeSessionKey,
       requireWriteSuccess: params.requireWriteSuccess,
       skipMaintenance: params.skipMaintenance ?? true,
       skipSaveWhenResult: (result) => !result.changed,

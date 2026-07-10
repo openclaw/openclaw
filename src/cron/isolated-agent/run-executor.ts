@@ -285,7 +285,7 @@ export function createCronPromptExecutor(params: {
         recorder: UserTurnTranscriptRecorder;
       }
     | undefined;
-  let attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
+  let attemptMediaTaskIds: ReadonlySet<string> = new Set();
   const currentAttemptCommittedMedia = () =>
     hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, attemptMediaTaskIds);
 
@@ -656,7 +656,7 @@ export async function executeCronRun(params: {
   const runStartedAt = params.runStartedAt ?? Date.now();
   const MAX_MODEL_SWITCH_RETRIES = 2;
   let modelSwitchRetries = 0;
-  let promptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
+  let promptMediaTaskIds: ReadonlySet<string> = new Set();
   while (true) {
     try {
       promptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
