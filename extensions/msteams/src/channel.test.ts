@@ -71,6 +71,16 @@ describe("msteamsPlugin", () => {
     const traceOnly = "⚠️ 🛠️ `search repos (agent)` failed";
     expect(sanitizeText!({ text: traceOnly, payload: { text: traceOnly } })).toBe("");
   });
+
+  it("sanitizeText strips memory tags from outbound text", () => {
+    const sanitizeText = msteamsPlugin.outbound?.sanitizeText;
+    expect(
+      sanitizeText!({
+        text: "Sure.\n<relevant_memories>\ncached\n</relevant_memories>",
+        payload: { text: "Sure.\n<relevant_memories>\ncached\n</relevant_memories>" },
+      }),
+    ).toBe("Sure.");
+  });
 });
 
 describe("msteams config schema", () => {
