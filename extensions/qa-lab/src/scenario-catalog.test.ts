@@ -340,6 +340,7 @@ describe("qa scenario catalog", () => {
     const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
     const messageTool = readQaScenarioById("runtime-tool-message-tool");
     const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
+    const webFetch = readQaScenarioById("runtime-tool-web-fetch");
     const webSearch = readQaScenarioById("runtime-tool-web-search");
     const imageGenerate = readQaScenarioById("runtime-tool-image-generate");
 
@@ -372,6 +373,16 @@ describe("qa scenario catalog", () => {
         required: true,
       },
     });
+    const webFetchConfig = readQaScenarioExecutionConfig(webFetch.id);
+    expect(webFetchConfig?.happyPrompt).toContain("Call web_fetch exactly once");
+    expect(webFetchConfig?.happyPrompt).toContain("call it directly without tool_search");
+    expect(webFetchConfig?.happyPrompt).toContain("Otherwise use tool_search to locate it first");
+    expect(webFetchConfig?.happyPrompt).toContain(
+      "A tool_search result alone does not complete the task",
+    );
+    expect(webFetchConfig?.happyPrompt).toContain("https://example.com/");
+    expect(webFetchConfig?.happyPrompt).toContain("maxChars 500");
+    expect(webFetchConfig?.happyPrompt).toContain("tool search qa check target=web_fetch");
     expect(webSearch.plugins).toEqual(["qa-lab"]);
     expect(webSearch.gatewayConfigPatch?.tools).toEqual({
       web: {
