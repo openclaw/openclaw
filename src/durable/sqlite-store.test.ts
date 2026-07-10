@@ -547,6 +547,43 @@ describe("durable runtime sqlite store", () => {
     }
   });
 
+  it("lists parent wakes by parent session key with an independent limit binding", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableRuntimeSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const firstWake = store.createParentWake({
+        parentSessionKey: "agent:parent:session",
+        reason: "child_terminal",
+        dedupeKey: "wake:session:first",
+        now: 100,
+      });
+      const secondWake = store.createParentWake({
+        parentSessionKey: "agent:parent:session",
+        reason: "child_terminal",
+        dedupeKey: "wake:session:second",
+        now: 110,
+      });
+      store.createParentWake({
+        parentSessionKey: "agent:other:session",
+        reason: "child_terminal",
+        dedupeKey: "wake:session:other",
+        now: 120,
+      });
+
+      expect(store.listParentWakes({ parentSessionKey: "agent:parent:session", limit: 2 })).toEqual(
+        [secondWake, firstWake],
+      );
+      expect(store.listParentWakes({ parentSessionKey: "agent:parent:session", limit: 1 })).toEqual(
+        [secondWake],
+      );
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("records uncertainty facts, cleanup audit, dedupe evidence, and unresolved obligations", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
     const store = openDurableRuntimeSqliteStore({
