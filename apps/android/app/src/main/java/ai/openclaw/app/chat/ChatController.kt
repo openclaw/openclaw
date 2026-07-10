@@ -1430,11 +1430,13 @@ class ChatController internal constructor(
     val outbox = commandOutbox ?: return
     scope.launch {
       val outboxScope = currentCacheScope() ?: return@launch
-      // requeueForRetry (not a plain status flip) refreshes createdAt so retrying an expired
-      // row does not get re-expired by the flush sweep before it can send.
-      runCatching { outbox.requeueForRetry(gatewayId = outboxScope.gatewayId, id = id, nowMs = System.currentTimeMillis()) }
+      // requeueForRetry refreshes createdAt and requires this gateway's Failed state. The
+      // compare-and-set keeps stale gateway or double Retry taps from reviving an in-flight row.
+      val requeued =
+        runCatching { outbox.requeueForRetry(gatewayId = outboxScope.gatewayId, id = id, nowMs = System.currentTimeMillis()) }
+          .getOrDefault(0)
       publishOutbox()
-      if (_healthOk.value) flushOutbox()
+      if (requeued > 0 && _healthOk.value) flushOutbox()
     }
   }
 

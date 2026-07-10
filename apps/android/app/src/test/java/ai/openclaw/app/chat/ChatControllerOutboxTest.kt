@@ -88,12 +88,13 @@ class ChatControllerOutboxTest {
       gatewayId: String,
       id: String,
       nowMs: Long,
-    ) {
-      val current = rows[id] ?: return
-      if (gatewayIds[id] != gatewayId) return
+    ): Int {
+      val current = rows[id] ?: return 0
+      if (gatewayIds[id] != gatewayId || current.status != ChatOutboxStatus.Failed) return 0
       val createdAt = maxOf(nowMs, nextCreatedAt)
       nextCreatedAt = createdAt + 1
       rows[id] = current.copy(status = ChatOutboxStatus.Queued, retryCount = 0, lastError = null, createdAtMs = createdAt)
+      return 1
     }
 
     override suspend fun delete(id: String) {

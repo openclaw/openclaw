@@ -89,15 +89,15 @@ interface ChatCommandOutbox {
   ): Int
 
   /**
-   * User-driven retry of a failed row: back to 'queued' with reset attempts and a fresh
-   * createdAt, so an expired row is not immediately re-expired by the flush sweep. Keeps the
-   * row id, so the original idempotency key still dedupes on the gateway.
+   * User-driven retry of a failed row owned by [gatewayId]: back to 'queued' with reset attempts
+   * and a fresh createdAt, so an expired row is not immediately re-expired by the flush sweep.
+   * Returns the number of rows transitioned; keeps the row id as the gateway idempotency key.
    */
   suspend fun requeueForRetry(
     gatewayId: String,
     id: String,
     nowMs: Long,
-  )
+  ): Int
 
   suspend fun delete(id: String)
 
@@ -164,14 +164,16 @@ internal interface ChatOutboxDao {
   )
 
   @Query(
-    "UPDATE outbox_commands SET status = :status, retryCount = 0, lastError = NULL, createdAtMs = :createdAtMs " +
-      "WHERE id = :id",
+    "UPDATE outbox_commands SET status = :queuedStatus, retryCount = 0, lastError = NULL, createdAtMs = :createdAtMs " +
+      "WHERE id = :id AND gatewayId = :gatewayId AND status = :failedStatus",
   )
   suspend fun requeueForRetry(
     id: String,
+    gatewayId: String,
     createdAtMs: Long,
-    status: String,
-  )
+    queuedStatus: String,
+    failedStatus: String,
+  ): Int
 
   @Query(
     "UPDATE outbox_commands SET status = :failedStatus, lastError = :error " +
@@ -282,13 +284,19 @@ class RoomChatCommandOutbox internal constructor(
     gatewayId: String,
     id: String,
     nowMs: Long,
-  ) {
-    val gateway = scopedGatewayId(gatewayId) ?: return
+  ): Int {
+    val gateway = scopedGatewayId(gatewayId) ?: return 0
     val dao = database.outboxDao()
-    database.withTransaction {
+    return database.withTransaction {
       // Same monotonic clamp as enqueue: a retried row re-joins the end of the FIFO queue.
       val createdAt = maxOf(nowMs, (dao.maxCreatedAt(gateway) ?: Long.MIN_VALUE) + 1)
-      dao.requeueForRetry(id = id, createdAtMs = createdAt, status = ChatOutboxStatus.Queued.dbValue)
+      dao.requeueForRetry(
+        id = id,
+        gatewayId = gateway,
+        createdAtMs = createdAt,
+        queuedStatus = ChatOutboxStatus.Queued.dbValue,
+        failedStatus = ChatOutboxStatus.Failed.dbValue,
+      )
     }
   }
 
