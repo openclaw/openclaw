@@ -49,14 +49,28 @@ function readPositiveSafeInteger(value: unknown): number | undefined {
     : undefined;
 }
 
+function hasUnsafeModelIdChars(id: string): boolean {
+  if (/\s/u.test(id)) {
+    return true;
+  }
+  for (const ch of id) {
+    const code = ch.codePointAt(0) ?? 0;
+    // Reject C0 control chars and DEL without a control-char regex literal.
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildNovitaModelDefinitionFromLiveRow(row: unknown): ModelDefinitionConfig | undefined {
   const entry = readRecord(row);
   const id = readString(entry?.id);
-  if (!id || id.length > NOVITA_MAX_MODEL_ID_LENGTH || /[\s\u0000-\u001f\u007f]/u.test(id)) {
+  if (!id || id.length > NOVITA_MAX_MODEL_ID_LENGTH || hasUnsafeModelIdChars(id)) {
     return undefined;
   }
   const contextWindow =
-    readPositiveSafeInteger(entry.context_size) ?? NOVITA_DEFAULT_CONTEXT_WINDOW;
+    readPositiveSafeInteger(entry?.context_size) ?? NOVITA_DEFAULT_CONTEXT_WINDOW;
   // The list endpoint does not advertise modality, reasoning, or output limits.
   // Keep unknown routes conservative instead of inferring capabilities from their names.
   return {
@@ -83,9 +97,9 @@ function hasUsableNovitaModelRows(rows: readonly unknown[]): boolean {
   return rows.some((row) => buildNovitaModelDefinitionFromLiveRow(row) !== undefined);
 }
 
-function hasCustomNovitaBaseUrl(config: ProviderCatalogContext["config"]): boolean {
+function hasCustomNovitaBaseUrl(config: ProviderCatalogContext["config"] | undefined): boolean {
   const novitaProviderIds = new Set([PROVIDER_ID, "novita-ai", "novitaai"]);
-  for (const [providerId, provider] of Object.entries(config.models?.providers ?? {})) {
+  for (const [providerId, provider] of Object.entries(config?.models?.providers ?? {})) {
     if (!novitaProviderIds.has(providerId.trim().toLowerCase())) {
       continue;
     }
@@ -97,9 +111,15 @@ function hasCustomNovitaBaseUrl(config: ProviderCatalogContext["config"]): boole
   return false;
 }
 
-export function resolveNovitaDiscoveryApiKey(
-  ctx: Pick<ProviderCatalogContext, "config" | "resolveProviderApiKey">,
-): string | undefined {
+export function resolveNovitaDiscoveryApiKey(ctx: {
+  config?: ProviderCatalogContext["config"];
+  resolveProviderApiKey?: ProviderCatalogContext["resolveProviderApiKey"];
+}): string | undefined {
+  // The augment-catalog context may omit config or the key resolver; without
+  // both there is nothing to discover against, so fall back to static rows.
+  if (!ctx.resolveProviderApiKey) {
+    return undefined;
+  }
   // A custom endpoint may not implement Novita's model-list contract. Never send
   // its credential to the public Novita endpoint; configured models remain available.
   if (hasCustomNovitaBaseUrl(ctx.config)) {
