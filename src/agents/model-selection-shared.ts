@@ -1495,6 +1495,11 @@ export function resolveAllowedModelSelection(
   if (!fallback) {
     return null;
   }
+  getLog().warn(
+    `Model "${sanitizeForLog(`${params.provider}/${params.model}`)}" ` +
+      `is not in the allowlist, falling back to "${sanitizeForLog(`${fallback.provider}/${fallback.id}`)}". ` +
+      `Add "${sanitizeForLog(`${params.provider}/${params.model}`)}" to agents.defaults.models to use it directly.`,
+  );
   return normalizeSelectionRef(fallback.provider, fallback.id);
 }
 
