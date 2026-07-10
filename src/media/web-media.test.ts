@@ -1144,6 +1144,52 @@ describe("loadWebMedia", () => {
     );
   });
 
+  it("aborts a stalled remote fetch via the overall timeoutMs deadline", async () => {
+    // Endpoint accepts the connection but never returns headers: the fetch
+    // promise stays pending until the guarded-fetch abort signal fires at the
+    // timeoutMs deadline. Proves loadWebMediaRaw forwards timeoutMs through
+    // readRemoteMediaBuffer to fetchWithSsrFGuard's abort signal (the total
+    // request lifetime, separate from readIdleTimeoutMs body-gap protection).
+    const timeoutMs = 200;
+    const fetchImpl = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            return;
+          }
+          // Reject with an Error to satisfy prefer-promise-reject-errors; the
+          // test only asserts that loadWebMediaRaw rejects when the guarded-fetch
+          // abort signal fires at the timeoutMs deadline.
+          const rejectWithAbort = () => reject(new Error("aborted"));
+          if (signal.aborted) {
+            rejectWithAbort();
+            return;
+          }
+          signal.addEventListener("abort", rejectWithAbort, { once: true });
+        }),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const outcome = loadWebMediaRaw("https://example.test/withheld.pdf", {
+        maxBytes: 1024 * 1024,
+        fetchImpl,
+        timeoutMs,
+        ssrfPolicy: { allowedHostnames: ["example.test"] },
+      }).then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      await vi.advanceTimersByTimeAsync(timeoutMs + 10);
+      const result = await outcome;
+      expect(result.status).toBe("rejected");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("loads a valid remote PDF when the raw web media read stays active", async () => {
     const fetchImpl = vi.fn(
       async () =>

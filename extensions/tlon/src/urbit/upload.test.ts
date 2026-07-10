@@ -55,13 +55,16 @@ describe("uploadImageFromUrl", () => {
     const result = await uploadImageFromUrl("https://example.com/image.png");
 
     expect(result).toBe("https://memex.tlon.network/uploaded.png");
-    expect(mockReadRemoteMediaBuffer).toHaveBeenCalledWith({
-      url: "https://example.com/image.png",
-      maxBytes: MAX_IMAGE_BYTES,
-      readIdleTimeoutMs: 30_000,
-      ssrfPolicy: undefined,
-      requestInit: { method: "GET" },
-    });
+    expect(mockReadRemoteMediaBuffer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.com/image.png",
+        maxBytes: MAX_IMAGE_BYTES,
+        timeoutMs: 15 * 60_000,
+        readIdleTimeoutMs: 30_000,
+        ssrfPolicy: undefined,
+        requestInit: { method: "GET" },
+      }),
+    );
     expect(mockUploadFile).toHaveBeenCalledTimes(1);
     const uploadParams = requireUploadParams();
     expect(uploadParams.contentType).toBe("image/png");

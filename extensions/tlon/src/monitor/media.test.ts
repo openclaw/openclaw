@@ -52,13 +52,16 @@ describe("tlon monitor media", () => {
 
     expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
-    expect(saveRemoteMediaMock).toHaveBeenCalledWith({
-      url: "https://example.com/photo.png",
-      maxBytes: MAX_IMAGE_BYTES,
-      readIdleTimeoutMs: 30_000,
-      ssrfPolicy: undefined,
-      requestInit: { method: "GET" },
-    });
+    expect(saveRemoteMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.com/photo.png",
+        maxBytes: MAX_IMAGE_BYTES,
+        timeoutMs: 15 * 60_000,
+        readIdleTimeoutMs: 30_000,
+        ssrfPolicy: undefined,
+        requestInit: { method: "GET" },
+      }),
+    );
     expect(result).toEqual({
       localPath: "/tmp/openclaw/media/inbound/photo---uuid.png",
       contentType: "image/png",
