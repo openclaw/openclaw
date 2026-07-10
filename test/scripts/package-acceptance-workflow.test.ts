@@ -233,6 +233,7 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
       PATH: process.env.PATH,
       PLUGINS: "",
       PLUGIN_PUBLISH_SCOPE: "all-publishable",
+      PREFLIGHT_RUN_ATTEMPT: "1",
       PREFLIGHT_RUN_ID: "111",
       PUBLISH_OPENCLAW_NPM: "true",
       RELEASE_NPM_DIST_TAG: "beta",
@@ -321,6 +322,7 @@ describe("package acceptance workflow", () => {
       FULL_RELEASE_VALIDATION_RUN_ID: "",
       PLUGINS: "@openclaw/meta",
       PLUGIN_PUBLISH_SCOPE: "selected",
+      PREFLIGHT_RUN_ATTEMPT: "",
       PREFLIGHT_RUN_ID: "",
       PUBLISH_OPENCLAW_NPM: "false",
     });
@@ -331,6 +333,7 @@ describe("package acceptance workflow", () => {
       FULL_RELEASE_VALIDATION_RUN_ID: "",
       PLUGINS: "   ",
       PLUGIN_PUBLISH_SCOPE: "selected",
+      PREFLIGHT_RUN_ATTEMPT: "",
       PREFLIGHT_RUN_ID: "",
       PUBLISH_OPENCLAW_NPM: "false",
     });
@@ -340,6 +343,7 @@ describe("package acceptance workflow", () => {
     const broadWithoutEvidence = runReleasePublishInputValidation({
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "",
       FULL_RELEASE_VALIDATION_RUN_ID: "",
+      PREFLIGHT_RUN_ATTEMPT: "",
       PREFLIGHT_RUN_ID: "",
       PUBLISH_OPENCLAW_NPM: "false",
     });
@@ -355,6 +359,12 @@ describe("package acceptance workflow", () => {
     });
     expect(partialEvidence.status).toBe(1);
     expect(partialEvidence.stderr).toContain("require full_release_validation_run_id");
+
+    const missingPreflightAttempt = runReleasePublishInputValidation({
+      PREFLIGHT_RUN_ATTEMPT: "",
+    });
+    expect(missingPreflightAttempt.status).toBe(1);
+    expect(missingPreflightAttempt.stderr).toContain("require a positive preflight_run_attempt");
 
     expect(runReleasePublishInputValidation({ PUBLISH_OPENCLAW_NPM: "false" }).status).toBe(0);
   });
