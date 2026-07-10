@@ -672,15 +672,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         decisionHandler(.cancel)
     }
 
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation _: WKNavigation!) {
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if self.linkBrowser.owns(webView) {
+            self.linkBrowser.navigationDidStart(navigation, in: webView)
             self.linkBrowser.updateChrome()
         }
     }
 
-    func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if self.linkBrowser.owns(webView) {
-            self.linkBrowser.navigationDidFinish(for: webView)
+            self.linkBrowser.navigationDidFinish(navigation, for: webView)
         }
     }
 
