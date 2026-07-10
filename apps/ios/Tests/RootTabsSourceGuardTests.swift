@@ -790,13 +790,55 @@ struct RootTabsSourceGuardTests {
             sectionsSource,
             from: "var privacyDestination: some View",
             to: "var notificationsDestination: some View")
+        let locationCard = try Self.extract(
+            sectionsSource,
+            from: "var locationModeCard: some View",
+            to: "var agentSelectionCard: some View")
+        let pendingLocationApplication = try Self.extract(
+            actionsSource,
+            from: "func applyPendingLocationModeIfAvailable()",
+            to: "func openLocationSettings()")
 
         #expect(!settingsList.contains("route: .notifications"))
         #expect(privacyDestination.contains("self.notificationsSection"))
+        #expect(privacyDestination.contains("title: \"Camera Access\""))
+        #expect(privacyDestination.contains("self.locationModeCard"))
+        #expect(privacyDestination.contains("title: \"Background Listening\""))
+        #expect(!privacyDestination.contains("title: \"Privacy\""))
         #expect(sectionsSource.contains("Toggle(\"Notifications\", isOn: self.notificationToggleBinding)"))
+        #expect(locationCard.contains("Text(\"Location\")"))
+        #expect(locationCard.contains(".font(OpenClawType.body)"))
+        #expect(locationCard.contains(".accessibilityLabel(\"Location Sharing\")"))
+        #expect(!locationCard.contains("Text(\"Location Sharing\")"))
+        #expect(!locationCard.contains("SettingsIcon("))
+        #expect(locationCard.contains("Text(\"Access Level\")"))
+        #expect(!locationCard.contains("Text(\"Open iOS Settings\")"))
+        #expect(locationCard.contains(".opacity(self.isChangingLocationMode ? 0 : 1)"))
+        #expect(locationCard.contains(".multilineTextAlignment(.trailing)"))
+        #expect(locationCard.contains(".lineLimit(2)"))
+        #expect(locationCard.contains(".accessibilityElement(children: .ignore)"))
+        #expect(locationCard.contains(".accessibilityLabel(\"Access Level\")"))
+        #expect(!locationCard.contains(".minimumScaleFactor("))
+        #expect(locationCard.contains("showLocationAccessDialog"))
+        #expect(locationCard.contains("chevron.up.chevron.down"))
+        #expect(locationCard.contains("Chooses While Using the App or Always"))
+        #expect(!locationCard.contains("Picker(\"Location\""))
+        #expect(!locationCard.contains("Text(\"While Using\")"))
+        #expect(!locationCard.contains("Choose a location mode"))
+        #expect(!actionsSource.contains("Location permission was not granted."))
+        #expect(!actionsSource.contains("presentation.showsOpenSettingsAction"))
+        #expect(actionsSource.contains("func selectLocationAccessLevel"))
+        #expect(actionsSource.contains("presentation.accessLevelAction(mode: mode)"))
+        #expect(actionsSource.contains("self.pendingLocationMode ?? self.selectedLocationMode"))
+        #expect(pendingLocationApplication.contains(
+            "self.locationSettingsPresentation(selectedMode: mode).statusText"))
+        let pendingClear = try #require(pendingLocationApplication.range(of: "self.pendingLocationMode = nil"))
+        let unavailableReturn = try #require(
+            pendingLocationApplication.range(of: "guard summary.effectiveMode != .off else"))
+        #expect(pendingClear.lowerBound < unavailableReturn.lowerBound)
         #expect(actionsSource.contains("UIApplication.shared.unregisterForRemoteNotifications()"))
         #expect(actionsSource.contains("UIApplication.openNotificationSettingsURLString"))
-        #expect(!actionsSource.contains("UIApplication.openSettingsURLString"))
+        #expect(actionsSource.contains("UIApplication.openSettingsURLString"))
     }
 
     @Test func `gateway settings keeps pairing trust diagnostics and tailscale actions`() throws {
