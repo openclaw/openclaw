@@ -338,14 +338,13 @@ export function resolveClaudeCliExecutionArgs(
     return resolveClaudeCliSideQuestionExecutionArgs(context.baseArgs);
   }
   const action = resolveClaudeCliEffortArgAction(context.thinkingLevel);
-  switch (action.mode) {
-    case "preserve":
-      return [...context.baseArgs];
-    case "omit":
-      return stripClaudeEffortArgs(context.baseArgs);
-    case "set":
-      return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, action.effort];
+  if (action.mode === "preserve") {
+    return [...context.baseArgs];
   }
+  if (action.mode === "omit") {
+    return stripClaudeEffortArgs(context.baseArgs);
+  }
+  return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, action.effort];
 }
 
 /** Normalize Claude CLI backend config before registration or execution. */
