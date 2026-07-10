@@ -25,6 +25,12 @@ import java.util.UUID
 class ChatControllerOutboxTest {
   private val json = Json { ignoreUnknownKeys = true }
 
+  private class LoadGate(
+    var remainingLoads: Int,
+    val entered: CompletableDeferred<Unit>,
+    val release: CompletableDeferred<Unit>,
+  )
+
   /** In-memory stand-in for the Room outbox; Room persistence itself is covered by [RoomChatCommandOutboxTest]. */
   private class FakeCommandOutbox(
     private val capacity: Int = OUTBOX_MAX_QUEUED,
@@ -39,6 +45,8 @@ class ChatControllerOutboxTest {
     var sendingStatusUpdateFailure: Throwable? = null
     var deleteFailure: Throwable? = null
     var deleteOnFailedStatus = false
+    var loadGate: LoadGate? = null
+    var onStatusUpdated: ((ChatOutboxStatus) -> Unit)? = null
     private var nextCreatedAt = 0L
 
     fun seed(
@@ -50,7 +58,20 @@ class ChatControllerOutboxTest {
       nextCreatedAt = maxOf(nextCreatedAt, item.createdAtMs + 1)
     }
 
-    override suspend fun load(gatewayId: String): List<ChatOutboxItem> = rows.values.filter { gatewayIds[it.id] == gatewayId }.sortedWith(compareBy({ it.createdAtMs }, { it.id }))
+    override suspend fun load(gatewayId: String): List<ChatOutboxItem> {
+      loadGate?.let { gate ->
+        if (gate.remainingLoads == 0) {
+          loadGate = null
+          gate.entered.complete(Unit)
+          gate.release.await()
+        } else {
+          gate.remainingLoads -= 1
+        }
+      }
+      return rows.values
+        .filter { gatewayIds[it.id] == gatewayId }
+        .sortedWith(compareBy({ it.createdAtMs }, { it.id }))
+    }
 
     override suspend fun enqueue(
       gatewayId: String,
@@ -94,6 +115,7 @@ class ChatControllerOutboxTest {
       if (status == ChatOutboxStatus.Sending) sendingStatusUpdateFailure?.let { throw it }
       val current = rows[id] ?: return 0
       rows[id] = current.copy(status = status, retryCount = retryCount, lastError = lastError)
+      onStatusUpdated?.invoke(status)
       return 1
     }
 
@@ -859,6 +881,61 @@ class ChatControllerOutboxTest {
 
       assertEquals(listOf("older", "younger"), gateway.sentMessages)
       assertTrue(chat.outboxItems.value.isEmpty())
+    }
+
+  @Test
+  fun healthFlushRequestDuringActiveFlushIsDrainedAfterRelease() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      chat.sendMessageAwaitAcceptance(
+        message = "ambiguous",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
+      chat.sendMessageAwaitAcceptance(
+        message = "younger",
+        thinkingLevel = "off",
+        attachments = emptyList(),
+      )
+
+      val finalPublishEntered = CompletableDeferred<Unit>()
+      val releaseFinalPublish = CompletableDeferred<Unit>()
+      outbox.onStatusUpdated = { status ->
+        if (status == ChatOutboxStatus.Failed) {
+          outbox.onStatusUpdated = null
+          // The first load republishes Failed; the second is the owning flush's finally block.
+          outbox.loadGate =
+            LoadGate(
+              remainingLoads = 1,
+              entered = finalPublishEntered,
+              release = releaseFinalPublish,
+            )
+        }
+      }
+      gateway.online = true
+      gateway.sendFailureAfterDispatch = GatewayRequestOutcomeUnknown("ack lost")
+      chat.handleGatewayEvent("health", null)
+      runCurrent()
+      finalPublishEntered.await()
+
+      assertEquals(listOf("ambiguous"), gateway.sentMessages)
+      assertFalse(chat.healthOk.value)
+      gateway.sendFailureAfterDispatch = null
+      chat.handleGatewayEvent("health", null)
+      runCurrent()
+      assertEquals(listOf("ambiguous"), gateway.sentMessages)
+
+      releaseFinalPublish.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(listOf("ambiguous", "younger"), gateway.sentMessages)
+      val failed = chat.outboxItems.value.single()
+      assertEquals("ambiguous", failed.text)
+      assertEquals(ChatOutboxStatus.Failed, failed.status)
     }
 
   @Test

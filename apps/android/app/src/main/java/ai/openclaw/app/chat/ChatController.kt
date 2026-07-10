@@ -190,7 +190,9 @@ class ChatController internal constructor(
   private val _outboxItems = MutableStateFlow<List<ChatOutboxItem>>(emptyList())
   val outboxItems: StateFlow<List<ChatOutboxItem>> = _outboxItems.asStateFlow()
 
+  // Flush requests are level-triggered: the owner clears one per pass and rechecks after release.
   private val outboxFlushInFlight = AtomicBoolean(false)
+  private val outboxFlushRequested = AtomicBoolean(false)
   private val outboxRecoveryMutex = Mutex()
   private var outboxRecoveryComplete = false
 
@@ -1372,7 +1374,7 @@ class ChatController internal constructor(
     val wasOk = _healthOk.value
     _healthOk.value = true
     if (!wasOk && commandOutbox != null) {
-      scope.launch { flushOutbox() }
+      requestOutboxFlush()
     }
   }
 
@@ -1436,7 +1438,7 @@ class ChatController internal constructor(
         runCatching { outbox.requeueForRetry(gatewayId = outboxScope.gatewayId, id = id, nowMs = System.currentTimeMillis()) }
           .getOrDefault(0)
       publishOutbox()
-      if (requeued > 0 && _healthOk.value) flushOutbox()
+      if (requeued > 0 && _healthOk.value) requestOutboxFlush()
     }
   }
 
@@ -1468,7 +1470,26 @@ class ChatController internal constructor(
    * Sends queued outbox rows strictly createdAt-ordered. Single-flight: health events can fire
    * repeatedly while a flush is already draining the queue.
    */
-  private suspend fun flushOutbox() {
+  private fun requestOutboxFlush() {
+    if (commandOutbox == null) return
+    outboxFlushRequested.set(true)
+    scope.launch { drainOutboxFlushRequests() }
+  }
+
+  private suspend fun drainOutboxFlushRequests() {
+    if (!outboxFlushInFlight.compareAndSet(false, true)) return
+    try {
+      while (outboxFlushRequested.getAndSet(false)) {
+        flushOutboxPass()
+      }
+    } finally {
+      outboxFlushInFlight.set(false)
+      // Close the release race: a requester that observed in-flight ownership leaves this bit set.
+      if (outboxFlushRequested.get()) requestOutboxFlush()
+    }
+  }
+
+  private suspend fun flushOutboxPass() {
     val outbox = commandOutbox ?: return
     // The unscoped recovery sweep must succeed before this process claims a row. A transient
     // storage failure stays retryable, but never lets younger queued work bypass an ambiguous send.
@@ -1478,7 +1499,6 @@ class ChatController internal constructor(
       publishOutbox()
       return
     }
-    if (!outboxFlushInFlight.compareAndSet(false, true)) return
     var flushedAny = false
     try {
       // The whole flush is bound to one gateway scope; a connection switch mid-flush stops it
@@ -1498,7 +1518,6 @@ class ChatController internal constructor(
         }
       }
     } finally {
-      outboxFlushInFlight.set(false)
       publishOutbox()
       if (flushedAny) {
         // Durable history replaces the queued bubbles; reconciliation matches by idempotency key.
