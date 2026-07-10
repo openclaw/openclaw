@@ -147,7 +147,7 @@ function formatFallbackWriteFailure(err: unknown): string {
 }
 
 const REQUEST_SCOPED_FALLBACK_NARRATIVE =
-  "A memory trace surfaced, but details were unavailable in this run.";
+  "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.";
 
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
@@ -459,8 +459,13 @@ export function summarizeNarrativeMessages(messages: unknown[]): string {
       if (hasText) {
         assistantWithText += 1;
       } else if (
+        // Covers the canonical OpenClaw normalized shape (toolCall) plus the
+        // provider-native camel/snake variants that can reach session files.
+        partTypes.has("toolCall") ||
+        partTypes.has("toolUse") ||
         partTypes.has("tool_use") ||
         partTypes.has("tool_call") ||
+        partTypes.has("functionCall") ||
         partTypes.has("function_call")
       ) {
         assistantToolOnly += 1;

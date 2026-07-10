@@ -242,6 +242,18 @@ describe("summarizeNarrativeMessages", () => {
     expect(summary).toContain("lastAssistantContent=array");
   });
 
+  it("classifies the canonical normalized toolCall shape as tool-only", () => {
+    const summary = summarizeNarrativeMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "t1", name: "search", arguments: {} }],
+      },
+    ]);
+    expect(summary).toContain("toolOnly=1");
+    expect(summary).toContain("nonTextParts=0");
+    expect(summary).toContain("withText=0");
+  });
+
   it("does not flag tool-only when the assistant also has text", () => {
     const summary = summarizeNarrativeMessages([
       {
@@ -924,7 +936,7 @@ describe("generateAndAppendDreamNarrative", () => {
       expect(subagent.getSessionMessages).toHaveBeenCalledTimes(5);
       const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
       expect(content).toContain(
-        "A memory trace surfaced, but details were unavailable in this run.",
+        "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
       );
       expectLogIncludes(logger.warn, "produced no text");
     } finally {
@@ -1092,7 +1104,9 @@ describe("generateAndAppendDreamNarrative", () => {
     // Raw staging snippets must never leak into the diary; only the generic
     // placeholder is written on fallback.
     expect(content).not.toContain("some memory");
-    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expect(content).toContain(
+      "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
+    );
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("status=timeout"));
   });
 
@@ -1123,7 +1137,9 @@ describe("generateAndAppendDreamNarrative", () => {
     }
     expect(content).not.toContain("Session Key:");
     expect(content).not.toContain("agent:main:dashboard");
-    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expect(content).toContain(
+      "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
+    );
   });
 
   it("skips extra settle waits after timeout and still attempts cleanup", async () => {
@@ -1186,7 +1202,9 @@ describe("generateAndAppendDreamNarrative", () => {
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     // Raw staging snippets must never leak into the diary on fallback.
     expect(content).not.toContain("API endpoints need authentication");
-    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expect(content).toContain(
+      "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
+    );
     expectLogIncludes(logger.info, "request-scoped");
     expectLogExcludes(logger.warn, "request-scoped");
     expectLogExcludes(logger.warn, workspaceDir);
@@ -1218,7 +1236,9 @@ describe("generateAndAppendDreamNarrative", () => {
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     // Raw staging promotions must never leak into the diary on fallback.
     expect(content).not.toContain("A durable candidate surfaced.");
-    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expect(content).toContain(
+      "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
+    );
     expectLogIncludes(logger.info, "request-scoped");
     expectLogExcludes(logger.warn, "request-scoped");
     expect(subagent.deleteSession).toHaveBeenCalledOnce();
