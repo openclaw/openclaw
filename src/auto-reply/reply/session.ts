@@ -588,7 +588,10 @@ async function initSessionStateAttemptLocked(
   // resume signal is allowed to suppress configured idle/daily rollover.
   const reconnectResumeRequested =
     params.resumeRequestedSession === true && requestedCurrentSession;
-  const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
+  const entryForcesRollover =
+    typeof entry?.sessionClosedAt === "number" && Number.isFinite(entry.sessionClosedAt);
+  const skipImplicitExpiry =
+    !entryForcesRollover && hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
@@ -599,6 +602,7 @@ async function initSessionStateAttemptLocked(
       ? ({ fresh: true } satisfies SessionFreshness)
       : evaluateSessionFreshness({
           updatedAt: entry.updatedAt,
+          sessionClosedAt: entry.sessionClosedAt,
           sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
           lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
           now,
@@ -638,10 +642,11 @@ async function initSessionStateAttemptLocked(
     isRecoverableTerminalSessionStatus(entry?.status);
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
-    (((reconnectResumeRequested && canReuseExistingEntry) ||
-      recoverTerminalVisibleEntry ||
-      (entryFreshness?.fresh ?? false) ||
-      (softResetAllowed && canReuseExistingEntry)) &&
+    (!entryForcesRollover &&
+      ((reconnectResumeRequested && canReuseExistingEntry) ||
+        recoverTerminalVisibleEntry ||
+        (entryFreshness?.fresh ?? false) ||
+        (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
   const activeReplyOperation = replyRunRegistry.get(sessionKey);
   const deferImplicitRolloverForActiveRun =
@@ -649,12 +654,13 @@ async function initSessionStateAttemptLocked(
     !freshEntry &&
     canReuseExistingEntry &&
     entryFreshness?.fresh === false &&
-    entryFreshness.staleReason != null &&
+    (entryFreshness.staleReason != null || entryFreshness.closedAt != null) &&
     activeReplyOperation?.phase !== "queued" &&
     activeReplyOperation?.sessionId === entry?.sessionId;
-  // Implicit daily/idle rollover must not rename a transcript while that exact
-  // session's active writer is still running. Admission will steer/wait/queue;
-  // queued pre-dispatch reservations still let the current turn roll over.
+  // Implicit daily/idle/closed rollover must not rename a transcript while
+  // that exact session's active writer is still running. Admission will
+  // steer/wait/queue; queued pre-dispatch reservations still let the current
+  // turn roll over.
   const effectiveFreshEntry = deferImplicitRolloverForActiveRun ? true : freshEntry;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
@@ -856,6 +862,8 @@ async function initSessionStateAttemptLocked(
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
     lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
+    sessionClosedAt:
+      isSystemEvent || deferImplicitRolloverForActiveRun ? baseEntry?.sessionClosedAt : undefined,
     systemSent,
     abortedLastRun: recoveredTerminalEntry ? undefined : abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.

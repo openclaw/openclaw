@@ -38,6 +38,15 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
   return Math.floor(value);
 }
 
+function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntry {
+  const next = { ...entry };
+  delete next.status;
+  delete next.startedAt;
+  delete next.endedAt;
+  delete next.runtimeMs;
+  return next;
+}
+
 /** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
@@ -131,6 +140,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         }),
   };
   if (entry.sessionId !== sessionId) {
+    delete next.sessionClosedAt;
     next.sessionFile =
       activeSessionFile ??
       resolveCompactionSessionFile({
@@ -277,14 +287,17 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
-  const metadataPatch = preserveUserFacingRunState
+  const metadataPatch: Partial<SessionEntry> = preserveUserFacingRunState
     ? {
         // Preserved-state runs must not alter perceived session state, so the
         // unread-driving lastActivityAt stays untouched here.
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
-    : next;
+    : removeLifecycleStateFromMetadataPatch(next);
+  if (!preserveUserFacingRunState && entry.sessionId !== sessionId) {
+    metadataPatch.sessionClosedAt = undefined;
+  }
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
   const persisted = await patchSessionEntry(
     {

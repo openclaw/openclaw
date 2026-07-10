@@ -14,7 +14,7 @@ Talk mode covers five runtime shapes:
 - **Android Talk (realtime)**: opt in with `talk.realtime.mode: "realtime"` and `talk.realtime.transport: "gateway-relay"`. Otherwise Android stays on native speech recognition, Gateway chat, and `talk.speak`.
 - **Transcription-only clients**: `talk.session.create({ mode: "transcription", transport: "gateway-relay", brain: "none" })`, then `talk.session.appendAudio`, `talk.session.cancelTurn`, and `talk.session.close` for captions/dictation without an assistant voice response. One-shot uploaded voice notes still use the [media understanding](/nodes/media-understanding) audio path.
 
-Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`).
+Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`). When `talk.silenceTimeoutMs` is unset, Talk keeps the platform default pause window: `700` ms macOS/Android, `900` ms iOS.
 
 Client-owned realtime Talk forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`. Accepted steering queues into the active embedded run; rejected steering returns a reason such as `no_active_run`, `not_streaming`, or `compacting`.
 

@@ -161,6 +161,16 @@ describe("resolveSessionResetPolicy", () => {
     expect(policy.atHour).toBe(4);
   });
 
+  it("keeps thread sessions on the shipped daily reset default unless configured", () => {
+    const policy = resolveSessionResetPolicy({
+      resetType: "thread",
+    });
+
+    expect(policy.mode).toBe("daily");
+    expect(policy.idleMinutes).toBeUndefined();
+    expect(policy.configured).toBe(false);
+  });
+
   it("treats idleMinutes=0 as never expiring by inactivity", () => {
     const freshness = evaluateSessionFreshness({
       updatedAt: 1_000,
@@ -176,6 +186,27 @@ describe("resolveSessionResetPolicy", () => {
       fresh: true,
       dailyResetAt: undefined,
       idleExpiresAt: undefined,
+    });
+  });
+
+  it("treats closed sessions as stale even when idle expiry is disabled", () => {
+    const now = 60 * 60 * 1_000;
+    const freshness = evaluateSessionFreshness({
+      updatedAt: now,
+      sessionClosedAt: now - 1_000,
+      now,
+      policy: {
+        mode: "idle",
+        atHour: 4,
+        idleMinutes: 0,
+      },
+    });
+
+    expect(freshness).toEqual({
+      fresh: false,
+      dailyResetAt: undefined,
+      idleExpiresAt: undefined,
+      closedAt: now - 1_000,
     });
   });
 

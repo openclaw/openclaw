@@ -98,7 +98,8 @@ A `sessionKey` identifies which conversation bucket you are in (routing + isolat
 Each `sessionKey` points at a current `sessionId` (the transcript file continuing the conversation). Decision logic lives in `initSessionState()` in `src/auto-reply/reply/session.ts`.
 
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
-- **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
+- **Daily reset** (default 4:00 AM local time on the gateway host for direct, group, and thread sessions) creates a new `sessionId` on the next message after the reset boundary.
+- **Thread continuity** across the daily boundary is explicit: configure `session.resetByType.thread` with `mode: "idle"` and `idleMinutes: 0` when topic/thread sessions should keep their `sessionId`.
 - **Idle expiry** (`session.reset.idleMinutes`, or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. If daily and idle are both configured, whichever expires first wins.
 - **Control UI reconnect resume** preserves the currently visible session for one reconnect send when the Gateway receives the matching `sessionId` from an operator UI client. This is a one-shot signal; ordinary stale sends still create a new `sessionId`.
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but never extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
@@ -112,6 +113,7 @@ The value type is `SessionEntry` in `src/config/sessions.ts`. Key fields (not ex
 - `sessionId`: current transcript id (filename derives from this unless `sessionFile` is set)
 - `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset freshness uses this. Legacy rows may derive it from the JSONL session header.
 - `lastInteractionAt`: last real user/channel interaction timestamp; idle reset freshness uses this so heartbeat, cron, and exec events do not keep sessions alive. Legacy rows without this field fall back to the recovered session start time.
+- `sessionClosedAt`: external thread/channel close timestamp; a later user turn rolls over from the closed session instead of reusing it.
 - `updatedAt`: last store-row mutation timestamp, used for listing/pruning/bookkeeping - not the daily/idle freshness authority.
 - `archivedAt`: optional archive timestamp. Archived sessions stay in the store with their transcript intact and are excluded from normal active listings.
 - `pinnedAt`: optional pin timestamp. Active pinned sessions sort ahead of unpinned sessions; archiving a session clears its pin.

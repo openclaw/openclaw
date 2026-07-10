@@ -9,12 +9,11 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 
 /**
  * Marks every session entry in the store whose key contains {@link threadId}
- * as "reset" by setting `updatedAt` to 0.
+ * as closed so the next inbound message rolls over to a fresh session.
  *
- * This mirrors how the daily / idle session reset works: zeroing `updatedAt`
- * makes `evaluateSessionFreshness` treat the session as stale on the next
- * inbound message, so the bot starts a fresh conversation without deleting
- * any on-disk transcript history.
+ * The close marker makes idle/no-expiry thread sessions stale without deleting
+ * the entry. Keeping the entry lets the normal rollover lifecycle archive and
+ * link the old transcript when the archived thread receives another message.
  */
 export async function closeDiscordThreadSessions(params: {
   cfg: OpenClawConfig;
@@ -47,30 +46,32 @@ export async function closeDiscordThreadSessions(params: {
   const storePath = resolveStorePath(cfg.session?.store, { agentId: accountId });
 
   let resetCount = 0;
+  const closedAt = Date.now();
 
   for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
-    if (!sessionKeyContainsThreadId(sessionKey) || entry.updatedAt === 0) {
+    if (!sessionKeyContainsThreadId(sessionKey) || entry.sessionClosedAt != null) {
       continue;
     }
-    // Setting updatedAt to 0 signals that this session is stale.
-    // evaluateSessionFreshness will create a new session on the next message.
-    let resetEntry = false;
+    let markedClosed = false;
     await patchSessionEntry({
       storePath,
       sessionKey,
       replaceEntry: true,
       update: (current) => {
-        if (current.updatedAt === 0) {
-          return null;
-        }
         if (current.updatedAt !== entry.updatedAt || current.sessionId !== entry.sessionId) {
           return null;
         }
-        resetEntry = true;
-        return { ...current, updatedAt: 0 };
+        const next = {
+          ...current,
+          lastInteractionAt: undefined,
+          sessionClosedAt: closedAt,
+          updatedAt: 0,
+        };
+        markedClosed = true;
+        return next;
       },
     });
-    if (resetEntry) {
+    if (markedClosed) {
       resetCount += 1;
     }
   }

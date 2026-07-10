@@ -69,9 +69,10 @@ Verify your setup with `openclaw security audit`.
 Sessions are reused until they expire under `session.reset`:
 
 - **Daily reset** (default `mode: "daily"`) - new session at a configured local
-  hour (`session.reset.atHour`, default `4`, 0-23) on the gateway host. Daily
-  freshness is based on when the current `sessionId` started, not on later
-  metadata writes.
+  hour (`session.reset.atHour`, default `4`, 0-23) on the gateway host. Direct,
+  group, and thread sessions use this daily default when no reset policy is
+  configured. Daily freshness is based on when the current `sessionId` started,
+  not on later metadata writes.
 - **Idle reset** (`mode: "idle"`) - new session after `session.reset.idleMinutes`
   of inactivity. Idle freshness is based on the last real user/channel
   interaction, so heartbeat, cron, and exec system events do not keep the
@@ -85,6 +86,12 @@ but those writes do not extend daily or idle reset freshness. When a reset
 rolls the session, queued system-event notices for the old session are
 discarded so stale background updates are not prepended to the first prompt in
 the new session.
+
+Thread-scoped sessions use the same daily reset default as other sessions when
+no `session.reset`, `session.resetByType`, or legacy `session.idleMinutes` is
+configured. Configure `session.resetByType.thread` with `mode: "idle"` and
+`idleMinutes: 0` when topic/thread continuity should be preserved across the
+daily boundary.
 
 Sessions with an active provider-owned CLI session are not cut by the implicit
 daily default. Use `/reset` or configure `session.reset` explicitly when those
@@ -120,6 +127,8 @@ an idle-mode default when no `session.reset`/`resetByType` block is set.
 
 - `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
 - `lastInteractionAt`: last user/channel interaction that extends idle lifetime.
+- `sessionClosedAt`: external thread/channel close time that forces the next
+  user turn to roll over from the closed session.
 - `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 

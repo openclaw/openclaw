@@ -156,11 +156,15 @@ export function resolveCronSession(params: {
       sessionCfg,
       resetType: "direct",
     });
-    const skipImplicitExpiry = resetPolicy.configured !== true && hasProviderOwnedSession(entry);
+    const entryHasClosedMarker =
+      typeof entry.sessionClosedAt === "number" && Number.isFinite(entry.sessionClosedAt);
+    const skipImplicitExpiry =
+      !entryHasClosedMarker && resetPolicy.configured !== true && hasProviderOwnedSession(entry);
     const freshness = skipImplicitExpiry
       ? ({ fresh: true } satisfies SessionFreshness)
       : evaluateSessionFreshness({
           updatedAt: entry.updatedAt,
+          sessionClosedAt: entry.sessionClosedAt,
           ...resolveSessionLifecycleTimestamps({
             entry,
             agentId: params.agentId,

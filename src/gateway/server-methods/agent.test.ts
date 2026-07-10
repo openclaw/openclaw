@@ -5701,6 +5701,64 @@ describe("gateway agent handler", () => {
     }
   });
 
+  it("clears closed-session markers after gateway agent rollover", async () => {
+    const now = Date.parse("2026-04-25T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+      mockMainSessionEntry(
+        {
+          sessionId: "closed-gateway-session-id",
+          updatedAt: now,
+          sessionStartedAt: now,
+          lastInteractionAt: now,
+          sessionClosedAt: now,
+        },
+        {
+          session: {
+            resetByType: { thread: { mode: "idle", idleMinutes: 0 } },
+          },
+        },
+      );
+      const loaded = mocks.loadSessionEntry();
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [loaded.canonicalKey]: structuredClone(loaded.entry),
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "closed thread rollover",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "closed-gateway-agent-session",
+        },
+        { reqId: "closed-gateway-agent-session" },
+      );
+
+      const call = await waitForAgentCommandCall<{
+        sessionId?: string;
+        sessionKey?: string;
+      }>();
+      expect(call.sessionKey).toBe("agent:main:main");
+      expect(call.sessionId).not.toBe("closed-gateway-session-id");
+      expect(capturedEntry?.sessionId).toBe(call.sessionId);
+      expect(capturedEntry?.sessionClosedAt).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a provider-owned CLI session across the daily default boundary on the gateway path", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();

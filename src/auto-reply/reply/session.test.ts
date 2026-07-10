@@ -2660,6 +2660,40 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).toBe(existingSessionId);
   });
 
+  it("uses the shipped daily reset default for unconfigured thread sessions", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-thread-default-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-100123:topic:456";
+    const existingSessionId = "thread-default-session";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "same thread follow-up",
+        SessionKey: sessionKey,
+        MessageThreadId: 456,
+        Provider: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
   it("defaults to daily resets when only resetByType is configured", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-type-default-");
@@ -4299,6 +4333,72 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("defers provider-owned closed thread rollover while the same session has an active run", async () => {
+    vi.useFakeTimers();
+    const existingSessionId = "active-closed-thread-session";
+    let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-active-closed-thread-");
+      const sessionKey = "agent:main:discord:channel:active-closed-thread";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+      const now = Date.now();
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: now,
+          sessionStartedAt: now,
+          lastInteractionAt: now,
+          sessionClosedAt: now,
+          providerOverride: "claude-cli",
+          cliSessionBindings: {
+            "claude-cli": { sessionId: "provider-owned-active-closed-thread" },
+          },
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello while active",
+          RawBody: "hello while active",
+          CommandBody: "hello while active",
+          From: "user-active-closed-thread",
+          To: "bot",
+          ChatType: "channel",
+          MessageThreadId: "active-closed-thread",
+          SessionKey: sessionKey,
+          Provider: "discord",
+          Surface: "discord",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.previousSessionEntry).toBeUndefined();
+      expect(result.sessionEntry.sessionClosedAt).toBe(now);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(0);
+    } finally {
+      operation?.complete();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not defer stale archival for the current turn's queued reservation", async () => {
     vi.useFakeTimers();
     let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
@@ -4407,6 +4507,129 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(archived).toHaveLength(1);
     } finally {
       operation?.complete();
+      vi.useRealTimers();
+    }
+  });
+
+  it("archives a closed idle/no-expiry thread session through the normal rollover lifecycle", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-closed-thread-rollover-");
+      const sessionKey = "agent:main:discord:channel:closed-thread";
+      const existingSessionId = "closed-thread-session";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+      const now = Date.now();
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: now,
+          sessionStartedAt: now,
+          lastInteractionAt: now,
+          sessionClosedAt: now,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          From: "user-closed-thread",
+          To: "bot",
+          ChatType: "channel",
+          MessageThreadId: "closed-thread",
+          SessionKey: sessionKey,
+          Provider: "discord",
+          Surface: "discord",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry.sessionClosedAt).toBeUndefined();
+      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps closed thread markers through system events before user rollover", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-closed-thread-system-event-");
+      const sessionKey = "agent:main:discord:channel:closed-thread-system";
+      const existingSessionId = "closed-thread-system-session";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+      const now = Date.now();
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: now,
+          sessionStartedAt: now,
+          lastInteractionAt: now,
+          sessionClosedAt: now,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const heartbeat = await initSessionState({
+        ctx: {
+          Body: "heartbeat tick",
+          SessionKey: sessionKey,
+          Provider: "heartbeat",
+          From: "heartbeat",
+          To: "heartbeat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(heartbeat.isNewSession).toBe(false);
+      expect(heartbeat.sessionId).toBe(existingSessionId);
+      expect(heartbeat.sessionEntry.sessionClosedAt).toBe(now);
+
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          From: "user-closed-thread",
+          To: "bot",
+          ChatType: "channel",
+          MessageThreadId: "closed-thread-system",
+          SessionKey: sessionKey,
+          Provider: "discord",
+          Surface: "discord",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry.sessionClosedAt).toBeUndefined();
+      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(1);
+    } finally {
       vi.useRealTimers();
     }
   });

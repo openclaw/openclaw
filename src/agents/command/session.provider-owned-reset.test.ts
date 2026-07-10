@@ -69,4 +69,20 @@ describe("command resolveSession provider-owned daily reset", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe("old-session-id");
   });
+
+  it("still rotates a closed provider-owned session across the daily boundary", () => {
+    const sessionKey = "agent:main:cli";
+    seedProviderOwned(sessionKey);
+    const entry = hoisted.store[sessionKey];
+    entry.sessionClosedAt = Date.now() - 1_000;
+
+    const result = resolveSession({
+      cfg: { session: {} } as OpenClawConfig,
+      sessionKey,
+      agentId: "main",
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe("old-session-id");
+  });
 });

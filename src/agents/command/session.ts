@@ -382,13 +382,19 @@ export function resolveSession(opts: {
           storePath,
         })
       : false;
+  const entryHasClosedMarker =
+    typeof sessionEntry?.sessionClosedAt === "number" &&
+    Number.isFinite(sessionEntry.sessionClosedAt);
   const skipImplicitExpiry =
-    resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
+    !entryHasClosedMarker &&
+    resetPolicy.configured !== true &&
+    hasProviderOwnedSession(sessionEntry);
   const fresh = sessionEntry
     ? !terminalMainTranscriptNewerThanRegistry &&
       (skipImplicitExpiry ||
         evaluateSessionFreshness({
           updatedAt: sessionEntry.updatedAt,
+          sessionClosedAt: sessionEntry.sessionClosedAt,
           ...resolveSessionLifecycleTimestamps({
             entry: sessionEntry,
             agentId: sessionAgentId,

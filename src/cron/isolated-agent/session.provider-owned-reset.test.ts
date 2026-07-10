@@ -64,6 +64,26 @@ describe("resolveCronSession provider-owned daily reset", () => {
     expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
   });
 
+  it("still rotates a closed provider-owned session across the daily boundary", () => {
+    const sessionKey = "agent:main:cron:daily-job";
+    const entry = {
+      ...providerOwnedEntry(),
+      sessionClosedAt: NOW_MS - 1_000,
+    };
+
+    const result = resolveCronSession({
+      cfg: { session: {} } as OpenClawConfig,
+      sessionKey,
+      agentId: "main",
+      nowMs: NOW_MS,
+      forceNew: false,
+      store: { [sessionKey]: entry },
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
+  });
+
   it("still rotates a provider-owned session when reset is explicitly configured", () => {
     const sessionKey = "agent:main:cron:daily-job";
     const entry = providerOwnedEntry();
