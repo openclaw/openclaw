@@ -55,6 +55,7 @@ describe("commands cli", () => {
     });
 
     expect(output).toContain("list");
+    expect(output).toContain("inspect");
     expect(output).not.toContain("audit");
   });
 
@@ -69,6 +70,66 @@ describe("commands cli", () => {
     expect(parsed.counts.commandDescriptors).toBeGreaterThan(50);
     expect(parsed.counts.routedOperations).toBeGreaterThan(10);
     expect(parsed.counts.runtimeCommands).toBeGreaterThan(0);
+  });
+
+  it("inspects an exact nested command path", async () => {
+    const output = await captureStdout(async () => {
+      await createProgram().parseAsync([
+        "node",
+        "openclaw",
+        "commands",
+        "inspect",
+        "gateway",
+        "status",
+        "--json",
+      ]);
+    });
+    const parsed = JSON.parse(output) as {
+      found: boolean;
+      commandPath: string[];
+      routes: unknown[];
+    };
+
+    expect(parsed.found).toBe(true);
+    expect(parsed.commandPath).toEqual(["gateway", "status"]);
+    expect(parsed.routes).toHaveLength(2);
+  });
+
+  it("loads a lazy sub-CLI before inspecting a nested command", async () => {
+    const output = await captureStdout(async () => {
+      await createProgram().parseAsync([
+        "node",
+        "openclaw",
+        "commands",
+        "inspect",
+        "models",
+        "aliases",
+        "list",
+        "--json",
+      ]);
+    });
+    const parsed = JSON.parse(output) as { found: boolean; runtimeCommands: unknown[] };
+
+    expect(parsed.found).toBe(true);
+    expect(parsed.runtimeCommands).toHaveLength(1);
+  });
+
+  it("loads a lazy core command group before inspection", async () => {
+    const output = await captureStdout(async () => {
+      await createProgram().parseAsync([
+        "node",
+        "openclaw",
+        "commands",
+        "inspect",
+        "message",
+        "send",
+        "--json",
+      ]);
+    });
+    const parsed = JSON.parse(output) as { found: boolean; runtimeCommands: unknown[] };
+
+    expect(parsed.found).toBe(true);
+    expect(parsed.runtimeCommands).toHaveLength(1);
   });
 
   it("loads plugin descriptors only when requested and keeps JSON clean", async () => {
@@ -92,14 +153,15 @@ describe("commands cli", () => {
         "node",
         "openclaw",
         "commands",
-        "list",
+        "inspect",
+        "example",
         "--json",
         "--plugin-descriptors",
       ]);
     });
 
     expect(forceStderrSnapshots).toEqual([true]);
-    expect(JSON.parse(output).counts.pluginCommands).toBe(1);
+    expect(JSON.parse(output).pluginCommands).toHaveLength(1);
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
@@ -122,6 +184,28 @@ describe("commands cli", () => {
     });
 
     expect(forceStderrSnapshots).toEqual([true]);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
+  it("fails instead of emitting an incomplete inventory when plugin loading fails", async () => {
+    loadPluginCliDescriptorEntriesMock.mockRejectedValueOnce(
+      new Error("Failed to load plugin CLI descriptor metadata: example-plugin: register failed"),
+    );
+
+    const output = await captureStdout(async () => {
+      await expect(
+        createProgram().parseAsync([
+          "node",
+          "openclaw",
+          "commands",
+          "list",
+          "--json",
+          "--plugin-descriptors",
+        ]),
+      ).rejects.toThrow("Failed to load plugin CLI descriptor metadata");
+    });
+
+    expect(output).toBe("");
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 });

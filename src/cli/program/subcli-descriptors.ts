@@ -44,7 +44,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "commands",
-    description: "List OpenClaw commands",
+    description: "List and inspect OpenClaw commands",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },

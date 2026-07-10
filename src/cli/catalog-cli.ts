@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { inspectCommand, renderCommandInspectionMarkdown } from "../cli-catalog-overlay/inspect.js";
 import { buildCatalogList, renderCatalogListMarkdown } from "../cli-catalog-overlay/list.js";
 import { buildPluginCatalogCommands } from "../cli-catalog-overlay/plugin-commands.js";
 import { collectRuntimeCommandTree } from "../cli-catalog-overlay/runtime-commands.js";
@@ -23,8 +24,29 @@ function validateOutputOptions(
   }
 }
 
+async function loadInspectedCommandGroup(
+  program: Command,
+  commandPath: readonly string[],
+): Promise<void> {
+  const root = commandPath[0];
+  if (!root || root === "commands") {
+    return;
+  }
+  const argv = ["node", "openclaw", ...commandPath];
+  const [{ registerCoreCliByName }, { createProgramContext }, { registerSubCliByName }] =
+    await Promise.all([
+      import("./program/command-registry-core.js"),
+      import("./program/context.js"),
+      import("./program/register.subclis.js"),
+    ]);
+  if (await registerCoreCliByName(program, createProgramContext(), root, argv)) {
+    return;
+  }
+  await registerSubCliByName(program, root, argv);
+}
+
 export function registerCommandsCli(program: Command): void {
-  const commands = program.command("commands").description("List OpenClaw commands");
+  const commands = program.command("commands").description("List and inspect OpenClaw commands");
 
   commands
     .command("list")
@@ -47,6 +69,35 @@ export function registerCommandsCli(program: Command): void {
           return;
         }
         process.stdout.write(`${renderCatalogListMarkdown({ runtimeCommands, pluginCommands })}\n`);
+      },
+    );
+
+  commands
+    .command("inspect")
+    .description("Inspect one exact command path")
+    .argument("<command-path...>", "Command path to inspect")
+    .option("--json", "Output JSON", false)
+    .option("--markdown", "Output Markdown", false)
+    .option("--plugin-descriptors", "Include plugin CLI descriptor metadata", false)
+    .action(
+      async (
+        commandPath: string[],
+        opts: { json?: boolean; markdown?: boolean; pluginDescriptors?: boolean },
+        command: Command,
+      ) => {
+        validateOutputOptions(opts, command);
+        await loadInspectedCommandGroup(program, commandPath);
+        const runtimeCommands = collectRuntimeCommandTree(program);
+        const pluginCommands = opts.pluginDescriptors ? await loadPluginCommands() : [];
+        const inspection = inspectCommand(
+          buildCatalogList({ runtimeCommands, pluginCommands }),
+          commandPath,
+        );
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(inspection, null, 2)}\n`);
+          return;
+        }
+        process.stdout.write(`${renderCommandInspectionMarkdown(inspection)}\n`);
       },
     );
 
