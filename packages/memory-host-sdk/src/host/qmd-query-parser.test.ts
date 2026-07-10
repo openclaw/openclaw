@@ -54,6 +54,26 @@ complete`,
     expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
   });
 
+  it("recovers after malformed qmd-like array prefixes", () => {
+    const results = parseQmdQueryJson(
+      `[{oops
+[{"docid":"abc","score":0.5}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
+  it("recovers after incomplete quoted qmd-like array prefixes", () => {
+    const results = parseQmdQueryJson(
+      `[{"log":
+[{"docid":"abc","score":0.5}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
   it("keeps result arrays with nested unknown array fields", () => {
     const results = parseQmdQueryJson(
       `[INFO] qmd ready
@@ -68,6 +88,17 @@ complete`,
     const results = parseQmdQueryJson(
       `[INFO] qmd ready
 [{"docid":"outer","score":0.9,"matches":[{"docid":"inner","score":0.1}]}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "outer", score: 0.9 }]);
+  });
+
+  it("does not return qmd-like arrays from complete unknown fields", () => {
+    const results = parseQmdQueryJson(
+      `noise
+[{"matches":[{"docid":"inner","score":0.1}]}]
+[{"docid":"outer","score":0.9}]`,
       "",
     );
 

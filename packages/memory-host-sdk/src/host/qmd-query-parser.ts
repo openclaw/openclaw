@@ -129,9 +129,12 @@ function parseQmdLineNumber(value: unknown): number | undefined {
 
 /** Extract the first complete qmd result array from noisy stdout. */
 function findFirstQmdResultArrayPayload(raw: string): string | null {
-  const starts: number[] = [];
+  const starts: Array<{ start: number; plausibleQmdResult: boolean }> = [];
+  let deferredNestedPayload: string | null = null;
+  let topLevelHasQmdResultKey = false;
   let inString = false;
   let escaped = false;
+  let stringStart: number | null = null;
   for (let i = 0; i < raw.length; i += 1) {
     const char = raw[i];
     if (char === undefined) {
@@ -142,6 +145,7 @@ function findFirstQmdResultArrayPayload(raw: string): string | null {
         starts.pop();
         inString = false;
         escaped = false;
+        stringStart = null;
         continue;
       }
       if (escaped) {
@@ -151,38 +155,76 @@ function findFirstQmdResultArrayPayload(raw: string): string | null {
       if (char === "\\") {
         escaped = true;
       } else if (char === '"') {
+        if (starts.length === 1 && stringStart !== null) {
+          const value = raw.slice(stringStart, i);
+          if (QMD_RESULT_KEYS.has(value)) {
+            topLevelHasQmdResultKey = true;
+          }
+        }
         inString = false;
+        stringStart = null;
       }
       continue;
     }
     if (starts.length > 0 && char === '"') {
       inString = true;
+      stringStart = i + 1;
       continue;
     }
     if (char === "[") {
-      if (starts.length === 0 && !isPlausibleQmdResultArrayStart(raw, i)) {
+      const plausibleQmdResult = isPlausibleQmdResultArrayStart(raw, i);
+      if (starts.length === 0 && !plausibleQmdResult) {
         continue;
       }
-      starts.push(i);
+      if (starts.length === 0) {
+        deferredNestedPayload = null;
+        topLevelHasQmdResultKey = false;
+      }
+      starts.push({ start: i, plausibleQmdResult });
       continue;
     }
     if (char === "]" && starts.length > 0) {
-      const start = starts.pop();
-      if (start === undefined) {
+      const candidate = starts.pop();
+      if (candidate === undefined) {
         continue;
       }
       if (starts.length > 0) {
+        if (
+          !topLevelHasQmdResultKey &&
+          deferredNestedPayload === null &&
+          candidate.plausibleQmdResult
+        ) {
+          const payload = raw.slice(candidate.start, i + 1);
+          const parsed = parseQmdQueryResultArray(payload);
+          if (parsed !== null && isLikelyQmdResultArray(parsed)) {
+            deferredNestedPayload = payload;
+          }
+        }
         continue;
       }
-      const payload = raw.slice(start, i + 1);
+      const payload = raw.slice(candidate.start, i + 1);
       const parsed = parseQmdQueryResultArray(payload);
       if (parsed !== null && isLikelyQmdResultArray(parsed)) {
         return payload;
       }
+      deferredNestedPayload = null;
     }
   }
-  return null;
+  return starts.length > 0 ? deferredNestedPayload : null;
 }
+
+const QMD_RESULT_KEYS = new Set([
+  "docid",
+  "score",
+  "collection",
+  "file",
+  "snippet",
+  "body",
+  "start_line",
+  "end_line",
+  "startLine",
+  "endLine",
+]);
 
 function isPlausibleQmdResultArrayStart(raw: string, start: number): boolean {
   for (let i = start + 1; i < raw.length; i += 1) {
