@@ -3,6 +3,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+} from "../../trajectory/paths.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
+import {
+  canonicalizeTrajectoryPath,
+  clearTrajectoryWriterLifecycleRegistryForTest,
+  withTrajectoryPathLock,
+} from "../../trajectory/writer-lifecycle.js";
 import { deleteSessionEntryLifecycle, resetSessionEntryLifecycle } from "./session-accessor.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
@@ -18,6 +28,7 @@ describe("session store lifecycle mutations", () => {
 
   afterEach(() => {
     clearSessionStoreCacheForTest();
+    clearTrajectoryWriterLifecycleRegistryForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -336,5 +347,167 @@ describe("session store lifecycle mutations", () => {
     expect(result.deleted).toBe(true);
     expect(fs.existsSync(runtimePath)).toBe(true);
     expect(fs.existsSync(pointerPath)).toBe(true);
+  });
+
+  it("rejects a trajectory flush issued after the session has already been deleted", async () => {
+    const sessionId = "post-delete-session";
+    const transcriptPath = path.join(tempDir, "post-delete-session.jsonl");
+    const now = Date.now();
+    fs.writeFileSync(transcriptPath, `{"type":"session","id":"${sessionId}"}\n`, "utf-8");
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:post-delete": {
+          sessionFile: transcriptPath,
+          sessionId,
+          updatedAt: now,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId,
+      sessionFile: transcriptPath,
+    });
+    if (!recorder) {
+      throw new Error("expected trajectory runtime recorder");
+    }
+    recorder.recordEvent("prompt.submitted", { marker: "should-not-land" });
+
+    const deleteResult = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: {
+        canonicalKey: "agent:main:post-delete",
+        storeKeys: ["agent:main:post-delete"],
+      },
+    });
+    expect(deleteResult.deleted).toBe(true);
+
+    // Models the abandoned cleanup-timeout flush landing after run teardown
+    // (and therefore delete) already proceeded.
+    await recorder.flush();
+
+    const runtimeFile = resolveTrajectoryFilePath({ sessionFile: transcriptPath, sessionId });
+    const pointerPath = resolveTrajectoryPointerFilePath(transcriptPath);
+    expect(fs.existsSync(runtimeFile)).toBe(false);
+    expect(fs.existsSync(pointerPath)).toBe(false);
+  });
+
+  it("closes the race between an in-flight trajectory flush and a concurrent session delete", async () => {
+    const sessionId = "race-session";
+    const transcriptPath = path.join(tempDir, "race-session.jsonl");
+    const now = Date.now();
+    fs.writeFileSync(transcriptPath, `{"type":"session","id":"${sessionId}"}\n`, "utf-8");
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:race": {
+          sessionFile: transcriptPath,
+          sessionId,
+          updatedAt: now,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId,
+      sessionFile: transcriptPath,
+    });
+    if (!recorder) {
+      throw new Error("expected trajectory runtime recorder");
+    }
+    recorder.recordEvent("prompt.submitted", { marker: "abandoned-flush" });
+
+    const canonicalPath = canonicalizeTrajectoryPath(
+      resolveTrajectoryFilePath({ sessionFile: transcriptPath, sessionId }),
+    );
+
+    // Hold the per-path lock to put flush() and delete() in the same queued
+    // race an abandoned cleanup-timeout flush would create against a
+    // concurrent sessions.delete — regardless of which one is admitted to
+    // the lock first, the outcome must be deterministic (F1).
+    let releaseHeldTurn: () => void = () => {};
+    const heldTurnGate = new Promise<void>((resolve) => {
+      releaseHeldTurn = resolve;
+    });
+    const heldTurn = withTrajectoryPathLock(canonicalPath, async () => {
+      await heldTurnGate;
+    });
+
+    const flushPromise = recorder.flush();
+    const deletePromise = deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: {
+        canonicalKey: "agent:main:race",
+        storeKeys: ["agent:main:race"],
+      },
+    });
+
+    releaseHeldTurn();
+    await heldTurn;
+    const [, deleteResult] = await Promise.all([flushPromise, deletePromise]);
+
+    expect(deleteResult.deleted).toBe(true);
+    const runtimeFile = resolveTrajectoryFilePath({ sessionFile: transcriptPath, sessionId });
+    const pointerPath = resolveTrajectoryPointerFilePath(transcriptPath);
+    expect(fs.existsSync(runtimeFile)).toBe(false);
+    expect(fs.existsSync(pointerPath)).toBe(false);
+  });
+
+  it("does not delete a colliding sibling session's trajectory file", async () => {
+    const trajectoryDir = path.join(tempDir, "traces");
+    // Colliding under safeTrajectorySessionFileName's sanitizer (":" -> "_")
+    // while both remain valid persisted session store ids (isSafeSessionId
+    // allows ":" but not "*").
+    const sessionAId = "abc:def";
+    const sessionBId = "abc_def";
+    const transcriptPathA = path.join(tempDir, "session-a.jsonl");
+    const transcriptPathB = path.join(tempDir, "session-b.jsonl");
+    const now = Date.now();
+    fs.writeFileSync(transcriptPathA, `{"type":"session","id":"${sessionAId}"}\n`, "utf-8");
+    fs.writeFileSync(transcriptPathB, `{"type":"session","id":"${sessionBId}"}\n`, "utf-8");
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:a": { sessionFile: transcriptPathA, sessionId: sessionAId, updatedAt: now },
+        "agent:main:b": { sessionFile: transcriptPathB, sessionId: sessionBId, updatedAt: now },
+      },
+      { skipMaintenance: true },
+    );
+
+    const env = { OPENCLAW_TRAJECTORY_DIR: trajectoryDir };
+    const recorderA = createTrajectoryRuntimeRecorder({
+      env,
+      sessionId: sessionAId,
+      sessionFile: transcriptPathA,
+    });
+    const recorderB = createTrajectoryRuntimeRecorder({
+      env,
+      sessionId: sessionBId,
+      sessionFile: transcriptPathB,
+    });
+    if (!recorderA || !recorderB) {
+      throw new Error("expected trajectory runtime recorders");
+    }
+    expect(recorderA.filePath).not.toBe(recorderB.filePath);
+    recorderA.recordEvent("prompt.submitted", { marker: "owner-a" });
+    recorderB.recordEvent("prompt.submitted", { marker: "owner-b" });
+    await recorderA.flush();
+    await recorderB.flush();
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: "agent:main:a", storeKeys: ["agent:main:a"] },
+    });
+
+    expect(result.deleted).toBe(true);
+    expect(fs.existsSync(recorderA.filePath)).toBe(false);
+    expect(fs.existsSync(recorderB.filePath)).toBe(true);
+    expect(fs.readFileSync(recorderB.filePath, "utf8")).toContain("owner-b");
   });
 });
