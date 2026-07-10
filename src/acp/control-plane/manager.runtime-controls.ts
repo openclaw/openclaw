@@ -69,6 +69,8 @@ function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown
 }
 
 /** Resolves backend-advertised controls plus locally inferred runtime control support. */
+const OPTIONAL_ACP_TUNING_CONFIG_KEYS = new Set(["thinking", "effort"]);
+
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -175,10 +177,17 @@ export async function applyManagerRuntimeControls(params: {
           });
         }
         for (const [key, value] of configOptions) {
-          if (
-            advertisedKeys.size > 0 &&
-            !advertisedKeys.has(normalizeLowercaseStringOrEmpty(key))
-          ) {
+          const normalizedKey = normalizeLowercaseStringOrEmpty(key);
+          if (advertisedKeys.size > 0 && !advertisedKeys.has(normalizedKey)) {
+            // Gateway-computed tuning defaults are best-effort hints: backends
+            // like acpx do not advertise thinking/effort, and a hard throw here
+            // killed every spawn before its first turn because the default
+            // injection cannot be disabled by the caller (#103802). Mirrors the
+            // optional-timeout tolerance below; explicit single-key
+            // setConfigOption requests still throw loudly on their own path.
+            if (OPTIONAL_ACP_TUNING_CONFIG_KEYS.has(normalizedKey)) {
+              continue;
+            }
             throw new AcpRuntimeError(
               "ACP_BACKEND_UNSUPPORTED_CONTROL",
               `ACP backend "${backend}" does not accept config key "${key}".`,
