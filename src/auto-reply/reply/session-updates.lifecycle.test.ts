@@ -8,7 +8,9 @@ import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import {
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
@@ -140,6 +142,42 @@ describe("session-updates lifecycle hooks", () => {
       release();
     }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("hands compaction lifecycle hooks off after restart drain closes admission", async () => {
+    const { storePath, sessionKey, sessionStore, entry } = await createFixture();
+    const releases: Array<() => void> = [];
+    const heldHook = () =>
+      new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
+    hookRunnerMocks.runSessionEnd.mockImplementationOnce(heldHook);
+    hookRunnerMocks.runSessionStart.mockImplementationOnce(heldHook);
+    const admission = tryBeginGatewayRootWorkAdmission();
+    expect(admission).not.toBeNull();
+
+    await admission?.run(async () => {
+      markGatewayRestartDraining();
+      await incrementCompactionCount({
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        sessionEntry: entry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        newSessionId: "s2",
+      });
+      await vi.waitFor(() => expect(releases).toHaveLength(2));
+      expect(getActiveGatewayRootWorkCount()).toBe(3);
+    });
+
+    admission?.release();
+    expect(getActiveGatewayRootWorkCount()).toBe(2);
+    for (const release of releases) {
+      release();
+    }
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
   });
 
   it("recreates a complete persisted row when compaction updates a missing store row", async () => {

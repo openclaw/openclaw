@@ -859,6 +859,9 @@ export async function runGatewayLoop(params: {
       }
       try {
         eagerLifecycleRuntime.rollbackGatewayRestartSignalAdmission();
+        // A later signal must repeat the synchronous close transition even if
+        // this handler failed after marking the one-way drain.
+        restartDrainingMarked = false;
       } catch {
         // Keep admission recovery independent from restart-token recovery.
       }

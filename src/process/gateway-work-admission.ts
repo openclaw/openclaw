@@ -242,6 +242,23 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
   }
 }
 
+/**
+ * Detaches required follow-up from the current admitted transaction.
+ * A live parent synchronously reserves a tracked root even after restart or
+ * suspension closes admission; callers without a live parent use the normal
+ * independent-root fence.
+ */
+export function runWithGatewayIndependentRootWorkContinuation<T>(
+  run: () => Promise<T>,
+): Promise<T> {
+  const parent = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
+  if (!parent || parent.released) {
+    return runWithGatewayIndependentRootWorkAdmission(run);
+  }
+  const admission = createGatewayRootWorkAdmission();
+  return admission.run(run).finally(admission.release);
+}
+
 /** Active root requests/ticks, optionally excluding the caller running prepare. */
 export function getActiveGatewayRootWorkCount(opts?: { excludeCurrent?: boolean }): number {
   let count = GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size;

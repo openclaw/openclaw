@@ -55,7 +55,7 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -1063,7 +1063,7 @@ async function initSessionStateAttemptLocked(
     // their transcript aliases main; cleanup must carry both exact keys.
     const runtimePolicySessionKey =
       resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
       await cleanupBrowserSessionsForLifecycleEnd({
         cfg,
         sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey],
@@ -1113,7 +1113,7 @@ async function initSessionStateAttemptLocked(
           transcriptArchived: previousSessionTranscript.transcriptArchived,
           nextSessionId: effectiveSessionId,
         });
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
+        void runWithGatewayIndependentRootWorkContinuation(async () => {
           await hookRunner.runSessionEnd(payload.event, payload.context);
         }).catch(() => {});
       }
@@ -1140,7 +1140,7 @@ async function initSessionStateAttemptLocked(
         cfg,
         resumedFrom: previousSessionEntry?.sessionId,
       });
-      void runWithGatewayIndependentRootWorkAdmission(async () => {
+      void runWithGatewayIndependentRootWorkContinuation(async () => {
         await hookRunner.runSessionStart(payload.event, payload.context);
       }).catch(() => {});
     }

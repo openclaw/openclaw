@@ -7,7 +7,9 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import {
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { initSessionState } from "./session.js";
@@ -286,6 +288,50 @@ describe("session hook context wiring", () => {
       release();
     }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("hands rollover hooks off after restart drain closes admission", async () => {
+    const releases: Array<() => void> = [];
+    const held = () =>
+      new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
+    hookRunnerMocks.runSessionEnd.mockImplementationOnce(held);
+    hookRunnerMocks.runSessionStart.mockImplementationOnce(held);
+    sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockImplementationOnce(
+      () =>
+        new Promise<number>((resolve) => {
+          releases.push(() => resolve(0));
+        }),
+    );
+    const sessionKey = "agent:main:telegram:direct:restart-handoff";
+    const { storePath } = await createStoredSession({
+      prefix: "openclaw-session-hook-restart-handoff",
+      sessionKey,
+      sessionId: "old-restart-session",
+    });
+    const admission = tryBeginGatewayRootWorkAdmission();
+    expect(admission).not.toBeNull();
+
+    await admission?.run(async () => {
+      markGatewayRestartDraining();
+      await initSessionState({
+        ctx: { Body: "/new", SessionKey: sessionKey },
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+      await vi.waitFor(() => expect(releases).toHaveLength(3));
+      expect(getActiveGatewayRootWorkCount()).toBe(4);
+    });
+
+    admission?.release();
+    expect(getActiveGatewayRootWorkCount()).toBe(3);
+    for (const release of releases) {
+      release();
+    }
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
   });
 
   it("marks explicit /reset rollovers with reason reset", async () => {

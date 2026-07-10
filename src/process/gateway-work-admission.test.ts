@@ -8,6 +8,7 @@ import {
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkContinuation,
   runWithGatewayRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -62,6 +63,59 @@ it("lets an admitted root cross only the reversible suspension fence", async () 
     expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(true);
   });
   root?.release();
+});
+
+it("synchronously reserves a tracked continuation across a closed suspension fence", async () => {
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root).not.toBeNull();
+  let releaseContinuation = () => {};
+  let continuation: Promise<void> | undefined;
+  await root?.run(async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension).not.toBeNull();
+    continuation = runWithGatewayIndependentRootWorkContinuation(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseContinuation = resolve;
+        }),
+    );
+    expect(getActiveGatewayRootWorkCount()).toBe(2);
+    expect(suspension?.rollback()).toBe(true);
+  });
+
+  root?.release();
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  releaseContinuation();
+  await continuation;
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("runs an admitted continuation when restart drain wins the handoff race", async () => {
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root).not.toBeNull();
+  const ran = vi.fn();
+  await root?.run(async () => {
+    markGatewayRestartDraining();
+    await runWithGatewayIndependentRootWorkContinuation(async () => {
+      ran();
+    });
+  });
+  root?.release();
+
+  expect(ran).toHaveBeenCalledOnce();
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("does not admit an unrelated continuation through restart drain", async () => {
+  markGatewayRestartDraining();
+  const ran = vi.fn();
+
+  await expect(
+    runWithGatewayIndependentRootWorkContinuation(async () => {
+      ran();
+    }),
+  ).rejects.toThrow("gateway is draining for restart");
+  expect(ran).not.toHaveBeenCalled();
 });
 
 it("does not let a stale suspension release clear restart drain", () => {

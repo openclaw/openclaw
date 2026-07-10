@@ -2083,6 +2083,37 @@ describe("runGatewayLoop", () => {
       await expect(exited).resolves.toBe(0);
     });
   });
+
+  it("recloses restart admission after a failed SIGUSR1 handler rolls it back", async () => {
+    vi.clearAllMocks();
+    markGatewaySigusr1RestartHandled.mockImplementationOnce(() => {
+      throw new Error("restart token cleanup failed");
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+      await waitForLoopCondition(
+        () => rollbackGatewayRestartSignalAdmission.mock.calls.length === 1,
+        "failed SIGUSR1 handler did not roll back restart admission",
+      );
+
+      sigusr1();
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 2,
+        "second SIGUSR1 did not start a restart",
+      );
+
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(markGatewayDraining).toHaveBeenCalledTimes(2);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
 });
 
 describe("gateway discover routing helpers", () => {
