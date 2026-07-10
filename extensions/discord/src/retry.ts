@@ -38,7 +38,6 @@ const DISCORD_RETRYABLE_ERROR_CODES = new Set([
 ]);
 const DISCORD_TRANSIENT_MESSAGE_RE =
   /\b(?:bad gateway|fetch failed|network error|networkerror|service unavailable|socket hang up|temporarily unavailable|timed out|timeout)\b|connection (?:closed|reset|refused)/i;
-const DISCORD_NON_IDEMPOTENT_RETRYABLE_STATUS_CODES = new Set([429, 502]);
 const DISCORD_PRECONNECT_ERROR_CODES = new Set([
   "EAI_AGAIN",
   "ECONNREFUSED",
@@ -51,7 +50,7 @@ const log = createSubsystemLogger("discord/retry");
 export type DiscordRetryRunner = <T>(
   fn: () => Promise<T>,
   label?: string,
-  options?: { nonIdempotent?: boolean },
+  options?: { nonIdempotent?: boolean; retryOn502?: boolean },
 ) => Promise<T>;
 
 function readDiscordErrorStatus(err: unknown): number | undefined {
@@ -96,7 +95,7 @@ export function isRetryableDiscordTransientError(err: unknown): boolean {
   return false;
 }
 
-export function isRetryableDiscordNonIdempotentError(err: unknown): boolean {
+export function isRetryableDiscordPreConnectError(err: unknown): boolean {
   if (err instanceof RateLimitError) {
     return true;
   }
@@ -104,7 +103,7 @@ export function isRetryableDiscordNonIdempotentError(err: unknown): boolean {
     current.cause,
     current.error,
   ])) {
-    if (DISCORD_NON_IDEMPOTENT_RETRYABLE_STATUS_CODES.has(readDiscordErrorStatus(candidate) ?? 0)) {
+    if (readDiscordErrorStatus(candidate) === 429) {
       return true;
     }
     const code = extractErrorCode(candidate);
@@ -113,6 +112,17 @@ export function isRetryableDiscordNonIdempotentError(err: unknown): boolean {
     }
   }
   return false;
+}
+
+export function isRetryableDiscordNonIdempotentError(err: unknown): boolean {
+  if (
+    collectErrorGraphCandidates(err, (current) => [current.cause, current.error]).some(
+      (candidate) => readDiscordErrorStatus(candidate) === 502,
+    )
+  ) {
+    return true;
+  }
+  return isRetryableDiscordPreConnectError(err);
 }
 
 function isRetryableDiscordGatewayTransportError(err: unknown): boolean {
@@ -141,10 +151,16 @@ export function createDiscordRetryRunner(params: {
       ? retryConfig.attempts + DISCORD_GATEWAY_RECONNECT_EXTRA_ATTEMPTS
       : retryConfig.attempts;
 
-  return <T>(fn: () => Promise<T>, label?: string, options?: { nonIdempotent?: boolean }) => {
-    const isRetryable = options?.nonIdempotent
-      ? isRetryableDiscordNonIdempotentError
-      : isRetryableDiscordTransientError;
+  return <T>(
+    fn: () => Promise<T>,
+    label?: string,
+    options?: { nonIdempotent?: boolean; retryOn502?: boolean },
+  ) => {
+    const isRetryable = !options?.nonIdempotent
+      ? isRetryableDiscordTransientError
+      : options.retryOn502 === false
+        ? isRetryableDiscordPreConnectError
+        : isRetryableDiscordNonIdempotentError;
     let observedGatewayDisconnect = false;
     const runRequest = async () => {
       observedGatewayDisconnect ||= params.isGatewayDisconnected?.() === true;

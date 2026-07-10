@@ -4,6 +4,7 @@ import { RateLimitError } from "./internal/discord.js";
 import {
   createDiscordRetryRunner,
   isRetryableDiscordNonIdempotentError,
+  isRetryableDiscordPreConnectError,
   isRetryableDiscordTransientError,
 } from "./retry.js";
 
@@ -86,6 +87,22 @@ describe("isRetryableDiscordNonIdempotentError", () => {
   });
 });
 
+describe("isRetryableDiscordPreConnectError", () => {
+  it.each([
+    ["rate limit", createRateLimitError()],
+    ["429 status", Object.assign(new Error("rate limited"), { status: 429 })],
+    ["ECONNREFUSED", Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" })],
+  ])("retries %s", (_name, err) => {
+    expect(isRetryableDiscordPreConnectError(err)).toBe(true);
+  });
+
+  it("does not retry 502", () => {
+    expect(
+      isRetryableDiscordPreConnectError(Object.assign(new Error("bad gateway"), { status: 502 })),
+    ).toBe(false);
+  });
+});
+
 describe("createDiscordRetryRunner nonIdempotent", () => {
   it("does not retry post-connect-ambiguous errors for non-idempotent sends", async () => {
     const fn = vi
@@ -118,6 +135,19 @@ describe("createDiscordRetryRunner nonIdempotent", () => {
 
     await expect(runner(fn, "text", { nonIdempotent: true })).resolves.toBe("ok");
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a 502 when the endpoint lacks nonce enforcement", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(
+      runner(fn, "forum-thread", { nonIdempotent: true, retryOn502: false }),
+    ).rejects.toThrow("bad gateway");
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("keeps retrying the broad transient set for default idempotent calls", async () => {

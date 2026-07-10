@@ -462,11 +462,13 @@ describe("sendStickerDiscord", () => {
     expect(res.receipt.parts[0]?.platformMessageId).toBe("msg1");
     expect(res.receipt.parts[0]?.kind).toBe("card");
     expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.channelMessages("789"));
-    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+    expect(requestBody(postMock as unknown as MockCallSource)).toMatchObject({
       content: "hiya",
       flags: MessageFlags.SuppressEmbeds,
       sticker_ids: ["123"],
+      enforce_nonce: true,
     });
+    expect(requestBody(postMock as unknown as MockCallSource).nonce).toMatch(/^[0-9a-f]{24}$/);
   });
 
   it("allows sticker content link embeds when disabled", async () => {
@@ -480,10 +482,12 @@ describe("sendStickerDiscord", () => {
       suppressEmbeds: false,
     });
 
-    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+    expect(requestBody(postMock as unknown as MockCallSource)).toMatchObject({
       content: "https://example.com",
       sticker_ids: ["123"],
+      enforce_nonce: true,
     });
+    expect(requestBody(postMock as unknown as MockCallSource).nonce).toMatch(/^[0-9a-f]{24}$/);
   });
 });
 
@@ -522,6 +526,10 @@ describe("sendPollDiscord", () => {
       allow_multiselect: false,
       layout_type: 1,
     });
+    expect(requestBody(postMock as unknown as MockCallSource)).toMatchObject({
+      enforce_nonce: true,
+    });
+    expect(requestBody(postMock as unknown as MockCallSource).nonce).toMatch(/^[0-9a-f]{24}$/);
   });
 
   it("combines silent and suppress-embeds flags for polls", async () => {
@@ -649,23 +657,21 @@ describe("retry rate limits", () => {
     expect(postMock).toHaveBeenCalledTimes(1);
   });
 
-  it("retries transient network errors", async () => {
+  it("does not retry ambiguous network errors", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock
       .mockRejectedValueOnce(new TypeError("fetch failed"))
       .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
 
-    const result = await sendMessageDiscord("channel:789", "hello", {
-      cfg: DISCORD_TEST_CFG,
-      rest,
-      token: "t",
-      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-    });
-
-    expect(result.messageId).toBe("msg1");
-    expect(result.channelId).toBe("789");
-    expect(result.receipt.platformMessageIds).toEqual(["msg1"]);
-    expect(postMock).toHaveBeenCalledTimes(2);
+    await expect(
+      sendMessageDiscord("channel:789", "hello", {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toThrow("fetch failed");
+    expect(postMock).toHaveBeenCalledTimes(1);
   });
 
   it("retries reactions on rate limits", async () => {

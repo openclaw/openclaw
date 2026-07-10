@@ -25,6 +25,7 @@ import {
   buildDiscordSendError,
   buildDiscordTextChunks,
   createDiscordClient,
+  createDiscordMessageNonce,
   normalizeDiscordPollInput,
   normalizeStickerIds,
   resolveDiscordMessageFlags,
@@ -249,7 +250,7 @@ export async function sendMessageDiscord(
             },
           ),
         "forum-thread",
-        { nonIdempotent: true },
+        { nonIdempotent: true, retryOn502: false },
       )) as { id: string; message?: { id: string; channel_id: string } };
     } catch (err) {
       throw await buildDiscordSendError(err, {
@@ -441,6 +442,8 @@ export async function sendStickerDiscord(
         body: {
           content: rewrittenContent || undefined,
           sticker_ids: stickers,
+          nonce: createDiscordMessageNonce(),
+          enforce_nonce: true,
           ...(flags ? { flags } : {}),
         },
       }),
@@ -468,6 +471,8 @@ export async function sendPollDiscord(
         body: {
           content: rewrittenContent || undefined,
           poll: payload,
+          nonce: createDiscordMessageNonce(),
+          enforce_nonce: true,
           ...(flags ? { flags } : {}),
         },
       }),
