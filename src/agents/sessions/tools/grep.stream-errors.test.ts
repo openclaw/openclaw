@@ -37,7 +37,7 @@ function createChild(): MockChild {
 }
 
 describe("grep tool stream errors", () => {
-  it("does not start ripgrep when aborted while resolving rg", async () => {
+  it("settles promptly when aborted while resolving rg", async () => {
     let resolveEnsureTool: ((value: string) => void) | undefined;
     vi.mocked(ensureTool).mockImplementationOnce(
       async () =>
@@ -58,13 +58,14 @@ describe("grep tool stream errors", () => {
 
     await vi.waitFor(() => expect(ensureTool).toHaveBeenCalledOnce());
     controller.abort();
-    resolveEnsureTool?.("rg");
-
     await expect(result).rejects.toThrow("Operation aborted");
+
+    resolveEnsureTool?.("rg");
+    await Promise.resolve();
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("does not start ripgrep when aborted while checking the search path", async () => {
+  it("does not spawn after an aborted search-path check later resolves", async () => {
     let resolveIsDirectory: ((value: boolean) => void) | undefined;
     vi.mocked(ensureTool).mockResolvedValue("rg");
 
@@ -88,10 +89,99 @@ describe("grep tool stream errors", () => {
 
     await vi.waitFor(() => expect(resolveIsDirectory).toBeDefined());
     controller.abort();
+    await expect(result).rejects.toThrow("Operation aborted");
+
     resolveIsDirectory?.(true);
+    await Promise.resolve();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("removes the abort listener after normal settlement", async () => {
+    const child = createChild();
+    vi.mocked(spawn).mockReturnValue(child);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+
+    const controller = new AbortController();
+    const removeEventListener = vi.spyOn(controller.signal, "removeEventListener");
+    const tool = createGrepToolDefinition(process.cwd());
+    const result = tool.execute(
+      "call-1",
+      { pattern: "foo" },
+      controller.signal,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    child.emit("close", 1);
+
+    await expect(result).resolves.toMatchObject({
+      content: [{ type: "text", text: "No matches found" }],
+    });
+    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    controller.abort();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("settles an abort when the spawned child never closes", async () => {
+    const child = createChild();
+    vi.mocked(spawn).mockReturnValue(child);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+
+    const controller = new AbortController();
+    const tool = createGrepToolDefinition(process.cwd());
+    const result = tool.execute(
+      "call-1",
+      { pattern: "foo" },
+      controller.signal,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    controller.abort();
 
     await expect(result).rejects.toThrow("Operation aborted");
-    expect(spawn).not.toHaveBeenCalled();
+    expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  it("preserves abort precedence during async match formatting", async () => {
+    const child = createChild();
+    vi.mocked(spawn).mockReturnValue(child);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+    let resolveReadFile: ((value: string) => void) | undefined;
+    const readFile = vi.fn(
+      async () =>
+        await new Promise<string>((resolve) => {
+          resolveReadFile = resolve;
+        }),
+    );
+
+    const controller = new AbortController();
+    const tool = createGrepToolDefinition(process.cwd(), {
+      operations: { isDirectory: () => true, readFile },
+    });
+    const result = tool.execute(
+      "call-1",
+      { pattern: "foo", context: 1 },
+      controller.signal,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "match",
+        data: { path: { text: "/tmp/match.txt" }, line_number: 1, lines: { text: "foo\n" } },
+      })}\n`,
+    );
+    child.emit("close", 0);
+    await vi.waitFor(() => expect(readFile).toHaveBeenCalledOnce());
+
+    controller.abort();
+    await expect(result).rejects.toThrow("Operation aborted");
+    expect(child.kill).not.toHaveBeenCalled();
+
+    resolveReadFile?.("foo\n");
+    await Promise.resolve();
   });
 
   it.each(["stdout", "stderr"] as const)(
