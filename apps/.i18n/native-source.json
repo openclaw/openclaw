@@ -22507,7 +22507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 224,
+      "line": 228,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatContextUsage.swift",
       "source": "\\(percent)%",
       "surface": "apple",
@@ -22515,7 +22515,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 231,
+      "line": 235,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatContextUsage.swift",
       "source": "Context usage",
       "surface": "apple",
