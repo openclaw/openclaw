@@ -6,6 +6,7 @@
 import {
   addTimerTimeoutGraceMs,
   asDateTimestampMs,
+  asPositiveSafeInteger,
   clampTimerTimeoutMs,
   parseFiniteNumber,
   resolveDateTimestampMs,
@@ -15,6 +16,7 @@ import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import {
+  isOpenClawInternalSourceReplyMirrorAssistantMessage,
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../shared/transcript-only-openclaw-assistant.js";
@@ -192,44 +194,115 @@ function isWaitedReplyTurnBoundary(message: unknown): boolean {
   return (message as { role?: unknown }).role === "user" || isInterSessionInputMessage(message);
 }
 
+function snapshotAssistantReply(message: unknown): AssistantReplySnapshot | undefined {
+  const text = extractAssistantText(message);
+  if (!text?.trim()) {
+    return undefined;
+  }
+  let fingerprint: string | undefined;
+  try {
+    fingerprint = JSON.stringify(message);
+  } catch {
+    fingerprint = text;
+  }
+  return { text, fingerprint };
+}
+
+function readTranscriptMessageSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const meta = (message as { __openclaw?: unknown })["__openclaw"];
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return undefined;
+  }
+  return asPositiveSafeInteger((meta as { seq?: unknown }).seq);
+}
+
+function readInternalSourceReplyMessageSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const marker = (message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror;
+  if (!marker || typeof marker !== "object" || Array.isArray(marker)) {
+    return undefined;
+  }
+  return asPositiveSafeInteger((marker as { sourceMessageSeq?: unknown }).sourceMessageSeq);
+}
+
 function resolveLatestAssistantReplySnapshot(
   messages: unknown[],
   opts?: { stopAtTranscriptArtifact?: boolean },
 ): AssistantReplySnapshot {
   let latestReply: AssistantReplySnapshot = {};
+  const internalSourceReplies: Array<{
+    snapshot: AssistantReplySnapshot;
+    sourceMessageSeq?: number;
+  }> = [];
+  let sawTranscriptArtifact = false;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const candidate = messages[i];
     if (!candidate || typeof candidate !== "object") {
       continue;
     }
     if (opts?.stopAtTranscriptArtifact === true && isWaitedReplyTurnBoundary(candidate)) {
-      return latestReply;
+      const boundarySeq = readTranscriptMessageSeq(candidate);
+      const currentInternalSourceReply = boundarySeq
+        ? internalSourceReplies.find(
+            (reply) => reply.sourceMessageSeq !== undefined && reply.sourceMessageSeq > boundarySeq,
+          )
+        : undefined;
+      if (currentInternalSourceReply) {
+        return currentInternalSourceReply.snapshot;
+      }
+      if (!boundarySeq && internalSourceReplies.length > 0) {
+        sawTranscriptArtifact = true;
+      }
+      internalSourceReplies.length = 0;
+      break;
     }
     if ((candidate as { role?: unknown }).role !== "assistant") {
       continue;
     }
-    if (isWaitedReplyTranscriptArtifact(candidate)) {
-      if (opts?.stopAtTranscriptArtifact === true) {
-        return {};
+    if (
+      opts?.stopAtTranscriptArtifact === true &&
+      isOpenClawInternalSourceReplyMirrorAssistantMessage(candidate)
+    ) {
+      // Internal source replies still need the outer A2A flow to deliver them.
+      // The source seq prevents a late old result from crossing a new turn.
+      const snapshot = snapshotAssistantReply(candidate);
+      const sourceMessageSeq = readInternalSourceReplyMessageSeq(candidate);
+      if (snapshot) {
+        internalSourceReplies.push({ snapshot, sourceMessageSeq });
+      }
+      if (!sourceMessageSeq) {
+        sawTranscriptArtifact = true;
       }
       continue;
     }
-    const text = extractAssistantText(candidate);
-    if (!text?.trim()) {
+    if (isWaitedReplyTranscriptArtifact(candidate)) {
+      if (opts?.stopAtTranscriptArtifact === true) {
+        sawTranscriptArtifact = true;
+      }
       continue;
     }
-    let fingerprint: string | undefined;
-    try {
-      fingerprint = JSON.stringify(candidate);
-    } catch {
-      fingerprint = text;
+    const snapshot = snapshotAssistantReply(candidate);
+    if (!snapshot) {
+      continue;
     }
-    const snapshot = { text, fingerprint };
     if (opts?.stopAtTranscriptArtifact !== true) {
       return snapshot;
     }
     if (!latestReply.text) {
       latestReply = snapshot;
+    }
+  }
+  if (opts?.stopAtTranscriptArtifact === true) {
+    if (internalSourceReplies.length > 0) {
+      sawTranscriptArtifact = true;
+    }
+    if (sawTranscriptArtifact) {
+      return {};
     }
   }
   return latestReply;

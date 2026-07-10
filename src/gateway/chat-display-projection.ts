@@ -1,7 +1,10 @@
 // Gateway chat display projection.
 // Converts raw transcript messages into bounded Control UI/history display records.
 import { createHash } from "node:crypto";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asPositiveSafeInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -39,6 +42,7 @@ type PendingMessageToolVisibleReply = {
   completionAnchor?: Record<string, unknown>;
   deliveryMirrorAnchor?: Record<string, unknown>;
   deliveryMirrorIndex?: number;
+  sourceReplySink?: "internal-ui";
   succeeded: boolean;
 };
 
@@ -928,15 +932,25 @@ function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>):
   return ok !== false;
 }
 
+function readMessageToolSourceReplySink(
+  message: Record<string, unknown>,
+): "internal-ui" | undefined {
+  const details = readRecord(message.details);
+  return details?.sourceReplySink === "internal-ui" ? "internal-ui" : undefined;
+}
+
 function buildMessageToolVisibleReplyMirror(
   pending: PendingMessageToolVisibleReply,
 ): Record<string, unknown> {
+  const sourceMessageSeq = asPositiveSafeInteger(readRecord(pending.anchor["__openclaw"])?.seq);
   const mirror: Record<string, unknown> = {
     role: "assistant",
     content: [{ type: "text", text: pending.text }],
     openclawMessageToolMirror: {
       toolName: "message",
       ...(pending.toolCallId ? { toolCallId: pending.toolCallId } : {}),
+      ...(pending.sourceReplySink ? { sourceReplySink: pending.sourceReplySink } : {}),
+      ...(pending.sourceReplySink && sourceMessageSeq ? { sourceMessageSeq } : {}),
     },
   };
   for (const field of ["timestamp", "createdAt", "agentId"] as const) {
@@ -1054,6 +1068,10 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       for (const item of pending) {
         if (!item.succeeded && isSuccessfulMessageToolResult(record, item)) {
           item.succeeded = true;
+          const sourceReplySink = readMessageToolSourceReplySink(record);
+          if (sourceReplySink) {
+            item.sourceReplySink = sourceReplySink;
+          }
           item.completionAnchor = item.deliveryMirrorAnchor ?? record;
           if (item.deliveryMirrorAnchor) {
             if (typeof item.deliveryMirrorIndex === "number") {
