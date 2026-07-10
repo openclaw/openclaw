@@ -4216,6 +4216,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Manual flow
   - H3: Upgrading container images
   - H3: Environment variables
+  - H3: Source-built images with selected plugins
   - H3: Observability
   - H3: Health checks
   - H3: LAN vs loopback

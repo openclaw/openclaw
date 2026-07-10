@@ -2,11 +2,11 @@ name: Publish generated pull request
 description: Commit generated files to an automation branch and open or update its pull request.
 
 inputs:
-  primary-private-key:
-    description: Primary OpenClaw GitHub App private key.
+  contents-client-id:
+    description: GitHub App client id with contents write access.
     required: true
-  fallback-private-key:
-    description: Fallback OpenClaw GitHub App private key.
+  contents-private-key:
+    description: GitHub App private key with contents write access.
     required: true
   pull-request-app-id:
     description: GitHub App id with pull-request write access.
@@ -39,39 +39,20 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Create generated branch app token
-      id: contents-token
-      continue-on-error: true
-      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+    - name: Create generated PR tokens
+      id: tokens
+      uses: ./.github/actions/create-generated-pr-tokens
       with:
-        app-id: "2729701"
-        private-key: ${{ inputs.primary-private-key }}
-        permission-contents: write
-
-    - name: Create generated branch fallback app token
-      id: contents-token-fallback
-      if: steps.contents-token.outcome == 'failure'
-      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-      with:
-        app-id: "2971289"
-        private-key: ${{ inputs.fallback-private-key }}
-        permission-contents: write
-
-    - name: Create generated PR app token
-      id: pull-request-token
-      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-      with:
-        app-id: ${{ inputs.pull-request-app-id }}
-        private-key: ${{ inputs.pull-request-private-key }}
-        owner: ${{ github.repository_owner }}
-        repositories: ${{ github.event.repository.name }}
-        permission-pull-requests: write
+        contents-client-id: ${{ inputs.contents-client-id }}
+        contents-private-key: ${{ inputs.contents-private-key }}
+        pull-request-app-id: ${{ inputs.pull-request-app-id }}
+        pull-request-private-key: ${{ inputs.pull-request-private-key }}
 
     - name: Publish generated pull request
       shell: bash
       env:
-        CONTENTS_TOKEN: ${{ steps.contents-token.outputs.token || steps.contents-token-fallback.outputs.token }}
-        GH_TOKEN: ${{ steps.pull-request-token.outputs.token }}
+        CONTENTS_TOKEN: ${{ steps.tokens.outputs.contents-token }}
+        GH_TOKEN: ${{ steps.tokens.outputs.pull-request-token }}
         BASE_BRANCH: ${{ inputs.base-branch }}
         HEAD_BRANCH: ${{ inputs.head-branch }}
         COMMIT_MESSAGE: ${{ inputs.commit-message }}
@@ -88,7 +69,7 @@ runs:
         export GIT_TERMINAL_PROMPT=0
 
         if [[ -z "${CONTENTS_TOKEN:-}" ]]; then
-          echo "Generated branch publication requires an OpenClaw contents-write App token." >&2
+          echo "Generated branch publication requires a contents-write App token." >&2
           exit 1
         fi
         if [[ -z "${GH_TOKEN:-}" ]]; then
