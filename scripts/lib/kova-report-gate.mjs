@@ -31,6 +31,14 @@ function array(value, label) {
   check(Array.isArray(value), `invalid ${label}`);
   return value;
 }
+
+function recordViolations(record) {
+  if (!Object.hasOwn(record, "violations")) {
+    return [];
+  }
+  return array(record.violations, "record violations");
+}
+
 function count(value, label, { positive = false } = {}) {
   check(Number.isSafeInteger(value) && value >= (positive ? 1 : 0), `invalid ${label}`);
   return value;
@@ -428,7 +436,7 @@ function validateProfiledFailure(record, card, group) {
     group.resourceInterpretation === "instrumented",
     "failed record group was not instrumented",
   );
-  const violations = array(record.violations, "record violations");
+  const violations = recordViolations(record);
   check(violations.length > 0, "failed record had no violations");
   for (const violationValue of violations) {
     const violation = object(violationValue, "violation");
@@ -488,7 +496,7 @@ export function evaluateToleratedPartialKovaReport(report) {
       "PARTIAL report had a non-PASS record",
     );
     check(
-      records.every((record) => array(record.violations, "record violations").length === 0),
+      records.every((record) => recordViolations(record).length === 0),
       "PARTIAL report had violations",
     );
   });
@@ -505,7 +513,7 @@ export function evaluateToleratedProfiledKovaReport(report) {
     check(
       records
         .filter((record) => record.status === "PASS")
-        .every((record) => array(record.violations, "record violations").length === 0),
+        .every((record) => recordViolations(record).length === 0),
       "PASS record had violations",
     );
     const failed = records.filter((record) => record.status === "FAIL");

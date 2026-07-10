@@ -442,6 +442,13 @@ export const es: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Visitas de la langosta",
+      lobsterVisitsOn: "Pasa de vez en cuando",
+      lobsterVisitsOff: "Nunca visita",
+      lobsterdex: "Lobsterdex",
+      lobsterdexSeen: "{seen}/{total} visitados",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -484,6 +491,10 @@ export const es: TranslationMap = {
     settingsGroupConnections: "Conexiones",
     settingsGroupAgents: "Agentes y herramientas",
     settingsGroupSystem: "Sistema",
+    settingsSearchLabel: "Buscar en la configuración",
+    settingsSearchPlaceholder: "Buscar en la configuración…",
+    settingsSearchNoResults: "No hay ningún ajuste que coincida.",
+    settingsSearchClear: "Borrar la búsqueda de ajustes",
     exitSettings: "Volver a la aplicación",
     expand: "Expandir barra lateral",
     collapse: "Contraer barra lateral",
@@ -604,7 +615,9 @@ export const es: TranslationMap = {
   },
   tasksPage: {
     active: "Activas",
+    activeSub: "Trabajo en segundo plano en cola y en ejecución.",
     recent: "Recientes",
+    recentSub: "Tareas completadas, fallidas y canceladas más recientes.",
     loading: "Cargando tareas…",
     empty: "Aún no hay tareas en segundo plano.",
     emptyActive: "No hay tareas en cola ni en ejecución.",
@@ -1710,7 +1723,6 @@ export const es: TranslationMap = {
       splitRight: "Dividir a la derecha",
       splitDown: "Dividir hacia abajo",
       closePane: "Cerrar panel",
-      sessionSelect: "Sesión del panel",
       dropSplit: "Dividir",
       dropOpenHere: "Abrir aquí",
     },
@@ -1750,10 +1762,6 @@ export const es: TranslationMap = {
       retry: "Reintentar",
       retrySend: "Reintentar envío",
       retryQueuedMessage: "Reintentar mensaje en cola",
-    },
-    modelPicker: {
-      faster: "Más rápido",
-      smarter: "Más inteligente",
     },
     pairingQrExpired: {
       title: "Código QR de emparejamiento caducado",
@@ -1955,8 +1963,7 @@ export const es: TranslationMap = {
     },
     summary: {
       enabled: "Habilitado",
-      yes: "Sí",
-      no: "No",
+      scheduler: "Programador",
       jobs: "Tareas",
       nextWake: "Próxima activación",
       refreshing: "Actualizando...",
