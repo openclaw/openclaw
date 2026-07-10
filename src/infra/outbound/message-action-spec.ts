@@ -6,7 +6,10 @@ import {
   normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
 import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
-import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelMessageActionName,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 /**
@@ -84,6 +87,11 @@ type ActionTargetAliasSpec = {
 export type ActionDeliveryTargetAliasSpec = ActionTargetAliasSpec & {
   deliveryTargetAliases?: string[];
   resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
+  matchesCurrentConversation?: (params: {
+    args: Record<string, unknown>;
+    accountId: string;
+    toolContext: ChannelThreadingToolContext;
+  }) => boolean;
 };
 
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>> = {

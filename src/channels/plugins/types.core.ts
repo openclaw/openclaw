@@ -787,6 +787,15 @@ export type ChannelMessageActionAdapter = {
         deliveryTargetAliases?: string[];
         /** Convert typed owner fields such as chatId into the canonical shared target shape. */
         resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
+        /**
+         * Prove that provider-native aliases name the trusted current conversation.
+         * Core consults this only for host-owned bundled registrations.
+         */
+        matchesCurrentConversation?: (params: {
+          args: Record<string, unknown>;
+          accountId: string;
+          toolContext: ChannelThreadingToolContext;
+        }) => boolean;
       }
     >
   >;

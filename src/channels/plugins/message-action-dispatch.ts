@@ -222,8 +222,10 @@ function isExactCurrentConversation(params: {
     }
     addHostConversationTarget(requestedTargets, normalizedTarget);
   }
+  const nonAliasRequestedTargets = Array.from(requestedTargets.values());
+  let hasDeliveryAliasInput = false;
   if (params.pluginOrigin === "bundled") {
-    const hasDeliveryAliasInput = (aliasSpec?.deliveryTargetAliases ?? []).some((alias) =>
+    hasDeliveryAliasInput = (aliasSpec?.deliveryTargetAliases ?? []).some((alias) =>
       hasTargetInput(params.ctx.params[alias]),
     );
     const resolvedAliasTarget = aliasSpec?.resolveDeliveryTarget?.({ args: params.ctx.params });
@@ -265,12 +267,28 @@ function isExactCurrentConversation(params: {
   if (requestedTargetList.length === 0) {
     return false;
   }
-  return requestedTargetList.every((requestedTarget) =>
+  const matchesCurrentTarget = (requestedTarget: HostConversationTarget) =>
     currentTargetsMatchRequested({
       currentTargets: currentTargetList,
       requestedTarget,
-    }),
-  );
+    });
+  if (requestedTargetList.every(matchesCurrentTarget)) {
+    return true;
+  }
+  if (
+    params.pluginOrigin !== "bundled" ||
+    !hasDeliveryAliasInput ||
+    !params.ctx.toolContext ||
+    !aliasSpec?.matchesCurrentConversation ||
+    !nonAliasRequestedTargets.every(matchesCurrentTarget)
+  ) {
+    return false;
+  }
+  return aliasSpec.matchesCurrentConversation({
+    args: params.ctx.params,
+    accountId: normalizeAccountId(params.ctx.accountId),
+    toolContext: params.ctx.toolContext,
+  });
 }
 
 function assertConversationReadAllowed(params: {
