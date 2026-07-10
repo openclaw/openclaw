@@ -1432,7 +1432,7 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     const dispatcher = createDispatcher();
     const sessionKey = "Agent:Main:Slack:Channel:C123";
-    const preparedSessionKey = "agent:main:slack:channel:c123";
+    const preparedSessionKey = "agent:main:slack:channel:C123";
     sessionStoreMocks.currentEntry = {
       sessionId: "previous-session",
       updatedAt: Date.now(),
@@ -1544,7 +1544,7 @@ describe("dispatchReplyFromConfig", () => {
             }) => void;
           }
         ).onSessionPrepared?.({
-          sessionKey: "agent:main:slack:channel:c123",
+          sessionKey: "agent:main:slack:channel:C123",
           sessionId: "prepared-session",
           storePath: "/tmp/prepared-sessions.json",
         });

@@ -22,7 +22,7 @@ describe("resolveSessionKey", () => {
     });
 
     expect(resolveSessionKey("per-sender", ctx, "main", "ops")).toBe(
-      "agent:ops:slack:channel:c123",
+      "agent:ops:slack:channel:C123",
     );
   });
 

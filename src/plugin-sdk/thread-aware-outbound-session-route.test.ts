@@ -101,12 +101,14 @@ describe("buildThreadAwareOutboundSessionRoute", () => {
     ).toBeUndefined();
   });
 
-  it("keeps recovering current-session threads for non-opaque folded channel keys", () => {
+  it("keeps recovering current-session threads for case-preserving Slack channel keys", () => {
+    // Slack channel IDs are now case-preserving (#102800); the base key retains
+    // the original case, and thread recovery matches regardless of case variant.
     expect(
       recoverCurrentThreadSessionId({
         route: baseRoute({
-          sessionKey: "agent:main:slack:channel:c1",
-          baseSessionKey: "agent:main:slack:channel:c1",
+          sessionKey: "agent:main:slack:channel:C1",
+          baseSessionKey: "agent:main:slack:channel:C1",
         }),
         currentSessionKey: "agent:main:slack:channel:C1:thread:1712345678.123456",
       }),
