@@ -66,6 +66,13 @@ export function resolvePreferredOpenClawTmpDir(
     if (typeof st.uid === "number" && st.uid !== uid) {
       return false;
     }
+    if (typeof st.mode === "number" && (st.mode & 0o1000) !== 0) {
+      // Sticky-bit directories like /tmp (mode 0o1777) are safe: only the
+      // file owner can delete or rename files inside, even though the
+      // directory itself is world-writable. Recognize the sticky bit as a
+      // safety mechanism rather than misclassifying the directory as insecure.
+      return true;
+    }
     return typeof st.mode !== "number" || (st.mode & 0o022) === 0;
   };
 
@@ -102,6 +109,12 @@ export function resolvePreferredOpenClawTmpDir(
       }
       if (typeof st.mode !== "number") {
         return false;
+      }
+      // Sticky-bit directories (e.g. /tmp with mode 0o1777) are safe as-is;
+      // chmod'ing them to 0o700 would corrupt system /tmp permissions and
+      // break every other process relying on the world-writable sticky-bit dir.
+      if ((st.mode & 0o1000) !== 0) {
+        return resolveDirState(candidatePath) === "available";
       }
       if ((st.mode & 0o022) === 0) {
         return resolveDirState(candidatePath) === "available";

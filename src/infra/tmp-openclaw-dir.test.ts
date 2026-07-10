@@ -572,4 +572,55 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
     expect(result).toBe(POSIX_OPENCLAW_TMP_DIR);
   });
+
+  it("recognizes sticky-bit directories as secure and does not chmod them (#103190)", () => {
+    // /tmp on Linux has mode 0o41777 (sticky bit + world-writable).
+    // Without the sticky-bit check, isSecureDirForUser would classify it as
+    // insecure (0o1777 & 0o022 !== 0) and tryRepairWritableBits would chmod
+    // it to 0o700, corrupting system /tmp permissions.
+    const chmodSync = vi.fn();
+    const warn = vi.fn();
+    const stickyBitMode = 0o41777;
+
+    const result = resolvePreferredOpenClawTmpDir({
+      accessSync: vi.fn(),
+      lstatSync: vi.fn((target: string) => {
+        if (target === POSIX_OPENCLAW_TMP_DIR) {
+          return makeDirStat({ mode: stickyBitMode });
+        }
+        return secureDirStat();
+      }),
+      mkdirSync: vi.fn(),
+      chmodSync,
+      getuid: vi.fn(() => 501),
+      tmpdir: vi.fn(() => "/var/fallback"),
+      warn,
+    });
+
+    expect(result).toBe(POSIX_OPENCLAW_TMP_DIR);
+    // chmod must NOT be called on a sticky-bit directory.
+    expect(chmodSync).not.toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, 0o700);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("still chmods non-sticky world-writable directories (#103190)", () => {
+    // A world-writable directory WITHOUT the sticky bit is genuinely insecure
+    // and should still be tightened to 0o700.
+    let preferredMode = 0o40777;
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      if (target === POSIX_OPENCLAW_TMP_DIR && mode === 0o700) {
+        preferredMode = 0o40700;
+      }
+    });
+    const warn = vi.fn();
+
+    const { resolved } = resolveWithMocks({
+      lstatSync: vi.fn(() => makeDirStat({ mode: preferredMode })),
+      chmodSync,
+      warn,
+    });
+
+    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+    expect(chmodSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, 0o700);
+  });
 });
