@@ -1299,10 +1299,11 @@ final class GatewayConnectionController {
         switch failure {
         case .endpointUnreachable:
             if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".ts.net") {
-                return String(
+                String(
                     localized: "Can't reach gateway at \(host):\(port). Verify Tailscale Serve is enabled and publishes this Gateway.")
+            } else {
+                String(localized: "Can't reach gateway at \(host):\(port). Check Tailscale or LAN.")
             }
-            return String(localized: "Can't reach gateway at \(host):\(port). Check Tailscale or LAN.")
         case .tlsHandshakeTimeout:
             "TLS fingerprint verification timed out for \(host):\(port). "
                 + "Secure endpoint was reached, but TLS did not finish in time."
