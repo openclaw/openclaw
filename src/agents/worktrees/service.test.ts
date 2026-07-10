@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { getRegistryWorktree } from "./registry.js";
+import { deleteRegistryWorktree, getRegistryWorktree } from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -677,6 +677,36 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(debris)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.stat(foreign)).toBeTruthy();
     await git(repo, "worktree", "remove", "--force", foreign);
+  });
+
+  it("adopts a worktree orphaned when create() crashed before the registry insert, during gc()", async () => {
+    const created = await service.create({ repoRoot: repo, name: "orphan-gc" });
+    // Simulates a create() that crashed between `git worktree add` and insertRegistryWorktree():
+    // the live worktree + branch stay on disk exactly as create() left them, but the row that
+    // would name them in the registry never landed.
+    deleteRegistryWorktree(env, created.id);
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+
+    const result = await service.gc();
+
+    expect(result.orphansDeleted).toBe(0);
+    const adopted = (await service.list()).find((entry) => entry.path === created.path);
+    expect(adopted).toMatchObject({ path: created.path, branch: created.branch });
+    expect(await fs.stat(created.path)).toBeTruthy();
+    expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
+  });
+
+  it("adopts an orphaned worktree instead of throwing on a retried create() with the same name", async () => {
+    const created = await service.create({ repoRoot: repo, name: "orphan-retry" });
+    deleteRegistryWorktree(env, created.id);
+
+    const retried = await service.create({ repoRoot: repo, name: "orphan-retry" });
+
+    expect(retried.path).toBe(created.path);
+    expect(retried.branch).toBe(created.branch);
+    expect(retried.id).not.toBe(created.id);
+    expect(getRegistryWorktree(env, retried.id)).toBeDefined();
+    expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {

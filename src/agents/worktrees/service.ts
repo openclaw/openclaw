@@ -261,6 +261,25 @@ async function canResetFailedWorktreeAdd(
   return branchExists.code === 1;
 }
 
+/**
+ * A crash between `git worktree add` and `insertRegistryWorktree()` (or an orphan directory
+ * found during gc) can leave a live git worktree + managed branch with no registry row.
+ * Adoption requires an exact match on both path and branch so foreign or detached worktrees
+ * are never silently claimed.
+ */
+async function findAdoptableOrphan(
+  repoRoot: string,
+  worktreePath: string,
+  branch: string,
+): Promise<boolean> {
+  const listed = await listGitWorktrees(repoRoot).catch(() => []);
+  return listed.some(
+    (entry) =>
+      path.resolve(entry.path) === path.resolve(worktreePath) &&
+      entry.branch === `refs/heads/${branch}`,
+  );
+}
+
 async function runSetupScript(repoRoot: string, worktreePath: string): Promise<void> {
   const setupScript = path.join(repoRoot, ".openclaw", "worktree-setup.sh");
   const stat = await fs.stat(setupScript).catch(() => undefined);
@@ -361,6 +380,20 @@ export class ManagedWorktreeService {
       `refs/heads/${branch}`,
     ]);
     if (branchExists.code === 0) {
+      // No registry row was found above for this exact path, yet the managed branch already
+      // exists: this is the crashed-create() signature. Adopt only on an exact live-worktree +
+      // branch match; a bare branch collision (no worktree) keeps the throw below.
+      if (
+        existing === undefined &&
+        (await findAdoptableOrphan(repository.repoRoot, worktreePath, branch))
+      ) {
+        return this.adoptOrphan({
+          repoFingerprint: repository.fingerprint,
+          repoRoot: repository.repoRoot,
+          path: worktreePath,
+          branch,
+        });
+      }
       throw new Error(`branch already exists: ${branch}`);
     }
     if (branchExists.code !== 1) {
@@ -778,6 +811,29 @@ export class ManagedWorktreeService {
     return { removed, orphansDeleted, snapshotsPruned };
   }
 
+  private adoptOrphan(params: {
+    repoFingerprint: string;
+    repoRoot: string;
+    path: string;
+    branch: string;
+  }): ManagedWorktreeRecord {
+    const createdAt = this.now();
+    const record: ManagedWorktreeRecord = {
+      id: randomUUID(),
+      name: path.basename(params.path),
+      repoFingerprint: params.repoFingerprint,
+      repoRoot: params.repoRoot,
+      path: params.path,
+      branch: params.branch,
+      baseRef: "HEAD",
+      ownerKind: "manual",
+      createdAt,
+      lastActiveAt: createdAt,
+    };
+    insertRegistryWorktree(this.env, record);
+    return record;
+  }
+
   private requireLiveRecord(id: string): ManagedWorktreeRecord {
     const record = getRegistryWorktree(this.env, id);
     if (!record || record.removedAt !== undefined) {
@@ -807,6 +863,18 @@ export class ManagedWorktreeService {
         }
         const repository = await resolveRepository(candidate).catch(() => undefined);
         if (repository) {
+          const managedBranch = `openclaw/${name.name}`;
+          if (await findAdoptableOrphan(repository.repoRoot, candidate, managedBranch)) {
+            // Orphaned by a create() that crashed before insertRegistryWorktree(); reclaim it
+            // instead of deleting a live worktree or leaving it invisible to list()/gc() forever.
+            this.adoptOrphan({
+              repoFingerprint: repository.fingerprint,
+              repoRoot: repository.repoRoot,
+              path: candidate,
+              branch: managedBranch,
+            });
+            continue;
+          }
           const listed = await listGitWorktrees(repository.repoRoot).catch(() => []);
           if (listed.some((entry) => path.resolve(entry.path) === path.resolve(candidate))) {
             continue;
