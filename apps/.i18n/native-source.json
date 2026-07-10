@@ -567,7 +567,7 @@
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Reconnect",
       "surface": "android",
-      "id": "native.android.0e24c627e6384ecc"
+      "id": "native.android.ec3669686494575b"
     },
     {
       "kind": "conditional-branch",
