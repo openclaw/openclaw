@@ -57,6 +57,48 @@ describe("JsonlSessionStorage timestamps", () => {
     );
   });
 
+  it("reports physical line numbers after blank lines", async () => {
+    const fs = createReadOnlyFs(
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "session-1",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: "/repo",
+      })}\n\n${JSON.stringify({
+        type: "custom",
+        id: "entry-1",
+        parentId: null,
+        timestamp: "not-a-date",
+        customType: "note",
+      })}\n`,
+    );
+
+    await expect(JsonlSessionStorage.open(fs, "/sessions/invalid-entry.jsonl")).rejects.toThrow(
+      "line 3 has invalid timestamp",
+    );
+  });
+
+  it("accepts leading blank lines before the session header", async () => {
+    const content = `\n\n${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "session-1",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      cwd: "/repo",
+    })}\n${JSON.stringify({
+      type: "custom",
+      id: "entry-1",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:01.000Z",
+      customType: "note",
+    })}\n`;
+
+    await expect(
+      JsonlSessionStorage.open(createReadOnlyFs(content), "/sessions/leading-blanks.jsonl"),
+    ).resolves.toBeDefined();
+  });
+
   it("uses a leaf control's opaque append parent for the next entry", async () => {
     let content = [
       {
