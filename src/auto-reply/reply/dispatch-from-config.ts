@@ -2008,15 +2008,15 @@ export async function dispatchReplyFromConfig(
     abortSignal?: AbortSignal,
     mirror?: boolean,
     kind: ReplyDispatchKind = "tool",
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     // Keep the runtime guard explicit because this helper is called from nested
     // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
     if (!routeReplyRuntime || !routeReplyChannel || !routeReplyTo) {
-      return;
+      return false;
     }
     const effectiveAbortSignal = abortSignal ?? getDispatchAbortSignal();
     if (effectiveAbortSignal?.aborted) {
-      return;
+      return false;
     }
     const result = await routeReplyToOriginating(payload, {
       abortSignal: effectiveAbortSignal,
@@ -2026,6 +2026,7 @@ export async function dispatchReplyFromConfig(
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
+    return result ? isRoutedReplyDelivered(result) : false;
   };
 
   const deliverBindingPayload = async (
@@ -3045,6 +3046,15 @@ export async function dispatchReplyFromConfig(
     let accumulatedBlockText = "";
     let accumulatedBlockTtsText = "";
     let blockCount = 0;
+    let cleanBlockDeliverySucceeded = false;
+    let queuedCleanBlockDeliveryCount = 0;
+    let unsuccessfulBlockDeliveryCountBefore: number | undefined;
+    const blockOutcomeCounts: DispatcherOutcomeCountsView = dispatcher;
+    const getUnsuccessfulBlockDeliveryCount = () => {
+      const cancelled = blockOutcomeCounts.getCancelledCounts?.();
+      const failed = blockOutcomeCounts.getFailedCounts?.();
+      return cancelled && failed ? cancelled.block + failed.block : undefined;
+    };
     const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
       cfg,
       ttsAuto: sessionTtsAuto,
@@ -3828,18 +3838,32 @@ export async function dispatchReplyFromConfig(
                       if (isDispatchOperationAborted()) {
                         return;
                       }
+                      const isCleanBlockDelivery =
+                        payload.isError !== true &&
+                        payload.isReasoning !== true &&
+                        payload.isCommentary !== true &&
+                        !isStatusNotice;
                       if (shouldRouteToOriginating) {
-                        await sendPayloadAsync(
+                        const delivered = await sendPayloadAsync(
                           normalizedPayload,
                           context?.abortSignal,
                           false,
                           "block",
                         );
+                        cleanBlockDeliverySucceeded =
+                          (isCleanBlockDelivery && delivered) || cleanBlockDeliverySucceeded;
                       } else {
                         markInboundDedupeReplayUnsafe();
-                        const delivered = dispatcher.sendBlockReply(normalizedPayload);
-                        if (delivered) {
+                        if (isCleanBlockDelivery) {
+                          unsuccessfulBlockDeliveryCountBefore ??=
+                            getUnsuccessfulBlockDeliveryCount();
+                        }
+                        const queued = dispatcher.sendBlockReply(normalizedPayload);
+                        if (queued) {
                           hasPendingDirectBlockReplyDelivery = true;
+                          if (isCleanBlockDelivery) {
+                            queuedCleanBlockDeliveryCount += 1;
+                          }
                         }
                       }
                     };
@@ -4101,7 +4125,19 @@ export async function dispatchReplyFromConfig(
     }
 
     await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
-    if (cleanFinalDeliverySucceeded || observedReplyDelivery || blockCount > 0) {
+    if (unsuccessfulBlockDeliveryCountBefore !== undefined) {
+      const unsuccessfulBlockDeliveryCountAfter = getUnsuccessfulBlockDeliveryCount();
+      if (unsuccessfulBlockDeliveryCountAfter !== undefined) {
+        // All settled block failures are a conservative upper bound for failures among
+        // clean blocks: this may flush extra diagnostics, but never hides an unconfirmed one.
+        const unsuccessfulQueuedBlockCount = Math.max(
+          0,
+          unsuccessfulBlockDeliveryCountAfter - unsuccessfulBlockDeliveryCountBefore,
+        );
+        cleanBlockDeliverySucceeded = queuedCleanBlockDeliveryCount > unsuccessfulQueuedBlockCount;
+      }
+    }
+    if (cleanFinalDeliverySucceeded || observedReplyDelivery || cleanBlockDeliverySucceeded) {
       discardPendingFailedProgressDeliveries();
     } else {
       await flushPendingFailedProgressDeliveries();

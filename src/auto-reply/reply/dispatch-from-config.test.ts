@@ -769,6 +769,56 @@ function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
+async function dispatchFailedCommandProgressBeforeBlock(params: {
+  dispatcher: ReplyDispatcher;
+  ctx?: MsgContext;
+}) {
+  setNoAbort();
+  const previousSessionEntry = sessionStoreMocks.currentEntry;
+  sessionStoreMocks.currentEntry = {
+    sessionId: "s1",
+    updatedAt: 0,
+    sendPolicy: "allow",
+    verboseLevel: "on",
+  };
+  const failedCommand = {
+    phase: "end",
+    name: "exec",
+    status: "failed",
+    exitCode: 1,
+  } as const;
+  const onCommandOutput = vi.fn();
+  const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+    await opts?.onCommandOutput?.(failedCommand);
+    await opts?.onBlockReply?.({ text: "visible answer" });
+    return undefined;
+  };
+
+  try {
+    try {
+      await dispatchReplyFromConfig({
+        ctx:
+          params.ctx ??
+          buildTestCtx({
+            Provider: "telegram",
+            ChatType: "direct",
+            SessionKey: "agent:main:telegram:direct:U1",
+          }),
+        cfg: emptyConfig,
+        dispatcher: params.dispatcher,
+        replyResolver,
+        replyOptions: { onCommandOutput },
+      });
+    } finally {
+      await settleReplyDispatcher({ dispatcher: params.dispatcher });
+    }
+  } finally {
+    sessionStoreMocks.currentEntry = previousSessionEntry;
+  }
+
+  return { failedCommand, onCommandOutput };
+}
+
 type MockAcpRuntime = AcpRuntime & {
   ensureSession: Mock<(input: AcpRuntimeEnsureInput) => Promise<AcpRuntimeHandle>>;
   runTurn: Mock<(input: AcpRuntimeTurnInput) => AsyncIterable<AcpRuntimeEvent>>;
@@ -5366,6 +5416,95 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      outcome: "delivered",
+      result: { ok: true, messageId: "mock" },
+      shouldFlush: false,
+    },
+    {
+      outcome: "suppressed",
+      result: {
+        ok: true,
+        messageId: "mock",
+        suppressed: true,
+        reason: "cancelled_by_reply_payload_sending_hook",
+      },
+      shouldFlush: true,
+    },
+    {
+      outcome: "failed",
+      result: { ok: false, messageId: "mock", error: "delivery failed" },
+      shouldFlush: true,
+    },
+  ])(
+    "handles buffered failed progress when routed block delivery is $outcome",
+    async ({ result, shouldFlush }) => {
+      mocks.routeReply.mockResolvedValue(result);
+      const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeBlock({
+        dispatcher: createDispatcher(),
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          OriginatingChannel: "slack",
+          OriginatingTo: "channel:C123",
+          ChatType: "direct",
+          SessionKey: "agent:main:slack:direct:U1",
+        }),
+      });
+
+      if (shouldFlush) {
+        expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+      } else {
+        expect(onCommandOutput).not.toHaveBeenCalled();
+      }
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: { text: "visible answer" },
+          replyKind: "block",
+        }),
+      );
+    },
+  );
+
+  it("flushes buffered failed progress when a dispatcher cancels block delivery", async () => {
+    const deliver = vi.fn(async () => undefined);
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: (payload, info) => (info.kind === "block" ? null : payload),
+    });
+
+    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeBlock({
+      dispatcher,
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    expect(dispatcher.getCancelledCounts?.().block).toBe(1);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("flushes buffered failed progress when a dispatcher declines the block", async () => {
+    const dispatcher = createDispatcher();
+    vi.mocked(dispatcher.sendBlockReply).mockReturnValue(false);
+
+    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeBlock({
+      dispatcher,
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "visible answer" });
+  });
+
+  it("discards buffered failed progress after confirmed dispatcher block delivery", async () => {
+    const deliver = vi.fn(async () => undefined);
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    const { onCommandOutput } = await dispatchFailedCommandProgressBeforeBlock({ dispatcher });
+
+    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledWith({ text: "visible answer" }, { kind: "block" });
   });
 
   it("flushes buffered regular-verbose failed tool payloads when no final reply is visible", async () => {
