@@ -229,6 +229,32 @@ function wrapLine(text: string, width: number): string[] {
     return params.every((param) => Number.isInteger(param)) ? params : null;
   };
 
+  // Returns the OSC-8 hyperlink params, or empty string for a close sequence,
+  // or undefined if the token is not an OSC-8 sequence. params excludes the
+  // surrounding introducer, "8;;" prefix, and string terminator.
+  const parseOsc8Params = (value: string): string | undefined => {
+    const escPrefix = `${ESC}]8;;`;
+    const c1Prefix = `${C1_OSC}8;;`;
+    let prefix: string;
+    let stLength: number;
+    if (value.startsWith(escPrefix)) {
+      prefix = escPrefix;
+      stLength = value.endsWith(`${ESC}\\`) ? 2 : 1;
+    } else if (value.startsWith(c1Prefix)) {
+      prefix = c1Prefix;
+      if (value.endsWith(C1_ST)) {
+        stLength = 1;
+      } else if (value.endsWith(`${ESC}\\`)) {
+        stLength = 2;
+      } else {
+        stLength = 1;
+      }
+    } else {
+      return undefined;
+    }
+    return value.slice(prefix.length, value.length - stLength);
+  };
+
   const activeSgrAfter = (tokensValue: Token[]) => {
     type SgrCategory =
       | "background"
@@ -348,6 +374,28 @@ function wrapLine(text: string, width: number): string[] {
     return active.map((entry) => entry.value).join("");
   };
 
+  // Track the active OSC-8 hyperlink params after a sequence of tokens.
+  // Returns undefined when no link is open, or the params string when a link
+  // opener has been seen without a matching close.
+  const activeOsc8After = (tokensValue: Token[]): string | undefined => {
+    let activeParams: string | undefined;
+    for (const token of tokensValue) {
+      if (token.kind !== "ansi") {
+        continue;
+      }
+      const params = parseOsc8Params(token.value);
+      if (params === undefined) {
+        continue;
+      }
+      if (params === "") {
+        activeParams = undefined;
+      } else {
+        activeParams = params;
+      }
+    }
+    return activeParams;
+  };
+
   const pushLine = (value: string) => {
     const cleaned = value.replace(/\s+$/, "");
     if (visibleWidth(cleaned) === 0) {
@@ -374,10 +422,19 @@ function wrapLine(text: string, width: number): string[] {
     if (buf.length === 0) {
       return;
     }
+    const left = breakAt == null || breakAt <= 0 ? buf : buf.slice(0, breakAt);
+    const activeSgr = activeSgrAfter(left);
+    const activeOsc8Params = activeOsc8After(left);
+    const closeOsc8 = activeOsc8Params !== undefined ? `${ESC}]8;;${BEL}` : "";
+    const openOsc8 = activeOsc8Params !== undefined ? `${ESC}]8;;${activeOsc8Params}${BEL}` : "";
+    const sgrReset = activeSgr ? SGR_RESET : "";
+
     if (breakAt == null || breakAt <= 0) {
-      const activeSgr = activeSgrAfter(buf);
-      pushLine(activeSgr ? `${bufToString()}${SGR_RESET}` : bufToString());
+      pushLine(`${bufToString()}${closeOsc8}${sgrReset}`);
       buf.length = 0;
+      if (openOsc8) {
+        buf.push({ kind: "ansi", value: openOsc8 });
+      }
       if (activeSgr) {
         buf.push({ kind: "ansi", value: activeSgr });
       }
@@ -386,11 +443,12 @@ function wrapLine(text: string, width: number): string[] {
       return;
     }
 
-    const left = buf.slice(0, breakAt);
     const rest = buf.slice(breakAt);
-    const activeSgr = activeSgrAfter(left);
-    pushLine(activeSgr ? `${bufToString(left)}${SGR_RESET}` : bufToString(left));
+    pushLine(`${bufToString(left)}${closeOsc8}${sgrReset}`);
     trimLeadingSpaces(rest);
+    if (openOsc8) {
+      rest.unshift({ kind: "ansi", value: openOsc8 });
+    }
     if (activeSgr) {
       rest.unshift({ kind: "ansi", value: activeSgr });
     }

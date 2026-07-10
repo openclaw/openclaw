@@ -227,6 +227,47 @@ describe("renderTable", () => {
     }
   });
 
+  it.each([
+    ["BEL ST", "\x1b]8;;https://openclaw.ai\x07", "\x1b]8;;\x07"],
+    ["ESC-backslash ST", "\x1b]8;;https://openclaw.ai\x1b\\", "\x1b]8;;\x1b\\"],
+    ["C1 ST", "\x9d8;;https://openclaw.ai\x9c", "\x9d8;;\x9c"],
+  ])(
+    "closes and reopens embedded OSC-8 links at wrap boundaries (%s)",
+    (_label, openSeq, closeSeq) => {
+      const link = `${openSeq}OpenClaw${closeSeq}`;
+      const out = renderTable({
+        width: 20,
+        columns: [
+          { key: "K", header: "K", minWidth: 3 },
+          { key: "V", header: "V", flex: true, minWidth: 10 },
+        ],
+        rows: [{ K: "X", V: `before ${link} after` }],
+      });
+
+      const lines = out
+        .split("\n")
+        .filter((line) => line.includes("before") || line.includes("after"));
+      // Every line that contains visible text should close any active link before
+      // the table border and reopen it at the start of the continuation.
+      for (const line of lines) {
+        const contentStart = Math.max(line.lastIndexOf("│"), line.lastIndexOf("|")) + 1;
+        const content = line.slice(contentStart);
+        // "after" must not be part of the hyperlink: it should appear after a
+        // close sequence on its line, or the line has no open sequence at all.
+        if (content.includes("after")) {
+          const afterIndex = content.indexOf("after");
+          const openIndex = content.indexOf(openSeq);
+          const closeIndex = content.indexOf(closeSeq);
+          expect(closeIndex).toBeGreaterThan(-1);
+          expect(closeIndex).toBeLessThan(afterIndex);
+          if (openIndex >= 0 && openIndex < afterIndex) {
+            expect(closeIndex).toBeGreaterThan(openIndex);
+          }
+        }
+      }
+    },
+  );
+
   it("respects explicit newlines in cell values", () => {
     const out = renderTable({
       width: 48,
