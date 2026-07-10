@@ -167,6 +167,7 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     if (session.activeRunId) {
       runIdToSessionId.delete(session.activeRunId);
     }
+    session.abortController?.abort();
     session.activeRunId = null;
     session.abortController = null;
     touchSession(session, now());

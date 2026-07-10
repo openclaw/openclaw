@@ -19,6 +19,20 @@ describe("acp session manager", () => {
     store.clearAllSessionsForTest();
   });
 
+  it("aborts the controller when clearing an active run", () => {
+    const session = store.createSession({
+      sessionKey: "acp:clear",
+      cwd: "/tmp",
+    });
+    const controller = new AbortController();
+    store.setActiveRun(session.sessionId, "run-1", controller);
+
+    store.clearActiveRun(session.sessionId);
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(store.getSessionByRunId("run-1")).toBeUndefined();
+  });
+
   it("tracks active runs and clears on cancel", () => {
     const session = store.createSession({
       sessionKey: "acp:test",
