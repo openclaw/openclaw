@@ -133,7 +133,7 @@ describe("anthropic provider replay hooks", () => {
         errorMessage: "",
         errorType: "api_error",
       }),
-    ).toBe("timeout");
+    ).toBe("server_error");
     expect(
       provider.classifyFailoverReason?.({
         provider: "anthropic",
@@ -149,6 +149,13 @@ describe("anthropic provider replay hooks", () => {
         code: "RATE_LIMIT_ERROR",
       }),
     ).toBe("rate_limit");
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "anthropic",
+        errorMessage: "",
+        code: "API_ERROR",
+      }),
+    ).toBe("server_error");
     expect(
       provider.classifyFailoverReason?.({
         provider: "anthropic",

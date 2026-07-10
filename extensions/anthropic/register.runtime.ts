@@ -65,7 +65,7 @@ function classifyAnthropicFailoverDescriptor(value: string | undefined) {
     case "RATE_LIMIT_ERROR":
       return "rate_limit" as const;
     case "API_ERROR":
-      return "timeout" as const;
+      return "server_error" as const;
     default:
       return undefined;
   }

@@ -118,7 +118,7 @@ describe("provider failover hook structured signals", () => {
 
   it.each([
     { errorType: "rate_limit_error", reason: "rate_limit", runtimeKind: "rate_limit" },
-    { errorType: "api_error", reason: "timeout", runtimeKind: "timeout" },
+    { errorType: "api_error", reason: "server_error", runtimeKind: "unclassified" },
   ] as const)(
     "classifies message-less Anthropic $errorType assistant failures",
     ({ errorType, reason, runtimeKind }) => {
@@ -129,7 +129,7 @@ describe("provider failover hook structured signals", () => {
         if (context.errorType === "rate_limit_error") {
           return "rate_limit";
         }
-        return context.errorType === "api_error" ? "timeout" : undefined;
+        return context.errorType === "api_error" ? "server_error" : undefined;
       });
 
       const message = makeAssistantMessageFixture({
@@ -147,6 +147,26 @@ describe("provider failover hook structured signals", () => {
           errorType,
         }),
       ).toBe(runtimeKind);
+    },
+  );
+
+  it.each([
+    { provider: "google", code: "SERVER_ERROR" },
+    { provider: "anthropic", code: "INSUFFICIENT_QUOTA" },
+    { provider: "openai", code: "INTERNAL" },
+    { provider: "openai", code: "DEADLINE_EXCEEDED" },
+    { provider: "anthropic", code: "UNAVAILABLE" },
+    { provider: "google", code: "API_ERROR" },
+    { provider: "google", code: "RATE_LIMIT_ERROR" },
+  ] as const)(
+    "does not apply provider-native $code semantics to non-owner $provider",
+    ({ provider, code }) => {
+      providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+
+      expect(classifyFailoverSignal({ provider, code, message: "" })).toBeNull();
+      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).toBe(
+        "unclassified",
+      );
     },
   );
 
