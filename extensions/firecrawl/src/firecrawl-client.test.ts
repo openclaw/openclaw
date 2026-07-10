@@ -746,36 +746,35 @@ describe("runFirecrawlSearch", () => {
       throw new Error("Loopback Firecrawl server did not bind to a TCP port");
     }
 
-    let received: unknown;
     try {
-      await runFirecrawlSearch({
-        cfg: {
-          plugins: {
-            entries: {
-              firecrawl: {
-                config: {
-                  webSearch: {
-                    apiKey: "test-key",
-                    baseUrl: `http://127.0.0.1:${address.port}`,
+      await expect(
+        runFirecrawlSearch({
+          cfg: {
+            plugins: {
+              entries: {
+                firecrawl: {
+                  config: {
+                    webSearch: {
+                      apiKey: "test-key",
+                      baseUrl: `http://127.0.0.1:${address.port}`,
+                    },
                   },
                 },
               },
             },
-          },
-        } satisfies OpenClawConfig,
-        query: "unicode boundary",
-      });
-    } catch (error) {
-      received = error;
+          } satisfies OpenClawConfig,
+          query: "unicode boundary",
+        }),
+      ).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message.includes("x".repeat(999)) &&
+          !error.message.includes("\ud83d"),
+      );
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );
     }
-
-    expect(received).toBeInstanceOf(Error);
-    const message = received instanceof Error ? received.message : "";
-    expect(message).toContain("x".repeat(999));
-    expect(message).not.toContain("\ud83d");
   });
 });
