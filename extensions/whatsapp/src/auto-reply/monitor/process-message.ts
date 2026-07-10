@@ -307,6 +307,7 @@ export async function processMessage(params: {
     cfg: params.cfg,
     msg: msgForAgent,
     agentId: params.route.agentId,
+    accountId: account.accountId,
     previousTimestamp,
     envelope: envelopeOptions,
     visibleReplyTo,

@@ -801,6 +801,105 @@ describe("buildInboundLine", () => {
     expect(line).toContain("[PFX] ping");
   });
 
+  it("applies the account-level messagePrefix over the channel-level prefix", () => {
+    // Account-specific messagePrefix must win over the channel-level value so
+    // per-account inbound prefix customization is honored.
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/openclaw" } },
+      channels: {
+        whatsapp: {
+          messagePrefix: "[CH]",
+          accounts: {
+            work: { messagePrefix: "[ACCT]" },
+          },
+        },
+      },
+    } as never;
+    const line = buildInboundLine({
+      cfg,
+      agentId: "main",
+      accountId: "work",
+      msg: createDirectMessage({
+        admission: {
+          conversation: {
+            id: "+1555",
+          },
+        },
+        body: "ping",
+        to: "+2666",
+      }),
+      envelope: { includeTimestamp: false },
+    });
+
+    expect(line).toContain("[ACCT] ping");
+    expect(line).not.toContain("[CH]");
+  });
+
+  it("falls back to the channel-level messagePrefix when the account has none", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/openclaw" } },
+      channels: {
+        whatsapp: {
+          messagePrefix: "[CH]",
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    } as never;
+    const line = buildInboundLine({
+      cfg,
+      agentId: "main",
+      accountId: "work",
+      msg: createDirectMessage({
+        admission: {
+          conversation: {
+            id: "+1555",
+          },
+        },
+        body: "ping",
+        to: "+2666",
+      }),
+      envelope: { includeTimestamp: false },
+    });
+
+    expect(line).toContain("[CH] ping");
+  });
+
+  it("treats an empty account-level messagePrefix as an explicit no-prefix override", () => {
+    // An empty string is an explicit operator choice: it must suppress the
+    // channel/global prefix rather than falling through to the channel value.
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/openclaw" } },
+      channels: {
+        whatsapp: {
+          messagePrefix: "[CH]",
+          accounts: {
+            work: { messagePrefix: "" },
+          },
+        },
+      },
+    } as never;
+    const line = buildInboundLine({
+      cfg,
+      agentId: "main",
+      accountId: "work",
+      msg: createDirectMessage({
+        admission: {
+          conversation: {
+            id: "+1555",
+          },
+        },
+        body: "ping",
+        to: "+2666",
+      }),
+      envelope: { includeTimestamp: false },
+    });
+
+    expect(line).not.toContain("[CH]");
+    expect(line).toContain("ping");
+  });
+
   it("normalizes direct from labels by stripping whatsapp: prefix", () => {
     const line = buildInboundLine({
       cfg: makeInboundCfg(""),

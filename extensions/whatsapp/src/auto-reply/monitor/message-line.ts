@@ -1,5 +1,6 @@
 // Whatsapp plugin module implements message line behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveMergedWhatsAppAccountConfig } from "../../account-config.js";
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -31,14 +32,24 @@ export function buildInboundLine(params: {
   cfg: OpenClawConfig;
   msg: AdmittedWebInboundMessage;
   agentId: string;
+  accountId?: string;
   previousTimestamp?: number;
   envelope?: EnvelopeFormatOptions;
   visibleReplyTo?: WhatsAppReplyContext | null;
 }) {
-  const { cfg, msg, agentId, previousTimestamp, envelope } = params;
-  // WhatsApp inbound prefix: channels.whatsapp.messagePrefix > legacy messages.messagePrefix > identity/defaults
+  const { cfg, msg, agentId, accountId, previousTimestamp, envelope } = params;
+  // WhatsApp inbound prefix cascade: account > channel > legacy global
+  // messages.messagePrefix > identity/defaults. When an account context is
+  // available, resolve the prefix through the shared WhatsApp account merge so a
+  // per-account `messagePrefix` override wins over the channel-level value
+  // (mirroring how `responsePrefix` and `ackReaction` honor account/channel scope).
+  // `messagePrefix` is WhatsApp-only (the global `messages.messagePrefix` is
+  // deprecated in favor of `whatsapp.messagePrefix`), so this stays scoped to the
+  // WhatsApp inbound path rather than widening a generic channel contract.
   const messagePrefix = resolveMessagePrefix(cfg, agentId, {
-    configured: cfg.channels?.whatsapp?.messagePrefix,
+    configured: accountId
+      ? resolveMergedWhatsAppAccountConfig({ cfg, accountId }).messagePrefix
+      : cfg.channels?.whatsapp?.messagePrefix,
     hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
   });
   const admission = requireWhatsAppInboundAdmission(msg);
