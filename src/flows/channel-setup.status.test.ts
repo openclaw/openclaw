@@ -411,6 +411,46 @@ describe("resolveChannelSetupSelectionContributions", () => {
     expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
   });
 
+  it("preserves explicit empty channel selection docs prefixes before selection notes", () => {
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "telegram",
+            meta: {
+              id: "telegram",
+              label: "Telegram",
+              selectionLabel: "Telegram",
+              docsPath: "/channels/telegram",
+              blurb: "Chat over Telegram.",
+              selectionDocsPrefix: "",
+              selectionDocsOmitLabel: true,
+            },
+          },
+        ],
+      }),
+    );
+
+    const lines = resolveChannelSelectionNoteLines({
+      cfg: {} as never,
+      installedPlugins: [],
+      selection: ["telegram"],
+    });
+
+    expect(formatChannelSelectionLine).toHaveBeenCalledOnce();
+    const [selectionMeta] = requireFirstMockCall(
+      formatChannelSelectionLine.mock.calls,
+      "selection line",
+    );
+    expect(selectionMeta).toEqual(
+      expect.objectContaining({
+        selectionDocsPrefix: "",
+        selectionDocsOmitLabel: true,
+      }),
+    );
+    expect(lines).toEqual(["Telegram — Chat over Telegram."]);
+  });
+
   it("localizes built-in channel blurbs before selection notes", () => {
     resolveChannelSetupEntries.mockReturnValue(
       makeChannelSetupEntries({

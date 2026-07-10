@@ -30,7 +30,7 @@ export function buildManifestChannelMeta(params: {
     params.arrayFieldMode === "defined" ? value !== undefined : Boolean(value?.length);
   const selectionDocsPrefix =
     typeof params.channel.selectionDocsPrefix === "string"
-      ? params.channel.selectionDocsPrefix.trim()
+      ? params.channel.selectionDocsPrefix
       : undefined;
   const hasSelectionDocsPrefix =
     params.selectionDocsPrefixMode === "defined"
