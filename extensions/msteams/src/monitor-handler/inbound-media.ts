@@ -12,13 +12,22 @@ import {
   type MSTeamsHtmlAttachmentSummary,
   type MSTeamsInboundMedia,
 } from "../attachments.js";
+import type { MSTeamsAttachmentDownloadLogger } from "../attachments/shared.js";
+import type { MSTeamsRequestDeadline } from "../request-timeout.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 
-type MSTeamsLogger = {
-  debug?: (message: string, meta?: Record<string, unknown>) => void;
-  warn?: (message: string, meta?: Record<string, unknown>) => void;
-  error?: (message: string, meta?: Record<string, unknown>) => void;
-};
+export function shouldAttemptMSTeamsGraphMediaFallback(params: {
+  conversationType: string;
+  htmlSummary?: MSTeamsHtmlAttachmentSummary;
+  graphMediaFallback?: boolean;
+}): boolean {
+  const conversationType = params.conversationType.trim().toLowerCase();
+  return (
+    params.graphMediaFallback === true &&
+    (conversationType === "channel" || conversationType === "groupchat") &&
+    (params.htmlSummary?.htmlAttachments ?? 0) > 0
+  );
+}
 
 export function resolveMSTeamsInboundMediaBody(params: {
   body: string;
@@ -52,9 +61,15 @@ export async function resolveMSTeamsInboundMedia(params: {
   conversationType: string;
   conversationId: string;
   conversationMessageId?: string;
+  teamAadGroupId?: string;
+  /** Resolve canonical channel identity only if direct media recovery misses. */
+  resolveTeamAadGroupId?: () => Promise<string | undefined>;
   serviceUrl?: string;
   activity: Pick<MSTeamsTurnContext["activity"], "id" | "replyToId" | "channelData">;
-  log: MSTeamsLogger;
+  log: MSTeamsAttachmentDownloadLogger;
+  deadline?: MSTeamsRequestDeadline;
+  /** Opt into Graph lookup when Teams strips file markers from channel/group HTML. */
+  graphMediaFallback?: boolean;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
 }): Promise<MSTeamsInboundMedia[]> {
@@ -67,6 +82,7 @@ export async function resolveMSTeamsInboundMedia(params: {
     conversationType,
     conversationId,
     conversationMessageId,
+    teamAadGroupId,
     serviceUrl,
     activity,
     log,
@@ -80,6 +96,7 @@ export async function resolveMSTeamsInboundMedia(params: {
     allowHosts,
     authAllowHosts: params.authAllowHosts,
     preserveFilenames,
+    deadline: params.deadline,
     logger: log,
   });
 
@@ -88,17 +105,19 @@ export async function resolveMSTeamsInboundMedia(params: {
     // Channel and group-chat activities can omit them while Graph holds a file.
     const attachmentIds = extractMSTeamsHtmlAttachmentIds(attachments);
     const hasHtmlFileAttachment = attachmentIds.length > 0;
-    const normalizedConversationType = conversationType.trim().toLowerCase();
-    const hasChannelOrGroupHtml =
-      (normalizedConversationType === "channel" || normalizedConversationType === "groupchat") &&
-      (htmlSummary?.htmlAttachments ?? 0) > 0;
+    const hasChannelOrGroupHtml = shouldAttemptMSTeamsGraphMediaFallback({
+      conversationType,
+      htmlSummary,
+      graphMediaFallback: params.graphMediaFallback,
+    });
     const shouldFetchGraphMessage = hasHtmlFileAttachment || hasChannelOrGroupHtml;
+    const isBotFrameworkPersonalChat = isBotFrameworkPersonalChatId(conversationId);
 
     // Personal DMs with the bot use Bot Framework conversation IDs (`a:...`
     // or `8:orgid:...`) which Graph's `/chats/{id}` endpoint rejects with
     // "Invalid ThreadId". Fetch media via the Bot Framework v3 attachments
     // endpoint instead, which speaks the same identifier space.
-    if (hasHtmlFileAttachment && isBotFrameworkPersonalChatId(conversationId)) {
+    if (hasHtmlFileAttachment && isBotFrameworkPersonalChat) {
       if (!serviceUrl) {
         log.debug?.("bot framework attachment skipped (missing serviceUrl)", {
           conversationType,
@@ -113,6 +132,7 @@ export async function resolveMSTeamsInboundMedia(params: {
           allowHosts,
           authAllowHosts: params.authAllowHosts,
           preserveFilenames,
+          deadline: params.deadline,
         });
         if (bfMedia.media.length > 0) {
           mediaList = bfMedia.media;
@@ -125,17 +145,17 @@ export async function resolveMSTeamsInboundMedia(params: {
       }
     }
 
-    if (
-      shouldFetchGraphMessage &&
-      mediaList.length === 0 &&
-      !isBotFrameworkPersonalChatId(conversationId)
-    ) {
+    if (shouldFetchGraphMessage && mediaList.length === 0 && !isBotFrameworkPersonalChat) {
+      const graphTeamAadGroupId =
+        conversationType.trim().toLowerCase() === "channel" && !teamAadGroupId
+          ? await params.resolveTeamAadGroupId?.()
+          : teamAadGroupId;
       const messageUrl = buildMSTeamsGraphMessageUrl({
         conversationType,
         conversationId,
         messageId: activity.id ?? undefined,
         threadRootMessageId: conversationMessageId ?? activity.replyToId,
-        teamAadGroupId: activity.channelData?.team?.aadGroupId,
+        teamAadGroupId: graphTeamAadGroupId,
         channelId: activity.channelData?.channel?.id,
       });
       if (!messageUrl) {
@@ -153,7 +173,7 @@ export async function resolveMSTeamsInboundMedia(params: {
           allowHosts,
           authAllowHosts: params.authAllowHosts,
           preserveFilenames,
-          log,
+          deadline: params.deadline,
           logger: log,
         });
         if (graphMedia.media.length > 0) {

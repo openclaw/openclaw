@@ -66,5 +66,7 @@ export type MSTeamsTurnContext = {
   sendActivities: (activities: Array<MSTeamsActivityParams>) => Promise<unknown>;
   updateActivity: (activity: MSTeamsActivityParams) => Promise<{ id?: string } | void>;
   deleteActivity: (activityId: string) => Promise<void>;
+  /** Resolve Bot Framework team metadata through this activity's regional service URL. */
+  getTeamDetails?: (teamId: string) => Promise<{ aadGroupId?: string }>;
   stream?: MSTeamsStreamer;
 };

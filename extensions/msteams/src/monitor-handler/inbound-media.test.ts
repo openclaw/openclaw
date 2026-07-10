@@ -6,7 +6,10 @@ vi.mock("../attachments.js", () => ({
   downloadMSTeamsGraphMedia: vi.fn(async () => ({ media: [] })),
   downloadMSTeamsBotFrameworkAttachments: vi.fn(async () => ({ media: [], attachmentCount: 0 })),
   buildMSTeamsGraphMessageUrl: vi.fn(
-    () => "https://graph.microsoft.com/v1.0/teams/team-aad-guid/channels/chan/messages/m",
+    (params: { conversationType: string; teamAadGroupId?: string }) =>
+      params.conversationType.toLowerCase() === "channel" && params.teamAadGroupId === undefined
+        ? undefined
+        : "https://graph.microsoft.com/v1.0/teams/team-aad-guid/channels/chan/messages/m",
   ),
   extractMSTeamsHtmlAttachmentIds: vi.fn(() => ["att-0", "att-1"]),
   isBotFrameworkPersonalChatId: vi.fn((id: string | null | undefined) => {
@@ -33,6 +36,7 @@ const baseParams = {
   tokenProvider: { getAccessToken: vi.fn(async () => "token") },
   conversationType: "channel",
   conversationId: "19:channel-thread@thread.tacv2",
+  teamAadGroupId: "team-aad-guid",
   activity: {
     id: "msg-1",
     replyToId: undefined,
@@ -125,7 +129,29 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
   });
 
-  it("triggers Graph fallback for a tagless channel HTML attachment", async () => {
+  it("triggers opted-in Graph fallback for text plus a tagless channel file stub", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      graphMediaFallback: true,
+      htmlSummary,
+      attachments: [
+        {
+          contentType: "Text/HTML; charset=utf-8",
+          content: '<div><at id="0">Bot</at></div>',
+        },
+      ],
+    });
+
+    expect(buildMSTeamsGraphMessageUrl).toHaveBeenCalled();
+    expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
+  });
+
+  it("keeps marker-free Graph fallback disabled by default", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
@@ -136,14 +162,14 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
       htmlSummary,
       attachments: [
         {
-          contentType: "Text/HTML; charset=utf-8",
-          content: '<div><at id="0">Bot</at> hello there</div>',
+          contentType: "text/html",
+          content: '<div><at id="0">Bot</at> Describe the attached image file</div>',
         },
       ],
     });
 
-    expect(buildMSTeamsGraphMessageUrl).toHaveBeenCalled();
-    expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
+    expect(buildMSTeamsGraphMessageUrl).not.toHaveBeenCalled();
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
   });
 
   it("triggers Graph fallback for a tagless group-chat HTML attachment", async () => {
@@ -154,8 +180,10 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
 
     await resolveMSTeamsInboundMedia({
       ...baseParams,
+      graphMediaFallback: true,
       conversationType: "groupChat",
       conversationId: "19:group-chat@thread.v2",
+      teamAadGroupId: undefined,
       activity: { id: "msg-1", replyToId: undefined, channelData: {} },
       htmlSummary,
       attachments: [{ contentType: "text/html", content: "<div>file stub</div>" }],
@@ -173,8 +201,10 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
 
     await resolveMSTeamsInboundMedia({
       ...baseParams,
+      graphMediaFallback: true,
       conversationType: "personal",
       conversationId: "19:real-graph-chat@unq.gbl.spaces",
+      teamAadGroupId: undefined,
       activity: { id: "msg-1", replyToId: undefined, channelData: {} },
       htmlSummary,
       attachments: [{ contentType: "text/html", content: "<div>mention only</div>" }],
@@ -193,12 +223,30 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
 
     await resolveMSTeamsInboundMedia({
       ...baseParams,
+      graphMediaFallback: true,
       attachments: [
         { contentType: "image/png", contentUrl: "https://example.com/img.png" },
         { contentType: "application/pdf", contentUrl: "https://example.com/doc.pdf" },
       ],
     });
 
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve Graph team identity when direct media succeeds", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValueOnce([
+      { path: "/tmp/direct.png", contentType: "image/png", placeholder: "<media:image>" },
+    ]);
+    const resolveTeamAadGroupId = vi.fn(async () => "team-aad-guid");
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      teamAadGroupId: undefined,
+      resolveTeamAadGroupId,
+      attachments: [{ contentType: "image/png", contentUrl: "https://example.com/direct.png" }],
+    });
+
+    expect(resolveTeamAadGroupId).not.toHaveBeenCalled();
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
   });
 
@@ -211,11 +259,12 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     await resolveMSTeamsInboundMedia({
       ...baseParams,
       conversationMessageId: "conversation-root",
+      teamAadGroupId: "entra-team-id",
       activity: {
         id: "reply-id",
         replyToId: "activity-root",
         channelData: {
-          team: { id: "bot-framework-team-id", aadGroupId: "entra-team-id" },
+          team: { id: "bot-framework-team-id", aadGroupId: "stale-activity-value" },
           channel: { id: "channel-id" },
         },
       },
@@ -235,6 +284,32 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
       teamAadGroupId: "entra-team-id",
       channelId: "channel-id",
     });
+  });
+
+  it("fails closed when a channel AAD group ID could not be resolved", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce(["att-0"]);
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      teamAadGroupId: undefined,
+      attachments: [
+        {
+          contentType: "text/html",
+          content: '<attachment id="att-0"></attachment>',
+        },
+      ],
+    });
+
+    expect(buildMSTeamsGraphMessageUrl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamAadGroupId: undefined,
+        channelId: "19:channel-thread@thread.tacv2",
+      }),
+    );
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
   });
 
   it("does NOT trigger Graph fallback when direct download succeeds", async () => {
@@ -333,7 +408,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     expect(mediaList[0].path).toBe("/tmp/report.pdf");
   });
 
-  it("skips the Graph fallback entirely for 'a:' conversation IDs", async () => {
+  it("skips Graph fallback for an 'a:' conversation without an exact Graph chat ID", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     vi.mocked(downloadMSTeamsBotFrameworkAttachments).mockClear();
     vi.mocked(downloadMSTeamsBotFrameworkAttachments).mockResolvedValue({
