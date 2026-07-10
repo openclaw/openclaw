@@ -32,6 +32,9 @@ inputs:
   generated-paths:
     description: Newline-delimited generated paths to commit.
     required: true
+  invalidation-paths:
+    description: Newline-delimited generator input paths that make an older run stale.
+    required: true
 
 runs:
   using: composite
@@ -75,6 +78,7 @@ runs:
         PR_TITLE: ${{ inputs.pr-title }}
         PR_BODY: ${{ inputs.pr-body }}
         GENERATED_PATHS: ${{ inputs.generated-paths }}
+        INVALIDATION_PATHS: ${{ inputs.invalidation-paths }}
       run: |
         set -euo pipefail
         export GH_PROMPT_DISABLED=1
@@ -102,6 +106,16 @@ runs:
           echo "Generated PR publication requires at least one generated path." >&2
           exit 1
         fi
+        invalidation_paths=()
+        while IFS= read -r invalidation_path; do
+          if [[ -n "${invalidation_path}" ]]; then
+            invalidation_paths+=("${invalidation_path}")
+          fi
+        done <<< "${INVALIDATION_PATHS}"
+        if [[ "${#invalidation_paths[@]}" -eq 0 ]]; then
+          echo "Generated PR publication requires at least one invalidation path." >&2
+          exit 1
+        fi
 
         find_open_pr() {
           timeout --signal=TERM --kill-after=10s 60s \
@@ -123,12 +137,6 @@ runs:
             echo "::error::Resolved workflow source is not an ancestor of latest ${BASE_BRANCH}."
             return 1
           fi
-          if ! git diff --quiet "${source_commit}" "${base_ref}" -- "${generated_paths[@]}"; then
-            echo "A newer main-triggered full locale refresh will retire the stale pull request." \
-              >> "${GITHUB_STEP_SUMMARY}"
-            return 0
-          fi
-
           current_head="$(read_remote_head)"
           if [[ -z "${current_head}" ]]; then
             echo "Stale generated pull request is already unmergeable because its branch is absent." \
@@ -194,6 +202,14 @@ runs:
           if ! git merge-base --is-ancestor "${source_commit}" "${base_ref}"; then
             echo "::error::Resolved workflow source is not an ancestor of latest ${BASE_BRANCH}."
             return 1
+          fi
+
+          # A completed older run must never publish output after a newer base changed generator
+          # inputs. Retire any existing deterministic-branch PR and let the newest queued run own it.
+          if ! git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"; then
+            echo "::notice::Deferring stale generated output because generator inputs changed on ${BASE_BRANCH}."
+            prepare_outcome=stale-input
+            return 0
           fi
 
           # Never overwrite a generated path that changed on main after this workflow's source SHA.
@@ -309,9 +325,16 @@ runs:
           > "${changed_paths_file}"
 
         prepare_branch
+        if [[ "${prepare_outcome}" = "stale-input" ]]; then
+          echo "A newer main-triggered full locale refresh will reconcile changed generator inputs." \
+            >> "${GITHUB_STEP_SUMMARY}"
+          neutralize_stale_pr
+          exit 0
+        fi
         if [[ "${prepare_outcome}" = "deferred" ]]; then
           echo "A newer main-triggered full locale refresh will reconcile the generated output." \
             >> "${GITHUB_STEP_SUMMARY}"
+          neutralize_stale_pr
           exit 0
         fi
         if [[ "${prepare_outcome}" = "merged" ]]; then
@@ -334,9 +357,16 @@ runs:
           # A merge can consume and delete the branch after observation. Rebuild from latest base;
           # overlap detection defers to the guaranteed main-triggered full refresh.
           prepare_branch
+          if [[ "${prepare_outcome}" = "stale-input" ]]; then
+            echo "A newer main-triggered full locale refresh will reconcile changed generator inputs." \
+              >> "${GITHUB_STEP_SUMMARY}"
+            neutralize_stale_pr
+            exit 0
+          fi
           if [[ "${prepare_outcome}" = "deferred" ]]; then
             echo "A newer main-triggered full locale refresh will reconcile the generated output." \
               >> "${GITHUB_STEP_SUMMARY}"
+            neutralize_stale_pr
             exit 0
           fi
           if [[ "${prepare_outcome}" = "merged" ]]; then
