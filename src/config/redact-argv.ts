@@ -41,7 +41,7 @@ const SECRET_FLAG_NAMES = new Set([
 ]);
 
 const SECRET_FLAG_SUFFIX_PATTERN =
-  /^--(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?(?:token|secret|password|passwd|api[-_]?key|api[-_]?secret|secret[-_]?key|secret[-_]?access[-_]?key|webhook|credential|bearer|pat|private[-_]?key|recovery[-_]?key|signing[-_]?key|encryption[-_]?key|master[-_]?key|session[-_]?key|gateway[-_]?key|service[-_]?key|hook[-_]?key)$/;
+  /^--(?:[a-z0-9]+(?:[-_][a-z0-9]+)*[-_])?(?:token|secret|password|passwd|api[-_]?key|api[-_]?secret|secret[-_]?key|secret[-_]?access[-_]?key|webhook|credential|bearer|pat|private[-_]?key|recovery[-_]?key|signing[-_]?key|encryption[-_]?key|master[-_]?key|session[-_]?key|gateway[-_]?key|service[-_]?key|hook[-_]?key)$/;
 
 function parseFlagName(arg: string): string | null {
   if (!arg.startsWith("--")) {

@@ -351,6 +351,9 @@ describe("config io audit helpers", () => {
       "--secret-key",
       "opaque-secret-key",
       "--aws-secret-access-key=opaque-aws-secret",
+      "--openai_api_key",
+      "opaque-underscore-key",
+      "--aws_secret_access_key=opaque-underscore-aws-secret",
     ];
     const result = redactConfigAuditArgv(argv);
     expect(result).toEqual([
@@ -364,6 +367,9 @@ describe("config io audit helpers", () => {
       "--secret-key",
       "***",
       "--aws-secret-access-key=***",
+      "--openai_api_key",
+      "***",
+      "--aws_secret_access_key=***",
     ]);
   });
 

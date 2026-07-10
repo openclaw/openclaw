@@ -182,6 +182,7 @@ describe("handleCommands /mcp", () => {
       const positionalArgSecret = "ghp_realgithubtoken1234567890ABCD";
       const secretKeyArg = "opaque-secret-key-value";
       const awsSecretAccessKeyArg = "opaque-aws-secret-access-key-value";
+      const underscoreApiKeyArg = "opaque-underscore-api-key-value";
       mcpServers.set("billing-server", {
         command: "uvx",
         args: [
@@ -193,6 +194,8 @@ describe("handleCommands /mcp", () => {
           "--secret-key",
           secretKeyArg,
           `--aws-secret-access-key=${awsSecretAccessKeyArg}`,
+          "--openai_api_key",
+          underscoreApiKeyArg,
           "--region",
           "us-east-1",
         ],
@@ -238,6 +241,7 @@ describe("handleCommands /mcp", () => {
       expect(namedText).toContain(`"--token=${REDACTED_SENTINEL}"`);
       expect(namedText).toContain('"--secret-key"');
       expect(namedText).toContain(`"--aws-secret-access-key=${REDACTED_SENTINEL}"`);
+      expect(namedText).toContain('"--openai_api_key"');
       expect(namedText).toContain('"--region"');
       expect(namedText).toContain('"us-east-1"');
       expect(namedText).toContain(REDACTED_SENTINEL);
@@ -248,6 +252,7 @@ describe("handleCommands /mcp", () => {
       expect(namedText).not.toContain(positionalArgSecret);
       expect(namedText).not.toContain(secretKeyArg);
       expect(namedText).not.toContain(awsSecretAccessKeyArg);
+      expect(namedText).not.toContain(underscoreApiKeyArg);
       expect(namedText).not.toContain("sk-test-secret-value");
 
       const allParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
@@ -272,6 +277,7 @@ describe("handleCommands /mcp", () => {
       expect(allText).not.toContain(positionalArgSecret);
       expect(allText).not.toContain(secretKeyArg);
       expect(allText).not.toContain(awsSecretAccessKeyArg);
+      expect(allText).not.toContain(underscoreApiKeyArg);
       expect(allText).not.toContain("local-env-secret-value");
     });
   });
