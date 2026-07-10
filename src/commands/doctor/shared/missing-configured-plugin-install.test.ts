@@ -9,6 +9,7 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
+import { hasRetainedManagedNpmInstallMarker } from "../../../plugins/managed-npm-retention.js";
 import { VERSION } from "../../../version.js";
 
 function expectedNpmInstallSpec(spec: string): string {
@@ -3636,7 +3637,55 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
     expect(updateRecord.resolvedSpec).toBeUndefined();
     expect(updateRecord.resolvedVersion).toBeUndefined();
+    expect(hasRetainedManagedNpmInstallMarker(pluginDir)).toBe(true);
     expect(result.changes).toEqual(['Repaired broken installed plugin "demo".']);
+  });
+
+  it("clears dependency-repair retention when the npm update fails", async () => {
+    const pluginDir = path.join(makeTempDir(), "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    const records = {
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        installPath: pluginDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      changed: false,
+      config: { plugins: { installs: records } },
+      outcomes: [
+        {
+          pluginId: "demo",
+          status: "error",
+          message: "update failed",
+        },
+      ],
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({ cfg: {}, env: {} });
+
+    expect(hasRetainedManagedNpmInstallMarker(pluginDir)).toBe(false);
+    expect(result.warnings).toContain("update failed");
   });
 
   it("reinstalls a known configured plugin from the catalog when its recorded install path is missing", async () => {
