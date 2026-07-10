@@ -85,10 +85,19 @@ class CronJobConfigRevisionConflictError extends Error {
   }
 }
 
+function publicCronJobState(job: CronJob): CronJob["state"] {
+  const {
+    pendingCatchupDeferral: _pendingCatchupDeferral,
+    ...state
+  } = job.state;
+  return state;
+}
+
 function cronJobReadView(job: CronJob) {
   return {
     ...job,
     configRevision: resolveCronJobConfigRevision(job),
+    state: publicCronJobState(job),
     nextRunAtMs: job.state.nextRunAtMs,
     lastRunAtMs: job.state.lastRunAtMs,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus,

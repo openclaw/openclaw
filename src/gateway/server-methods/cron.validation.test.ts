@@ -576,6 +576,23 @@ describe("cron method validation", () => {
     expectCronReadSuccess(respond, job);
   });
 
+  it("hides internal catch-up deferral state from cron.get responses", async () => {
+    const job = createCronJob({
+      id: "cron-42",
+      state: {
+        nextRunAtMs: 2000,
+        pendingCatchupDeferral: true,
+      },
+    });
+
+    const { respond } = await invokeCronGet({ id: "cron-42" }, job);
+    const payload = respond.mock.calls[0]?.[1] as CronJob | undefined;
+
+    expect(payload?.state).toEqual({ nextRunAtMs: 2000 });
+    expect(payload?.nextRunAtMs).toBe(2000);
+    expect(payload?.state).not.toHaveProperty("pendingCatchupDeferral");
+  });
+
   it("hides caller-scoped cron.get for a foreign agent", async () => {
     const job = createCronJob({ id: "cron-42", agentId: "ops" });
 
@@ -733,6 +750,25 @@ describe("cron method validation", () => {
     );
 
     expect(firstPayload.snapshotRevision).toBe(secondPayload.snapshotRevision);
+  });
+
+  it("hides internal catch-up deferral state from full cron.list responses", async () => {
+    const context = createCronContext(
+      createCronJob({
+        state: {
+          nextRunAtMs: 2000,
+          pendingCatchupDeferral: true,
+        },
+      }),
+    );
+
+    const { respond } = await invokeCron("cron.list", { includeDisabled: true }, { context });
+    const payload = respond.mock.calls[0]?.[1] as { jobs?: CronJob[] } | undefined;
+    const listedJob = payload?.jobs?.[0];
+
+    expect(listedJob?.state).toEqual({ nextRunAtMs: 2000 });
+    expect(listedJob?.nextRunAtMs).toBe(2000);
+    expect(listedJob?.state).not.toHaveProperty("pendingCatchupDeferral");
   });
 
   it("rejects caller-scoped cron.list for a foreign explicit agentId", async () => {
