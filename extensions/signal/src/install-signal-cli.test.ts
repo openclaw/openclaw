@@ -8,11 +8,16 @@ import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseAsset } from "./install-signal-cli.js";
 
-const { fetchWithSsrFGuardMock, resolveBrewExecutableMock, runPluginCommandWithTimeoutMock } =
-  vi.hoisted(() => ({
+const {
+  fetchWithSsrFGuardMock,
+  resolveBrewExecutableMock,
+  runPluginCommandWithTimeoutMock,
+  tempDownloadPaths,
+} = vi.hoisted(() => ({
     fetchWithSsrFGuardMock: vi.fn(),
     resolveBrewExecutableMock: vi.fn(),
     runPluginCommandWithTimeoutMock: vi.fn(),
+    tempDownloadPaths: [] as string[],
   }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -30,6 +35,21 @@ vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => {
 vi.mock("openclaw/plugin-sdk/run-command", () => ({
   runPluginCommandWithTimeout: runPluginCommandWithTimeoutMock,
 }));
+
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>();
+  return {
+    ...actual,
+    withTempDownloadPath: async (
+      params: { prefix: string; fileName?: string; tmpDir?: string },
+      run: (tmpPath: string) => Promise<unknown>,
+    ) =>
+      await actual.withTempDownloadPath(params, async (tmpPath) => {
+        tempDownloadPaths.push(tmpPath);
+        return await run(tmpPath);
+      }),
+  };
+});
 
 const {
   downloadToFile,
@@ -88,10 +108,24 @@ async function withTempFile(run: (filePath: string) => Promise<void>) {
   }
 }
 
+const originalPlatform = process.platform;
+const originalArch = process.arch;
+
+function setProcessPlatform(platform: NodeJS.Platform, arch: string) {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+  Object.defineProperty(process, "arch", { configurable: true, value: arch });
+}
+
 beforeEach(() => {
   fetchWithSsrFGuardMock.mockReset();
   resolveBrewExecutableMock.mockReset();
   runPluginCommandWithTimeoutMock.mockReset();
+  tempDownloadPaths.length = 0;
+});
+
+afterEach(() => {
+  Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+  Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
 });
 
 function requireAsset(asset: ReleaseAsset | undefined, label: string): ReleaseAsset {
@@ -108,6 +142,15 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   } catch (error) {
     expect((error as { code?: string }).code).toBe("ENOENT");
   }
+}
+
+async function expectTempDownloadDirMissing(): Promise<void> {
+  expect(tempDownloadPaths).toHaveLength(1);
+  const [tmpPath] = tempDownloadPaths;
+  if (!tmpPath) {
+    throw new Error("expected one captured temp download path");
+  }
+  await expectPathMissing(path.dirname(tmpPath));
 }
 
 describe("looksLikeArchive", () => {
@@ -374,71 +417,33 @@ describe("installSignalCliFromRelease", () => {
   });
 
   it("removes the download temp dir even when extraction fails", async () => {
-    const originalPlatform = process.platform;
-    const originalArch = process.arch;
-    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-    Object.defineProperty(process, "arch", { configurable: true, value: "x64" });
-    // Capture the real temp dir mkdtemp creates so we can assert it is removed.
-    const createdTempDirs: string[] = [];
-    const originalMkdtemp = fs.mkdtemp.bind(fs);
-    const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix) => {
-      const dir = await originalMkdtemp(prefix as string);
-      if (dir.includes("openclaw-signal-") && !dir.includes("staging")) {
-        createdTempDirs.push(dir);
-      }
-      return dir;
-    });
-    try {
-      // First call: release metadata with a Linux-native asset.
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(
-        okDownloadResponse(
-          JSON.stringify({
-            tag_name: "v0.0.0-leak-test",
-            assets: [
-              {
-                name: "signal-cli-0.0.0-Linux-native.tar.gz",
-                browser_download_url: "https://example.com/linux-native.tar.gz",
-              },
-            ],
-          }),
-          { headers: { "content-type": "application/json" } },
-        ),
-      );
-      // Second call (downloadToFile): bytes that are not a valid tarball, so
-      // extractSignalCliArchive throws and the function returns an error.
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(okDownloadResponse("not-a-real-archive"));
+    setProcessPlatform("linux", "x64");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      okDownloadResponse(
+        JSON.stringify({
+          tag_name: "v0.0.0-leak-test",
+          assets: [
+            {
+              name: "signal-cli-0.0.0-Linux-native.tar.gz",
+              browser_download_url: "https://example.com/linux-native.tar.gz",
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(okDownloadResponse("not-a-real-archive"));
 
-      const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
 
-      expect(result.ok).toBe(false);
-      // The temp dir created during this call must have been removed by the finally.
-      expect(createdTempDirs.length).toBe(1);
-      await expect(fs.stat(createdTempDirs[0] as string)).rejects.toThrow();
-    } finally {
-      mkdtempSpy.mockRestore();
-      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-      Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
-    }
+    expect(result.ok).toBe(false);
+    await expectTempDownloadDirMissing();
   });
 
   it("removes the download temp dir on the success path too", async () => {
-    const originalPlatform = process.platform;
-    const originalArch = process.arch;
-    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-    Object.defineProperty(process, "arch", { configurable: true, value: "x64" });
-    const createdTempDirs: string[] = [];
-    const originalMkdtemp = fs.mkdtemp.bind(fs);
-    const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix) => {
-      const dir = await originalMkdtemp(prefix as string);
-      if (dir.includes("openclaw-signal-") && !dir.includes("staging")) {
-        createdTempDirs.push(dir);
-      }
-      return dir;
-    });
+    setProcessPlatform("linux", "x64");
+    const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-staging-"));
     try {
-      // Build a real tar.gz archive containing a signal-cli binary so the full
-      // success path (download -> extract -> find binary) runs against real bytes.
-      const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-staging-"));
       const inner = path.join(staging, "signal-cli-0.0.0-success-test");
       await fs.mkdir(inner, { recursive: true });
       await fs.writeFile(path.join(inner, "signal-cli"), "#!/bin/sh\necho ok\n", "utf-8");
@@ -467,32 +472,45 @@ describe("installSignalCliFromRelease", () => {
       const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
 
       expect(result.ok).toBe(true);
-      expect(createdTempDirs.length).toBe(1);
-      // The temp dir (and the downloaded archive inside it) must be gone.
-      await expect(fs.stat(createdTempDirs[0] as string)).rejects.toThrow();
-      await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      if (!result.cliPath) {
+        throw new Error("expected the installed signal-cli path");
+      }
+      const installedStat = await fs.stat(result.cliPath);
+      expect(installedStat.isFile()).toBe(true);
+      expect(installedStat.mode & 0o111).not.toBe(0);
+      await expectTempDownloadDirMissing();
     } finally {
-      mkdtempSpy.mockRestore();
-      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-      Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
+      await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
     }
+  });
+
+  it("removes the download temp dir when the download throws", async () => {
+    setProcessPlatform("linux", "x64");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      okDownloadResponse(
+        JSON.stringify({
+          tag_name: "v0.0.0-download-failure-test",
+          assets: [
+            {
+              name: "signal-cli-0.0.0-Linux-native.tar.gz",
+              browser_download_url: "https://example.com/linux-native.tar.gz",
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("download failed"));
+
+    await expect(
+      installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv),
+    ).rejects.toThrow("download failed");
+
+    await expectTempDownloadDirMissing();
   });
 });
 
 describe("installSignalCli", () => {
-  const originalPlatform = process.platform;
-  const originalArch = process.arch;
-
-  function setProcessPlatform(platform: NodeJS.Platform, arch: string) {
-    Object.defineProperty(process, "platform", { configurable: true, value: platform });
-    Object.defineProperty(process, "arch", { configurable: true, value: arch });
-  }
-
-  afterEach(() => {
-    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-    Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
-  });
-
   it("uses Homebrew on macOS instead of downloading the first GitHub release archive", async () => {
     setProcessPlatform("darwin", "arm64");
     const brewPrefix = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-brew-"));
