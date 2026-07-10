@@ -348,6 +348,9 @@ describe("config io audit helpers", () => {
       "--rotated-signing-key=PEM-LIKE-MATERIAL",
       "--ops-master-key",
       "ABCDEF1234567890",
+      "--secret-key",
+      "opaque-secret-key",
+      "--aws-secret-access-key=opaque-aws-secret",
     ];
     const result = redactConfigAuditArgv(argv);
     expect(result).toEqual([
@@ -358,6 +361,9 @@ describe("config io audit helpers", () => {
       "--rotated-signing-key=***",
       "--ops-master-key",
       "***",
+      "--secret-key",
+      "***",
+      "--aws-secret-access-key=***",
     ]);
   });
 
