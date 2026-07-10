@@ -17,6 +17,7 @@ import type {
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { sleep } from "../../utils/sleep.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
@@ -49,6 +50,10 @@ const supportExportModuleLoader = createLazyImportLoader(
 const daemonStatusGatherModuleLoader = createLazyImportLoader(
   () => import("../daemon-cli/status.gather.js"),
 );
+
+const USAGE_COST_SETTLE_INITIAL_POLL_MS = 250;
+const USAGE_COST_SETTLE_MAX_POLL_MS = 5_000;
+const USAGE_COST_SETTLE_TIMEOUT_MS = 5 * 60_000;
 
 function loadConfigModule() {
   return configModuleLoader.load();
@@ -103,6 +108,34 @@ function gatewayCallOpts(cmd: Command): Command {
 async function callGatewayCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
   const mod = await import("./call.js");
   return mod.callGatewayCli(method, opts, params);
+}
+
+async function loadSettledCostUsageSummary(
+  rpcOpts: GatewayRpcOpts,
+  params: { days: number; agentId?: string; agentScope?: "all" },
+): Promise<CostUsageSummary> {
+  const startedAt = Date.now();
+  let pollMs = USAGE_COST_SETTLE_INITIAL_POLL_MS;
+  for (;;) {
+    const summary = (await callGatewayCli("usage.cost", rpcOpts, params)) as CostUsageSummary;
+    const status = summary.cacheStatus?.status;
+    if (status !== "refreshing" && status !== "partial") {
+      return summary;
+    }
+
+    const remainingMs = USAGE_COST_SETTLE_TIMEOUT_MS - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      const cachedFiles = summary.cacheStatus?.cachedFiles ?? 0;
+      const pendingFiles = summary.cacheStatus?.pendingFiles ?? 0;
+      throw new Error(
+        `Timed out waiting for usage cost cache refresh (${cachedFiles} cached, ${pendingFiles} pending)`,
+      );
+    }
+    // Keep large cache rebuilds in the Gateway background; this explicit audit
+    // command waits with backoff so it never presents a refreshing zero as final.
+    await sleep(Math.min(pollMs, remainingMs));
+    pollMs = Math.min(pollMs * 2, USAGE_COST_SETTLE_MAX_POLL_MS);
+  }
 }
 
 async function runGatewayCommand(
@@ -567,17 +600,16 @@ export function registerGatewayCli(program: Command) {
             if (agentId && opts.allAgents) {
               throw new Error("Use --agent or --all-agents, not both");
             }
-            const result = await callGatewayCli("usage.cost", rpcOpts, {
+            const summary = await loadSettledCostUsageSummary(rpcOpts, {
               days,
               ...(agentId ? { agentId } : {}),
               ...(opts.allAgents ? { agentScope: "all" } : {}),
             });
             if (rpcOpts.json) {
-              defaultRuntime.writeJson(result);
+              defaultRuntime.writeJson(summary);
               return;
             }
             const rich = isRich();
-            const summary = result as CostUsageSummary;
             for (const line of await renderCostUsageSummaryAsync(summary, days, rich)) {
               defaultRuntime.log(line);
             }
