@@ -251,11 +251,11 @@ export function prepareGatewaySuspend(params: {
   let suspensionInvalidated = false;
   const admission = tryBeginGatewaySuspendAdmission(() => {
     suspensionInvalidated = true;
-    const current = COORDINATOR_STATE.current;
-    if (current?.owner !== owner) {
+    const activeEntry = COORDINATOR_STATE.current;
+    if (activeEntry?.owner !== owner) {
       return;
     }
-    clearEntryTimer(current);
+    clearEntryTimer(activeEntry);
     COORDINATOR_STATE.current = null;
   });
   if (!admission) {
