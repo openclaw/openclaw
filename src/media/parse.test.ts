@@ -47,6 +47,10 @@ describe("splitMediaFromOutput", () => {
   }
 
   it.each([
+    // Bug #103473: URI scheme is case-insensitive per RFC 3986.  Uppercase
+    // FILE:// must extract the same local path as lowercase file://.
+    ["/tmp/generated.png", "MEDIA:FILE:///tmp/generated.png"],
+    ["/tmp/generated.png", "MEDIA:File:///tmp/generated.png"],
     ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
     ["/Users/pete/My File.png", 'MEDIA:"/Users/pete/My File.png"'],
     ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],

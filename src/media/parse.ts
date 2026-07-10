@@ -33,9 +33,10 @@ export type SplitMediaFromOutputOptions = {
   extractMediaDirectives?: boolean;
 };
 
-/** Converts file URLs into plain local paths before downstream media validation. */
+/** Converts file URLs into plain local paths before downstream media validation.
+ * URI scheme is case-insensitive per RFC 3986 §3.1. */
 export function normalizeMediaSource(src: string): string {
-  return src.startsWith("file://") ? src.replace("file://", "") : src;
+  return src.toLowerCase().startsWith("file://") ? src.slice(7) : src;
 }
 
 const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:]|$).*/s;
