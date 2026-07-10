@@ -7,7 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
@@ -354,16 +354,20 @@ const stringifyCell = (value: unknown, fallback = "-") => {
   return fallback;
 };
 
-const pad = (value: unknown, width: number) => stringifyCell(value).padEnd(width);
+const pad = (value: unknown, width: number) => {
+  const text = stringifyCell(value);
+  const remaining = width - visibleWidth(text);
+  return remaining > 0 ? `${text}${" ".repeat(remaining)}` : text;
+};
 
 const truncate = (value: string, width: number) => {
-  if (value.length <= width) {
+  if (visibleWidth(value) <= width) {
     return value;
   }
   if (width <= 3) {
-    return truncateUtf16Safe(value, width);
+    return truncateToVisibleWidth(value, width);
   }
-  return `${truncateUtf16Safe(value, width - 3)}...`;
+  return `${truncateToVisibleWidth(value, width - 3)}...`;
 };
 
 const formatIsoMinute = (iso: string) => {
