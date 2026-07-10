@@ -14,6 +14,7 @@
  */
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import {
+  clearSessionGoalWaitBarrier,
   recordSessionGoalContinuation,
   resetSessionGoalContinuations,
   updateSessionGoalStatus,
@@ -116,6 +117,10 @@ function readGoalSnapshot(
     ...(goal.tokenBudget !== undefined ? { tokenBudget: goal.tokenBudget } : {}),
     continuationTurns: goal.continuationTurns,
     ...(goal.contract ? { contract: goal.contract } : {}),
+    ...(goal.wait?.waitingUntil !== undefined ? { waitingUntil: goal.wait.waitingUntil } : {}),
+    ...(goal.wait?.waitingOnSessionKey
+      ? { waitingOnSessionKey: goal.wait.waitingOnSessionKey }
+      : {}),
   };
 }
 
@@ -153,6 +158,23 @@ export function createGoalDriverService(
     isInboundQueueEmpty: (sessionKey) =>
       listQueuedChatTurnsForSession({ chatQueuedTurns, sessionKeys: [sessionKey] }).length === 0 &&
       !hasSystemEvents(sessionKey),
+
+    // g5 (session barrier) — the watched session still has a Control-UI-visible
+    // run in flight. Reuses the same active-run check as g2, applied to the
+    // barrier's target session key rather than the goal's own session.
+    isWaitedSessionActive: (waitedSessionKey) =>
+      hasVisibleActiveSessionRun({
+        context: { chatAbortControllers },
+        requestedKey: waitedSessionKey,
+        canonicalKey: waitedSessionKey,
+      }),
+    // g5 — drop a satisfied barrier so the next wake resumes normal gating.
+    clearWaitBarrier: (sessionKey) => {
+      const { storePath } = resolveScope(config, sessionKey);
+      void clearSessionGoalWaitBarrier({ sessionKey, storePath }).catch((err: unknown) => {
+        log?.warn({ err: String(err), sessionKey }, "goal-driver: clearWaitBarrier failed");
+      });
+    },
 
     buildContinuationPrompt: (goal) => formatGoalDriverContinuationPrompt(goal),
 

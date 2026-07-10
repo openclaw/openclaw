@@ -4,11 +4,13 @@ import {
   clearSessionGoal,
   createSessionGoal,
   formatSessionGoalStatus,
+  clearSessionGoalWaitBarrier,
   getSessionGoal,
   normalizeSessionGoalContract,
   recordSessionGoalContinuation,
   resetSessionGoalContinuations,
   resolveSessionGoalDisplayState,
+  setSessionGoalWaitBarrier,
   updateSessionGoalContract,
   updateSessionGoalObjective,
   updateSessionGoalStatus,
@@ -591,6 +593,95 @@ describe("session goals", () => {
         contract: undefined,
       });
       expect(cleared.contract).toBeUndefined();
+    });
+  });
+
+  describe("wait barrier", () => {
+    async function activeGoal() {
+      await writeSession(0);
+      await createSessionGoal({
+        storePath: fixture.storePath(),
+        sessionKey,
+        objective: "ship",
+        now: 10,
+      });
+    }
+
+    it("sets a time barrier and clears it", async () => {
+      await activeGoal();
+      const parked = await setSessionGoalWaitBarrier({
+        storePath: fixture.storePath(),
+        sessionKey,
+        now: 100,
+        waitingUntil: 100 + 5_000,
+        reason: "CI running",
+      });
+      expect(parked?.wait?.waitingUntil).toBe(100 + 5_000);
+      expect(parked?.wait?.waitingReason).toBe("CI running");
+      expect(parked?.wait?.waitingSince).toBe(100);
+
+      const unparked = await clearSessionGoalWaitBarrier({
+        storePath: fixture.storePath(),
+        sessionKey,
+        now: 200,
+      });
+      expect(unparked?.wait).toBeUndefined();
+    });
+
+    it("prefers a session barrier over a time barrier when both are supplied", async () => {
+      await activeGoal();
+      const parked = await setSessionGoalWaitBarrier({
+        storePath: fixture.storePath(),
+        sessionKey,
+        now: 100,
+        waitingUntil: 100 + 5_000,
+        waitingOnSessionKey: "agent:main:cron:build",
+      });
+      expect(parked?.wait?.waitingOnSessionKey).toBe("agent:main:cron:build");
+      expect(parked?.wait?.waitingUntil).toBeUndefined();
+    });
+
+    it("rejects an already-passed time barrier and requires an active goal", async () => {
+      await activeGoal();
+      const past = await setSessionGoalWaitBarrier({
+        storePath: fixture.storePath(),
+        sessionKey,
+        now: 100,
+        waitingUntil: 50,
+      });
+      expect(past).toBeUndefined();
+
+      // A non-active goal cannot be parked.
+      await updateSessionGoalStatus({
+        storePath: fixture.storePath(),
+        sessionKey,
+        status: "paused",
+        now: 110,
+      });
+      const parkedPaused = await setSessionGoalWaitBarrier({
+        storePath: fixture.storePath(),
+        sessionKey,
+        now: 120,
+        waitingUntil: 120 + 5_000,
+      });
+      expect(parkedPaused).toBeUndefined();
+    });
+
+    it("drops the barrier when the goal changes status", async () => {
+      await activeGoal();
+      await setSessionGoalWaitBarrier({
+        storePath: fixture.storePath(),
+        sessionKey,
+        now: 100,
+        waitingOnSessionKey: "agent:main:cron:build",
+      });
+      const paused = await updateSessionGoalStatus({
+        storePath: fixture.storePath(),
+        sessionKey,
+        status: "paused",
+        now: 200,
+      });
+      expect(paused.wait).toBeUndefined();
     });
   });
 });

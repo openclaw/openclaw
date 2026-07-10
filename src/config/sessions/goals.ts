@@ -307,6 +307,9 @@ export async function updateSessionGoalStatus(
         ...(options.status === "blocked" ? { blockedAt: now } : {}),
         ...(options.status === "complete" ? { completedAt: now } : {}),
       };
+      // A parked wait barrier is meaningless once the goal changes status: a
+      // pause/block/complete abandons it, and resuming to active starts fresh.
+      delete next.wait;
       if (resetsBudgetWindow) {
         next.tokenStart = freshTokenStart ?? 0;
         next.tokenStartFresh = freshTokenStart !== undefined;
@@ -415,6 +418,92 @@ export async function updateSessionGoalContract(
   }
   emitGoalUpdated(goalToUpdatedEvent(options.sessionKey, updated, "host"));
   return cloneGoal(updated);
+}
+
+/**
+ * Sets a parked wait barrier on the active goal. While set and unsatisfied, the
+ * goal driver quiesces without firing a continuation or consuming a no-progress
+ * turn. Exactly one barrier kind is stored: a time barrier (`waitingUntil`) or a
+ * session barrier (`waitingOnSessionKey`); passing both prefers the session key.
+ * No-ops (returns undefined) when no `active` goal exists or neither field is
+ * usable.
+ */
+export async function setSessionGoalWaitBarrier(
+  options: SessionGoalStoreOptions & {
+    waitingUntil?: number;
+    waitingOnSessionKey?: string;
+    reason?: string;
+  },
+): Promise<SessionGoal | undefined> {
+  const now = nowMs(options.now);
+  const waitingOnSessionKey = options.waitingOnSessionKey?.trim() || undefined;
+  const waitingUntil =
+    !waitingOnSessionKey &&
+    typeof options.waitingUntil === "number" &&
+    Number.isFinite(options.waitingUntil) &&
+    options.waitingUntil > now
+      ? Math.floor(options.waitingUntil)
+      : undefined;
+  if (!waitingOnSessionKey && waitingUntil === undefined) {
+    return undefined;
+  }
+  const reason = options.reason?.trim() || undefined;
+  let updated: SessionGoal | undefined;
+  await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
+      const goal = entry.goal;
+      if (!goal || goal.status !== "active") {
+        return null;
+      }
+      const wait: NonNullable<SessionGoal["wait"]> = {
+        waitingSince: now,
+        ...(waitingOnSessionKey
+          ? { waitingOnSessionKey }
+          : waitingUntil !== undefined
+            ? { waitingUntil }
+            : {}),
+        ...(reason ? { waitingReason: reason } : {}),
+      };
+      updated = { ...goal, wait, updatedAt: now };
+      return { goal: updated };
+    },
+    { fallbackEntry: options.fallbackEntry },
+  );
+  if (updated) {
+    emitGoalUpdated(goalToUpdatedEvent(options.sessionKey, updated, "host"));
+  }
+  return updated ? cloneGoal(updated) : undefined;
+}
+
+/**
+ * Clears any parked wait barrier from a goal. Called by the driver once a
+ * barrier is satisfied (deadline passed / watched session's run ended), and by
+ * the user-facing unwait path. No-ops when no barrier is set.
+ */
+export async function clearSessionGoalWaitBarrier(
+  options: SessionGoalStoreOptions,
+): Promise<SessionGoal | undefined> {
+  const now = nowMs(options.now);
+  let updated: SessionGoal | undefined;
+  await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
+      const goal = entry.goal;
+      if (!goal || !goal.wait) {
+        return null;
+      }
+      const next = { ...goal, updatedAt: now };
+      delete next.wait;
+      updated = next;
+      return { goal: updated };
+    },
+    { fallbackEntry: options.fallbackEntry },
+  );
+  if (updated) {
+    emitGoalUpdated(goalToUpdatedEvent(options.sessionKey, updated, "host"));
+  }
+  return updated ? cloneGoal(updated) : undefined;
 }
 
 /**

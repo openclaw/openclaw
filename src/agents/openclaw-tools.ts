@@ -55,6 +55,7 @@ import {
   createCreateGoalTool,
   createGetGoalTool,
   createSetGoalContractTool,
+  createSetGoalWaitTool,
   createUpdateGoalTool,
 } from "./tools/goal-tools.js";
 import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
@@ -559,6 +560,12 @@ export function createOpenClawTools(
       config: resolvedConfig,
     }),
     createSetGoalContractTool({
+      agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
+      sessionAgentId,
+      config: resolvedConfig,
+    }),
+    createSetGoalWaitTool({
       agentSessionKey: options?.agentSessionKey,
       runSessionKey: options?.runSessionKey,
       sessionAgentId,

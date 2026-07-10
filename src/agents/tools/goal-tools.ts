@@ -8,6 +8,7 @@ import {
   createSessionGoal,
   getSessionGoal,
   MODEL_UPDATABLE_SESSION_GOAL_STATUSES,
+  setSessionGoalWaitBarrier,
   updateSessionGoalContract,
   updateSessionGoalStatus,
 } from "../../config/sessions/goals.js";
@@ -77,6 +78,21 @@ const CreateGoalToolSchema = Type.Object({
 });
 
 const SetGoalContractToolSchema = Type.Object({ ...ContractToolFields });
+
+const SetGoalWaitToolSchema = Type.Object({
+  seconds: Type.Optional(
+    Type.Number({
+      description:
+        "Park the goal for this many seconds (a time backoff). Ignored when session_key is set.",
+    }),
+  ),
+  session_key: Type.Optional(
+    Type.String({
+      description: "Park the goal until this session key's run finishes.",
+    }),
+  ),
+  reason: Type.Optional(Type.String({ description: "Short reason the goal is parked." })),
+});
 
 const UpdateGoalToolSchema = Type.Object({
   status: stringEnum(MODEL_UPDATABLE_SESSION_GOAL_STATUSES, {
@@ -196,6 +212,39 @@ export function createSetGoalContractTool(options: GoalToolOptions): AnyAgentToo
         contract: Object.keys(contract).length > 0 ? contract : undefined,
       });
       return jsonResult({ status: "updated", goal });
+    },
+  };
+}
+
+/** Creates the tool that parks the current goal behind a wait barrier. */
+export function createSetGoalWaitTool(options: GoalToolOptions): AnyAgentTool {
+  return {
+    label: "Set Goal Wait",
+    name: "set_goal_wait",
+    displaySummary: "Park a thread goal on a wait barrier",
+    description:
+      "Park the active goal while blocked on async work so the goal driver stops firing continuations until the barrier clears. Provide seconds (a time backoff) OR session_key (wait for that session's run to finish). The barrier auto-clears once satisfied. Fails when no active goal exists.",
+    parameters: SetGoalWaitToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const sessionKey = readStringParam(params, "session_key");
+      const seconds = readNumberParam(params, "seconds");
+      const reason = readStringParam(params, "reason");
+      if (!sessionKey && (seconds === undefined || seconds <= 0)) {
+        throw new ToolInputError("provide session_key or a positive seconds value");
+      }
+      const goal = await setSessionGoalWaitBarrier({
+        ...resolveGoalSessionScope(options),
+        ...(sessionKey ? { waitingOnSessionKey: sessionKey } : {}),
+        ...(!sessionKey && seconds !== undefined
+          ? { waitingUntil: Date.now() + Math.floor(seconds) * 1000 }
+          : {}),
+        ...(reason ? { reason } : {}),
+      });
+      if (!goal) {
+        throw new ToolInputError("no active goal to park");
+      }
+      return jsonResult({ status: "waiting", goal });
     },
   };
 }

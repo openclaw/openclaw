@@ -47,6 +47,10 @@ export type GoalDriverGoalSnapshot = {
   continuationTurns: number;
   /** Optional completion contract restated on every continuation turn. */
   contract?: GoalContinuationContract;
+  /** Wait barrier: park until this wall-clock epoch (ms) passes. */
+  waitingUntil?: number;
+  /** Wait barrier: park until this session key's run ends. */
+  waitingOnSessionKey?: string;
 };
 
 export type GoalDriverEvent =
@@ -55,7 +59,7 @@ export type GoalDriverEvent =
   | {
       kind: "rearmed";
       sessionKey: string;
-      reason: "active-run" | "queue-nonempty";
+      reason: "active-run" | "queue-nonempty" | "wait-barrier";
       delayMs: number;
     }
   | { kind: "disarmed"; sessionKey: string; reason: "goal-inactive" | "no-goal" | "stopped" }
@@ -73,6 +77,8 @@ export type GoalContinuationDriverDeps = {
   maxConsecutiveContinuations?: number;
   /** Floor between re-arms so a failed gate can never tight-loop (default 2s). */
   minRearmGapMs?: number;
+  /** Wall-clock source for the time wait-barrier; injected in tests (default Date.now). */
+  now?: () => number;
 
   /** g1 + prompt source: current durable goal snapshot, or undefined if none. */
   readGoal: (sessionKey: string) => GoalDriverGoalSnapshot | undefined;
@@ -80,6 +86,14 @@ export type GoalContinuationDriverDeps = {
   hasActiveRun: (sessionKey: string) => boolean;
   /** g3: inbound queue (queued chat turns / pending system events) is empty. */
   isInboundQueueEmpty: (sessionKey: string) => boolean;
+  /**
+   * g5 (session wait barrier): true while the session named by
+   * `waitingOnSessionKey` still has a run in flight. Optional — omitting it
+   * makes a session barrier resolve immediately (treated as satisfied).
+   */
+  isWaitedSessionActive?: (sessionKey: string) => boolean;
+  /** g5: clear a satisfied wait barrier so the next wake resumes normal gating. */
+  clearWaitBarrier?: (sessionKey: string) => void;
 
   /** FIRE: enqueue the continuation steering prompt and wake a new turn. */
   fireContinuation: (sessionKey: string, prompt: string) => void;
@@ -127,6 +141,7 @@ export function createGoalContinuationDriver(
   const random = deps.random ?? Math.random;
   const maxConsecutive = deps.maxConsecutiveContinuations ?? DEFAULT_MAX_CONSECUTIVE;
   const minRearmGapMs = deps.minRearmGapMs ?? DEFAULT_MIN_REARM_GAP_MS;
+  const now = deps.now ?? Date.now;
   const log = deps.log;
 
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -170,6 +185,23 @@ export function createGoalContinuationDriver(
     return delayMs;
   };
 
+  /**
+   * Evaluate a goal's wait barrier (g5): "active" while the barrier holds,
+   * "clear" when a set barrier is now satisfied (should be cleared before
+   * resuming), or "none" when no barrier is set. A time barrier holds until its
+   * deadline; a session barrier holds while the watched session's run is active.
+   */
+  const evaluateWaitBarrier = (goal: GoalDriverGoalSnapshot): "active" | "clear" | "none" => {
+    if (goal.waitingOnSessionKey) {
+      const stillActive = deps.isWaitedSessionActive?.(goal.waitingOnSessionKey) ?? false;
+      return stillActive ? "active" : "clear";
+    }
+    if (typeof goal.waitingUntil === "number") {
+      return now() < goal.waitingUntil ? "active" : "clear";
+    }
+    return "none";
+  };
+
   const attemptContinuation = (sessionKey: string) => {
     if (stopped) {
       return;
@@ -184,6 +216,19 @@ export function createGoalContinuationDriver(
     if (goal.status !== "active") {
       emit({ kind: "disarmed", sessionKey, reason: "goal-inactive" });
       return;
+    }
+    // g5: wait barrier. A parked goal (time deadline not passed, or watched
+    // session's run still in flight) must NOT fire and must NOT consume a
+    // no-progress turn -> re-arm at the floor and re-check later. A satisfied
+    // barrier is cleared here so the next wake resumes normal gating.
+    const barrier = evaluateWaitBarrier(goal);
+    if (barrier === "active") {
+      const delayMs = arm(sessionKey, minRearmGapMs);
+      emit({ kind: "rearmed", sessionKey, reason: "wait-barrier", delayMs });
+      return;
+    }
+    if (barrier === "clear") {
+      deps.clearWaitBarrier?.(sessionKey);
     }
     // g4: consecutive-continuation ceiling -> auto-pause (terminal until user resume).
     if (goal.continuationTurns >= maxConsecutive) {
