@@ -1,5 +1,6 @@
 // Codex plugin module implements command handlers behavior.
 import crypto from "node:crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
@@ -1669,7 +1670,7 @@ function formatCodexDiagnosticsTargetLine(target: CodexDiagnosticsTarget): strin
 
 function normalizeDiagnosticsReason(note: string): string | undefined {
   const normalized = normalizeOptionalString(note);
-  return normalized ? normalized.slice(0, CODEX_DIAGNOSTICS_REASON_MAX_CHARS) : undefined;
+  return normalized ? truncateUtf16Safe(normalized, CODEX_DIAGNOSTICS_REASON_MAX_CHARS) : undefined;
 }
 
 function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
