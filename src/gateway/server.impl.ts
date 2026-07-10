@@ -1434,11 +1434,6 @@ export async function startGatewayServer(
           cancelled: true,
         };
       }
-      setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
-        config: params.nextConfig,
-        env: process.env,
-        workspaceDir: defaultWorkspaceDir,
-      });
       const loaded = prepareGatewayPluginLoad({
         cfg: params.nextConfig,
         workspaceDir: defaultWorkspaceDir,
@@ -1447,6 +1442,15 @@ export async function startGatewayServer(
         hostServices: pluginHostServices,
         baseMethods,
         pluginLookUpTable: nextPluginLookUpTable,
+      });
+      // Publish the plugin metadata snapshot only after the fallible load
+      // succeeds. If prepareGatewayPluginLoad throws, the current metadata
+      // must stay describing the still-running plugin set so capability
+      // lookups remain consistent with the live runtime.
+      setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
+        config: params.nextConfig,
+        env: process.env,
+        workspaceDir: defaultWorkspaceDir,
       });
       const previousPluginServices = runtimeState.pluginServices;
       runtimeState.pluginServices = null;
