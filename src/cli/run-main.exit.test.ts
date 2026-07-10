@@ -2228,6 +2228,56 @@ describe("runCli exit behavior", () => {
     },
   );
 
+  it("parks gateway run startup until deferred activation resolves", async () => {
+    let resolveActivation:
+      | ((value: { mode: "activated"; activationId: string }) => void)
+      | undefined;
+    waitForDeferredGatewayActivationMock.mockImplementation(
+      () =>
+        new Promise((resolve: (value: { mode: "activated"; activationId: string }) => void) => {
+          resolveActivation = resolve;
+        }),
+    );
+
+    const runPromise = runCli(["node", "openclaw", "gateway", "run"]);
+
+    await vi.waitFor(() => {
+      expect(waitForDeferredGatewayActivationMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(loadDotEnvMock).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(pinRuntimePathsMock).not.toHaveBeenCalled();
+    expect(pinConfigDirMock).not.toHaveBeenCalled();
+    expect(normalizeEnvMock).not.toHaveBeenCalled();
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(addGatewayRunCommandMock).not.toHaveBeenCalled();
+    expect(commanderParseAsyncMock).not.toHaveBeenCalled();
+    expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+
+    if (!resolveActivation) {
+      throw new Error("deferred activation resolver was not captured");
+    }
+    resolveActivation({ mode: "activated", activationId: "lifecycle-test" });
+    await runPromise;
+
+    expect(loadDotEnvMock).toHaveBeenCalledTimes(1);
+    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ isolateEnv: true, observe: false });
+    expect(pinRuntimePathsMock).toHaveBeenCalledTimes(1);
+    expect(pinConfigDirMock).toHaveBeenCalledTimes(1);
+    expect(normalizeEnvMock).toHaveBeenCalled();
+    const activationOrder = waitForDeferredGatewayActivationMock.mock.invocationCallOrder[0] ?? 0;
+    const normalizeOrder = normalizeEnvMock.mock.invocationCallOrder[0] ?? 0;
+    expect(normalizeOrder).toBeGreaterThan(activationOrder);
+    expect(startProxyMock).toHaveBeenCalledTimes(1);
+    expect(startProxyMock).toHaveBeenCalledWith(undefined);
+    expect(addGatewayRunCommandMock).toHaveBeenCalledTimes(2);
+    expect(commanderParseAsyncMock).toHaveBeenCalledTimes(1);
+    expect(commanderParseAsyncMock).toHaveBeenCalledWith(["node", "openclaw", "gateway", "run"]);
+  });
+
   it.each([
     ["root help", ["node", "openclaw", "--help"]],
     ["version", ["node", "openclaw", "--version"]],
