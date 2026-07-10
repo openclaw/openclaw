@@ -4881,6 +4881,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Milestones
   - H2: Open questions
 
+## plan/path3-sqlite-session-artifact-family.md
+
+- Route: /plan/path3-sqlite-session-artifact-family
+- Headings:
+  - H1: Path 3 SQLite Session Artifact Family
+  - H2: Authoritative family
+  - H2: Non-family artifacts after the flip
+  - H2: Patch points
+  - H2: Focused tests
+
 ## plan/ui-channels.md
 
 - Route: /plan/ui-channels

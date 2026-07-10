@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
@@ -539,8 +539,10 @@ describe("codex command", () => {
       },
       { threadId: "thread-old", cwd: "/old" },
     );
-    await saveSessionStore(storePath, {
-      [sessionKey]: { sessionId: "session-new", updatedAt: Date.now() },
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "session-new", updatedAt: Date.now() },
     });
     const codexControlRequest = vi.fn(async () =>
       createThreadResumeResponse({ threadId: "thread-new" }),

@@ -24,8 +24,13 @@ export type AgentHarnessSupport =
   | { supported: true; priority?: number; reason?: string }
   | { supported: false; reason?: string };
 
-export type AgentHarnessAttemptParams =
+type InternalEmbeddedRunAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
+
+export type AgentHarnessAttemptParams = Omit<
+  InternalEmbeddedRunAttemptParams,
+  "trajectoryRecorder"
+>;
 export type AgentHarnessAttemptResult =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
 export type AgentHarnessSideQuestionParams = {

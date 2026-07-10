@@ -13,6 +13,8 @@ import {
   listActiveReplyRunSessionIds,
   queueReplyRunMessage,
   resolveReplyBackendQueueMessageMismatch,
+  resolveReplyRunPhaseForSessionId,
+  type ReplyOperationPhase,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -633,6 +635,12 @@ export function isEmbeddedAgentRunActive(sessionId: string): boolean {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
   return active;
+}
+
+export function resolveEmbeddedAgentReplyRunPhase(
+  sessionId: string,
+): ReplyOperationPhase | undefined {
+  return resolveReplyRunPhaseForSessionId(sessionId);
 }
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
