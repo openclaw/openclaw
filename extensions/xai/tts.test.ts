@@ -168,6 +168,18 @@ describe("xai tts", () => {
         'only supports the native api.x.ai endpoint; got host "proxy.example"',
       );
     });
+
+    it.each([
+      "https://api.x.ai:8443/v1",
+      "https://user:password@api.x.ai/v1",
+      "https://api.x.ai/custom",
+      "https://api.x.ai/v1?existing=value",
+      "https://api.x.ai/v1#fragment",
+    ])("rejects non-canonical native endpoint shape %s", (baseUrl) => {
+      expect(() => assertXaiNativeTtsStreamEndpoint(baseUrl)).toThrow(
+        `requires the canonical ${XAI_BASE_URL} base URL`,
+      );
+    });
   });
 
   describe("listXaiTtsVoices", () => {

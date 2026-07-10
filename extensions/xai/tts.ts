@@ -151,6 +151,17 @@ export function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
       `xAI streaming TTS only supports the native ${XAI_NATIVE_TTS_STREAM_HOST} endpoint; got host "${hostname}"`,
     );
   }
+  const pathname = url.pathname.replace(/\/+$/, "");
+  if (
+    url.username ||
+    url.password ||
+    url.port ||
+    pathname !== "/v1" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(`xAI streaming TTS requires the canonical ${XAI_BASE_URL} base URL`);
+  }
 }
 
 export function decodeWebSocketTextMessage(data: RawData): string {
