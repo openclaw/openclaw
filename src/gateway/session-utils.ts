@@ -24,8 +24,7 @@ import {
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
-import { resolveAgentAvatarFromSource } from "../agents/identity-avatar.js";
-import { resolveAgentAvatarUrl } from "../agents/identity-avatar-projection.js";
+import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import {
   findModelCatalogEntry,
   modelSupportsInput,
@@ -1199,7 +1198,7 @@ export function listAgentsForGateway(
     const agentId = normalizeAgentId(entry.id);
     const configuredName = normalizeOptionalString(entry.name);
     const avatar = normalizeOptionalString(entry.identity?.avatar);
-    const avatarUrl = resolveAgentAvatarUrl(resolveAgentAvatarFromSource(cfg, agentId, avatar));
+    const avatarUrl = resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),
