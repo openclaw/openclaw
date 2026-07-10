@@ -21,19 +21,31 @@ const refLocator = vi.fn(() => {
   return locator;
 });
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
+const assertPageNavigationCompletedSafely = vi.fn(async () => {});
+const isPolicyDenyNavigationError = vi.fn(() => false);
+const quarantineBlockedNavigationTargetForError = vi.fn(async () => {});
+const wasBrowserNavigationRequestBlockedBeforeDispatch = vi.fn(() => false);
+const withPageNavigationRequestGuard = vi.fn(
+  async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
+);
 
 const resolveStrictExistingUploadPaths =
   vi.fn<typeof import("./paths.js").resolveStrictExistingUploadPaths>();
 
 vi.mock("./pw-session.js", () => {
   return {
+    assertPageNavigationCompletedSafely,
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
     getPageForTargetId,
     isBrowserObservedDialogBlockedError,
+    isPolicyDenyNavigationError,
     markObservedDialogsHandledRemotelyForPage,
+    quarantineBlockedNavigationTargetForError,
     refLocator,
     restoreRoleRefsForTarget,
+    wasBrowserNavigationRequestBlockedBeforeDispatch,
+    withPageNavigationRequestGuard,
   };
 });
 
@@ -48,7 +60,9 @@ const { setInputFilesViaPlaywright } = await import("./pw-tools-core.interaction
 function seedSingleLocatorPage(): {
   setInputFiles: ReturnType<typeof vi.fn>;
   elementHandle: ReturnType<typeof vi.fn>;
+  setUrl: (url: string) => void;
 } {
+  let currentUrl = "https://example.com/form";
   const setInputFiles = vi.fn(async () => {});
   const elementHandle = vi.fn(async () => {
     throw new Error("manual upload event dispatch is forbidden");
@@ -59,8 +73,15 @@ function seedSingleLocatorPage(): {
   };
   page = {
     locator: vi.fn(() => ({ first: () => locator })),
+    url: vi.fn(() => currentUrl),
   };
-  return { setInputFiles, elementHandle };
+  return {
+    setInputFiles,
+    elementHandle,
+    setUrl: (url: string) => {
+      currentUrl = url;
+    },
+  };
 }
 
 describe("setInputFilesViaPlaywright", () => {
@@ -111,5 +132,41 @@ describe("setInputFilesViaPlaywright", () => {
     ).rejects.toThrow("Invalid path: must stay within inbound media directory");
 
     expect(setInputFiles).not.toHaveBeenCalled();
+  });
+
+  it("guards the upload dispatch and checks its resulting navigation", async () => {
+    const { setInputFiles, setUrl } = seedSingleLocatorPage();
+    const requestSignal = new AbortController().signal;
+    setInputFiles.mockImplementationOnce(async () => {
+      setUrl("https://example.com/uploaded");
+    });
+
+    await setInputFilesViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      element: "input[type=file]",
+      paths: ["/tmp/openclaw/uploads/ok.txt"],
+      ssrfPolicy: { allowPrivateNetwork: false },
+      browserProxyMode: "explicit-browser-proxy",
+      signal: requestSignal,
+    });
+
+    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
+      page,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      browserProxyMode: "explicit-browser-proxy",
+      action: expect.any(Function),
+    });
+    expect(withPageNavigationRequestGuard.mock.invocationCallOrder[0]).toBeLessThan(
+      setInputFiles.mock.invocationCallOrder[0]!,
+    );
+    expect(assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      browserProxyMode: "explicit-browser-proxy",
+      targetId: "T1",
+    });
   });
 });

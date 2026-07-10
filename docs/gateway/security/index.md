@@ -481,7 +481,11 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 - Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so private/internal/special-use destinations stay blocked. Legacy alias `allowPrivateNetwork` still accepted.
 - Opt-in: set `dangerouslyAllowPrivateNetwork: true` to allow those destinations.
 - In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including otherwise-blocked names like `localhost`) for explicit exceptions.
-- Navigation is checked before the request and best-effort re-checked on the final `http(s)` URL after navigation, to reduce redirect-based pivots.
+- Requested navigation URLs and direct selected-page document requests visible to
+  Playwright are checked before dispatch, then final `http(s)` URLs are best-effort
+  re-checked after navigation. Later redirect hops, a popup's first request, and
+  Service Worker-handled requests are outside Playwright interception; use
+  network-level egress isolation when complete browser enforcement is required.
 
 ```json5
 {

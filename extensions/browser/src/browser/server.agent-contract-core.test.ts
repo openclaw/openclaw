@@ -19,6 +19,7 @@ import {
   makeResponse,
   resetBrowserControlServerTestContext,
   setBrowserControlServerEvaluateEnabled,
+  setBrowserControlServerExtraArgs,
   setBrowserControlServerProfiles,
   setBrowserControlServerReachable,
   setBrowserControlServerSsrFPolicy,
@@ -667,6 +668,9 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       ref: "2",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
     expect((hoverArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
 
@@ -680,6 +684,9 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       ref: "2",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
     expect((scrollArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
 
@@ -695,8 +702,33 @@ describe("browser control server", () => {
       targetId: "abcd1234",
       startRef: "3",
       endRef: "4",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
     expect((dragArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
+  });
+
+  it("agent contract: forwards explicit browser proxy policy through /act", async () => {
+    setBrowserControlServerExtraArgs(["--proxy-server=http://127.0.0.1:18888"]);
+    const base = await startServerAndBase();
+
+    const response = await postJson<{ ok: boolean }>(`${base}/act`, {
+      kind: "hover",
+      ref: "2",
+    });
+
+    expect(response.ok).toBe(true);
+    const executeArgs = mockFirstArg(pwMocks.executeActViaPlaywright, 0, "execute act");
+    expectRecordFields(executeArgs, {
+      browserProxyMode: "explicit-browser-proxy",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+    const hoverArgs = mockFirstArg(pwMocks.hoverViaPlaywright, 0, "hover");
+    expectRecordFields(hoverArgs, {
+      browserProxyMode: "explicit-browser-proxy",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
   });
   it("POST /tabs/open?profile=unknown returns 404", async () => {
     await startBrowserControlServerFromConfig();

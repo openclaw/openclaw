@@ -9,7 +9,9 @@ import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
 import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { runExistingSessionActionWithNavigationGuard } from "./agent.act.existing-session-navigation-guard.js";
 import {
+  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -56,6 +58,7 @@ export function registerBrowserAgentActHookRoutes(
         ctx,
         targetId,
         run: async ({ profileCtx, cdpUrl, tab }) => {
+          const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
           const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
           if (!resolvedResult.ok) {
             res.status(400).json({ error: resolvedResult.error });
@@ -74,14 +77,39 @@ export function registerBrowserAgentActHookRoutes(
             if (!uid) {
               return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.uploadRefRequired);
             }
-            await uploadChromeMcpFile({
+            const existingSessionCallOptions = {
+              timeoutMs: timeoutMs ?? ctx.state().resolved.actionTimeoutMs,
+              signal: req.signal,
+            };
+            const existingSessionTarget = {
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
-              uid,
-              filePath: resolvedPaths[0] ?? "",
-              timeoutMs: timeoutMs ?? ctx.state().resolved.actionTimeoutMs,
-              signal: req.signal,
+              ...existingSessionCallOptions,
+            };
+            const hasNavigationResultPolicy = Boolean(
+              navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
+            );
+            const initialTabTargetIds = hasNavigationResultPolicy
+              ? new Set(
+                  (await profileCtx.listTabs(existingSessionCallOptions)).map(
+                    (currentTab) => currentTab.targetId,
+                  ),
+                )
+              : new Set<string>();
+            await runExistingSessionActionWithNavigationGuard({
+              execute: () =>
+                uploadChromeMcpFile({
+                  ...existingSessionTarget,
+                  uid,
+                  filePath: resolvedPaths[0] ?? "",
+                }),
+              guard: {
+                ...existingSessionTarget,
+                ...navigationPolicy,
+                listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
+                initialTabTargetIds,
+              },
             });
             return res.json({ ok: true });
           }
@@ -101,6 +129,8 @@ export function registerBrowserAgentActHookRoutes(
               inputRef,
               element,
               paths: resolvedPaths,
+              ...navigationPolicy,
+              signal: req.signal,
             });
           } else {
             await pw.armFileUploadViaPlaywright({
@@ -113,8 +143,9 @@ export function registerBrowserAgentActHookRoutes(
               await pw.clickViaPlaywright({
                 cdpUrl,
                 targetId: tab.targetId,
-                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                ...navigationPolicy,
                 ref,
+                signal: req.signal,
               });
             }
           }

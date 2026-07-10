@@ -6,7 +6,6 @@ import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runt
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
@@ -21,6 +20,7 @@ import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import {
   assertBrowserNavigationResultAllowed,
+  type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
@@ -34,9 +34,11 @@ import {
   isBrowserObservedDialogBlockedError,
   isPolicyDenyNavigationError,
   markObservedDialogsHandledRemotelyForPage,
-  quarantineBlockedNavigationTarget,
+  quarantineBlockedNavigationTargetForError,
   refLocator,
   restoreRoleRefsForTarget,
+  wasBrowserNavigationRequestBlockedBeforeDispatch,
+  withPageNavigationRequestGuard,
 } from "./pw-session.js";
 import {
   normalizeTimeoutMs,
@@ -62,6 +64,10 @@ type TargetOpts = {
 
 const INTERACTION_NAVIGATION_GRACE_MS = 250;
 const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
+
+function hasBrowserNavigationPolicy(opts: BrowserNavigationPolicyOptions): boolean {
+  return Boolean(opts.ssrfPolicy || opts.browserProxyMode === "explicit-browser-proxy");
+}
 
 type NavigationObservablePage = Pick<Page, "url"> & {
   mainFrame?: () => Frame;
@@ -158,9 +164,12 @@ function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): bo
 
 async function assertSubframeNavigationAllowed(
   frameUrl: string,
-  ssrfPolicy?: SsrFPolicy,
+  navigationPolicy: BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  if (!ssrfPolicy || (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://"))) {
+  if (
+    !hasBrowserNavigationPolicy(navigationPolicy) ||
+    (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://"))
+  ) {
     // Non-network frame URLs like about:blank and about:srcdoc do not cross the
     // browser SSRF boundary, so they should not trigger the navigation policy.
     return;
@@ -168,7 +177,9 @@ async function assertSubframeNavigationAllowed(
 
   await assertBrowserNavigationResultAllowed({
     url: frameUrl,
-    ...withBrowserNavigationPolicy(ssrfPolicy),
+    ...withBrowserNavigationPolicy(navigationPolicy.ssrfPolicy, {
+      browserProxyMode: navigationPolicy.browserProxyMode,
+    }),
   });
 }
 
@@ -186,17 +197,18 @@ function snapshotNetworkFrameUrl(frame: Frame): string | null {
   }
 }
 
-async function assertObservedDelayedNavigations(opts: {
-  cdpUrl: string;
-  page: Page;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-  observed: ObservedDelayedNavigations;
-}): Promise<void> {
+async function assertObservedDelayedNavigations(
+  opts: {
+    cdpUrl: string;
+    page: Page;
+    targetId?: string;
+    observed: ObservedDelayedNavigations;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   let subframeError: unknown;
   try {
     for (const frameUrl of opts.observed.subframes) {
-      await assertSubframeNavigationAllowed(frameUrl, opts.ssrfPolicy);
+      await assertSubframeNavigationAllowed(frameUrl, opts);
     }
   } catch (err) {
     subframeError = err;
@@ -207,6 +219,7 @@ async function assertObservedDelayedNavigations(opts: {
       page: opts.page,
       response: null,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   }
@@ -265,14 +278,15 @@ function observeDelayedInteractionNavigation(
   });
 }
 
-function scheduleDelayedInteractionNavigationGuard(opts: {
-  cdpUrl: string;
-  page: Page;
-  previousUrl: string;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<void> {
-  if (!opts.ssrfPolicy) {
+function scheduleDelayedInteractionNavigationGuard(
+  opts: {
+    cdpUrl: string;
+    page: Page;
+    previousUrl: string;
+    targetId?: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
+  if (!hasBrowserNavigationPolicy(opts)) {
     return Promise.resolve();
   }
   const page = opts.page as unknown as NavigationObservablePage;
@@ -282,6 +296,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
       page: opts.page,
       response: null,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   }
@@ -320,6 +335,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
         cdpUrl: opts.cdpUrl,
         page: opts.page,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
         observed: { mainFrameNavigated: true, subframes },
       }).then(() => settle(), settle);
@@ -330,6 +346,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
         cdpUrl: opts.cdpUrl,
         page: opts.page,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
         observed: {
           mainFrameNavigated: didCrossDocumentUrlChange(page, opts.previousUrl),
@@ -350,15 +367,16 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
   });
 }
 
-async function assertInteractionNavigationCompletedSafely<T>(opts: {
-  action: () => Promise<T>;
-  cdpUrl: string;
-  page: Page;
-  previousUrl: string;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<T> {
-  if (!opts.ssrfPolicy) {
+async function runInteractionWithPostNavigationCheck<T>(
+  opts: {
+    action: () => Promise<T>;
+    cdpUrl: string;
+    page: Page;
+    previousUrl: string;
+    targetId?: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<T> {
+  if (!hasBrowserNavigationPolicy(opts)) {
     return await opts.action();
   }
   // Phase 1: keep a framenavigated listener alive for the entire duration of the
@@ -405,7 +423,7 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   let subframeError: unknown;
   try {
     for (const frameUrl of subframeNavigationsDuringAction) {
-      await assertSubframeNavigationAllowed(frameUrl, opts.ssrfPolicy);
+      await assertSubframeNavigationAllowed(frameUrl, opts);
     }
   } catch (err) {
     subframeError = err;
@@ -417,6 +435,7 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
       page: opts.page,
       response: null,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   } else if (actionError) {
@@ -429,6 +448,7 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
         cdpUrl: opts.cdpUrl,
         page: opts.page,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
         observed,
       });
@@ -442,6 +462,7 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
       page: opts.page,
       previousUrl: opts.previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   }
@@ -454,6 +475,38 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
     throw toLintErrorObject(actionError, "Non-Error thrown");
   }
   return result as T;
+}
+
+async function assertInteractionNavigationCompletedSafely<T>(
+  opts: {
+    action: () => Promise<T>;
+    cdpUrl: string;
+    page: Page;
+    previousUrl: string;
+    targetId?: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<T> {
+  try {
+    return await withPageNavigationRequestGuard({
+      page: opts.page,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      action: () => runInteractionWithPostNavigationCheck(opts),
+    });
+  } catch (err) {
+    if (
+      isPolicyDenyNavigationError(err) &&
+      !wasBrowserNavigationRequestBlockedBeforeDispatch(err)
+    ) {
+      await quarantineBlockedNavigationTargetForError({
+        cdpUrl: opts.cdpUrl,
+        error: err,
+        page: opts.page,
+        targetId: opts.targetId,
+      });
+    }
+    throw err;
+  }
 }
 
 async function awaitActionWithAbort<T>(
@@ -545,7 +598,8 @@ export async function clickViaPlaywright(opts: {
   modifiers?: Array<"Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift">;
   delayMs?: number;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -635,6 +689,7 @@ export async function clickViaPlaywright(opts: {
       page,
       previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   } catch (err) {
@@ -656,7 +711,8 @@ export async function clickCoordsViaPlaywright(opts: {
   button?: "left" | "right" | "middle";
   delayMs?: number;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const page = await getRestoredPageForTarget(opts);
@@ -679,6 +735,7 @@ export async function clickCoordsViaPlaywright(opts: {
     page,
     previousUrl,
     ssrfPolicy: opts.ssrfPolicy,
+    browserProxyMode: opts.browserProxyMode,
     targetId: opts.targetId,
   }).finally(cleanup);
 }
@@ -690,6 +747,8 @@ export async function hoverViaPlaywright(opts: {
   ref?: string;
   selector?: string;
   timeoutMs?: number;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -698,16 +757,26 @@ export async function hoverViaPlaywright(opts: {
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
+  const previousUrl = page.url();
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await awaitActionWithAbort(
-      locator.hover({
-        timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
-      }),
-      abortPromise,
-      reconcileRemoteDialog,
-    );
+    await assertInteractionNavigationCompletedSafely({
+      action: () =>
+        awaitActionWithAbort(
+          locator.hover({
+            timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+          }),
+          abortPromise,
+          reconcileRemoteDialog,
+        ),
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
@@ -724,6 +793,8 @@ export async function dragViaPlaywright(opts: {
   endRef?: string;
   endSelector?: string;
   timeoutMs?: number;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolvedStart = requireRefOrSelector(opts.startRef, opts.startSelector);
@@ -737,16 +808,26 @@ export async function dragViaPlaywright(opts: {
     : page.locator(resolvedEnd.selector!);
   const startLabel = resolvedStart.ref ?? resolvedStart.selector!;
   const endLabel = resolvedEnd.ref ?? resolvedEnd.selector!;
+  const previousUrl = page.url();
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await awaitActionWithAbort(
-      startLocator.dragTo(endLocator, {
-        timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
-      }),
-      abortPromise,
-      reconcileRemoteDialog,
-    );
+    await assertInteractionNavigationCompletedSafely({
+      action: () =>
+        awaitActionWithAbort(
+          startLocator.dragTo(endLocator, {
+            timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+          }),
+          abortPromise,
+          reconcileRemoteDialog,
+        ),
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, `${startLabel} -> ${endLabel}`);
   } finally {
@@ -762,7 +843,8 @@ export async function selectOptionViaPlaywright(opts: {
   selector?: string;
   values: string[];
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -792,6 +874,7 @@ export async function selectOptionViaPlaywright(opts: {
       page,
       previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   } catch (err) {
@@ -807,7 +890,8 @@ export async function pressKeyViaPlaywright(opts: {
   targetId?: string;
   key: string;
   delayMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const key = normalizeOptionalString(opts.key) ?? "";
@@ -834,6 +918,7 @@ export async function pressKeyViaPlaywright(opts: {
       page,
       previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   } finally {
@@ -851,7 +936,8 @@ export async function typeViaPlaywright(opts: {
   submit?: boolean;
   slowly?: boolean;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -891,6 +977,7 @@ export async function typeViaPlaywright(opts: {
         page,
         previousUrl,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
       });
     } else {
@@ -913,6 +1000,7 @@ export async function typeViaPlaywright(opts: {
         page,
         previousUrl,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
       });
     }
@@ -929,7 +1017,8 @@ export async function fillFormViaPlaywright(opts: {
   targetId?: string;
   fields: BrowserFormField[];
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const page = await getRestoredPageForTarget(opts);
@@ -968,6 +1057,7 @@ export async function fillFormViaPlaywright(opts: {
             page,
             previousUrl,
             ssrfPolicy: opts.ssrfPolicy,
+            browserProxyMode: opts.browserProxyMode,
             targetId: opts.targetId,
           });
         } catch (err) {
@@ -989,6 +1079,7 @@ export async function fillFormViaPlaywright(opts: {
           page,
           previousUrl,
           ssrfPolicy: opts.ssrfPolicy,
+          browserProxyMode: opts.browserProxyMode,
           targetId: opts.targetId,
         });
       } catch (err) {
@@ -1004,10 +1095,11 @@ export async function fillFormViaPlaywright(opts: {
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  ssrfPolicy?: SsrFPolicy;
   fn: string;
   ref?: string;
   timeoutMs?: number;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<unknown> {
   const fnText = normalizeOptionalString(opts.fn) ?? "";
@@ -1050,12 +1142,13 @@ export async function evaluateViaPlaywright(opts: {
 
   try {
     const previousUrl = page.url();
-    if (opts.ssrfPolicy) {
+    if (hasBrowserNavigationPolicy(opts)) {
       await assertPageNavigationCompletedSafely({
         cdpUrl: opts.cdpUrl,
         page,
         response: null,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
       });
     }
@@ -1089,17 +1182,22 @@ export async function evaluateViaPlaywright(opts: {
         }
         `,
       ) as (el: Element, args: { fnSource: string; timeoutMs: number }) => unknown;
-      const evalPromise = locator.evaluate(elementEvaluator, {
-        fnSource,
-        timeoutMs: evaluateTimeout,
-      });
       const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
       const result = await assertInteractionNavigationCompletedSafely({
-        action: () => awaitActionWithAbort(evalPromise, abortPromise, reconcileRemoteDialog),
+        action: () =>
+          awaitActionWithAbort(
+            locator.evaluate(elementEvaluator, {
+              fnSource,
+              timeoutMs: evaluateTimeout,
+            }),
+            abortPromise,
+            reconcileRemoteDialog,
+          ),
         cdpUrl: opts.cdpUrl,
         page,
         previousUrl,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
       });
       return result;
@@ -1131,17 +1229,22 @@ export async function evaluateViaPlaywright(opts: {
         }
       `,
     ) as (args: { fnSource: string; timeoutMs: number }) => unknown;
-    const evalPromise = page.evaluate(browserEvaluator, {
-      fnSource,
-      timeoutMs: evaluateTimeout,
-    });
     const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
     const result = await assertInteractionNavigationCompletedSafely({
-      action: () => awaitActionWithAbort(evalPromise, abortPromise, reconcileRemoteDialog),
+      action: () =>
+        awaitActionWithAbort(
+          page.evaluate(browserEvaluator, {
+            fnSource,
+            timeoutMs: evaluateTimeout,
+          }),
+          abortPromise,
+          reconcileRemoteDialog,
+        ),
       cdpUrl: opts.cdpUrl,
       page,
       previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
     return result;
@@ -1157,6 +1260,8 @@ export async function scrollIntoViewViaPlaywright(opts: {
   ref?: string;
   selector?: string;
   timeoutMs?: number;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -1167,14 +1272,24 @@ export async function scrollIntoViewViaPlaywright(opts: {
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
+  const previousUrl = page.url();
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await awaitActionWithAbort(
-      locator.scrollIntoViewIfNeeded({ timeout }),
-      abortPromise,
-      reconcileRemoteDialog,
-    );
+    await assertInteractionNavigationCompletedSafely({
+      action: () =>
+        awaitActionWithAbort(
+          locator.scrollIntoViewIfNeeded({ timeout }),
+          abortPromise,
+          reconcileRemoteDialog,
+        ),
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
@@ -1463,13 +1578,16 @@ async function captureElementScreenshotForLabels(
 }
 
 /** Sets file inputs for a role ref or selector with strict existing-path checks. */
-export async function setInputFilesViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  inputRef?: string;
-  element?: string;
-  paths: string[];
-}): Promise<void> {
+export async function setInputFilesViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    inputRef?: string;
+    element?: string;
+    paths: string[];
+    signal?: AbortSignal;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -1492,10 +1610,28 @@ export async function setInputFilesViaPlaywright(opts: {
   }
   const resolvedPaths = resolvedResult.paths;
 
+  const previousUrl = page.url();
+  const { abortPromise, cleanup } = createAbortPromise(opts.signal);
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await locator.setInputFiles(resolvedPaths);
+    await assertInteractionNavigationCompletedSafely({
+      action: () =>
+        awaitActionWithAbort(
+          locator.setInputFiles(resolvedPaths),
+          abortPromise,
+          reconcileRemoteDialog,
+        ),
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, inputRef || element);
+  } finally {
+    cleanup();
   }
 }
 
@@ -1504,7 +1640,7 @@ async function executeSingleAction(
   cdpUrl: string,
   targetId?: string,
   evaluateEnabled?: boolean,
-  ssrfPolicy?: SsrFPolicy,
+  navigationPolicy: BrowserNavigationPolicyOptions = {},
   depth = 0,
   signal?: AbortSignal,
 ): Promise<unknown> {
@@ -1526,7 +1662,7 @@ async function executeSingleAction(
         >,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
-        ssrfPolicy,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1540,7 +1676,7 @@ async function executeSingleAction(
         button: action.button as "left" | "right" | "middle" | undefined,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
-        ssrfPolicy,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1554,7 +1690,7 @@ async function executeSingleAction(
         submit: action.submit,
         slowly: action.slowly,
         timeoutMs: action.timeoutMs,
-        ssrfPolicy,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1564,7 +1700,7 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
         key: action.key,
         delayMs: action.delayMs,
-        ssrfPolicy,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1575,6 +1711,7 @@ async function executeSingleAction(
         ref: action.ref,
         selector: action.selector,
         timeoutMs: action.timeoutMs,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1585,6 +1722,7 @@ async function executeSingleAction(
         ref: action.ref,
         selector: action.selector,
         timeoutMs: action.timeoutMs,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1597,6 +1735,7 @@ async function executeSingleAction(
         endRef: action.endRef,
         endSelector: action.endSelector,
         timeoutMs: action.timeoutMs,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1608,7 +1747,7 @@ async function executeSingleAction(
         selector: action.selector,
         values: action.values,
         timeoutMs: action.timeoutMs,
-        ssrfPolicy,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1618,7 +1757,7 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
         fields: action.fields,
         timeoutMs: action.timeoutMs,
-        ssrfPolicy,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1655,7 +1794,7 @@ async function executeSingleAction(
       return await evaluateViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
-        ssrfPolicy,
+        ...navigationPolicy,
         fn: action.fn,
         ref: action.ref,
         timeoutMs: action.timeoutMs,
@@ -1671,7 +1810,7 @@ async function executeSingleAction(
       await batchViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
-        ssrfPolicy,
+        ...navigationPolicy,
         actions: action.actions,
         stopOnError: action.stopOnError,
         evaluateEnabled,
@@ -1687,7 +1826,7 @@ async function executeSingleAction(
 
 function actionNeedsStandaloneDownloadGrace(
   action: BrowserActRequest,
-  ssrfPolicy?: SsrFPolicy,
+  navigationPolicy: BrowserNavigationPolicyOptions,
 ): boolean {
   switch (action.kind) {
     case "close":
@@ -1697,15 +1836,15 @@ function actionNeedsStandaloneDownloadGrace(
     case "hover":
     case "scrollIntoView":
     case "drag":
-      return true;
+      return !hasBrowserNavigationPolicy(navigationPolicy);
     case "batch":
       return action.actions.some((nested) =>
-        actionNeedsStandaloneDownloadGrace(nested, ssrfPolicy),
+        actionNeedsStandaloneDownloadGrace(nested, navigationPolicy),
       );
     default:
       // Navigation-aware interactions already hold a 250 ms event window when
       // policy is active. Policy-free internal callers need that window here.
-      return !ssrfPolicy;
+      return !hasBrowserNavigationPolicy(navigationPolicy);
   }
 }
 
@@ -1715,7 +1854,8 @@ export async function executeActViaPlaywright(opts: {
   action: BrowserActRequest;
   targetId?: string;
   evaluateEnabled?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<{
   result?: unknown;
@@ -1738,11 +1878,16 @@ export async function executeActViaPlaywright(opts: {
       }
       await assertBrowserNavigationResultAllowed({
         url: download.url,
-        ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+        ...withBrowserNavigationPolicy(opts.ssrfPolicy, {
+          browserProxyMode: opts.browserProxyMode,
+        }),
       });
     },
   });
-  const downloadGraceMs = actionNeedsStandaloneDownloadGrace(opts.action, opts.ssrfPolicy)
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
+  const downloadGraceMs = actionNeedsStandaloneDownloadGrace(opts.action, navigationPolicy)
     ? INTERACTION_NAVIGATION_GRACE_MS
     : 0;
   const drainDownloads = async () =>
@@ -1760,7 +1905,7 @@ export async function executeActViaPlaywright(opts: {
       const batch = await batchViaPlaywright({
         cdpUrl: opts.cdpUrl,
         targetId: opts.targetId,
-        ssrfPolicy: opts.ssrfPolicy,
+        ...navigationPolicy,
         actions: opts.action.actions,
         stopOnError: opts.action.stopOnError,
         evaluateEnabled: opts.evaluateEnabled,
@@ -1777,7 +1922,7 @@ export async function executeActViaPlaywright(opts: {
       opts.cdpUrl,
       opts.targetId,
       opts.evaluateEnabled,
-      opts.ssrfPolicy,
+      navigationPolicy,
       0,
       dialogAbort.signal,
     );
@@ -1798,9 +1943,13 @@ export async function executeActViaPlaywright(opts: {
     if (isBrowserObservedDialogBlockedError(failure)) {
       return { blockedByDialog: true, browserState: failure.browserState };
     }
-    if (isPolicyDenyNavigationError(failure)) {
-      await quarantineBlockedNavigationTarget({
+    if (
+      isPolicyDenyNavigationError(failure) &&
+      !wasBrowserNavigationRequestBlockedBeforeDispatch(failure)
+    ) {
+      await quarantineBlockedNavigationTargetForError({
         cdpUrl: opts.cdpUrl,
+        error: failure,
         page,
         targetId: opts.targetId,
       });
@@ -1819,7 +1968,8 @@ export async function batchViaPlaywright(opts: {
   actions: BrowserActRequest[];
   stopOnError?: boolean;
   evaluateEnabled?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   depth?: number;
   signal?: AbortSignal;
 }): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {
@@ -1841,7 +1991,9 @@ export async function batchViaPlaywright(opts: {
         opts.cdpUrl,
         opts.targetId,
         opts.evaluateEnabled,
-        opts.ssrfPolicy,
+        withBrowserNavigationPolicy(opts.ssrfPolicy, {
+          browserProxyMode: opts.browserProxyMode,
+        }),
         depth,
         opts.signal,
       );

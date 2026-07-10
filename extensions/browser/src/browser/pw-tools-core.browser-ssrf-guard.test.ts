@@ -21,6 +21,8 @@ const sessionMocks = vi.hoisted(() => ({
   isBrowserObservedDialogBlockedError: vi.fn(() => false),
   isPolicyDenyNavigationError: vi.fn(() => false),
   markObservedDialogsHandledRemotelyForPage: vi.fn(() => ({})),
+  quarantineBlockedNavigationTarget: vi.fn(async () => {}),
+  quarantineBlockedNavigationTargetForError: vi.fn(async () => {}),
   refLocator: vi.fn(() => {
     if (!pageState.locator) {
       throw new Error("missing locator");
@@ -29,6 +31,11 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),
+  withPageNavigationRequestGuard: vi.fn(
+    async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
+  ),
+  wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn(() => false),
+  wasBrowserNavigationErrorQuarantined: vi.fn(() => false),
 }));
 
 const pageCdpMocks = vi.hoisted(() => ({
@@ -230,6 +237,147 @@ describe("pw-tools-core browser SSRF guards", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
       targetId: "tab-1",
     });
+  });
+
+  it.each([
+    {
+      name: "hover",
+      run: () =>
+        interactions.hoverViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "tab-1",
+          ref: "1",
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        }),
+      method: "hover",
+    },
+    {
+      name: "scrollIntoView",
+      run: () =>
+        interactions.scrollIntoViewViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "tab-1",
+          ref: "1",
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        }),
+      method: "scrollIntoViewIfNeeded",
+    },
+    {
+      name: "drag",
+      run: () =>
+        interactions.dragViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "tab-1",
+          startRef: "1",
+          endRef: "2",
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        }),
+      method: "dragTo",
+    },
+  ])("guards direct $name actions with the supplied SSRF policy", async ({ run, method }) => {
+    const locator = {
+      hover: vi.fn(async () => {}),
+      scrollIntoViewIfNeeded: vi.fn(async () => {}),
+      dragTo: vi.fn(async () => {}),
+    };
+    pageState.page = { url: vi.fn(() => "https://example.com") };
+    pageState.locator = locator;
+
+    await run();
+
+    expect(locator[method as keyof typeof locator]).toHaveBeenCalledTimes(1);
+    expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        page: pageState.page,
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      }),
+    );
+  });
+
+  it("preserves SSRF policy through recursively nested hover, scroll, and drag batches", async () => {
+    const locator = {
+      hover: vi.fn(async () => {}),
+      scrollIntoViewIfNeeded: vi.fn(async () => {}),
+      dragTo: vi.fn(async () => {}),
+    };
+    pageState.page = { url: vi.fn(() => "https://example.com") };
+    pageState.locator = locator;
+
+    const result = await interactions.batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      actions: [
+        {
+          kind: "batch",
+          actions: [
+            { kind: "hover", ref: "1" },
+            { kind: "scrollIntoView", ref: "1" },
+            { kind: "drag", startRef: "1", endRef: "2" },
+          ],
+        },
+      ],
+    });
+
+    expect(result.results).toEqual([{ ok: true }]);
+    expect(locator.hover).toHaveBeenCalledTimes(1);
+    expect(locator.scrollIntoViewIfNeeded).toHaveBeenCalledTimes(1);
+    expect(locator.dragTo).toHaveBeenCalledTimes(1);
+    expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledTimes(3);
+    for (const [guardOpts] of sessionMocks.withPageNavigationRequestGuard.mock.calls) {
+      expect(guardOpts).toEqual(
+        expect.objectContaining({
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        }),
+      );
+    }
+  });
+
+  it("quarantines a policy denial when the request could not be stopped before dispatch", async () => {
+    const blocked = new Error("blocked after route abort failed");
+    blocked.name = "SsrFBlockedError";
+    pageState.page = { url: vi.fn(() => "https://example.com") };
+    pageState.locator = { hover: vi.fn(async () => {}) };
+    sessionMocks.withPageNavigationRequestGuard.mockRejectedValueOnce(blocked);
+    sessionMocks.isPolicyDenyNavigationError.mockReturnValueOnce(true);
+    sessionMocks.wasBrowserNavigationRequestBlockedBeforeDispatch.mockReturnValueOnce(false);
+
+    await expect(
+      interactions.hoverViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        ref: "1",
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      }),
+    ).rejects.toThrow("blocked after route abort failed");
+
+    expect(sessionMocks.quarantineBlockedNavigationTargetForError).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      error: blocked,
+      page: pageState.page,
+      targetId: "tab-1",
+    });
+  });
+
+  it("keeps the source page usable when Playwright stopped the denied request", async () => {
+    const blocked = new Error("blocked before dispatch");
+    blocked.name = "SsrFBlockedError";
+    pageState.page = { url: vi.fn(() => "https://example.com") };
+    pageState.locator = { hover: vi.fn(async () => {}) };
+    sessionMocks.withPageNavigationRequestGuard.mockRejectedValueOnce(blocked);
+    sessionMocks.isPolicyDenyNavigationError.mockReturnValueOnce(true);
+    sessionMocks.wasBrowserNavigationRequestBlockedBeforeDispatch.mockReturnValueOnce(true);
+
+    await expect(
+      interactions.hoverViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        ref: "1",
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      }),
+    ).rejects.toThrow("blocked before dispatch");
+
+    expect(sessionMocks.quarantineBlockedNavigationTargetForError).not.toHaveBeenCalled();
   });
 
   it("re-checks current page URL before snapshotting AI content", async () => {

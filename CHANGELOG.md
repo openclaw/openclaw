@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 - **CLI installer cleanup:** remove Node staging directories and pnpm workspace-rewrite temporary files on failure. (#103725) Thanks @SebTardif.
 - **Agent-core truncation:** avoid empty-output crashes when head truncation receives negative line or byte ceilings. (#103425) Thanks @qingminglong.
 - **Windows Node resolution:** preserve the current executable when resolving bare case-insensitive `node.exe` entries under hostile `PATH` values. (#103907) Thanks @soldforaloss.
+- **Browser interaction SSRF:** apply browser navigation policy to Playwright-backed DOM interactions, abort direct selected-page document requests before dispatch, preserve allowed page behavior, and expose `scrollIntoView` to agents. (#103783)
 - **Codex runtime switching:** accept the bundled Codex runtime for both `codex/*` and `openai/*` model routes while keeping unsupported provider/runtime pairs rejected. (#103762)
 - **Agent abort cleanup:** serialize prompt lock reacquisition with terminal cleanup so canceled embedded runs do not self-contend on session locks for up to 60 seconds.
 - **Chutes OAuth deadlines:** bound token exchange, profile lookup, and refresh requests, and keep issued tokens when optional userinfo enrichment stalls. (#102026) Thanks @Alix-007.

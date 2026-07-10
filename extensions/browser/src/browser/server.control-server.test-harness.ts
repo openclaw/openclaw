@@ -16,6 +16,7 @@ type HarnessState = {
   reachable: boolean;
   cfgAttachOnly: boolean;
   cfgEvaluateEnabled: boolean;
+  cfgExtraArgs: string[];
   cfgSsrfPolicy: SsrFPolicy | undefined;
   cfgDefaultProfile: string;
   cfgProfiles: Record<
@@ -40,6 +41,7 @@ const state: HarnessState = {
   reachable: false,
   cfgAttachOnly: false,
   cfgEvaluateEnabled: true,
+  cfgExtraArgs: [],
   cfgSsrfPolicy: undefined,
   cfgDefaultProfile: "openclaw",
   cfgProfiles: {},
@@ -70,6 +72,11 @@ function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void {
 /** Sets the mocked browser.evaluateEnabled config flag. */
 export function setBrowserControlServerEvaluateEnabled(enabled: boolean): void {
   state.cfgEvaluateEnabled = enabled;
+}
+
+/** Sets mocked managed Chrome arguments for proxy-policy tests. */
+export function setBrowserControlServerExtraArgs(extraArgs: string[]): void {
+  state.cfgExtraArgs = extraArgs;
 }
 
 /** Sets the mocked Browser SSRF policy. */
@@ -129,6 +136,7 @@ type ExecuteActMockOptions = {
   action: ExecuteActMockAction;
   targetId?: string;
   ssrfPolicy?: unknown;
+  browserProxyMode?: unknown;
   evaluateEnabled?: boolean;
   signal?: AbortSignal;
 };
@@ -157,6 +165,7 @@ function buildActPayload(params: {
   action: ExecuteActMockAction;
   fields: readonly string[];
   ssrfPolicy?: unknown;
+  browserProxyMode?: unknown;
   signal?: AbortSignal;
   includeSsrf?: boolean;
   includeSignal?: boolean;
@@ -166,6 +175,9 @@ function buildActPayload(params: {
     targetId: params.targetId,
     ...pickActionFields(params.action, params.fields),
     ...(params.includeSsrf ? { ssrfPolicy: params.ssrfPolicy } : {}),
+    ...(params.includeSsrf && params.browserProxyMode
+      ? { browserProxyMode: params.browserProxyMode }
+      : {}),
     ...(params.includeSignal ? { signal: params.signal } : {}),
   };
 }
@@ -255,14 +267,17 @@ const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   hover: {
     mock: pwMocks.hoverViaPlaywright,
     fields: ["ref", "selector", "timeoutMs"],
+    includeSsrf: true,
   },
   scrollIntoView: {
     mock: pwMocks.scrollIntoViewViaPlaywright,
     fields: ["ref", "selector", "timeoutMs"],
+    includeSsrf: true,
   },
   drag: {
     mock: pwMocks.dragViaPlaywright,
     fields: ["startRef", "startSelector", "endRef", "endSelector", "timeoutMs"],
+    includeSsrf: true,
   },
   select: {
     mock: pwMocks.selectOptionViaPlaywright,
@@ -294,7 +309,8 @@ pwMocks.executeActViaPlaywright.mockImplementation(
     if (!opts) {
       return {};
     }
-    const { cdpUrl, action, targetId, ssrfPolicy, evaluateEnabled, signal } = opts;
+    const { cdpUrl, action, targetId, ssrfPolicy, browserProxyMode, evaluateEnabled, signal } =
+      opts;
     const spec = passThroughActDispatch[action.kind];
     if (spec) {
       await spec.mock(
@@ -304,6 +320,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           action,
           fields: spec.fields,
           ssrfPolicy,
+          browserProxyMode,
           signal,
           includeSsrf: spec.includeSsrf,
           includeSignal: spec.includeSignal,
@@ -321,6 +338,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           cdpUrl,
           targetId,
           ssrfPolicy,
+          browserProxyMode,
           fn: action.fn,
           ref: action.ref,
           timeoutMs: action.timeoutMs,
@@ -336,6 +354,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           stopOnError: action.stopOnError,
           evaluateEnabled,
           ssrfPolicy,
+          browserProxyMode,
           signal,
         });
         return { results: result.results };
@@ -431,6 +450,7 @@ vi.mock("../config/config.js", async () => {
         evaluateEnabled: state.cfgEvaluateEnabled,
         color: "#FF4500",
         attachOnly: state.cfgAttachOnly,
+        extraArgs: state.cfgExtraArgs,
         ssrfPolicy: state.cfgSsrfPolicy ?? { dangerouslyAllowPrivateNetwork: true },
         headless: true,
         defaultProfile: state.cfgDefaultProfile,
@@ -570,6 +590,7 @@ export async function resetBrowserControlServerTestContext(): Promise<void> {
   state.reachable = false;
   state.cfgAttachOnly = false;
   state.cfgEvaluateEnabled = true;
+  state.cfgExtraArgs = [];
   state.cfgSsrfPolicy = undefined;
   state.cfgDefaultProfile = "openclaw";
   state.cfgProfiles = defaultProfilesForState(state.testPort);

@@ -17,7 +17,15 @@ const restoreRoleRefsForTarget = vi.fn(() => {});
 const isBrowserObservedDialogBlockedError = vi.fn(
   (err: unknown) => err instanceof Error && err.name === "BrowserObservedDialogBlockedError",
 );
+const isPolicyDenyNavigationError = vi.fn(() => false);
 const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
+const quarantineBlockedNavigationTarget = vi.fn(async () => {});
+const quarantineBlockedNavigationTargetForError = vi.fn(async () => {});
+const wasBrowserNavigationRequestBlockedBeforeDispatch = vi.fn(() => false);
+const wasBrowserNavigationErrorQuarantined = vi.fn(() => false);
+const withPageNavigationRequestGuard = vi.fn(
+  async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
+);
 const refLocator = vi.fn(() => {
   if (!locator) {
     throw new Error("test: locator not set");
@@ -32,9 +40,15 @@ vi.mock("./pw-session.js", () => {
     forceDisconnectPlaywrightForTarget,
     getPageForTargetId,
     isBrowserObservedDialogBlockedError,
+    isPolicyDenyNavigationError,
     markObservedDialogsHandledRemotelyForPage,
+    quarantineBlockedNavigationTarget,
+    quarantineBlockedNavigationTargetForError,
     refLocator,
     restoreRoleRefsForTarget,
+    wasBrowserNavigationRequestBlockedBeforeDispatch,
+    wasBrowserNavigationErrorQuarantined,
+    withPageNavigationRequestGuard,
   };
 });
 
@@ -105,6 +119,36 @@ describe("evaluateViaPlaywright (abort)", () => {
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       reason: "evaluate aborted",
     });
+  });
+
+  it.each([
+    { label: "page.evaluate", fn: "() => 1" },
+    { label: "locator.evaluate", fn: "(el) => el.textContent", ref: "e1" },
+  ])("installs the request guard before starting $label", async ({ fn, ref }) => {
+    page = {
+      evaluate: vi.fn(async () => "page result"),
+      url: vi.fn(() => "https://example.com/current"),
+    };
+    locator = {
+      evaluate: vi.fn(async () => "locator result"),
+    };
+    const evaluate = ref ? locator.evaluate : page.evaluate;
+    withPageNavigationRequestGuard.mockImplementationOnce(
+      async <T>({ action }: { action: () => Promise<T> }): Promise<T> => {
+        expect(evaluate).not.toHaveBeenCalled();
+        return await action();
+      },
+    );
+
+    await evaluateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      fn,
+      ref,
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+    });
+
+    expect(withPageNavigationRequestGuard).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalledTimes(1);
   });
 
   it("does not disconnect when evaluate is blocked by an observed dialog", async () => {

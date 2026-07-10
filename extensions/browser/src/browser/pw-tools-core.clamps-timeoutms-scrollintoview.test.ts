@@ -13,7 +13,7 @@ describe("pw-tools-core", () => {
   it("clamps timeoutMs for scrollIntoView", async () => {
     const scrollIntoViewIfNeeded = vi.fn(async () => {});
     setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
-    setPwToolsCoreCurrentPage({});
+    setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.com") });
 
     await mod.scrollIntoViewViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -40,7 +40,7 @@ describe("pw-tools-core", () => {
       throw new Error(errorMessage);
     });
     setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
-    setPwToolsCoreCurrentPage({});
+    setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.com") });
 
     await expect(
       mod.scrollIntoViewViaPlaywright({

@@ -1227,60 +1227,36 @@ export async function getPageForTargetId(opts: {
   }
 }
 
-function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame;
+export type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
+
+/** Classify document requests that can move a page or one of its frames. */
+export function classifyBrowserDocumentNavigationRequest(
+  page: Page,
+  request: Request,
+): BrowserDocumentNavigationRequestKind | null {
+  let kind: BrowserDocumentNavigationRequestKind;
   try {
-    sameMainFrame = request.frame() === page.mainFrame();
+    kind = request.frame() === page.mainFrame() ? "top-level" : "subframe";
   } catch {
-    // Frame resolution can fail during redirect/renderer churn; fail closed.
-    sameMainFrame = true;
-  }
-  if (!sameMainFrame) {
-    return false;
+    // Frame resolution can fail during renderer churn. Guard the request, but
+    // do not grant destructive top-level ownership when its frame is unknown.
+    return "subframe";
   }
 
   try {
     if (request.isNavigationRequest()) {
-      return true;
-    }
-  } catch {
-    // Ignore and fall back to resource-type check below.
-  }
-
-  try {
-    return request.resourceType() === "document";
-  } catch {
-    return false;
-  }
-}
-
-function isSubframeDocumentNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame;
-  try {
-    sameMainFrame = request.frame() === page.mainFrame();
-  } catch {
-    // Fail closed: if frame resolution throws after the top-level check already
-    // determined this is NOT the main frame, treat it as a subframe document
-    // navigation so the SSRF guard still fires. Returning false here would let
-    // transient renderer churn skip the policy check entirely.
-    return true;
-  }
-  if (sameMainFrame) {
-    return false;
-  }
-
-  try {
-    if (request.isNavigationRequest()) {
-      return true;
+      return kind;
     }
   } catch {
     // Fall through to the resource-type check.
   }
 
   try {
-    return request.resourceType() === "document";
+    return request.resourceType() === "document" ? kind : null;
   } catch {
-    return false;
+    // The frame is known, but Chromium no longer exposes enough metadata to
+    // prove this is a subresource. Fail closed within that exact frame.
+    return kind;
   }
 }
 
@@ -1305,6 +1281,35 @@ export async function quarantineBlockedNavigationTarget(opts: {
   const targetIdToBlock = resolvedTargetId || fallbackTargetId;
   if (targetIdToBlock) {
     markTargetBlocked(opts.cdpUrl, targetIdToBlock);
+  }
+}
+
+const quarantinedPagesByNavigationError = new WeakMap<object, WeakSet<Page>>();
+
+/** Return true when this policy error already quarantined its page target. */
+export function wasBrowserNavigationErrorQuarantined(err: unknown, page: Page): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    quarantinedPagesByNavigationError.get(err)?.has(page) === true
+  );
+}
+
+/** Quarantine one target once for a specific policy error. */
+export async function quarantineBlockedNavigationTargetForError(opts: {
+  cdpUrl: string;
+  error: unknown;
+  page: Page;
+  targetId?: string;
+}): Promise<void> {
+  if (wasBrowserNavigationErrorQuarantined(opts.error, opts.page)) {
+    return;
+  }
+  await quarantineBlockedNavigationTarget(opts);
+  if (typeof opts.error === "object" && opts.error !== null) {
+    const quarantinedPages = quarantinedPagesByNavigationError.get(opts.error) ?? new WeakSet();
+    quarantinedPages.add(opts.page);
+    quarantinedPagesByNavigationError.set(opts.error, quarantinedPages);
   }
 }
 
@@ -1348,8 +1353,9 @@ export async function assertPageNavigationCompletedSafely(
     });
   } catch (err) {
     if (isPolicyDenyNavigationError(err)) {
-      await quarantineBlockedNavigationTarget({
+      await quarantineBlockedNavigationTargetForError({
         cdpUrl: opts.cdpUrl,
+        error: err,
         page: opts.page,
         targetId: opts.targetId,
       });
@@ -1368,6 +1374,171 @@ async function continueRouteSafely(route: Route): Promise<void> {
     }
     throw err;
   }
+}
+
+async function fallbackRouteSafely(route: Route): Promise<void> {
+  try {
+    await route.fallback();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    if (message.includes("Route is already handled")) {
+      return;
+    }
+    throw err;
+  }
+}
+
+const blockedBeforeDispatchErrors = new WeakSet<object>();
+
+async function removePageNavigationRequestGuard(
+  page: Page,
+  handler: (route: Route, request: Request) => Promise<void>,
+): Promise<unknown> {
+  try {
+    await page.unroute("**", handler);
+  } catch (err) {
+    // A closed page owns no live interception state. Preserve close-triggering
+    // interactions while still surfacing cleanup failures on a usable page.
+    try {
+      if (page.isClosed()) {
+        return undefined;
+      }
+    } catch {
+      // Keep the original cleanup failure when page state is unavailable.
+    }
+    return err;
+  }
+  return undefined;
+}
+
+/** Return true when Playwright aborted the denied request before network dispatch. */
+export function wasBrowserNavigationRequestBlockedBeforeDispatch(err: unknown): boolean {
+  return typeof err === "object" && err !== null && blockedBeforeDispatchErrors.has(err);
+}
+
+/** Run one page action with document requests paused until navigation policy allows them. */
+export async function withPageNavigationRequestGuard<T>(
+  opts: {
+    action: () => Promise<T>;
+    page: Page;
+  } & BrowserNavigationPolicyOptions,
+): Promise<T> {
+  if (!opts.ssrfPolicy && opts.browserProxyMode !== "explicit-browser-proxy") {
+    return await opts.action();
+  }
+
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
+  const inFlight = new Set<Promise<void>>();
+  let hasGuardError = false;
+  let firstGuardError: unknown;
+  let deniedRequestAbortCount = 0;
+  let deniedRequestAbortFailed = false;
+
+  const recordGuardError = (err: unknown) => {
+    if (hasGuardError) {
+      return;
+    }
+    hasGuardError = true;
+    firstGuardError = err;
+  };
+
+  const abortGuardedRoute = async (route: Route) => {
+    try {
+      await route.abort();
+      deniedRequestAbortCount += 1;
+    } catch {
+      deniedRequestAbortFailed = true;
+    }
+  };
+
+  const handleRoute = async (route: Route, request: Request) => {
+    if (!classifyBrowserDocumentNavigationRequest(opts.page, request)) {
+      try {
+        await fallbackRouteSafely(route);
+      } catch (err) {
+        recordGuardError(err);
+        await abortGuardedRoute(route);
+      }
+      return;
+    }
+    if (hasGuardError) {
+      await abortGuardedRoute(route);
+      return;
+    }
+    try {
+      await assertBrowserNavigationAllowed({
+        url: request.url(),
+        ...navigationPolicy,
+      });
+    } catch (err) {
+      recordGuardError(err);
+    }
+    if (hasGuardError) {
+      await abortGuardedRoute(route);
+      return;
+    }
+    try {
+      await fallbackRouteSafely(route);
+    } catch (err) {
+      recordGuardError(err);
+      await abortGuardedRoute(route);
+    }
+  };
+  const handler = (route: Route, request: Request) => {
+    const operation = handleRoute(route, request).catch(async (err) => {
+      recordGuardError(err);
+      await abortGuardedRoute(route);
+    });
+    inFlight.add(operation);
+    void operation.then(
+      () => inFlight.delete(operation),
+      () => inFlight.delete(operation),
+    );
+    return operation;
+  };
+
+  try {
+    await opts.page.route("**", handler);
+  } catch (err) {
+    // Playwright registers the client-side handler before awaiting browser-side
+    // interception setup, so a rejected route() still needs exact rollback.
+    await removePageNavigationRequestGuard(opts.page, handler);
+    throw err;
+  }
+  let result: T | undefined;
+  let actionError: unknown;
+  try {
+    result = await opts.action();
+  } catch (err) {
+    actionError = err;
+  }
+
+  const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
+  await Promise.allSettled(inFlight);
+
+  // Policy denial wins over action and cleanup errors. Mark it only when every
+  // denied request was stopped, so callers quarantine residual navigations.
+  if (hasGuardError) {
+    if (
+      isPolicyDenyNavigationError(firstGuardError) &&
+      deniedRequestAbortCount > 0 &&
+      !deniedRequestAbortFailed &&
+      typeof firstGuardError === "object" &&
+      firstGuardError !== null
+    ) {
+      blockedBeforeDispatchErrors.add(firstGuardError);
+    }
+    throw toLintErrorObject(firstGuardError, "Non-Error thrown");
+  }
+  if (actionError) {
+    throw toLintErrorObject(actionError, "Non-Error thrown");
+  }
+  if (cleanupError) {
+    throw toLintErrorObject(cleanupError, "Non-Error thrown");
+  }
+  return result as T;
 }
 
 /** Navigate a page while guarding requested URL and redirect chain. */
@@ -1390,10 +1561,8 @@ export async function gotoPageWithNavigationGuard(
       await route.abort().catch(() => {});
       return;
     }
-    const isTopLevel = isTopLevelNavigationRequest(opts.page, request);
-    const isSubframeDocument =
-      !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);
-    if (!isTopLevel && !isSubframeDocument) {
+    const requestKind = classifyBrowserDocumentNavigationRequest(opts.page, request);
+    if (!requestKind) {
       await continueRouteSafely(route);
       return;
     }
@@ -1404,7 +1573,7 @@ export async function gotoPageWithNavigationGuard(
       });
     } catch (err) {
       if (isPolicyDenyNavigationError(err)) {
-        if (isTopLevel) {
+        if (requestKind === "top-level") {
           blockedError = err;
         }
         await route.abort().catch(() => {});

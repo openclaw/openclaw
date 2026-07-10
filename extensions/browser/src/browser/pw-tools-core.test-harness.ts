@@ -74,6 +74,12 @@ const sessionMocks = vi.hoisted(() => ({
     }
     return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
   }),
+  quarantineBlockedNavigationTargetForError: vi.fn(async () => {}),
+  withPageNavigationRequestGuard: vi.fn(
+    async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
+  ),
+  wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn(() => false),
+  wasBrowserNavigationErrorQuarantined: vi.fn(() => false),
   quarantineBlockedNavigationTarget: vi.fn(async () => {}),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   respondToObservedDialogOnPage: vi.fn(async () => {
