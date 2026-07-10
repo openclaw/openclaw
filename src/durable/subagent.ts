@@ -23,8 +23,8 @@ import type {
 } from "./types.js";
 import {
   recordDurableWakeForChildTerminalFact,
+  recordDurableWakeForDelegationBindingMissing,
   recordDurableWakeForDeliveryUnknownFact,
-  recordDurableWakeForSubagentParentBindingMissing,
 } from "./wake-producers.js";
 const SUBAGENT_PARENT_STEP_ID = "subagents";
 const SUBAGENT_ANNOUNCE_IDEMPOTENCY_PREFIX = "announce:v1:";
@@ -283,11 +283,11 @@ export function recordDurableSubagentRegistered(params: {
       if (!parent) {
         store.appendEvent({
           runtimeRunId: child.runtimeRunId,
-          eventType: "subagent.parent.binding_missing",
+          eventType: "subagent.delegation.binding_missing",
           eventTime: now,
           stepId: "subagent_run",
           agentInvocationId: params.runId,
-          idempotencyKey: `${params.runId}:parent-binding:${parentBinding.reason}`,
+          idempotencyKey: `${params.runId}:delegation-binding:${parentBinding.reason}`,
           correlationId: params.requesterSessionKey,
           payload: {
             requesterSessionKey: params.requesterSessionKey,
@@ -296,7 +296,7 @@ export function recordDurableSubagentRegistered(params: {
             candidateCount: parentBinding.candidateCount,
           },
         });
-        recordDurableWakeForSubagentParentBindingMissing({
+        recordDurableWakeForDelegationBindingMissing({
           store,
           childRun: child,
           requesterSessionKey: params.requesterSessionKey,

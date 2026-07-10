@@ -219,7 +219,7 @@ describe("durable subagent bridge", () => {
       expect(assertStore.listChildLinks(staleParentId)).toEqual([]);
       expect(assertStore.getTimeline(child!.runtimeRunId)).toContainEqual(
         expect.objectContaining({
-          eventType: "subagent.parent.binding_missing",
+          eventType: "subagent.delegation.binding_missing",
           agentInvocationId: "run_child_current",
           payload: expect.objectContaining({
             reason: "requester_run_id_not_found",
@@ -235,10 +235,12 @@ describe("durable subagent bridge", () => {
           targetRef: "operator",
           targetResolutionStatus: "missing",
           targetResolutionReason: "explicit_work_owner_missing",
-          dedupeKey: `wake:v1:subagent-parent-binding-missing:${child?.runtimeRunId}`,
+          factsRef: `run:${child?.runtimeRunId}:delegation.binding_missing`,
+          dedupeKey: `wake:v1:delegation-binding-missing:${child?.runtimeRunId}`,
           metadata: expect.objectContaining({
             evidence: expect.objectContaining({
-              kind: "subagent_parent_binding_missing",
+              kind: "delegation_binding_missing",
+              delegationKind: "subagent_child",
               requesterRunId: "run_parent_current_not_recorded",
               reason: "requester_run_id_not_found",
             }),
