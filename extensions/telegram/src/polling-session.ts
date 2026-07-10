@@ -903,6 +903,7 @@ export class TelegramPollingSession {
   async #drainSpooledUpdates(params: {
     bot: TelegramBot;
     isDrainHealthy: () => boolean;
+    shouldStop: () => boolean;
     spoolDir: string;
   }): Promise<SpooledUpdateDrainResult> {
     const activeLaneKeys = this.#activeSpooledUpdateLaneKeysForSpool(params.spoolDir);
@@ -951,7 +952,7 @@ export class TelegramPollingSession {
     ]);
     let started = 0;
     while (started < TELEGRAM_SPOOLED_DRAIN_START_LIMIT) {
-      if (this.opts.abortSignal?.aborted) {
+      if (params.shouldStop() || this.opts.abortSignal?.aborted) {
         break;
       }
       const claimedUpdate = await this.#claimNextSpooledUpdate({
@@ -960,6 +961,18 @@ export class TelegramPollingSession {
         spoolDir: params.spoolDir,
       });
       if (!claimedUpdate) {
+        break;
+      }
+      if (params.shouldStop() || this.opts.abortSignal?.aborted) {
+        try {
+          await releaseTelegramSpooledUpdateClaim(claimedUpdate, {
+            lastError: "Telegram polling cycle ended before processing",
+          });
+        } catch (err) {
+          this.opts.log(
+            `[telegram][diag] spooled update ${claimedUpdate.updateId} could not be requeued after its polling cycle ended: ${formatErrorMessage(err)}`,
+          );
+        }
         break;
       }
       const laneKey = this.#spooledUpdateLaneKey(claimedUpdate);
@@ -1207,6 +1220,11 @@ export class TelegramPollingSession {
     const stalledBacklogKeys = new Set<string>();
     let requestImmediateDrain: () => void = () => undefined;
     let drainRequested = false;
+    let cycleEnding = false;
+    const endCycle = () => {
+      cycleEnding = true;
+      abortFetch();
+    };
     const unsubscribe = worker.onMessage((message) => {
       const ackSpooledUpdate = (
         requestId: string,
@@ -1279,7 +1297,7 @@ export class TelegramPollingSession {
       }
     });
     const stopOnAbort = () => {
-      abortFetch();
+      endCycle();
       void stopWorker();
     };
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
@@ -1307,7 +1325,7 @@ export class TelegramPollingSession {
         return;
       }
       restartRequested = true;
-      abortFetch();
+      endCycle();
       void stopWorker();
       if (!forceCycleTimer) {
         forceCycleTimer = setTimeout(() => {
@@ -1323,7 +1341,7 @@ export class TelegramPollingSession {
       }
     };
     const drainOnce = async () => {
-      if (restartRequested || this.opts.abortSignal?.aborted) {
+      if (cycleEnding || restartRequested || this.opts.abortSignal?.aborted) {
         return;
       }
       if (drainActive) {
@@ -1337,6 +1355,7 @@ export class TelegramPollingSession {
         const drain = await this.#drainSpooledUpdates({
           bot,
           isDrainHealthy,
+          shouldStop: () => cycleEnding,
           spoolDir,
         });
         consecutiveDrainFailures = 0;
@@ -1386,7 +1405,12 @@ export class TelegramPollingSession {
           drainHealth.lastCompletedAt = Date.now();
         }
         drainActive = false;
-        if (drainRequested && !restartRequested && !this.opts.abortSignal?.aborted) {
+        if (
+          drainRequested &&
+          !cycleEnding &&
+          !restartRequested &&
+          !this.opts.abortSignal?.aborted
+        ) {
           drainRequested = false;
           // Handler finalizers clear active lane guards in microtasks; redrain
           // after them so newly unblocked same-lane rows can claim immediately.
@@ -1423,12 +1447,12 @@ export class TelegramPollingSession {
       try {
         await Promise.race([worker.task(), forceCyclePromise]);
         clearForceCycleTimer();
-        abortFetch();
+        endCycle();
       } catch (err) {
         if (this.opts.abortSignal?.aborted) {
           return "exit";
         }
-        abortFetch();
+        endCycle();
         // The worker only issues getUpdates, so a 409 is always a duplicate
         // poller (or stale webhook) conflict. Mirror the classic polling
         // cycle: re-clear the webhook, rotate the transport (#69787), and
@@ -1485,7 +1509,7 @@ export class TelegramPollingSession {
       unsubscribe();
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       // End media work before waiting for durable handlers so every interrupted claim can retry.
-      abortFetch();
+      endCycle();
       await stopWorker();
       if (!restartRequested) {
         await drainOnce();
