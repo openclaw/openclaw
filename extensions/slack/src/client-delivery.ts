@@ -1,10 +1,11 @@
 // Slack plugin module owns WebClient-scoped message and file delivery primitives.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   appendSlackDataVisualizationFallbackText,
   hasSlackDataVisualizationBlock,
@@ -23,21 +24,12 @@ import {
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { truncateSlackText } from "./truncate.js";
 
+const SLACK_UPLOAD_HOSTNAMES = ["files.slack.com", "files.slack-gov.com"];
+const SLACK_API_ORIGINS = new Set(["https://slack.com", "https://slack-gov.com"]);
 const SLACK_UPLOAD_SSRF_POLICY = {
-  // Slack negotiates the capability URL, but file bytes must still stay on
-  // Slack-owned hosts if that control-plane response is ever compromised.
-  hostnameAllowlist: [
-    "slack.com",
-    "*.slack.com",
-    "slack-edge.com",
-    "*.slack-edge.com",
-    "slack-files.com",
-    "*.slack-files.com",
-    "slack-gov.com",
-    "*.slack-gov.com",
-  ],
+  hostnameAllowlist: SLACK_UPLOAD_HOSTNAMES,
   allowRfc2544BenchmarkRange: true,
-};
+} satisfies SsrFPolicy;
 const SLACK_UPLOAD_POST_TIMEOUT_MS = 120_000;
 const SLACK_DNS_RETRY_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "UND_ERR_DNS_RESOLVE_FAILED"]);
 const SLACK_DNS_RETRY_ATTEMPTS = 2;
@@ -95,6 +87,51 @@ function resolveSlackUploadTimeoutLogUrl(url: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function parseSlackUploadHttpUrl(value: string, label: string): URL {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed;
+    }
+  } catch {
+    // Fall through to the same capability-safe error below.
+  }
+  throw new Error(`${label} must use a valid HTTP or HTTPS URL`);
+}
+
+function resolveSlackUploadTransportPolicy(params: { uploadUrl: string; slackApiUrl?: string }): {
+  requireHttps: boolean;
+  policy: SsrFPolicy;
+} {
+  if (!params.slackApiUrl) {
+    return { requireHttps: true, policy: SLACK_UPLOAD_SSRF_POLICY };
+  }
+  const apiUrl = parseSlackUploadHttpUrl(params.slackApiUrl, "Configured Slack API URL");
+  if (SLACK_API_ORIGINS.has(apiUrl.origin)) {
+    return { requireHttps: true, policy: SLACK_UPLOAD_SSRF_POLICY };
+  }
+  const uploadUrl = parseSlackUploadHttpUrl(params.uploadUrl, "Slack external upload URL");
+  if (
+    uploadUrl.protocol === "https:" &&
+    SLACK_UPLOAD_HOSTNAMES.includes(uploadUrl.hostname.toLowerCase())
+  ) {
+    return { requireHttps: true, policy: SLACK_UPLOAD_SSRF_POLICY };
+  }
+  // Default Slack capabilities stay Slack-hosted. An operator-selected API
+  // root may additionally return upload capabilities on its exact origin.
+  if (uploadUrl.origin !== apiUrl.origin) {
+    throw new Error("Slack external upload URL must match the configured Slack API origin");
+  }
+  return {
+    requireHttps: apiUrl.protocol === "https:",
+    policy: {
+      hostnameAllowlist: [apiUrl.hostname],
+      allowedOrigins: [apiUrl.origin],
+      allowRfc2544BenchmarkRange: true,
+    },
+  };
 }
 
 export async function withSlackDnsRequestRetry<T>(
@@ -203,6 +240,10 @@ export async function uploadSlackFile(params: {
     throw new Error(`Failed to get upload URL: ${uploadUrlResp.error ?? "unknown error"}`);
   }
   const uploadFileId = uploadUrlResp.file_id;
+  const uploadTransport = resolveSlackUploadTransportPolicy({
+    uploadUrl: uploadUrlResp.upload_url,
+    slackApiUrl: params.client.slackApiUrl,
+  });
   // Bound only the byte transfer. Completion may commit server-side before its
   // response arrives, so timing it out would create unsafe unknown-send retries.
   const { signal: uploadTimeoutSignal, cleanup: cleanupUploadTimeout } = buildTimeoutAbortSignal({
@@ -220,8 +261,9 @@ export async function uploadSlackFile(params: {
           body: new Uint8Array(buffer) as BodyInit,
         },
         signal: uploadTimeoutSignal,
-        requireHttps: true,
-        policy: SLACK_UPLOAD_SSRF_POLICY,
+        requireHttps: uploadTransport.requireHttps,
+        policy: uploadTransport.policy,
+        capture: false,
         auditContext: params.auditContext ?? "slack-upload-file",
       }),
     );
@@ -230,8 +272,21 @@ export async function uploadSlackFile(params: {
         throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);
       }
     } finally {
+      // Slack's status is the upload result; discard any response body so its
+      // keep-alive or proxy socket cannot outlive this transfer.
+      await uploadResp.body?.cancel().catch(() => undefined);
       await release();
     }
+  } catch (error) {
+    if (uploadTimeoutSignal?.aborted) {
+      // Slack discards raw uploads that never reach completion. The durable
+      // queue can therefore retry this timeout without duplicating a message.
+      throw new PlatformMessageNotDispatchedError(
+        "Slack external upload timed out before completion dispatch",
+        { cause: error },
+      );
+    }
+    throw error;
   } finally {
     cleanupUploadTimeout();
   }
