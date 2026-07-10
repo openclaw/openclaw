@@ -196,6 +196,16 @@ describe("loadWidgetManifest", () => {
     });
   });
 
+  it("refuses to hash an oversized widget asset", async () => {
+    await withWidget(async ({ stateDir, widgetDir }) => {
+      // Pending widget files are agent-authored; approval must not read an
+      // arbitrarily large file into memory.
+      await fs.writeFile(path.join(widgetDir, "huge.png"), Buffer.alloc(2 * 1024 * 1024 + 1));
+
+      await expect(snapshotApprovedWidget("demo", { stateDir })).rejects.toThrow("too large");
+    });
+  });
+
   it("refuses a widget with no manifest at all", async () => {
     await withWidget(async ({ stateDir, widgetDir }) => {
       await fs.rm(path.join(widgetDir, "widget.json"));

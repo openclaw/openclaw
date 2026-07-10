@@ -173,8 +173,10 @@ export function nearestFreeSlot(
     (max, rect) => Math.max(max, rect.y + rect.h),
     0,
   );
-  // One extra band below everything guarantees a free row exists.
-  const maxY = Math.max(requested.y, occupiedRows) + h;
+  // One extra band below everything usually guarantees a free row, but never search
+  // past the last row the store accepts: a slot at y=500 would be "nearest" and then
+  // rejected by schema validation, snapping the drop back.
+  const maxY = Math.min(Math.max(requested.y, occupiedRows) + h, DASHBOARD_GRID_MAX_Y - h + 1);
   let best: { rect: DashboardGridRect; distance: number } | null = null;
   for (let y = 0; y <= maxY; y += 1) {
     // Past the requested row every further row is at least one unit farther away,

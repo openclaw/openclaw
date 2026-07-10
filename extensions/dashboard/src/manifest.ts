@@ -37,6 +37,13 @@ export const WIDGET_CONTENT_TYPES: Record<string, string> = {
 
 /** Max servable files one widget may have; keeps the approval digest bounded. */
 const MAX_WIDGET_FILES = 64;
+/**
+ * Byte caps on the assets approval hashes. Pending widget files are agent-authored
+ * and untrusted: without a cap, dropping one huge file into the scaffold directory
+ * would make approval read it into memory and stall or OOM the gateway.
+ */
+const MAX_WIDGET_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_WIDGET_TOTAL_BYTES = 8 * 1024 * 1024;
 
 /** sha256 of one file's bytes, lowercase hex. */
 function hashBytes(bytes: Buffer): string {
@@ -78,6 +85,7 @@ export async function snapshotApprovedWidget(
   }
   const files: Record<string, string> = {};
   let manifestBytes: Buffer | undefined;
+  let totalBytes = 0;
   for (const entry of entries) {
     if (!entry.isFile()) {
       continue;
@@ -89,6 +97,15 @@ export async function snapshotApprovedWidget(
     }
     if (Object.keys(files).length >= MAX_WIDGET_FILES) {
       throw new Error(`widget has more than ${MAX_WIDGET_FILES} servable files`);
+    }
+    // Check the size before reading: the bytes are untrusted until approved.
+    const size = (await fs.stat(absolute)).size;
+    if (size > MAX_WIDGET_FILE_BYTES) {
+      throw new Error(`widget file is too large: ${logical}`);
+    }
+    totalBytes += size;
+    if (totalBytes > MAX_WIDGET_TOTAL_BYTES) {
+      throw new Error("widget assets exceed the approval size limit");
     }
     const bytes = await fs.readFile(absolute);
     files[logical] = hashBytes(bytes);

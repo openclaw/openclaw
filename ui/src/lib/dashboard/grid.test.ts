@@ -88,6 +88,17 @@ describe("dashboard grid math", () => {
     });
   });
 
+  it("never proposes a row past the store's last accepted row", () => {
+    // A tall widget occupying the bottom band: any fallback slot must still satisfy
+    // y <= 499, or the optimistic drop is rejected by the server and snaps back.
+    const widgets = [widget("a", 0, 495, 12, 5)];
+    const slot = nearestFreeSlot({ x: 0, y: 498, w: 4, h: 2 }, widgets, "b");
+    expect(slot === null || slot.y + slot.h - 1 <= 499).toBe(true);
+    if (slot) {
+      expect(collides(slot, widgets, "b")).toBe(false);
+    }
+  });
+
   it("clamps y and h to the bounds the store enforces", () => {
     expect(clampRect({ x: 0, y: 900, w: 2, h: 40 })).toEqual({ x: 0, y: 499, w: 2, h: 20 });
     expect(nudgeRect({ x: 0, y: 499, w: 2, h: 1 }, "move", "down")).toEqual({
