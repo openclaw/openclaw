@@ -74,7 +74,7 @@ struct ChatSessionsSheet: View {
                     self.emptyState
                 }
             }
-            .searchable(text: self.$searchText, prompt: Text("Search sessions"))
+            .searchable(text: self.$searchText, prompt: "Search sessions")
             .navigationTitle("Sessions")
             .toolbar {
                 #if os(macOS)
@@ -193,7 +193,7 @@ struct ChatSessionsSheet: View {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel(Text("Pinned"))
+                        .accessibilityLabel("Pinned")
                 }
             }
         }
