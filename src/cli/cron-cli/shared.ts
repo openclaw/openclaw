@@ -7,8 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
@@ -344,7 +343,6 @@ const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
 const CRON_OWNER_PAD = 24;
 const CRON_MODEL_PAD = 20;
-const TRUNCATED_SUFFIX = "...";
 
 const stringifyCell = (value: unknown, fallback = "-") => {
   if (typeof value === "string") {
@@ -356,21 +354,16 @@ const stringifyCell = (value: unknown, fallback = "-") => {
   return fallback;
 };
 
-const pad = (value: unknown, width: number) => {
-  const text = stringifyCell(value);
-  const remaining = width - visibleWidth(text);
-  return remaining > 0 ? `${text}${" ".repeat(remaining)}` : text;
-};
+const pad = (value: unknown, width: number) => stringifyCell(value).padEnd(width);
 
 const truncate = (value: string, width: number) => {
-  const sanitized = sanitizeTerminalText(value);
-  if (visibleWidth(sanitized) <= width) {
-    return sanitized;
+  if (value.length <= width) {
+    return value;
   }
-  if (width <= TRUNCATED_SUFFIX.length) {
-    return truncateToVisibleWidth(sanitized, width);
+  if (width <= 3) {
+    return truncateUtf16Safe(value, width);
   }
-  return `${truncateToVisibleWidth(sanitized, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
+  return `${truncateUtf16Safe(value, width - 3)}...`;
 };
 
 const formatIsoMinute = (iso: string) => {
