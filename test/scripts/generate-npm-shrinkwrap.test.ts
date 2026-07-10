@@ -491,6 +491,12 @@ describe("generate-npm-shrinkwrap", () => {
     ).toEqual(["extensions/acpx"]);
   });
 
+  it("targets changed tracked shrinkwraps for private packages", () => {
+    expect(
+      shrinkwrapPackageDirsForChangedPaths(["extensions/vault/package.json"]).map(repoRelativePath),
+    ).toEqual(["extensions/vault"]);
+  });
+
   it("falls back to every shrinkwrap when lockfile ownership is ambiguous", () => {
     const packageDirs = shrinkwrapPackageDirsForChangedPaths(["pnpm-lock.yaml"]).map(
       repoRelativePath,
@@ -498,6 +504,7 @@ describe("generate-npm-shrinkwrap", () => {
 
     expect(packageDirs).toContain("");
     expect(packageDirs).toContain("extensions/acpx");
+    expect(packageDirs).toContain("extensions/vault");
   });
 
   it("falls back to every shrinkwrap when mixed lockfile changes do not map to packages", () => {

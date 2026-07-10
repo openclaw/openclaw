@@ -1080,9 +1080,11 @@ function shrinkwrapPathForPackage(packageDir) {
   return path.join(packageDir, "npm-shrinkwrap.json");
 }
 
-function listPublishablePluginPackageDirs() {
+function listManagedShrinkwrapPackageDirs() {
   // Published workspace packages (packages/*) ship npm-shrinkwrap.json just
   // like publishable plugins so their transitive dependency tree stays pinned.
+  // Keep any already-tracked shrinkwrap managed too, including private packages,
+  // or version alignment can leave that release metadata silently stale.
   return ["extensions", "packages"]
     .flatMap((parentDir) =>
       readdirSync(path.join(ROOT_DIR, parentDir), { withFileTypes: true })
@@ -1095,14 +1097,17 @@ function listPublishablePluginPackageDirs() {
         return false;
       }
       const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-      return packageJson.openclaw?.release?.publishToNpm === true;
+      return (
+        packageJson.openclaw?.release?.publishToNpm === true ||
+        existsSync(shrinkwrapPathForPackage(path.join(ROOT_DIR, packageDir)))
+      );
     })
     .toSorted((left, right) => left.localeCompare(right));
 }
 
 function shrinkwrapPackageDirsForChangedPaths(changedPaths) {
   const packageDirs = new Set();
-  const publishablePluginPackageDirs = new Set(listPublishablePluginPackageDirs());
+  const managedShrinkwrapPackageDirs = new Set(listManagedShrinkwrapPackageDirs());
   let hasAmbiguousDependencyPolicyChange = false;
   let hasLockfileChange = false;
 
@@ -1121,7 +1126,7 @@ function shrinkwrapPackageDirsForChangedPaths(changedPaths) {
     const workspacePackageMatch = changedPath.match(
       /^((?:extensions|packages)\/[^/]+)\/(?:package\.json|npm-shrinkwrap\.json)$/u,
     );
-    if (workspacePackageMatch && publishablePluginPackageDirs.has(workspacePackageMatch[1])) {
+    if (workspacePackageMatch && managedShrinkwrapPackageDirs.has(workspacePackageMatch[1])) {
       packageDirs.add(path.resolve(ROOT_DIR, workspacePackageMatch[1]));
       continue;
     }
@@ -1140,14 +1145,14 @@ function shrinkwrapPackageDirsForChangedPaths(changedPaths) {
   if (hasAmbiguousDependencyPolicyChange) {
     return [
       ROOT_DIR,
-      ...listPublishablePluginPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
+      ...listManagedShrinkwrapPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
     ];
   }
 
   if (hasLockfileChange) {
     return [
       ROOT_DIR,
-      ...listPublishablePluginPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
+      ...listManagedShrinkwrapPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
     ];
   }
   return [...packageDirs].toSorted((left, right) =>
@@ -1258,7 +1263,7 @@ export function resolvePackageDirs(args) {
       jobs,
       packageDirs: [
         ROOT_DIR,
-        ...listPublishablePluginPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
+        ...listManagedShrinkwrapPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
       ],
     };
   }
@@ -1267,7 +1272,7 @@ export function resolvePackageDirs(args) {
       check,
       changedPaths: check ? listCheckChangedPaths() : [],
       jobs,
-      packageDirs: listPublishablePluginPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
+      packageDirs: listManagedShrinkwrapPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
     };
   }
   if (changed) {
