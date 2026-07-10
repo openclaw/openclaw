@@ -26,6 +26,7 @@ export function createRunStateMachine(params: RunStateMachineParams) {
   const now = params.now ?? Date.now;
   const runStartsByHandle = new Map<RunHandle, number>();
   let nextRunHandle = 0;
+  let anonymousRuns = 0;
   let runActivityHeartbeat: ReturnType<typeof setInterval> | null = null;
   let lifecycleActive = !params.abortSignal?.aborted;
 
@@ -43,7 +44,7 @@ export function createRunStateMachine(params: RunStateMachineParams) {
     if (!lifecycleActive) {
       return;
     }
-    const activeRuns = runStartsByHandle.size;
+    const activeRuns = anonymousRuns + runStartsByHandle.size;
     params.setStatus?.({
       activeRuns,
       busy: activeRuns > 0,
@@ -61,11 +62,11 @@ export function createRunStateMachine(params: RunStateMachineParams) {
   };
 
   const ensureHeartbeat = () => {
-    if (runActivityHeartbeat || runStartsByHandle.size <= 0 || !lifecycleActive) {
+    if (runActivityHeartbeat || anonymousRuns + runStartsByHandle.size <= 0 || !lifecycleActive) {
       return;
     }
     runActivityHeartbeat = setInterval(() => {
-      if (!lifecycleActive || runStartsByHandle.size <= 0) {
+      if (!lifecycleActive || anonymousRuns + runStartsByHandle.size <= 0) {
         clearHeartbeat();
         return;
       }
@@ -102,23 +103,28 @@ export function createRunStateMachine(params: RunStateMachineParams) {
     isActive() {
       return lifecycleActive;
     },
-    onRunStart(): RunHandle {
+    onRunStart() {
+      anonymousRuns += 1;
+      publish();
+      ensureHeartbeat();
+    },
+    onRunEnd() {
+      anonymousRuns = Math.max(0, anonymousRuns - 1);
+      if (anonymousRuns + runStartsByHandle.size <= 0) {
+        clearHeartbeat();
+      }
+      publish();
+    },
+    onTrackedRunStart(): RunHandle {
       const handle = nextRunHandle++;
       runStartsByHandle.set(handle, now());
       publish();
       ensureHeartbeat();
       return handle;
     },
-    onRunEnd(handle?: RunHandle) {
-      if (handle == null) {
-        const oldestHandle = runStartsByHandle.keys().next().value;
-        if (oldestHandle != null) {
-          runStartsByHandle.delete(oldestHandle);
-        }
-      } else {
-        runStartsByHandle.delete(handle);
-      }
-      if (runStartsByHandle.size <= 0) {
+    onTrackedRunEnd(handle: RunHandle) {
+      runStartsByHandle.delete(handle);
+      if (anonymousRuns + runStartsByHandle.size <= 0) {
         clearHeartbeat();
       }
       publish();
