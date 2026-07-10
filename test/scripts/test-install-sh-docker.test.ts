@@ -1432,11 +1432,12 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     };
 
     expect(step("Checkout trusted installer harness").with).toMatchObject({
-      ref: "${{ github.workflow_sha }}",
+      repository: "${{ needs.preflight.outputs.workflow_repository }}",
+      ref: "${{ needs.preflight.outputs.workflow_sha }}",
       "persist-credentials": false,
     });
     expect(step("Checkout candidate CLI").with).toMatchObject({
-      ref: "${{ inputs.ref || github.ref }}",
+      ref: "${{ needs.preflight.outputs.target_sha }}",
       path: "candidate",
       "persist-credentials": false,
     });
