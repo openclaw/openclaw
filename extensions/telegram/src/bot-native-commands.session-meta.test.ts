@@ -708,9 +708,12 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
     await handler(createTelegramPrivateCommandContext());
 
-    const dispatchCall = firstMockArg(
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher,
-      "dispatchReplyWithBufferedBlockDispatcher",
+    const dispatchCall = requireRecord(
+      firstMockArg(
+        replyMocks.dispatchReplyWithBufferedBlockDispatcher,
+        "dispatchReplyWithBufferedBlockDispatcher",
+      ),
+      "dispatch call",
     );
     expect(dispatchCall.cfg).toBe(runtimeCfg);
   });

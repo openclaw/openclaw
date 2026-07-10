@@ -52,11 +52,14 @@ describe("telegram bot message processor", () => {
     upsertChannelPairingRequest,
   } as unknown as TelegramBotDeps;
 
+  const baseTurnContext = {
+    cfg: {},
+    telegramCfg: {},
+  } satisfies import("./bot-message.js").TelegramMessageProcessorTurnContext;
+
   const baseDeps = {
     bot: {},
-    cfg: {},
     account: {},
-    telegramCfg: {},
     historyLimit: 0,
     groupHistories: {},
     dmPolicy: {},
@@ -92,8 +95,8 @@ describe("telegram bot message processor", () => {
       [],
       [],
       {
-        cfg: turnContext?.cfg ?? baseDeps.cfg,
-        telegramCfg: turnContext?.telegramCfg ?? baseDeps.telegramCfg,
+        cfg: turnContext?.cfg ?? baseTurnContext.cfg,
+        telegramCfg: turnContext?.telegramCfg ?? baseTurnContext.telegramCfg,
         onDispatchStart: turnContext?.onDispatchStart,
       },
       options,
