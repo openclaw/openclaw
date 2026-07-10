@@ -165,6 +165,32 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `markdown heading hierarchy builds with inline formatting and table`() {
+        let markdown = """
+        # First **strong** heading
+        ## Second [linked](https://example.com) heading
+        ### Third `code` heading
+        #### Fourth heading
+        ##### Fifth heading
+        ###### Sixth heading
+
+        | Surface | State |
+        | --- | --- |
+        | iOS | Native |
+        """
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = ChatMarkdownRenderer(
+                text: markdown,
+                context: .assistant,
+                variant: .standard,
+                font: OpenClawChatTypography.body,
+                textColor: OpenClawChatTheme.assistantText)
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 393, height: 700))
+        }
+    }
+
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
         let text = """
         Earlier prose stays visible.
