@@ -383,7 +383,7 @@ describe("installSignalCliFromRelease", () => {
     const originalMkdtemp = fs.mkdtemp.bind(fs);
     const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix) => {
       const dir = await originalMkdtemp(prefix as string);
-      if (dir.includes("openclaw-signal-")) {
+      if (dir.includes("openclaw-signal-") && !dir.includes("staging")) {
         createdTempDirs.push(dir);
       }
       return dir;
@@ -414,6 +414,63 @@ describe("installSignalCliFromRelease", () => {
       // The temp dir created during this call must have been removed by the finally.
       expect(createdTempDirs.length).toBe(1);
       await expect(fs.stat(createdTempDirs[0] as string)).rejects.toThrow();
+    } finally {
+      mkdtempSpy.mockRestore();
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+      Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
+    }
+  });
+
+  it("removes the download temp dir on the success path too", async () => {
+    const originalPlatform = process.platform;
+    const originalArch = process.arch;
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    Object.defineProperty(process, "arch", { configurable: true, value: "x64" });
+    const createdTempDirs: string[] = [];
+    const originalMkdtemp = fs.mkdtemp.bind(fs);
+    const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix) => {
+      const dir = await originalMkdtemp(prefix as string);
+      if (dir.includes("openclaw-signal-") && !dir.includes("staging")) {
+        createdTempDirs.push(dir);
+      }
+      return dir;
+    });
+    try {
+      // Build a real tar.gz archive containing a signal-cli binary so the full
+      // success path (download -> extract -> find binary) runs against real bytes.
+      const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-staging-"));
+      const inner = path.join(staging, "signal-cli-0.0.0-success-test");
+      await fs.mkdir(inner, { recursive: true });
+      await fs.writeFile(path.join(inner, "signal-cli"), "#!/bin/sh\necho ok\n", "utf-8");
+      const archivePath = path.join(staging, "signal-cli-0.0.0-Linux-native.tar.gz");
+      await tar.c({ cwd: staging, file: archivePath, gzip: true }, [
+        "signal-cli-0.0.0-success-test",
+      ]);
+      const archiveBytes = await fs.readFile(archivePath);
+
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(
+        okDownloadResponse(
+          JSON.stringify({
+            tag_name: "v0.0.0-success-test",
+            assets: [
+              {
+                name: "signal-cli-0.0.0-Linux-native.tar.gz",
+                browser_download_url: "https://example.com/linux-native.tar.gz",
+              },
+            ],
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(okDownloadResponse(archiveBytes));
+
+      const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+
+      expect(result.ok).toBe(true);
+      expect(createdTempDirs.length).toBe(1);
+      // The temp dir (and the downloaded archive inside it) must be gone.
+      await expect(fs.stat(createdTempDirs[0] as string)).rejects.toThrow();
+      await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
     } finally {
       mkdtempSpy.mockRestore();
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
