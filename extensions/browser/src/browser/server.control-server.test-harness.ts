@@ -255,14 +255,17 @@ const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   hover: {
     mock: pwMocks.hoverViaPlaywright,
     fields: ["ref", "selector", "timeoutMs"],
+    includeSsrf: true,
   },
   scrollIntoView: {
     mock: pwMocks.scrollIntoViewViaPlaywright,
     fields: ["ref", "selector", "timeoutMs"],
+    includeSsrf: true,
   },
   drag: {
     mock: pwMocks.dragViaPlaywright,
     fields: ["startRef", "startSelector", "endRef", "endSelector", "timeoutMs"],
+    includeSsrf: true,
   },
   select: {
     mock: pwMocks.selectOptionViaPlaywright,

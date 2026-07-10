@@ -690,6 +690,7 @@ export async function hoverViaPlaywright(opts: {
   ref?: string;
   selector?: string;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -701,13 +702,24 @@ export async function hoverViaPlaywright(opts: {
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await awaitActionWithAbort(
-      locator.hover({
-        timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
-      }),
-      abortPromise,
-      reconcileRemoteDialog,
-    );
+    // Hover handlers can trigger document navigations; run the same
+    // interaction navigation guard as click so page-influenced automation
+    // cannot reach destinations the SSRF policy denies (#103783).
+    await assertInteractionNavigationCompletedSafely({
+      action: async () =>
+        await awaitActionWithAbort(
+          locator.hover({
+            timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+          }),
+          abortPromise,
+          reconcileRemoteDialog,
+        ),
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl: opts.ssrfPolicy ? page.url() : "",
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
@@ -724,6 +736,7 @@ export async function dragViaPlaywright(opts: {
   endRef?: string;
   endSelector?: string;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
   const resolvedStart = requireRefOrSelector(opts.startRef, opts.startSelector);
@@ -740,13 +753,22 @@ export async function dragViaPlaywright(opts: {
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await awaitActionWithAbort(
-      startLocator.dragTo(endLocator, {
-        timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
-      }),
-      abortPromise,
-      reconcileRemoteDialog,
-    );
+    // Drag/drop handlers can trigger document navigations; guard like click (#103783).
+    await assertInteractionNavigationCompletedSafely({
+      action: async () =>
+        await awaitActionWithAbort(
+          startLocator.dragTo(endLocator, {
+            timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+          }),
+          abortPromise,
+          reconcileRemoteDialog,
+        ),
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl: opts.ssrfPolicy ? page.url() : "",
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, `${startLabel} -> ${endLabel}`);
   } finally {
@@ -1157,6 +1179,7 @@ export async function scrollIntoViewViaPlaywright(opts: {
   ref?: string;
   selector?: string;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -1170,11 +1193,20 @@ export async function scrollIntoViewViaPlaywright(opts: {
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await awaitActionWithAbort(
-      locator.scrollIntoViewIfNeeded({ timeout }),
-      abortPromise,
-      reconcileRemoteDialog,
-    );
+    // Scroll handlers can trigger document navigations; guard like click (#103783).
+    await assertInteractionNavigationCompletedSafely({
+      action: async () =>
+        await awaitActionWithAbort(
+          locator.scrollIntoViewIfNeeded({ timeout }),
+          abortPromise,
+          reconcileRemoteDialog,
+        ),
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl: opts.ssrfPolicy ? page.url() : "",
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
@@ -1586,6 +1618,7 @@ async function executeSingleAction(
         ref: action.ref,
         selector: action.selector,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
         signal,
       });
       break;
@@ -1596,6 +1629,7 @@ async function executeSingleAction(
         ref: action.ref,
         selector: action.selector,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
         signal,
       });
       break;
@@ -1608,6 +1642,7 @@ async function executeSingleAction(
         endRef: action.endRef,
         endSelector: action.endSelector,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
         signal,
       });
       break;

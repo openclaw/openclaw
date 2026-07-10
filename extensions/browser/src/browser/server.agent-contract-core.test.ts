@@ -667,6 +667,9 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       ref: "2",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
     expect((hoverArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
 
@@ -680,6 +683,9 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       ref: "2",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
     expect((scrollArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
 
@@ -695,6 +701,9 @@ describe("browser control server", () => {
       targetId: "abcd1234",
       startRef: "3",
       endRef: "4",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
     expect((dragArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
   });
