@@ -7,6 +7,8 @@ import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/connection-banner.ts";
 import "../components/exec-approval.ts";
+import "../components/question-card.ts";
+import "../components/goal-chip.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
@@ -926,6 +928,34 @@ class OpenClawShell extends OpenClawLightDomElement {
               context.overlays.decideApproval(decision),
           }}
         ></openclaw-exec-approval>
+        ${
+          // The chat composer renders pending questions inline (Codex swap-in); the
+          // app-level modal stays only as a fallback for non-chat surfaces.
+          this.routeState.routeId === "chat"
+            ? nothing
+            : html`<openclaw-question-card
+                .props=${{
+                  queue: overlaySnapshot.questionQueue,
+                  busy: overlaySnapshot.questionBusy,
+                  error: overlaySnapshot.questionError,
+                  onSubmit: (
+                    id: Parameters<typeof context.overlays.submitQuestionAnswers>[0],
+                    answers: Parameters<typeof context.overlays.submitQuestionAnswers>[1],
+                  ) => context.overlays.submitQuestionAnswers(id, answers),
+                }}
+              ></openclaw-question-card>`
+        }
+        <openclaw-goal-chip
+          .props=${{
+            goal: overlaySnapshot.goalChip,
+            busy: overlaySnapshot.goalBusy,
+            error: overlaySnapshot.goalError,
+            onAction: (
+              action: Parameters<typeof context.overlays.updateGoal>[0],
+              payload: Parameters<typeof context.overlays.updateGoal>[1],
+            ) => context.overlays.updateGoal(action, payload),
+          }}
+        ></openclaw-goal-chip>
         ${renderDevicePairSetup({
           open: overlaySnapshot.devicePairSetupOpen,
           loading: overlaySnapshot.devicePairSetupLoading,

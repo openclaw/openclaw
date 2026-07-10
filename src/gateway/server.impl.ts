@@ -1125,6 +1125,7 @@ export async function startGatewayServer(
       transcriptUnsub: runtimeState.transcriptUnsub,
       lifecycleUnsub: runtimeState.lifecycleUnsub,
       taskUnsub: runtimeState.taskUnsub,
+      goalDriverStop: () => runtimeState.goalDriverStop(),
       chatRunState,
       chatAbortControllers,
       chatQueuedTurns,
@@ -1226,13 +1227,29 @@ export async function startGatewayServer(
     getActiveTaskCount = earlyRuntime.getActiveTaskCount;
     runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
 
-    const [{ startGatewayEventSubscriptions }, { startGatewayRuntimeServices }] =
-      await startupTrace.measure("runtime.post-early-imports", () =>
-        Promise.all([
-          import("./server-runtime-subscriptions.js"),
-          import("./server-runtime-startup-services.js"),
-        ]),
-      );
+    const [
+      { startGatewayEventSubscriptions },
+      { startGatewayRuntimeServices },
+      { startGoalDriverWiring, bindGoalUpdatedBroadcast },
+    ] = await startupTrace.measure("runtime.post-early-imports", () =>
+      Promise.all([
+        import("./server-runtime-subscriptions.js"),
+        import("./server-runtime-startup-services.js"),
+        import("./goal-driver-wiring.js"),
+      ]),
+    );
+    // Every goal-store write (commands, tools, driver auto-pause) broadcasts a
+    // `goal.updated` event through the global goal-events emitter.
+    bindGoalUpdatedBroadcast(broadcast);
+    // Autonomous goal continuation driver (behind tools.experimental.goalDriver);
+    // undefined when the flag is off, so the turn-completed seam is a no-op.
+    const goalDriverWiring = startGoalDriverWiring({
+      config: cfgAtStart,
+      chatAbortControllers,
+      chatQueuedTurns,
+      log,
+    });
+    runtimeState.goalDriverStop = () => goalDriverWiring?.stop();
     const runtimeSubscriptions = await startupTrace.measure("runtime.subscriptions", () =>
       startGatewayEventSubscriptions({
         log,
@@ -1246,6 +1263,7 @@ export async function startGatewayServer(
         sessionMessageSubscribers,
         chatAbortControllers,
         restartRecoveryCandidates,
+        ...(goalDriverWiring ? { onGoalTurnCompleted: goalDriverWiring.onTurnCompleted } : {}),
       }),
     );
     Object.assign(runtimeState, runtimeSubscriptions);
@@ -1260,25 +1278,71 @@ export async function startGatewayServer(
     );
     Object.assign(runtimeState, runtimeServices);
 
-    const { execApprovalManager, pluginApprovalManager, extraHandlers, coreGatewayHandlers } =
-      await startupTrace.measure("gateway.handlers", async () => {
-        const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
-          await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
-        return {
-          ...createGatewayAuxHandlers({
-            log,
-            activateRuntimeSecrets,
-            sharedGatewaySessionGenerationState,
-            resolveSharedGatewaySessionGenerationForConfig,
-            clients,
-            startChannel,
-            stopChannel,
-            getChannelAutostartSuppression: channelManager.getAutostartSuppression,
-            logChannels,
-          }),
-          coreGatewayHandlers: coreGatewayHandlersLocal,
-        };
-      });
+    const {
+      execApprovalManager,
+      pluginApprovalManager,
+      questionManager,
+      extraHandlers,
+      coreGatewayHandlers,
+    } = await startupTrace.measure("gateway.handlers", async () => {
+      const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
+        await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
+      return {
+        ...createGatewayAuxHandlers({
+          log,
+          activateRuntimeSecrets,
+          sharedGatewaySessionGenerationState,
+          resolveSharedGatewaySessionGenerationForConfig,
+          clients,
+          startChannel,
+          stopChannel,
+          getChannelAutostartSuppression: channelManager.getAutostartSuppression,
+          logChannels,
+        }),
+        coreGatewayHandlers: coreGatewayHandlersLocal,
+      };
+    });
+    // Bind the global question manager to the persistent gateway broadcast so the
+    // ask_user_question tool's pending/resolved/expired lifecycle reaches Control UI
+    // and channels even though the tool registers outside any request context.
+    const [{ bindQuestionManagerEmitter }, { createQuestionForwarder }] = await Promise.all([
+      import("./server-methods/question.js"),
+      import("../infra/question-forwarder.js"),
+    ]);
+    // Also push each pending question to its originating chat (Telegram inline
+    // keyboard / Slack blocks) through the durable outbound path.
+    bindQuestionManagerEmitter({
+      manager: questionManager,
+      broadcast,
+      forwarder: createQuestionForwarder(),
+    });
+    // In-memory pending questions died with the previous process; sweep the durable
+    // breadcrumbs so any surface still showing a pre-restart question is dismissed
+    // via question.expired instead of hanging. Best-effort, default store scope.
+    void (async () => {
+      try {
+        const [{ sweepPendingQuestions }, { resolveStorePath }] = await Promise.all([
+          import("../config/sessions/pending-question.js"),
+          import("../config/sessions/paths.js"),
+        ]);
+        await sweepPendingQuestions({
+          storePath: resolveStorePath(cfgAtStart?.session?.store),
+          emitExpired: (breadcrumb) =>
+            broadcast(
+              "question.expired",
+              {
+                id: breadcrumb.pendingQuestion.id,
+                reason: "gateway-restart",
+                ts: Date.now(),
+                turnSourceChannel: breadcrumb.pendingQuestion.turnSourceChannel ?? null,
+              },
+              { dropIfSlow: true },
+            ),
+        });
+      } catch (err) {
+        log.warn?.(`question breadcrumb startup sweep failed: ${String(err)}`);
+      }
+    })();
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,

@@ -1,5 +1,9 @@
 // Slack tests cover interactions plugin behavior.
 import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
+import {
+  getGlobalQuestionManager,
+  resetGlobalQuestionManagerForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -962,6 +966,64 @@ describe("registerSlackInteractionEvents", () => {
       heartbeat: { target: "last" },
     });
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a pending question from a Slack option button", async () => {
+    resetGlobalQuestionManagerForTest();
+    const manager = getGlobalQuestionManager();
+    const { record, wait } = manager.register({
+      sessionKey: "agent:ops:slack:channel:C1",
+      questions: [
+        {
+          id: "q1",
+          header: "Deploy",
+          question: "Ship it?",
+          isOther: true,
+          options: [{ label: "Yes" }, { label: "No" }],
+        },
+      ],
+    });
+
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "The agent has a question:",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button:1:2" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button:1:2",
+        block_id: "reply_actions",
+        value: "/answer 2",
+        text: { type: "plain_text", text: "No" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    await expect(wait).resolves.toEqual({ q1: { text: "No" } });
+    expect(manager.getSnapshot(record.id)?.status).toBe("resolved");
+    // Resolved buttons must not fall through to the generic interaction event.
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    // The option row is replaced with a confirmation.
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+    resetGlobalQuestionManagerForTest();
   });
 
   it("uses unique interaction ids for repeated Slack actions on the same message", async () => {

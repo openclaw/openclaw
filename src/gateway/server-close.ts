@@ -694,6 +694,7 @@ export function createGatewayCloseHandler(
     transcriptUnsub: (() => void) | null;
     lifecycleUnsub: (() => void) | null;
     taskUnsub: (() => void) | null;
+    goalDriverStop?: () => void;
     getPendingReplyCount?: () => number;
     clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
     configReloader: { stop: () => Promise<void> };
@@ -914,6 +915,9 @@ export function createGatewayCloseHandler(
       }
       if (params.taskUnsub) {
         await shutdownStep("task-unsub", () => params.taskUnsub!(), warnings);
+      }
+      if (params.goalDriverStop) {
+        await shutdownStep("goal-driver-stop", () => params.goalDriverStop!(), warnings);
       }
       params.chatRunState.clear();
       let clientCloseFailures = 0;

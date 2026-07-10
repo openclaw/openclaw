@@ -2,9 +2,11 @@
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
+import { extractPlanChecklist } from "../../lib/plan-checklist.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { clearPlanChecklist, setPlanChecklist } from "./plan-stream-store.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -312,6 +314,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  clearPlanChecklist(host.sessionKey);
 }
 
 export type CompactionStatus = {
@@ -712,6 +715,14 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
         : undefined;
   if (name === "session_status" && phase === "result") {
     syncSessionStatusModelOverride(host, data);
+  }
+  if (name === "update_plan" && (phase === "update" || phase === "result")) {
+    // Capture the live plan checklist so the plan panel updates in real time while the agent
+    // plans. Re-render is driven by the throttled scheduleToolStreamSync below.
+    const checklist = extractPlanChecklist(data.result ?? data.partialResult);
+    if (checklist) {
+      setPlanChecklist(sessionKey ?? host.sessionKey, checklist);
+    }
   }
 
   const now = Date.now();

@@ -1,6 +1,7 @@
 // Session goal state tracks objective progress and token budgets in the session store.
 import crypto from "node:crypto";
 import { formatTokenCount } from "../../utils/token-format.js";
+import { emitGoalUpdated, goalToUpdatedEvent } from "./goal-events.js";
 import { loadSessionEntry, patchSessionEntry } from "./session-accessor.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
@@ -223,6 +224,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
   if (!result || !created) {
     throw new Error("session not found");
   }
+  emitGoalUpdated(goalToUpdatedEvent(options.sessionKey, created, "host"));
   return cloneGoal(created);
 }
 
@@ -281,16 +283,18 @@ export async function updateSessionGoalStatus(
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");
   }
+  emitGoalUpdated(goalToUpdatedEvent(options.sessionKey, updated, "host"));
   return cloneGoal(updated);
 }
 
 export async function updateSessionGoalObjective(
-  options: SessionGoalStoreOptions & { objective: string },
+  options: SessionGoalStoreOptions & { objective: string; tokenBudget?: number },
 ): Promise<SessionGoal> {
   const objective = options.objective.trim();
   if (!objective) {
     throw new Error("objective required");
   }
+  const tokenBudget = normalizeTokenBudget(options.tokenBudget);
   const now = nowMs(options.now);
   let updated: SessionGoal | undefined;
   let foundSession = false;
@@ -305,15 +309,77 @@ export async function updateSessionGoalObjective(
       if (TERMINAL_GOAL_STATUSES.has(accounted.status)) {
         throw new Error(`goal is already ${accounted.status}`);
       }
-      // Rewording keeps status and token accounting; only the target moves.
-      updated = { ...accounted, objective, updatedAt: now };
+      // Rewording keeps status and token accounting; only the target moves. An
+      // optional budget update rides along so the edit dialog can adjust both.
+      updated = {
+        ...accounted,
+        objective,
+        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+        updatedAt: now,
+      };
       return { goal: updated };
     },
   );
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");
   }
+  emitGoalUpdated(goalToUpdatedEvent(options.sessionKey, updated, "host"));
   return cloneGoal(updated);
+}
+
+/**
+ * Increments the durable no-progress continuation counter for a session goal.
+ *
+ * The goal-driver calls this immediately before it fires a continuation turn so
+ * the consecutive-continuation ceiling survives a gateway restart (the counter
+ * is otherwise process-local). No-ops when no goal exists or the goal is not
+ * `active`. Returns the updated goal, or undefined when there is nothing to
+ * increment. Token accounting is intentionally NOT re-projected here — this is a
+ * narrow counter write on the hot driver path, not a display read.
+ */
+export async function recordSessionGoalContinuation(
+  options: SessionGoalStoreOptions,
+): Promise<SessionGoal | undefined> {
+  let updated: SessionGoal | undefined;
+  await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
+      const goal = entry.goal;
+      if (!goal || goal.status !== "active") {
+        return null;
+      }
+      updated = { ...goal, continuationTurns: goal.continuationTurns + 1 };
+      return { goal: updated };
+    },
+    { fallbackEntry: options.fallbackEntry },
+  );
+  return updated ? cloneGoal(updated) : undefined;
+}
+
+/**
+ * Resets the durable no-progress continuation counter to zero.
+ *
+ * Called when a real inbound (non-driver) turn completes: any genuine user
+ * interaction counts as progress and re-opens the full continuation budget.
+ * No-ops when no goal exists or the counter is already zero.
+ */
+export async function resetSessionGoalContinuations(
+  options: SessionGoalStoreOptions,
+): Promise<SessionGoal | undefined> {
+  let updated: SessionGoal | undefined;
+  await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
+      const goal = entry.goal;
+      if (!goal || goal.continuationTurns === 0) {
+        return null;
+      }
+      updated = { ...goal, continuationTurns: 0 };
+      return { goal: updated };
+    },
+    { fallbackEntry: options.fallbackEntry },
+  );
+  return updated ? cloneGoal(updated) : undefined;
 }
 
 export async function clearSessionGoal(options: SessionGoalStoreOptions): Promise<boolean> {
@@ -328,5 +394,9 @@ export async function clearSessionGoal(options: SessionGoalStoreOptions): Promis
       return { goal: undefined };
     },
   );
-  return Boolean(result && removed);
+  const cleared = Boolean(result && removed);
+  if (cleared) {
+    emitGoalUpdated(goalToUpdatedEvent(options.sessionKey, undefined, "host"));
+  }
+  return cleared;
 }

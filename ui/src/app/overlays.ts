@@ -25,6 +25,51 @@ import {
   type ExecApprovalRequest,
 } from "./exec-approval.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import {
+  applyGoalUpdated,
+  clearGoalChip,
+  type GoalChipEntry,
+  type GoalChipState,
+} from "./goal-chip.ts";
+import {
+  enqueueQuestionCard,
+  parseQuestionPending,
+  parseQuestionRemoved,
+  removeQuestionCard,
+  setQuestionQueueFromList,
+  type QuestionCardAnswers,
+  type QuestionCardEntry,
+  type QuestionPromptState,
+} from "./question-card.ts";
+
+/** Goal-chip actions map to the existing `/goal` host verbs sent via chat.send. */
+export type GoalChipActionKind = "pause" | "resume" | "stop" | "edit";
+export type GoalChipActionPayload = { objective?: string; tokenBudget?: number };
+
+/** Builds the `/goal …` host-verb command string for a chip action. */
+export function goalActionCommand(
+  action: GoalChipActionKind,
+  payload?: GoalChipActionPayload,
+): string {
+  switch (action) {
+    case "pause":
+      return "/goal pause";
+    case "resume":
+      return "/goal resume";
+    case "stop":
+      return "/goal stop";
+    case "edit": {
+      const objective = payload?.objective?.trim() ?? "";
+      const budget =
+        payload?.tokenBudget !== undefined && payload.tokenBudget > 0
+          ? ` --budget ${Math.floor(payload.tokenBudget)}`
+          : "";
+      return `/goal edit ${objective}${budget}`;
+    }
+    default:
+      return "/goal status";
+  }
+}
 
 type ApplicationStatusBanner = {
   tone: "danger" | "warn" | "info";
@@ -38,6 +83,12 @@ export type ApplicationOverlaySnapshot = {
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
   approvalError: string | null;
+  questionQueue: readonly QuestionCardEntry[];
+  questionBusy: boolean;
+  questionError: string | null;
+  goalChip: GoalChipEntry | null;
+  goalBusy: boolean;
+  goalError: string | null;
   devicePairSetupOpen: boolean;
   devicePairSetupLoading: boolean;
   devicePairSetupError: string | null;
@@ -51,6 +102,8 @@ export type ApplicationOverlays = {
   runUpdate: () => Promise<void>;
   dismissUpdate: () => void;
   decideApproval: (decision: ExecApprovalDecision) => Promise<void>;
+  submitQuestionAnswers: (id: string, answers: QuestionCardAnswers) => Promise<void>;
+  updateGoal: (action: GoalChipActionKind, payload?: GoalChipActionPayload) => Promise<void>;
   openDevicePairSetup: () => Promise<void>;
   refreshDevicePairSetup: () => Promise<void>;
   closeDevicePairSetup: () => void;
@@ -207,6 +260,12 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     approvalQueue: [],
     approvalBusy: false,
     approvalError: null,
+    questionQueue: [],
+    questionBusy: false,
+    questionError: null,
+    goalChip: null,
+    goalBusy: false,
+    goalError: null,
     devicePairSetupOpen: false,
     devicePairSetupLoading: false,
     devicePairSetupError: null,
@@ -247,6 +306,18 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     execApprovalError: null,
     execApprovalExpiryTimers: new Map(),
   };
+  const questionState: QuestionPromptState = {
+    client: activeClient,
+    questionQueue: [],
+    questionBusy: false,
+    questionError: null,
+  };
+  const goalState: GoalChipState = {
+    client: activeClient,
+    goal: null,
+    busy: false,
+    error: null,
+  };
 
   const publish = () => {
     snapshot = {
@@ -256,6 +327,12 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
       approvalError: promptState.execApprovalError,
+      questionQueue: questionState.questionQueue,
+      questionBusy: questionState.questionBusy,
+      questionError: questionState.questionError,
+      goalChip: goalState.goal,
+      goalBusy: goalState.busy,
+      goalError: goalState.error,
       devicePairSetupOpen: devicePairSetupState.devicePairSetupOpen,
       devicePairSetupLoading: devicePairSetupState.devicePairSetupLoading,
       devicePairSetupError: devicePairSetupState.devicePairSetupError,
@@ -315,6 +392,20 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     if (applied && !disposed) {
       publish();
     }
+  };
+
+  const refreshQuestions = async (client: NonNullable<typeof activeClient>) => {
+    let result: unknown;
+    try {
+      result = await client.request("question.list", {});
+    } catch {
+      return;
+    }
+    if (disposed || !isCurrentClient(client)) {
+      return;
+    }
+    setQuestionQueueFromList(questionState, result);
+    publish();
   };
 
   const publishUpdateBanner = (updateStatusBanner: ApplicationStatusBanner | null) => {
@@ -445,6 +536,8 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     activeClient = next.client;
     connectedSource = nextConnectedSource;
     promptState.client = next.client;
+    questionState.client = next.client;
+    goalState.client = next.client;
     devicePairSetupState.client = next.client;
     devicePairSetupState.connected = next.connected;
     if (connectedSourceChanged) {
@@ -461,6 +554,10 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
       promptState.execApprovalError = null;
+      questionState.questionQueue = [];
+      questionState.questionBusy = false;
+      questionState.questionError = null;
+      clearGoalChip(goalState);
       snapshot = { ...snapshot, updateAvailable: null, updateRunning: false };
       for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
         globalThis.clearTimeout(timer);
@@ -475,6 +572,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       connectedEpoch += 1;
       const epoch = connectedEpoch;
       void refreshApprovals(next.client, epoch);
+      void refreshQuestions(next.client);
       void verifyPendingUpdateVersion(next.client, epoch);
     }
   };
@@ -516,6 +614,27 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
         clearResolvedExecApprovalPrompt(promptState, resolved.id);
         publish();
       }
+      return;
+    }
+    if (event.event === "question.pending") {
+      const entry = parseQuestionPending(event.payload);
+      if (entry) {
+        enqueueQuestionCard(questionState, entry);
+        publish();
+      }
+      return;
+    }
+    if (event.event === "question.resolved" || event.event === "question.expired") {
+      const removed = parseQuestionRemoved(event.payload);
+      if (removed) {
+        removeQuestionCard(questionState, removed.id);
+        publish();
+      }
+      return;
+    }
+    if (event.event === "goal.updated") {
+      applyGoalUpdated(goalState, event.payload);
+      publish();
     }
   });
   synchronizeGateway(gateway.snapshot);
@@ -660,6 +779,83 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
         if (approvalDecision === operation) {
           approvalDecision = null;
           promptState.execApprovalBusy = false;
+          publish();
+        }
+      }
+    },
+    async submitQuestionAnswers(id, answers) {
+      const client = gateway.snapshot.client;
+      const active = questionState.questionQueue.find((entry) => entry.id === id);
+      if (!active || !client || questionState.questionBusy || disposed) {
+        return;
+      }
+      questionState.questionBusy = true;
+      questionState.questionError = null;
+      publish();
+      try {
+        await client.request("question.resolve", { id, answers });
+        if (!isCurrentClient(client)) {
+          return;
+        }
+        // The question.resolved broadcast also removes the card; do it here too so
+        // the local UI updates immediately without waiting for the round-trip event.
+        removeQuestionCard(questionState, id);
+      } catch (error) {
+        if (isStaleApprovalResolutionError(error)) {
+          if (isCurrentClient(client)) {
+            removeQuestionCard(questionState, id);
+          }
+          return;
+        }
+        if (isCurrentClient(client) && questionState.questionQueue.some((e) => e.id === id)) {
+          questionState.questionError = `Answer failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+        }
+      } finally {
+        if (isCurrentClient(client)) {
+          questionState.questionBusy = false;
+          publish();
+        }
+      }
+    },
+    async updateGoal(action, payload) {
+      const goal = goalState.goal;
+      const client = gateway.snapshot.client;
+      if (!goal || !client || goalState.busy || disposed) {
+        return;
+      }
+      // Route through the existing `/goal` host verbs via chat.send so the same
+      // command path (and its host-only pause/resume restriction) applies. The
+      // resulting mutation broadcasts `goal.updated`, which refreshes the chip.
+      goalState.busy = true;
+      goalState.error = null;
+      publish();
+      try {
+        await client.request("chat.send", {
+          sessionKey: goal.sessionKey,
+          message: goalActionCommand(action, payload),
+          deliver: false,
+          idempotencyKey: `goal-${action}-${Date.now()}`,
+        });
+        if (
+          action === "stop" &&
+          isCurrentClient(client) &&
+          goalState.goal?.sessionKey === goal.sessionKey
+        ) {
+          // Stopping clears the goal; drop the chip immediately without waiting
+          // for the goal.updated round-trip.
+          clearGoalChip(goalState);
+        }
+      } catch (error) {
+        if (isCurrentClient(client)) {
+          goalState.error = `Goal update failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+        }
+      } finally {
+        if (isCurrentClient(client)) {
+          goalState.busy = false;
           publish();
         }
       }

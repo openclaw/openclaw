@@ -3790,6 +3790,350 @@ td.data-table-key-col {
 }
 
 /* ===========================================
+   Ask User Question Card
+   =========================================== */
+
+.question-card {
+  width: 100%;
+  max-height: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  overflow-y: auto;
+  animation: scale-in 0.2s var(--ease-out);
+}
+
+.question-card-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.question-card-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.question-card-queue {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.question-card-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.question-card-question + .question-card-question {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.question-card-header {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.question-card-prompt {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.question-card-secret {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.question-card-option {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  cursor: pointer;
+  transition:
+    background 0.15s var(--ease-out),
+    border-color 0.15s var(--ease-out);
+}
+
+.question-card-option:hover {
+  background: var(--bg-hover);
+}
+
+.question-card-option:has(input:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.question-card-option input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.question-card-option-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.question-card-recommended {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: var(--radius-full);
+  padding: 1px 8px;
+}
+
+.question-card-option-desc {
+  width: 100%;
+  padding-left: 26px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.question-card-other-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.question-card-other-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.question-card-error {
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.question-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Composer-inline question card (Codex swap-in) — matches the plan-panel inline look. */
+.inline-question {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0 auto 8px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, var(--border)) 45%, transparent);
+  border-radius: var(--radius-lg);
+  animation: scale-in 0.2s var(--ease-out);
+}
+
+.inline-question__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inline-question__icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.inline-question__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.inline-question__paging {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.inline-question__page-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.inline-question__page-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.inline-question__page-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.inline-question__page-btn--prev {
+  transform: scaleX(-1);
+}
+
+.inline-question__page-indicator {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.inline-question__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+/* Composer-inline plan-approval card (Codex "Implement this plan?"). */
+.inline-plan-approval {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0 auto 8px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, var(--border)) 45%, transparent);
+  border-radius: var(--radius-lg);
+  animation: scale-in 0.2s var(--ease-out);
+}
+
+.inline-plan-approval__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inline-plan-approval__icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.inline-plan-approval__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.inline-plan-approval__summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inline-plan-approval__revise {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inline-plan-approval__feedback {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.inline-plan-approval__feedback:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.inline-plan-approval__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+/* Compact plan status chip in the composer status-stack (full plan lives in the sidebar). */
+.agent-chat__plan-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: center;
+  max-width: 100%;
+  margin: 0 auto 8px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-full);
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s var(--ease-out),
+    border-color 0.15s var(--ease-out);
+}
+
+.agent-chat__plan-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent, var(--border)) 45%, transparent);
+}
+
+.agent-chat__plan-chip:disabled {
+  cursor: default;
+}
+
+.agent-chat__plan-chip--pending_approval {
+  border-color: color-mix(in srgb, var(--accent, var(--border)) 55%, transparent);
+}
+
+.agent-chat__plan-chip-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.agent-chat__plan-chip-label {
+  font-weight: 600;
+}
+
+.agent-chat__plan-chip-progress {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-chat__plan-chip-view {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  color: var(--accent, var(--text));
+}
+
+
+
+/* ===========================================
    Agents
    =========================================== */
 
@@ -6557,4 +6901,98 @@ details[open] > .ov-expandable-toggle::after {
   border: none;
   border-radius: 10px;
   background: var(--card);
+}
+
+/* Persistent "Pursuing goal" chip + edit dialog (goal-driver). */
+.goal-chip {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 360px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  cursor: pointer;
+}
+.goal-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.goal-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.goal-chip-label {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.goal-chip-objective {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-chip-status,
+.goal-chip-usage {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.goal-chip--paused .goal-chip-label,
+.goal-chip--blocked .goal-chip-label,
+.goal-chip--budget_limited .goal-chip-label,
+.goal-chip--usage_limited .goal-chip-label {
+  color: var(--danger);
+}
+.goal-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 320px;
+  /* Real card surface: the modal-dialog element itself is transparent, so the
+     dialog body must carry its own chrome (mirrors .question-card / .exec-approval-card). */
+  padding: 20px;
+  background: var(--card, var(--bg-elevated));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.goal-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.goal-dialog-label {
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  color: var(--text);
+}
+.goal-dialog-objective,
+.goal-dialog-budget {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--secondary);
+  color: var(--text);
+  font: inherit;
+}
+.goal-dialog-objective:focus,
+.goal-dialog-budget:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.goal-dialog-error {
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+.goal-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }

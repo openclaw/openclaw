@@ -1,6 +1,7 @@
 // Loads command handlers behind a runtime boundary for the command dispatcher.
 import { handleAcpCommand } from "./commands-acp.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
+import { handleAnswerCommand } from "./commands-answer.js";
 import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleBtwCommand } from "./commands-btw.js";
@@ -25,6 +26,7 @@ import { handleLoginCommand } from "./commands-login.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handleNameCommand } from "./commands-name.js";
+import { handlePlanCommand } from "./commands-plan.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
 import {
@@ -66,6 +68,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleToolsCommand,
     handleStatusCommand,
     handleGoalCommand,
+    handlePlanCommand,
     handleLearnCommand,
     handleNameCommand,
     handleDiagnosticsCommand,
@@ -73,6 +76,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleSteerCommand,
     handleAllowlistCommand,
     handleApproveCommand,
+    handleAnswerCommand,
     handleContextCommand,
     handleExportSessionCommand,
     handleExportTrajectoryCommand,

@@ -7,6 +7,8 @@ import {
   deliverAgentHarnessUserInputPrompt,
   embeddedAgentLog,
   emptyAgentHarnessUserInputAnswers,
+  registerAgentHarnessQuestion,
+  type AgentHarnessQuestionRegistration,
   type AgentHarnessUserInputOption,
   type AgentHarnessUserInputQuestion,
   type EmbeddedRunAttemptParams,
@@ -27,6 +29,10 @@ type PendingUserInput = {
   questions: AgentHarnessUserInputQuestion[];
   resolve: (value: JsonValue) => void;
   cleanup: () => void;
+  // Structured-question lane registration (Control UI card / channel buttons).
+  // Cancelled when the legacy free-text reply wins the race, so the rendered
+  // question is dismissed everywhere.
+  questionRegistration?: AgentHarnessQuestionRegistration;
 };
 
 type CodexUserInputBridge = {
@@ -55,6 +61,9 @@ export function createCodexUserInputBridge(params: {
     }
     pending = undefined;
     current.cleanup();
+    // Dismiss the structured-question surfaces. Idempotent: when the structured
+    // resolve won the race the manager record is already resolved and this no-ops.
+    current.questionRegistration?.cancel("codex-user-input-resolved");
     current.resolve(value);
   };
 
@@ -76,7 +85,7 @@ export function createCodexUserInputBridge(params: {
       return new Promise<JsonValue>((resolve) => {
         const abortListener = () => resolvePending(emptyUserInputResponse());
         const cleanup = () => params.signal?.removeEventListener("abort", abortListener);
-        pending = {
+        const current: PendingUserInput = {
           requestId: request.id,
           threadId: requestParams.threadId,
           turnId: requestParams.turnId,
@@ -85,11 +94,30 @@ export function createCodexUserInputBridge(params: {
           resolve,
           cleanup,
         };
+        pending = current;
         params.signal?.addEventListener("abort", abortListener, { once: true });
         if (params.signal?.aborted) {
           resolvePending(emptyUserInputResponse());
           return;
         }
+        // Lane-a convergence: also register the question with the global manager so
+        // it renders as a Control UI card / channel buttons and can be answered from
+        // any surface. Whichever resolves first — a structured question.resolve or
+        // the legacy next-free-text reply — wins; resolvePending cancels the other.
+        const registration = registerAgentHarnessQuestion({
+          questions: requestParams.questions,
+          sessionKey: params.paramsForRun.sessionKey ?? null,
+        });
+        current.questionRegistration = registration;
+        void registration.wait
+          .then((answers) => {
+            if (answers && pending?.questionRegistration === registration) {
+              resolvePending(answers as unknown as JsonObject);
+            }
+          })
+          .catch((error: unknown) => {
+            embeddedAgentLog.warn("codex structured question resolution failed", { error });
+          });
         void deliverUserInputPrompt(params.paramsForRun, requestParams.questions).catch(
           (error: unknown) => {
             embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });

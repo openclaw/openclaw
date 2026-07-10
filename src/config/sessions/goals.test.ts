@@ -5,6 +5,8 @@ import {
   createSessionGoal,
   formatSessionGoalStatus,
   getSessionGoal,
+  recordSessionGoalContinuation,
+  resetSessionGoalContinuations,
   resolveSessionGoalDisplayState,
   updateSessionGoalObjective,
   updateSessionGoalStatus,
@@ -347,6 +349,53 @@ describe("session goals", () => {
     expect(text).toContain("Goal\nStatus: blocked\nObjective: land the PR");
     expect(text).toContain("Token budget: 12k/30k");
     expect(text).toContain("Commands: /goal resume, /goal edit <objective>, /goal clear");
+  });
+
+  it("durably records and resets the no-progress continuation counter (survives reload)", async () => {
+    await writeSession(0);
+    await createSessionGoal({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "ship the feature",
+    });
+
+    // Two driver fires increment the durable counter.
+    await recordSessionGoalContinuation({ storePath: fixture.storePath(), sessionKey });
+    await recordSessionGoalContinuation({ storePath: fixture.storePath(), sessionKey });
+
+    // Re-read from disk (a fresh read == a gateway restart) proves durability.
+    expect(
+      getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.continuationTurns,
+    ).toBe(2);
+
+    // A real inbound turn resets the counter durably.
+    const reset = await resetSessionGoalContinuations({
+      storePath: fixture.storePath(),
+      sessionKey,
+    });
+    expect(reset?.continuationTurns).toBe(0);
+    expect(
+      getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.continuationTurns,
+    ).toBe(0);
+  });
+
+  it("does not increment the continuation counter for a non-active goal", async () => {
+    await writeSession(0);
+    await createSessionGoal({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "ship the feature",
+    });
+    await updateSessionGoalStatus({ storePath: fixture.storePath(), sessionKey, status: "paused" });
+
+    const result = await recordSessionGoalContinuation({
+      storePath: fixture.storePath(),
+      sessionKey,
+    });
+    expect(result).toBeUndefined();
+    expect(
+      getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.continuationTurns,
+    ).toBe(0);
   });
 
   it("rewords the objective without touching status or token accounting", async () => {

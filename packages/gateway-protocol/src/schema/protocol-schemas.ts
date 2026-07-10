@@ -272,6 +272,11 @@ import {
 } from "./plugins.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
+  QuestionAnswerSchema,
+  QuestionListParamsSchema,
+  QuestionResolveParamsSchema,
+} from "./questions.js";
+import {
   SecretsReloadParamsSchema,
   SecretsResolveAssignmentSchema,
   SecretsResolveParamsSchema,
@@ -695,6 +700,9 @@ export const ProtocolSchemas = {
   ExecApprovalGetParams: ExecApprovalGetParamsSchema,
   ExecApprovalRequestParams: ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
+  QuestionAnswer: QuestionAnswerSchema,
+  QuestionListParams: QuestionListParamsSchema,
+  QuestionResolveParams: QuestionResolveParamsSchema,
   PluginApprovalRequestParams: PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: PluginApprovalResolveParamsSchema,
   PluginControlUiDescriptor: PluginControlUiDescriptorSchema,

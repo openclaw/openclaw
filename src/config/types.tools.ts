@@ -749,6 +749,22 @@ export type ToolsConfig = {
   experimental?: {
     /** Enable the structured `update_plan` tool explicitly outside strict-agentic execution mode. */
     planTool?: boolean;
+    /**
+     * Autonomous goal continuation driver. When enabled, a session with an
+     * `active` goal is pursued unattended: the driver starts a new turn whenever
+     * the session goes idle, until the goal is completed, blocked, paused, or a
+     * budget/no-progress ceiling is hit. Default off (experimental).
+     */
+    goalDriver?: {
+      /** Enable the autonomous goal continuation driver (default: false). */
+      enabled?: boolean;
+      /** Idle debounce (ms) after a turn completes before a continuation may fire (default: 20000). */
+      debounceMs?: number;
+      /** Extra random delay in [0, jitterMs) added to each arm to de-synchronize sessions (default: 5000). */
+      jitterMs?: number;
+      /** Consecutive no-progress driver continuations before the goal auto-pauses (default: 3). */
+      maxNoProgressContinuations?: number;
+    };
   };
 };
 

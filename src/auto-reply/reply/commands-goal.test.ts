@@ -3,12 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatGoalDriverContinuationPrompt } from "../../agents/goal-driver/continuation-prompt.js";
 import { getSessionEntry, upsertSessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import {
+  extractGoalBudgetFlag,
   formatGoalContinuationPrompt,
   handleGoalCommand,
+  isFormattedGoalContinuationPrompt,
   parseGoalCommand,
 } from "./commands-goal.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -270,7 +273,7 @@ describe("goal commands", () => {
     });
 
     const usage = await handleGoalCommand(buildGoalParams("/goal edit", storePath), true);
-    expect(usage?.reply?.text).toBe("Usage: /goal edit <objective>");
+    expect(usage?.reply?.text).toBe("Usage: /goal edit <objective> [--budget N]");
 
     const missing = await handleGoalCommand(
       buildGoalParams("/goal edit new target", storePath),
@@ -312,5 +315,77 @@ describe("goal commands", () => {
     expect(result?.reply?.text).toContain("Status: budget_limited");
     expect(getSessionEntry({ storePath, sessionKey })?.goal?.status).toBe("active");
     expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
+  });
+
+  it("extractGoalBudgetFlag strips a trailing --budget flag off the objective", () => {
+    expect(extractGoalBudgetFlag("ship the feature --budget 50000")).toEqual({
+      objective: "ship the feature",
+      tokenBudget: 50000,
+    });
+    expect(extractGoalBudgetFlag("ship the feature --budget=50000")).toEqual({
+      objective: "ship the feature",
+      tokenBudget: 50000,
+    });
+    // No flag -> objective passes through untouched.
+    expect(extractGoalBudgetFlag("ship the feature")).toEqual({ objective: "ship the feature" });
+    // Non-positive / malformed budget is ignored (flag still stripped).
+    expect(extractGoalBudgetFlag("ship it --budget 0")).toEqual({ objective: "ship it" });
+  });
+
+  it("sets a goal with an inline --budget flag", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    });
+
+    const params = buildGoalParams("/goal set ship the feature --budget 50000", storePath);
+    const result = await handleGoalCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(true);
+    const goal = getSessionEntry({ storePath, sessionKey })?.goal;
+    expect(goal?.objective).toBe("ship the feature");
+    expect(goal?.tokenBudget).toBe(50000);
+  });
+
+  it("stops a goal (host-facing verb) by clearing it", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "finish the migration",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      },
+    });
+
+    const params = buildGoalParams("/goal stop", storePath);
+    const result = await handleGoalCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("Goal stopped.");
+    expect(getSessionEntry({ storePath, sessionKey })?.goal).toBeUndefined();
+  });
+
+  it("recognizes a driver continuation prompt as an internal goal continuation", () => {
+    const prompt = formatGoalDriverContinuationPrompt({ objective: "finish it", tokensUsed: 0 });
+    expect(isFormattedGoalContinuationPrompt(prompt)).toBe(true);
+    // A plain user message is not a continuation.
+    expect(isFormattedGoalContinuationPrompt("hello there")).toBe(false);
   });
 });

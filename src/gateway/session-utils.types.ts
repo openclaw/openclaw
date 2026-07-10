@@ -6,6 +6,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionEntry,
   SessionGoal,
+  SessionPlanState,
 } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type { FastModeSource } from "../shared/fast-mode.js";
@@ -90,6 +91,7 @@ export type GatewaySessionRow = {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   goal?: SessionGoal;
+  plan?: SessionPlanState | null;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
   hasActiveRun?: boolean;

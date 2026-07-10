@@ -93,5 +93,6 @@ export function describeUpdatePlanTool(): string {
     "Update current run plan.",
     "Use for non-trivial multi-step work; keep plan current while executing.",
     "Short steps; max one `in_progress`; skip for simple one-step work.",
+    "In plan mode this is your live checklist: keep exactly one step `in_progress` and mark steps `completed` as you finish, then present the plan with exit_plan_mode.",
   ].join(" ");
 }

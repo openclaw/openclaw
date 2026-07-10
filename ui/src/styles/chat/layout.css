@@ -1186,7 +1186,14 @@ openclaw-chat-page {
 }
 
 .agent-chat__composer-status-stack:not(
-  :has(.compaction-indicator, .fallback-indicator, .agent-chat__goal)
+  :has(
+    .compaction-indicator,
+    .fallback-indicator,
+    .agent-chat__goal,
+    .agent-chat__plan-chip,
+    openclaw-inline-question,
+    openclaw-inline-plan-approval
+  )
 ) {
   display: none;
 }
@@ -3158,6 +3165,50 @@ openclaw-chat-page {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
+/* Composer mode selector (Off | Plan | Goal). */
+.chat-mode-select__menu {
+  width: max-content;
+  min-width: 168px;
+}
+
+.chat-mode-select__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-mode-select__option:hover,
+.chat-mode-select__option:focus-visible {
+  border-color: color-mix(in srgb, var(--border) 76%, transparent);
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.chat-mode-select__option.active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent, var(--text)) 12%, transparent);
+}
+
+.chat-mode-select__option-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.chat-mode-select__trigger.active {
+  color: var(--accent, var(--text-strong));
+}
+
 
 /* The combined picker contains provider, model, and reasoning controls in one
    bounded surface instead of opening a second flyout. */

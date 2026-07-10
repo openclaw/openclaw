@@ -4,10 +4,18 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  SessionGoal,
+  SessionPlanState,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
+import type { InlineQuestionProps } from "../../../components/inline-question-card.ts";
+import "../../../components/inline-plan-approval.ts";
+import "../../../components/inline-question-card.ts";
 import "../../../components/tooltip.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
@@ -38,6 +46,7 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
+import { formatPlanProgress, formatPlanStateLabel } from "../../../lib/session-plan.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import {
   getChatAttachmentPreviewUrl,
@@ -46,6 +55,7 @@ import {
 } from "../attachment-payload-store.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
+import { getPlanChecklist } from "../plan-stream-store.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
@@ -126,6 +136,10 @@ type ChatComposerProps = {
   onScrollToBottom?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onGoalCommand?: (command: string) => void;
+  /** Pending ask_user_question for this session, rendered inline in the status-stack. */
+  questionInline?: InlineQuestionProps | null;
+  /** Opens the full plan in the right sidebar pane (the compact stack chip links to it). */
+  onViewPlan?: () => void;
 };
 
 type PendingClearedSubmittedDraft = {
@@ -256,16 +270,15 @@ function suppressStaleSubmittedDraftReplay(
 
 export function resetChatComposerState(paneId?: string) {
   if (paneId) {
-    // Goal elapsed timers are keyed by element and cleaned up when their
-    // element leaves the DOM, so a per-pane reset does not need to touch them.
+    clearGoalElapsedTick(paneId);
     composerStates.delete(paneId);
     return;
   }
   composerStates.clear();
-  for (const timer of goalElapsedTimers.values()) {
+  for (const timer of goalElapsedTicks.values()) {
     clearInterval(timer);
   }
-  goalElapsedTimers.clear();
+  goalElapsedTicks.clear();
 }
 
 const composerTextareaResizeObservers = new WeakMap<HTMLTextAreaElement, ResizeObserver>();
@@ -336,39 +349,33 @@ function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "dow
   });
 }
 
-const goalElapsedTimers = new Map<HTMLElement, ReturnType<typeof setInterval>>();
+// Per-pane elapsed tick. While an active goal exists we request a host re-render
+// once a second so the elapsed label — derived in render from the goal's start —
+// stays live through Lit's own render path. Writing element.textContent directly
+// on the node Lit tracks as the ${elapsed} ChildPart raced Lit commits and threw
+// "ChildPart has no parentNode", silently corrupting later composer renders.
+const goalElapsedTicks = new Map<string, ReturnType<typeof setInterval>>();
 
-function clearGoalElapsedTimer(el: HTMLElement) {
-  const timer = goalElapsedTimers.get(el);
+function clearGoalElapsedTick(paneId: string) {
+  const timer = goalElapsedTicks.get(paneId);
   if (timer !== undefined) {
     clearInterval(timer);
-    goalElapsedTimers.delete(el);
+    goalElapsedTicks.delete(paneId);
   }
 }
 
-// Ticks the elapsed span in place so an idle active goal does not force
-// full chat re-renders every second.
-function createGoalElapsedRef(goal: SessionGoal) {
-  let bound: HTMLElement | null = null;
-  return (element: Element | undefined) => {
-    if (bound) {
-      clearGoalElapsedTimer(bound);
-      bound = null;
-    }
-    if (!(element instanceof HTMLElement) || goal.status !== "active") {
-      return;
-    }
-    bound = element;
-    const timer = setInterval(() => {
-      // Tests and detached renders can drop the pill without a final ref call.
-      if (!element.isConnected) {
-        clearGoalElapsedTimer(element);
-        return;
-      }
-      element.textContent = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
-    }, 1000);
-    goalElapsedTimers.set(element, timer);
-  };
+function syncGoalElapsedTick(paneId: string, active: boolean, requestUpdate: () => void) {
+  if (!active) {
+    clearGoalElapsedTick(paneId);
+    return;
+  }
+  if (goalElapsedTicks.has(paneId)) {
+    return;
+  }
+  goalElapsedTicks.set(
+    paneId,
+    setInterval(() => requestUpdate(), 1000),
+  );
 }
 
 type ChatGoalActions = {
@@ -429,7 +436,7 @@ function renderChatGoal(
         <span class="agent-chat__goal-icon">${icons.target}</span>
         <span class="agent-chat__goal-label">${formatGoalStatusLabel(goal.status)}</span>
         <span class="agent-chat__goal-objective">${goal.objective}</span>
-        <span class="agent-chat__goal-elapsed" ${ref(createGoalElapsedRef(goal))}>${elapsed}</span>
+        <span class="agent-chat__goal-elapsed">${elapsed}</span>
         <span class="agent-chat__goal-actions">
           ${showActions && actions.onGoalEdit && goal.status !== "complete"
             ? renderChatGoalActionButton({
@@ -488,6 +495,34 @@ function renderChatGoal(
           `
         : nothing}
     </div>
+  `;
+}
+
+// Compact plan status chip in the composer status-stack. The full plan + live
+// checklist lives in the right sidebar pane (U-V3); this one-liner links to it.
+function renderCompactPlanChip(
+  plan: SessionPlanState,
+  checklist: ReturnType<typeof getPlanChecklist>,
+  onView: (() => void) | undefined,
+): TemplateResult {
+  const progress = formatPlanProgress(checklist?.steps ?? []);
+  return html`
+    <button
+      class="agent-chat__plan-chip agent-chat__plan-chip--${plan.status}"
+      type="button"
+      data-plan-chip-compact="true"
+      ?disabled=${!onView}
+      @click=${() => onView?.()}
+    >
+      <span class="agent-chat__plan-chip-icon" aria-hidden="true">${icons.scrollText}</span>
+      <span class="agent-chat__plan-chip-label">${formatPlanStateLabel(plan.status)}</span>
+      ${progress ? html`<span class="agent-chat__plan-chip-progress">${progress}</span>` : nothing}
+      ${onView
+        ? html`<span class="agent-chat__plan-chip-view"
+            >${t("plan.view")} ${icons.chevronRight}</span
+          >`
+        : nothing}
+    </button>
   `;
 }
 
@@ -2124,6 +2159,14 @@ export function renderChatComposer(props: ChatComposerProps) {
           : `${assistantName} is working...`;
   const mobileRunStatusIndicator = renderChatRunStatusIndicator(composerRunStatus, inProgressLabel);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  // Keep the goal-pill elapsed live via a host re-render rather than an out-of-band
+  // DOM write. Only tick when a host requestUpdate exists, so the timer clears itself
+  // on the next render (or pane teardown) instead of spinning against a no-op.
+  syncGoalElapsedTick(
+    props.paneId,
+    activeSession?.goal?.status === "active" && Boolean(props.onRequestUpdate),
+    requestUpdate,
+  );
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
 
   const placeholder = !props.connected
@@ -2426,6 +2469,11 @@ export function renderChatComposer(props: ChatComposerProps) {
             `
           : nothing}
         <div class="agent-chat__composer-status-stack">
+          ${props.questionInline
+            ? html`<openclaw-inline-question
+                .props=${props.questionInline}
+              ></openclaw-inline-question>`
+            : nothing}
           ${renderFallbackIndicator(props.fallbackStatus)}
           ${renderCompactionIndicator(props.compactionStatus)}
           ${renderChatGoal(state, activeSession?.goal, {
@@ -2438,6 +2486,26 @@ export function renderChatComposer(props: ChatComposerProps) {
             },
             requestUpdate,
           })}
+          ${activeSession?.plan
+            ? renderCompactPlanChip(
+                activeSession.plan,
+                getPlanChecklist(props.sessionKey),
+                props.onViewPlan,
+              )
+            : nothing}
+          ${activeSession?.plan?.status === "pending_approval" && canCompose && props.onGoalCommand
+            ? html`<openclaw-inline-plan-approval
+                .props=${{
+                  summary: activeSession.plan.lastSummary ?? null,
+                  busy: isBusy,
+                  // Approve/revise ride the /plan channel command, which resolves the PR-A
+                  // approval question (no new approval path).
+                  onApprove: () => props.onGoalCommand?.("/plan accept"),
+                  onRevise: (feedback: string) =>
+                    props.onGoalCommand?.(feedback ? `/plan reject ${feedback}` : "/plan reject"),
+                }}
+              ></openclaw-inline-plan-approval>`
+            : nothing}
         </div>
 
         <input

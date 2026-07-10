@@ -64,11 +64,11 @@ describe("openclaw-tools update_plan gating", () => {
     setEmbeddedMode(false);
   });
 
-  it("keeps update_plan disabled by default", () => {
-    expectUpdatePlanEnabled({ config: {} as OpenClawConfig }, false);
+  it("enables update_plan by default for all models (Codex-parity promotion)", () => {
+    expectUpdatePlanEnabled({ config: {} as OpenClawConfig }, true);
   });
 
-  it("does not expose update_plan from default tool construction", () => {
+  it("exposes update_plan from default tool construction", () => {
     const defaultTools = createFastToolNames({
       config: {} as OpenClawConfig,
       modelProvider: "anthropic",
@@ -81,8 +81,9 @@ describe("openclaw-tools update_plan gating", () => {
       modelId: "claude-sonnet-4-6",
     };
 
-    expect(defaultTools).not.toContain("update_plan");
-    expect(shouldIncludeUpdatePlanToolForOpenClawTools(emptyAllowlistParams)).toBe(false);
+    expect(defaultTools).toContain("update_plan");
+    // No explicit allowlist entry, but the default-on switch still includes it.
+    expect(shouldIncludeUpdatePlanToolForOpenClawTools(emptyAllowlistParams)).toBe(true);
   });
 
   it("wraps constructed tools with before-tool-call hooks by default", () => {
@@ -250,11 +251,22 @@ describe("openclaw-tools update_plan gating", () => {
     expect(includeUpdatePlan).toBe(false);
   });
 
-  it("auto-enables update_plan for unconfigured GPT-5 openai runs", () => {
-    // Unspecified executionContract on a supported provider/model enables the
-    // structured plan tool by default. Explicit "default" still opts out.
+  it("enables update_plan by default regardless of provider or model", () => {
+    const cfg = { agents: { list: [{ id: "main" }] } } as OpenClawConfig;
+    expectUpdatePlanEnabled(openAiGpt5Params(cfg), true);
+    expectUpdatePlanEnabled(
+      openAiGpt5Params(cfg, { modelProvider: "anthropic", modelId: "claude-sonnet-4-6" }),
+      true,
+    );
+    expectUpdatePlanEnabled(openAiGpt5Params(cfg, { modelId: "gpt-4.1" }), true);
+  });
+
+  it("no longer requires an execution contract: default contract still enables update_plan", () => {
+    // After the Codex-parity promotion, executionContract no longer gates update_plan; only
+    // the explicit planTool kill-switch does.
     const cfg = {
       agents: {
+        defaults: { embeddedAgent: { executionContract: "default" } },
         list: [{ id: "main" }],
       },
     } as OpenClawConfig;
@@ -262,137 +274,21 @@ describe("openclaw-tools update_plan gating", () => {
     expectUpdatePlanEnabled(openAiGpt5Params(cfg), true);
   });
 
-  it("respects explicit default contract opt-out on GPT-5 runs", () => {
-    // Users who explicitly set executionContract: "default" are saying they
-    // want the old pre-parity-program behavior. Honor that opt-out.
+  it("lets explicit planTool false kill-switch disable the default-on tool", () => {
     const cfg = {
-      agents: {
-        defaults: {
-          embeddedAgent: {
-            executionContract: "default",
-          },
-        },
-        list: [{ id: "main" }],
-      },
+      tools: { experimental: { planTool: false } },
+      agents: { list: [{ id: "main" }] },
     } as OpenClawConfig;
 
     expectUpdatePlanEnabled(openAiGpt5Params(cfg), false);
   });
 
-  it("does not auto-enable update_plan for non-openai providers even when unconfigured", () => {
+  it("keeps update_plan when an explicit allowlist overrides the planTool kill-switch", () => {
     const cfg = {
-      agents: {
-        list: [{ id: "main" }],
-      },
-    } as OpenClawConfig;
-
-    expectUpdatePlanEnabled(
-      openAiGpt5Params(cfg, { modelProvider: "anthropic", modelId: "claude-sonnet-4-6" }),
-      false,
-    );
-    expectUpdatePlanEnabled(openAiGpt5Params(cfg, { modelId: "gpt-4.1" }), false);
-  });
-
-  it("auto-enables update_plan for strict-agentic GPT-5 agents", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          embeddedAgent: {
-            executionContract: "strict-agentic",
-          },
-        },
-        list: [{ id: "main" }],
-      },
+      tools: { experimental: { planTool: false }, allow: ["update_plan"] },
+      agents: { list: [{ id: "main" }] },
     } as OpenClawConfig;
 
     expectUpdatePlanEnabled(openAiGpt5Params(cfg), true);
-  });
-
-  it("does not auto-enable update_plan for unsupported providers or models", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          embeddedAgent: {
-            executionContract: "strict-agentic",
-          },
-        },
-        list: [{ id: "main" }],
-      },
-    } as OpenClawConfig;
-
-    expectUpdatePlanEnabled(
-      openAiGpt5Params(cfg, { modelProvider: "anthropic", modelId: "claude-sonnet-4-6" }),
-      false,
-    );
-    expectUpdatePlanEnabled(openAiGpt5Params(cfg, { modelId: "gpt-4.1" }), false);
-  });
-
-  it("lets explicit planTool false override strict-agentic auto-enable", () => {
-    const cfg = {
-      tools: {
-        experimental: {
-          planTool: false,
-        },
-      },
-      agents: {
-        defaults: {
-          embeddedAgent: {
-            executionContract: "strict-agentic",
-          },
-        },
-        list: [{ id: "main" }],
-      },
-    } as OpenClawConfig;
-
-    expectUpdatePlanEnabled(openAiGpt5Params(cfg), false);
-  });
-
-  it("resolves strict-agentic gating from explicit agentId when no session key is available", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          embeddedAgent: {
-            executionContract: "default",
-          },
-        },
-        list: [
-          { id: "main" },
-          {
-            id: "research",
-            embeddedAgent: {
-              executionContract: "strict-agentic",
-            },
-          },
-        ],
-      },
-    } as OpenClawConfig;
-
-    expectUpdatePlanEnabled(openAiGpt5Params(cfg, { agentId: "research" }), true);
-  });
-
-  it("applies per-agent overrides without leaking the contract to other agents", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          embeddedAgent: {
-            executionContract: "strict-agentic",
-          },
-        },
-        list: [
-          {
-            id: "main",
-            embeddedAgent: {
-              executionContract: "default",
-            },
-          },
-          {
-            id: "research",
-          },
-        ],
-      },
-    } as OpenClawConfig;
-
-    expectUpdatePlanEnabled(openAiGpt5Params(cfg, { agentId: "main" }), false);
-    expectUpdatePlanEnabled(openAiGpt5Params(cfg, { agentId: "research" }), true);
   });
 });

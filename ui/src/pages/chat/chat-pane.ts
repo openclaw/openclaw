@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type {
   TaskSuggestion,
@@ -15,10 +15,13 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import type { ApplicationOverlaySnapshot } from "../../app/overlays.ts";
+import type { QuestionCardEntry } from "../../app/question-card.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette.ts";
+import "../../components/goal-editor.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -82,6 +85,7 @@ import {
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
 import { exportChatMarkdown } from "./export.ts";
+import { getPlanChecklist } from "./plan-stream-store.ts";
 import {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,
@@ -145,6 +149,29 @@ class ChatPane extends OpenClawLightDomElement {
   private connectionGeneration = 0;
   private nativeDraftCleanup: (() => void) | null = null;
   private readonly unreadPatchGuard = new SessionUnreadPatchGuard();
+  // Pending ask_user_question state, mirrored from the global QuestionManager so a
+  // question for this pane's session renders inline in the composer (Codex swap-in).
+  private questionOverlay: {
+    queue: readonly QuestionCardEntry[];
+    busy: boolean;
+    error: string | null;
+  } = { queue: [], busy: false, error: null };
+  // Questions dismissed locally (ESC/Dismiss) stay pending on the gateway and remain
+  // answerable via /answer; we just stop showing the inline card for them.
+  private readonly dismissedQuestionIds = new Set<string>();
+  // Goal-editor modal (opened from the composer mode selector).
+  private goalEditorOpen = false;
+
+  private openGoalEditor() {
+    this.goalEditorOpen = true;
+    this.requestUpdate();
+  }
+
+  private closeGoalEditor() {
+    this.goalEditorOpen = false;
+    this.requestUpdate();
+  }
+
   private taskSuggestions: TaskSuggestion[] = [];
   private readonly taskSuggestionBusyIds = new Set<string>();
   private readonly taskSuggestionOperations = new Map<string, symbol>();
@@ -743,7 +770,38 @@ class ChatPane extends OpenClawLightDomElement {
         this.applySessionsState(state);
       }),
     );
+    this.applyOverlaySnapshot(this.context.overlays.snapshot);
+    chatState.addCleanup(
+      this.context.overlays.subscribe((snapshot) => {
+        this.applyOverlaySnapshot(snapshot);
+      }),
+    );
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
+  }
+
+  private applyOverlaySnapshot(snapshot: ApplicationOverlaySnapshot) {
+    this.questionOverlay = {
+      queue: snapshot.questionQueue,
+      busy: snapshot.questionBusy,
+      error: snapshot.questionError,
+    };
+    // Drop dismissals for questions the gateway has since resolved/expired.
+    for (const id of this.dismissedQuestionIds) {
+      if (!snapshot.questionQueue.some((entry) => entry.id === id)) {
+        this.dismissedQuestionIds.delete(id);
+      }
+    }
+    this.state?.requestUpdate?.();
+  }
+
+  private selectInlineQuestion(sessionKey: string): QuestionCardEntry | null {
+    return (
+      this.questionOverlay.queue.find(
+        (entry) =>
+          !this.dismissedQuestionIds.has(entry.id) &&
+          (entry.sessionKey === sessionKey || entry.sessionKey === null),
+      ) ?? null
+    );
   }
 
   override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
@@ -767,6 +825,21 @@ class ChatPane extends OpenClawLightDomElement {
       this.draft !== this.state.chatMessage
     ) {
       this.state.handleChatDraftChange(this.draft);
+    }
+  }
+
+  override updated() {
+    // The plan pane holds a snapshot taken when it was opened; once the plan
+    // exits (approved/cleared) there is nothing to show, so close the pane
+    // rather than fall through to the generic "no content" detail view.
+    if (this.state?.sidebarContent?.kind === "plan") {
+      const sessionKey = this.state.sessionKey;
+      const activePlan = this.state.sessionsResult?.sessions.find(
+        (row) => row.key === sessionKey,
+      )?.plan;
+      if (!activePlan) {
+        this.state.handleCloseSidebar();
+      }
     }
   }
 
@@ -992,6 +1065,21 @@ class ChatPane extends OpenClawLightDomElement {
       : selectedSessionArchived
         ? t("chat.archivedSessionDisabled")
         : null;
+    const activeSessionRow = state.sessionsResult?.sessions.find(
+      (row) => row.key === state.sessionKey,
+    );
+    // Keep the docked plan pane live: re-derive it from the session's current plan +
+    // checklist each render, and close it if the plan ends.
+    const sidebarContent =
+      state.sidebarContent?.kind === "plan"
+        ? activeSessionRow?.plan
+          ? {
+              kind: "plan" as const,
+              plan: activeSessionRow.plan,
+              checklist: getPlanChecklist(state.sessionKey),
+            }
+          : null
+        : state.sidebarContent;
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
@@ -1098,6 +1186,8 @@ class ChatPane extends OpenClawLightDomElement {
           state.sessionsHideCron = !state.sessionsHideCron;
           state.requestUpdate?.();
         },
+        onModeCommand: (command) => void state.handleSendChat(command),
+        onOpenGoalEditor: () => this.openGoalEditor(),
       }),
       sessionWorkspace: createSessionWorkspaceProps(state),
       taskSuggestions: this.taskSuggestions,
@@ -1153,6 +1243,30 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
+      onViewPlan: activeSessionRow?.plan
+        ? () =>
+            state.handleOpenSidebar({
+              kind: "plan",
+              plan: activeSessionRow.plan!,
+              checklist: getPlanChecklist(state.sessionKey),
+            })
+        : undefined,
+      questionInline: (() => {
+        const entry = this.selectInlineQuestion(state.sessionKey);
+        if (!entry) {
+          return null;
+        }
+        return {
+          entry,
+          busy: this.questionOverlay.busy,
+          error: this.questionOverlay.error,
+          onSubmit: (id, answers) => void this.context.overlays.submitQuestionAnswers(id, answers),
+          onDismiss: () => {
+            this.dismissedQuestionIds.add(entry.id);
+            state.requestUpdate?.();
+          },
+        };
+      })(),
       onDismissSideResult: () => {
         state.chatSideResult = null;
         state.requestUpdate?.();
@@ -1192,7 +1306,7 @@ class ChatPane extends OpenClawLightDomElement {
         });
       },
       sidebarOpen: state.sidebarOpen,
-      sidebarContent: state.sidebarContent,
+      sidebarContent,
       splitRatio: state.splitRatio,
       canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
       onOpenSidebar: state.handleOpenSidebar,
@@ -1210,7 +1324,16 @@ class ChatPane extends OpenClawLightDomElement {
       onAssistantAttachmentLoaded: () => state.scrollToBottom(),
       basePath: state.basePath,
     };
-    return renderChat(props);
+    return html`${renderChat(props)}${this.goalEditorOpen
+      ? html`<openclaw-goal-editor
+          .props=${{
+            goal: activeSessionRow?.goal ?? null,
+            busy: state.chatSending,
+            onSubmit: (command: string) => void state.handleSendChat(command),
+            onClose: () => this.closeGoalEditor(),
+          }}
+        ></openclaw-goal-editor>`
+      : nothing}`;
   }
 }
 

@@ -58,6 +58,12 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
+  /**
+   * Notified with a session key each time a tracked run is cleared (a turn
+   * ended). Wired to the goal continuation driver so it can arm the next idle
+   * debounce; undefined when the goalDriver experiment is off.
+   */
+  onGoalTurnCompleted?: (sessionKey: string) => void;
 }) {
   // audit.enabled=false stops ledger writes entirely; reads over existing
   // records keep working. Resolved once at gateway startup like the other
@@ -97,11 +103,13 @@ export function startGatewayEventSubscriptions(params: {
             },
             clearTrackedActiveRun: ({ runId, clientRunId }) => {
               const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
+              let goalTurnSessionKey: string | undefined;
               for (const candidateRunId of candidateRunIds) {
                 const entry = params.chatAbortControllers.get(candidateRunId);
                 // Chat abort entries can hold the requested key while chat run
                 // state holds the canonical key; the run ids are the scoped match.
                 if (entry) {
+                  goalTurnSessionKey ??= entry.sessionKey;
                   entry.projectSessionActive = false;
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersisted = false;
@@ -120,6 +128,10 @@ export function startGatewayEventSubscriptions(params: {
                     }
                   });
                 }
+              }
+              // Arm the goal driver's idle debounce now that the run is cleared.
+              if (goalTurnSessionKey) {
+                params.onGoalTurnCompleted?.(goalTurnSessionKey);
               }
             },
             markTrackedRunTerminalPersisted: ({ runId, clientRunId }) => {

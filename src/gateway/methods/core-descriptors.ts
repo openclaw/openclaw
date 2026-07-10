@@ -64,6 +64,11 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugin.approval.request", scope: "operator.approvals" },
   { name: "plugin.approval.waitDecision", scope: "operator.approvals" },
   { name: "plugin.approval.resolve", scope: "operator.approvals" },
+  // ask_user_question resolution rides the same operator.approvals scope as
+  // exec/plugin approvals so any surface that can act on approvals can answer a
+  // parked question (and non-admin operators are not gated to admin by default).
+  { name: "question.list", scope: "operator.approvals" },
+  { name: "question.resolve", scope: "operator.approvals" },
   { name: "plugins.uiDescriptors", scope: "operator.read" },
   { name: "plugins.sessionAction", scope: "dynamic" },
   { name: "crestodian.chat", scope: "operator.admin" },

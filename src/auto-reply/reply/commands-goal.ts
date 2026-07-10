@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isGoalDriverContinuationPrompt } from "../../agents/goal-driver/continuation-prompt.js";
 import {
   clearSessionGoal,
   createSessionGoal,
@@ -38,7 +39,33 @@ const GOAL_ACTIONS = new Set([
   "set",
   "start",
   "status",
+  "stop",
 ]);
+
+/**
+ * Splits a trailing `--budget N` (or `--budget=N`) flag off an objective string.
+ *
+ * Mirrors the codex `/goal set <objective> [--budget N]` surface: a positive
+ * integer token budget can be attached inline when starting a goal. The flag is
+ * stripped from the objective text so it never leaks into the pursued goal.
+ */
+export function extractGoalBudgetFlag(text: string): {
+  objective: string;
+  tokenBudget?: number;
+} {
+  const match = text.match(/(?:^|\s)--budget(?:=|\s+)(\d+)(?=\s|$)/);
+  if (!match) {
+    return { objective: text.trim() };
+  }
+  const parsed = Number.parseInt(match[1] ?? "", 10);
+  const objective = (
+    text.slice(0, match.index) + text.slice(match.index! + match[0].length)
+  ).trim();
+  return {
+    objective,
+    ...(Number.isFinite(parsed) && parsed > 0 ? { tokenBudget: parsed } : {}),
+  };
+}
 
 /** Parses /goal action text, defaulting unknown actions to goal creation. */
 export function parseGoalCommand(raw: string): { action: string; text: string } | null {
@@ -109,12 +136,21 @@ export function formatGoalResumeContinuationPrompt(note: string): string {
     : `Continue pursuing the current goal. Note: ${trimmed}`;
 }
 
-/** Returns true for internally generated goal continuation prompts. */
+/**
+ * Returns true for internally generated goal continuation prompts.
+ *
+ * Recognizes both the manual `/goal start|resume` prompts and the autonomous
+ * goal-driver continuation marker so the gateway classifies every driver-fired
+ * turn as a goal continuation. Without folding the driver marker in here the
+ * no-progress ceiling counter would reset on the driver's own turns and the
+ * auto-pause safety valve could never trip.
+ */
 export function isFormattedGoalContinuationPrompt(message: string): boolean {
   const trimmed = message.trim();
   return (
     trimmed.startsWith(GOAL_CONTINUATION_PROMPT_PREFIX) ||
-    trimmed.startsWith(GOAL_RESUME_NOTE_PROMPT_PREFIX)
+    trimmed.startsWith(GOAL_RESUME_NOTE_PROMPT_PREFIX) ||
+    isGoalDriverContinuationPrompt(trimmed)
   );
 }
 
@@ -182,14 +218,16 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
       case "start":
       case "set":
       case "create": {
-        const objective = normalizeOptionalString(parsed.text);
+        const { objective: rawObjective, tokenBudget } = extractGoalBudgetFlag(parsed.text);
+        const objective = normalizeOptionalString(rawObjective);
         if (!objective) {
-          return goalReply("Usage: /goal start <objective>");
+          return goalReply("Usage: /goal set <objective> [--budget N]");
         }
         const goal = await createSessionGoal({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           objective,
+          ...(tokenBudget !== undefined ? { tokenBudget } : {}),
           fallbackEntry: params.sessionEntry,
         });
         syncGoalSessionEntry(params);
@@ -198,14 +236,16 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         return goalContinuation();
       }
       case "edit": {
-        const objective = normalizeOptionalString(parsed.text);
+        const { objective: rawObjective, tokenBudget } = extractGoalBudgetFlag(parsed.text);
+        const objective = normalizeOptionalString(rawObjective);
         if (!objective) {
-          return goalReply("Usage: /goal edit <objective>");
+          return goalReply("Usage: /goal edit <objective> [--budget N]");
         }
         const goal = await updateSessionGoalObjective({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           objective,
+          ...(tokenBudget !== undefined ? { tokenBudget } : {}),
         });
         syncGoalSessionEntry(params);
         markCommandSessionMetadataChanged(params);
@@ -259,7 +299,10 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         markCommandSessionMetadataChanged(params);
         return goalReply(`Goal blocked: ${goal.objective}`);
       }
-      case "clear": {
+      case "clear":
+      case "stop": {
+        // `stop` is the host-facing verb for ending goal pursuit (codex parity);
+        // it clears the goal entirely, disarming the driver on its next wake.
         const removed = await clearSessionGoal({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
@@ -268,11 +311,12 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         if (removed) {
           markCommandSessionMetadataChanged(params);
         }
-        return goalReply(removed ? "Goal cleared." : "No goal to clear.");
+        const verb = parsed.action === "stop" ? "stopped" : "cleared";
+        return goalReply(removed ? `Goal ${verb}.` : "No goal to clear.");
       }
       default:
         return goalReply(
-          "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
+          "Usage: /goal <objective> | /goal [status] | /goal set <objective> [--budget N] | /goal edit <objective> | /goal pause|resume|complete|block|stop|clear",
         );
     }
   } catch (error) {

@@ -79,6 +79,7 @@ import {
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
+import { resolvePlanModeGate } from "./plan-mode/gate-hook.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
 export {
   consumeAdjustedParamsForToolCall,
@@ -168,7 +169,7 @@ export type HookContext = {
   };
 };
 
-type HookBlockedReason = "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
+type HookBlockedReason = "plugin-before-tool-call" | "plugin-approval" | "tool-loop" | "plan-mode";
 export type BeforeToolCallFailureDisposition = "blocked" | DiagnosticToolTerminalReason;
 type HookBlockedOutcome = {
   blocked: true;
@@ -1398,6 +1399,25 @@ export async function runBeforeToolCallHook(args: {
   const params = args.params;
 
   try {
+    // Plan-mode gate: a trusted core policy that vetoes mutating tools while the session is
+    // in plan mode. Runs before loop detection so a vetoed call is not recorded, and before
+    // any plugin/trusted-policy gating so it applies even with no plugins installed.
+    const planGate = resolvePlanModeGate({
+      toolName,
+      toolParams: params,
+      ...(args.ctx?.sessionKey ? { sessionKey: args.ctx.sessionKey } : {}),
+      ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
+      ...(args.ctx?.config ? { config: args.ctx.config } : {}),
+    });
+    if (planGate.blocked) {
+      return {
+        blocked: true,
+        kind: "veto",
+        deniedReason: "plan-mode",
+        reason: planGate.reason,
+        params,
+      };
+    }
     if (args.ctx?.sessionKey) {
       const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
         await loadBeforeToolCallRuntime();

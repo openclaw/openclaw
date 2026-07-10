@@ -21,7 +21,9 @@ import {
 } from "./config-reload-plan.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { getGlobalQuestionManager } from "./question-manager.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
+import { createQuestionHandlers } from "./server-methods/question.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./server-methods/types.js";
 import {
   disconnectStaleSharedGatewayAuthClients,
@@ -90,6 +92,10 @@ export function createGatewayAuxHandlers(params: {
     { cacheRejections: true },
   );
   const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
+  // Questions share a process-global manager with the asking tool so a promise can
+  // park the tool while any surface answers via question.resolve.
+  const questionManager = getGlobalQuestionManager();
+  const questionHandlers = createQuestionHandlers(questionManager);
   const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>();
   const loadPluginApprovalHandlers = createLazyPromise(
     () =>
@@ -300,8 +306,11 @@ export function createGatewayAuxHandlers(params: {
         "plugin.approval.resolve",
         loadPluginApprovalHandlers,
       ),
+      "question.list": questionHandlers["question.list"]!,
+      "question.resolve": questionHandlers["question.resolve"]!,
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
     },
+    questionManager,
   };
 }
