@@ -174,6 +174,24 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
   }),
 }));
 
+// Dedicated suites cover these sidecars; misc runner cases keep them inert to avoid unrelated graphs.
+vi.mock("../../cli/command-secret-targets.js", () => ({
+  getAgentRuntimeCommandSecretTargetIds: () => new Set<string>(),
+  getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+}));
+
+vi.mock("../../agents/harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: async () => undefined,
+}));
+
+vi.mock("../../commitments/runtime.js", () => ({
+  enqueueCommitmentExtraction: () => false,
+}));
+
+vi.mock("./followup-runner.js", () => ({
+  createFollowupRunner: () => vi.fn(async () => undefined),
+}));
+
 vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: (provider: string | undefined | null) =>
     provider === "google" || provider === "google-gemini-cli",
@@ -3467,6 +3485,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     summaryLine?: string;
     strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
+    isHeartbeat?: boolean;
     replyOperation?: ReturnType<typeof createReplyOperation>;
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
@@ -3571,6 +3590,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      ...(params.isHeartbeat ? { opts: { isHeartbeat: true } } : {}),
       ...(params.replyOperation ? { replyOperation: params.replyOperation } : {}),
     });
     return { storePath, tmp, sessionKey, result, finalAssistantText };
@@ -3706,6 +3726,14 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     await runPrivateFinalCase({ inboundEventKind: "room_event" });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it("does not warn, enqueue retry, or emit diagnostic for heartbeat runs", async () => {
+    const { result } = await runPrivateFinalCase({ isHeartbeat: true });
+    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    const payloads = result === undefined ? [] : normalizeReplyPayloads(result);
+    expect(payloads.some((payload) => payload.text === strandedDiagnosticText)).toBe(false);
   });
 
   it("does not warn or enqueue retry when send policy denied source delivery", async () => {

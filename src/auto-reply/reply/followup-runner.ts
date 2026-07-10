@@ -123,7 +123,7 @@ import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-r
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
-  STRANDED_REPLY_RETRY_MARKER,
+  buildStrandedReplyRetryFollowupRun,
 } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -1606,6 +1606,13 @@ export function createFollowupRunner(params: {
         if (isStrandedReplyRetryFollowup(effectiveQueued)) {
           return false;
         }
+        // Heartbeat turns can reach this path: runReplyAgent builds the
+        // followup runner with opts.isHeartbeat and may enqueue-followup while
+        // another run is active. Heartbeats already deliver fallback finals
+        // via sendDurableMessageBatch, so recovery would duplicate delivery.
+        if (opts?.isHeartbeat === true) {
+          return false;
+        }
         const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
           cfg: runtimeConfig,
           ctx: {
@@ -1647,33 +1654,15 @@ export function createFollowupRunner(params: {
           channel: queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
           finalTextLength: assistantFinalText.trim().length,
         });
-        const retryDeliveryText = assistantFinalText;
-        const retryPrompt =
-          `[System] Your previous reply was not delivered to the conversation because ` +
-          `you did not call message(action=send). Your reply text was:\n\n` +
-          `"${retryDeliveryText}"\n\n` +
-          `Please deliver this reply now by calling message(action=send). ` +
-          `Do not add any extra commentary; just deliver the original reply.`;
         const retryEnqueued =
           typeof replySessionKey === "string" &&
           replySessionKey.length > 0 &&
           enqueueFollowupRun(
             replySessionKey,
-            {
-              ...effectiveQueued,
-              prompt: retryPrompt,
-              summaryLine: STRANDED_REPLY_RETRY_MARKER,
-              strandedReplyRetry: true,
-              disableCollectBatching: true,
-              transcriptPrompt: undefined,
-              userTurnTranscriptRecorder: undefined,
-              currentInboundContext: undefined,
-              run: {
-                ...run,
-                sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-                suppressNextUserMessagePersistence: true,
-              },
-            },
+            buildStrandedReplyRetryFollowupRun(effectiveQueued, {
+              finalText: assistantFinalText,
+              sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+            }),
             resolveQueueSettings({
               cfg: runtimeConfig,
               channel: queued.originatingChannel ?? run.messageProvider,

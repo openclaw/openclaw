@@ -137,8 +137,6 @@ export function enqueueFollowupRun(
   if (!markFollowupRunEnqueued(run)) {
     return false;
   }
-  queue.lastEnqueuedAt = Date.now();
-  queue.lastRun = run.run;
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
@@ -190,6 +188,10 @@ export function enqueueFollowupRun(
     completeFollowupRunLifecycle(run);
     return false;
   }
+  // Only admitted items refresh debounce; rejected overflow must not starve
+  // protected stranded-reply retries waiting for the quiet window.
+  queue.lastEnqueuedAt = Date.now();
+  queue.lastRun = run.run;
 
   run.queueAbortSignal = queue.abortController.signal;
   if (options.position === "front") {

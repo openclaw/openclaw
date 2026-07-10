@@ -1993,6 +1993,38 @@ describe("followup queue collect routing", () => {
     expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
   });
 
+  it("does not advance debounce stamp when overflow rejects an incoming message", () => {
+    const key = `test-priority-followup-debounce-reject-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 5_000,
+      cap: 1,
+      dropPolicy: "old",
+    };
+
+    const priorityAccepted = enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      settings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+    const queue = getExistingFollowupQueue(key);
+    expect(priorityAccepted).toBe(true);
+    expect(queue).toBeDefined();
+    const stampedAt = queue!.lastEnqueuedAt;
+    expect(stampedAt).toBeGreaterThan(0);
+
+    const rejected = enqueueFollowupRun(key, createRun({ prompt: "busy chat noise" }), settings);
+    expect(rejected).toBe(false);
+    expect(getExistingFollowupQueue(key)?.lastEnqueuedAt).toBe(stampedAt);
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+      "priority retry",
+    ]);
+  });
+
   it("leaves the queue untouched when protected overflow cannot drop enough items", () => {
     const key = `test-priority-followup-atomic-overflow-${Date.now()}`;
     const initialSettings: QueueSettings = {

@@ -120,8 +120,8 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { createReplyMediaContext } from "./reply-media-paths.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
+import { createReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
   replyRunRegistry,
@@ -136,7 +136,7 @@ import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-r
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
-  STRANDED_REPLY_RETRY_MARKER,
+  buildStrandedReplyRetryFollowupRun,
 } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -2051,10 +2051,7 @@ export async function runReplyAgent(params: {
       }
       return buildStrandedReplyDeliveryFailurePayload();
     };
-    if (
-      opts?.sourceReplyDeliveryMode === "message_tool_only" &&
-      committedSourceReplyDelivery
-    ) {
+    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && committedSourceReplyDelivery) {
       await opts.onObservedReplyDelivery?.();
     }
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
@@ -2634,7 +2631,10 @@ export async function runReplyAgent(params: {
           : (rawAssistantText ?? ""),
       );
       const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
+      // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
+      // recovering here would duplicate that message.
       const isStrandedReply =
+        !isHeartbeat &&
         !isRoomEvent &&
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
@@ -2644,6 +2644,7 @@ export async function runReplyAgent(params: {
         });
       const retryMissingSourceDelivery =
         isStrandedReplyRetryRun &&
+        !isHeartbeat &&
         !isRoomEvent &&
         sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
         !sourceReplyPolicy.sendPolicyDenied &&
@@ -2663,30 +2664,12 @@ export async function runReplyAgent(params: {
         if (isStrandedReplyRetryRun) {
           finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
         } else {
-          const retryDeliveryText = assistantFinalText;
-          const retryPrompt =
-            `[System] Your previous reply was not delivered to the conversation because ` +
-            `you did not call message(action=send). Your reply text was:\n\n` +
-            `"${retryDeliveryText}"\n\n` +
-            `Please deliver this reply now by calling message(action=send). ` +
-            `Do not add any extra commentary; just deliver the original reply.`;
           const retryEnqueued = enqueueFollowupRun(
             queueKey,
-            {
-              ...followupRun,
-              prompt: retryPrompt,
-              summaryLine: STRANDED_REPLY_RETRY_MARKER,
-              strandedReplyRetry: true,
-              disableCollectBatching: true,
-              transcriptPrompt: undefined,
-              userTurnTranscriptRecorder: undefined,
-              currentInboundContext: undefined,
-              run: {
-                ...followupRun.run,
-                sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-                suppressNextUserMessagePersistence: true,
-              },
-            },
+            buildStrandedReplyRetryFollowupRun(followupRun, {
+              finalText: assistantFinalText,
+              sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+            }),
             resolvedQueue,
             "none",
             runFollowupTurn,
