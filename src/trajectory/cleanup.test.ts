@@ -200,9 +200,9 @@ describe("trajectory cleanup", () => {
       await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
 
       const canonicalPath = canonicalizeTrajectoryPath(runtimeFile);
-      const generationBefore = await withTrajectoryPathLock(
+      const incarnationBefore = await withTrajectoryPathLock(
         canonicalPath,
-        (ctx) => ctx.currentGeneration,
+        (ctx) => ctx.currentIncarnation,
       );
 
       await removeSessionTrajectoryArtifacts({
@@ -214,7 +214,7 @@ describe("trajectory cleanup", () => {
 
       const afterRemoval = await withTrajectoryPathLock(canonicalPath, (ctx) => ctx);
       expect(afterRemoval.retired).toBe(true);
-      expect(afterRemoval.currentGeneration).toBeGreaterThan(generationBefore);
+      expect(afterRemoval.currentIncarnation).toBeGreaterThan(incarnationBefore);
     });
   });
 
@@ -228,11 +228,11 @@ describe("trajectory cleanup", () => {
       const sessionFileB = path.join(dir, "session-b.jsonl");
       const env = { OPENCLAW_TRAJECTORY_DIR: trajectoryDir };
 
-      const leaseA = acquireTrajectoryWriterLease({
+      const leaseA = await acquireTrajectoryWriterLease({
         sessionId: sessionAId,
         candidatePath: resolveTrajectoryFilePath({ env, sessionId: sessionAId }),
       });
-      const leaseB = acquireTrajectoryWriterLease({
+      const leaseB = await acquireTrajectoryWriterLease({
         sessionId: sessionBId,
         candidatePath: resolveTrajectoryFilePath({ env, sessionId: sessionBId }),
       });
@@ -255,6 +255,73 @@ describe("trajectory cleanup", () => {
 
       await expectPathMissing(leaseA.filePath);
       expect((await fs.stat(leaseB.filePath)).isFile()).toBe(true);
+    });
+  });
+
+  it("does not admit a writer claim while a delete's unlink is still in flight", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      const sessionId = "session-7";
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = path.join(dir, `${sessionId}.jsonl`);
+      const runtimeFile = resolveTrajectoryFilePath({ env: {}, sessionFile, sessionId });
+      const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+      await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
+      await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
+
+      const order: string[] = [];
+      const originalRm = nodeFs.promises.rm.bind(nodeFs.promises);
+      let releaseUnlink: () => void = () => {};
+      const unlinkGate = new Promise<void>((resolve) => {
+        releaseUnlink = resolve;
+      });
+      const rmSpy = vi
+        .spyOn(nodeFs.promises, "rm")
+        .mockImplementation(async (target: nodeFs.PathLike, options?: nodeFs.RmOptions) => {
+          order.push("unlink-start");
+          await unlinkGate;
+          const result = await originalRm(target, options);
+          order.push("unlink-done");
+          return result;
+        });
+
+      try {
+        const deletePromise = removeSessionTrajectoryArtifacts({
+          sessionId,
+          sessionFile,
+          storePath,
+          restrictToStoreDir: true,
+        });
+
+        // Let the delete turn's synchronous claim+retire run and reach the
+        // paused unlink before attempting a concurrent claim.
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(order).toEqual(["unlink-start"]);
+
+        const acquirePromise = acquireTrajectoryWriterLease({
+          sessionId,
+          candidatePath: runtimeFile,
+        }).then((lease) => {
+          order.push("acquire-done");
+          return lease;
+        });
+
+        // The claim must queue behind the per-path lock, not run concurrently
+        // with the paused unlink (P1-A) — give it every chance to (wrongly)
+        // resolve early before asserting it hasn't.
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(order).toEqual(["unlink-start"]);
+
+        releaseUnlink();
+        const [, lease] = await Promise.all([deletePromise, acquirePromise]);
+
+        expect(order.indexOf("unlink-done")).toBeLessThan(order.indexOf("acquire-done"));
+        expect(lease.filePath).toBe(runtimeFile);
+        // The claim was only admitted after delete's unlink fully committed,
+        // so it cannot have reactivated or recreated the deleted artifact.
+        await expectPathMissing(runtimeFile);
+      } finally {
+        rmSpy.mockRestore();
+      }
     });
   });
 });

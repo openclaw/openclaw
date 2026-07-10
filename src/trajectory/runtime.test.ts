@@ -12,13 +12,16 @@ import {
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 import {
   acquireTrajectoryWriterLease,
-  bumpTrajectoryPathGeneration,
   canonicalizeTrajectoryPath,
+  claimTrajectoryPathIncarnation,
   clearTrajectoryWriterLifecycleRegistryForTest,
+  reapRetiredTrajectoryPathEntries,
   withTrajectoryPathLock,
 } from "./writer-lifecycle.js";
 
-type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
+type TrajectoryRuntimeRecorder = NonNullable<
+  Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>
+>;
 
 const tempDirs: string[] = [];
 
@@ -36,9 +39,10 @@ afterEach(() => {
   }
 });
 
-function expectTrajectoryRuntimeRecorder(
-  recorder: ReturnType<typeof createTrajectoryRuntimeRecorder>,
-): TrajectoryRuntimeRecorder {
+async function expectTrajectoryRuntimeRecorder(
+  recorderPromise: ReturnType<typeof createTrajectoryRuntimeRecorder>,
+): Promise<TrajectoryRuntimeRecorder> {
+  const recorder = await recorderPromise;
   if (recorder === null) {
     throw new Error("Expected trajectory runtime recorder");
   }
@@ -65,7 +69,7 @@ describe("trajectory runtime", () => {
     ).toBe(path.join(path.resolve("/tmp/traces"), "___evil_session.jsonl"));
   });
 
-  it("records sanitized runtime events by default", () => {
+  it("records sanitized runtime events by default", async () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
@@ -84,7 +88,7 @@ describe("trajectory runtime", () => {
       },
     });
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("context.compiled", {
       systemPrompt: "system prompt",
       headers: [{ name: "Authorization", value: "Bearer sk-test-secret-token" }],
@@ -113,7 +117,7 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
-  it("bounds large runtime event fields before serialization", () => {
+  it("bounds large runtime event fields before serialization", async () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
@@ -127,7 +131,7 @@ describe("trajectory runtime", () => {
       },
     });
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("context.compiled", {
       prompt: "x".repeat(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1),
     });
@@ -141,7 +145,7 @@ describe("trajectory runtime", () => {
     );
   });
 
-  it("preserves usage when truncating oversized runtime events", () => {
+  it("preserves usage when truncating oversized runtime events", async () => {
     const writes: string[] = [];
     const usage = {
       input: 384_954,
@@ -163,7 +167,7 @@ describe("trajectory runtime", () => {
       },
     });
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("model.completed", {
       usage,
       promptCache,
@@ -189,7 +193,7 @@ describe("trajectory runtime", () => {
     );
   });
 
-  it("drops oversized preserved fields when needed to keep runtime events bounded", () => {
+  it("drops oversized preserved fields when needed to keep runtime events bounded", async () => {
     const writes: string[] = [];
     const oversizedUsage = Object.fromEntries(
       Array.from({ length: 64 }, (_value, index) => [`field-${index}`, "x".repeat(5_000)]),
@@ -207,7 +211,7 @@ describe("trajectory runtime", () => {
       },
     });
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("model.completed", {
       usage: oversizedUsage,
       promptCache,
@@ -230,7 +234,7 @@ describe("trajectory runtime", () => {
     );
   });
 
-  it("preserves usage on non-final oversized runtime completions", () => {
+  it("preserves usage on non-final oversized runtime completions", async () => {
     const writes: string[] = [];
     const firstUsage = {
       input: 384_954,
@@ -252,7 +256,7 @@ describe("trajectory runtime", () => {
       },
     });
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("model.completed", {
       usage: firstUsage,
       promptCache: { readTokens: 333_824 },
@@ -281,7 +285,7 @@ describe("trajectory runtime", () => {
     expect(second.data.truncated).toBeUndefined();
   });
 
-  it("redacts secrets before preserving usage in truncated runtime events", () => {
+  it("redacts secrets before preserving usage in truncated runtime events", async () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
@@ -295,7 +299,7 @@ describe("trajectory runtime", () => {
       },
     });
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("model.completed", {
       usage: {
         total: 1,
@@ -329,7 +333,7 @@ describe("trajectory runtime", () => {
       maxRuntimeFileBytes,
     });
 
-    const firstRuntimeRecorder = expectTrajectoryRuntimeRecorder(firstRecorder);
+    const firstRuntimeRecorder = await expectTrajectoryRuntimeRecorder(firstRecorder);
     for (const marker of ["old-1", "old-2", "old-3"]) {
       firstRuntimeRecorder.recordEvent("prompt.submitted", {
         marker,
@@ -343,7 +347,7 @@ describe("trajectory runtime", () => {
       sessionFile,
       maxRuntimeFileBytes,
     });
-    const secondRuntimeRecorder = expectTrajectoryRuntimeRecorder(secondRecorder);
+    const secondRuntimeRecorder = await expectTrajectoryRuntimeRecorder(secondRecorder);
     for (const marker of ["new-1", "new-2", "new-3"]) {
       secondRuntimeRecorder.recordEvent("prompt.submitted", {
         marker,
@@ -371,7 +375,7 @@ describe("trajectory runtime", () => {
         maxRuntimeFileBytes: 1_600,
       });
 
-      const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+      const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
       runtimeRecorder.recordEvent("prompt.submitted", {
         prompt: "hello",
       });
@@ -390,7 +394,7 @@ describe("trajectory runtime", () => {
       maxRuntimeFileBytes: 2_400,
     });
 
-    const staleRuntimeRecorder = expectTrajectoryRuntimeRecorder(staleRecorder);
+    const staleRuntimeRecorder = await expectTrajectoryRuntimeRecorder(staleRecorder);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     staleRuntimeRecorder.recordEvent("prompt.submitted", {
@@ -403,7 +407,7 @@ describe("trajectory runtime", () => {
       sessionFile,
       maxRuntimeFileBytes: 2_400,
     });
-    const newerRuntimeRecorder = expectTrajectoryRuntimeRecorder(newerRecorder);
+    const newerRuntimeRecorder = await expectTrajectoryRuntimeRecorder(newerRecorder);
     newerRuntimeRecorder.recordEvent("prompt.submitted", {
       marker: "new-recorder",
       prompt: "y".repeat(260),
@@ -427,14 +431,14 @@ describe("trajectory runtime", () => {
       sessionFile,
       maxRuntimeFileBytes: 2_400,
     });
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("prompt.submitted", { marker: "should-not-land" });
 
     const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "session-1" });
     const canonicalPath = canonicalizeTrajectoryPath(runtimeFile);
     await withTrajectoryPathLock(canonicalPath, () => {
-      bumpTrajectoryPathGeneration(canonicalPath, {
-        retire: true,
+      claimTrajectoryPathIncarnation(canonicalPath, {
+        retired: true,
         ownerSessionId: "session-1",
       });
     });
@@ -452,7 +456,7 @@ describe("trajectory runtime", () => {
       sessionFile,
       maxRuntimeFileBytes: 2_400,
     });
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("prompt.submitted", { marker: "first" });
     await runtimeRecorder.flush();
 
@@ -460,7 +464,7 @@ describe("trajectory runtime", () => {
     // "evict-session" is dropped, while this test keeps its own direct
     // reference to the writer exactly as an abandoned closure would.
     for (let index = 0; index < 100; index += 1) {
-      expectTrajectoryRuntimeRecorder(
+      await expectTrajectoryRuntimeRecorder(
         createTrajectoryRuntimeRecorder({
           sessionId: `evict-filler-${index}`,
           sessionFile: path.join(tmpDir, `evict-filler-${index}.jsonl`),
@@ -472,8 +476,8 @@ describe("trajectory runtime", () => {
     const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "evict-session" });
     const canonicalPath = canonicalizeTrajectoryPath(runtimeFile);
     await withTrajectoryPathLock(canonicalPath, () => {
-      bumpTrajectoryPathGeneration(canonicalPath, {
-        retire: true,
+      claimTrajectoryPathIncarnation(canonicalPath, {
+        retired: true,
         ownerSessionId: "evict-session",
       });
       // Mirror what a real sessions.delete does inside the same locked turn:
@@ -487,7 +491,7 @@ describe("trajectory runtime", () => {
     expect(fs.existsSync(runtimeFile)).toBe(false);
   });
 
-  it("reuses the same lease generation when a live writer is evicted and recreated", async () => {
+  it("reuses the same lease incarnation when a live writer is evicted and recreated", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session-reuse.jsonl");
     const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "reuse-session" });
@@ -497,14 +501,16 @@ describe("trajectory runtime", () => {
       sessionFile,
       maxRuntimeFileBytes: 2_400,
     });
-    expectTrajectoryRuntimeRecorder(recorderA);
-    const generationAfterA = acquireTrajectoryWriterLease({
-      sessionId: "reuse-session",
-      candidatePath: runtimeFile,
-    }).generation;
+    await expectTrajectoryRuntimeRecorder(recorderA);
+    const incarnationAfterA = (
+      await acquireTrajectoryWriterLease({
+        sessionId: "reuse-session",
+        candidatePath: runtimeFile,
+      })
+    ).incarnation;
 
     for (let index = 0; index < 100; index += 1) {
-      expectTrajectoryRuntimeRecorder(
+      await expectTrajectoryRuntimeRecorder(
         createTrajectoryRuntimeRecorder({
           sessionId: `reuse-filler-${index}`,
           sessionFile: path.join(tmpDir, `reuse-filler-${index}.jsonl`),
@@ -518,33 +524,81 @@ describe("trajectory runtime", () => {
       sessionFile,
       maxRuntimeFileBytes: 2_400,
     });
-    const runtimeRecorderB = expectTrajectoryRuntimeRecorder(recorderB);
-    const generationAfterB = acquireTrajectoryWriterLease({
-      sessionId: "reuse-session",
-      candidatePath: runtimeFile,
-    }).generation;
+    const runtimeRecorderB = await expectTrajectoryRuntimeRecorder(recorderB);
+    const incarnationAfterB = (
+      await acquireTrajectoryWriterLease({
+        sessionId: "reuse-session",
+        candidatePath: runtimeFile,
+      })
+    ).incarnation;
 
     // Eviction+recreation for the *same* still-live session must not spuriously
-    // bump the generation — it is the same owner reconnecting, not a new epoch.
-    expect(generationAfterB).toBe(generationAfterA);
+    // claim a fresh incarnation — it is the same owner reconnecting, not a new epoch.
+    expect(incarnationAfterB).toBe(incarnationAfterA);
 
     runtimeRecorderB.recordEvent("prompt.submitted", { marker: "reused-writer" });
     await runtimeRecorderB.flush();
     expect(fs.readFileSync(runtimeFile, "utf8")).toContain("reused-writer");
   });
 
+  it("keeps a writer held past its retirement's tombstone reap invalidated against a fresh claim", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session-reap.jsonl");
+    const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "reap-session" });
+    const canonicalPath = canonicalizeTrajectoryPath(runtimeFile);
+
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "reap-session",
+      sessionFile,
+      maxRuntimeFileBytes: 2_400,
+    });
+    const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("prompt.submitted", { marker: "stale-before-reap" });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    // Retire exactly like a delete would, then remove the file it protected.
+    await withTrajectoryPathLock(canonicalPath, () => {
+      claimTrajectoryPathIncarnation(canonicalPath, {
+        retired: true,
+        ownerSessionId: "reap-session",
+      });
+    });
+    fs.rmSync(runtimeFile, { force: true });
+
+    // Past the 5-minute retired grace period: the registry entry reaps,
+    // losing all local memory of this path's prior incarnation.
+    vi.setSystemTime(new Date("2026-01-01T00:06:00.000Z"));
+    reapRetiredTrajectoryPathEntries();
+    vi.useRealTimers();
+
+    // A fresh, unrelated claim on the same (now-reaped) canonical path must
+    // land on a process-unique incarnation the pre-reap stale writer can
+    // never match, even though the per-path registry has no memory of it
+    // and would otherwise restart local numbering from scratch (P1-B).
+    const freshLease = await acquireTrajectoryWriterLease({
+      sessionId: "post-reap-owner",
+      candidatePath: runtimeFile,
+    });
+    expect(freshLease.filePath).toBe(runtimeFile);
+
+    await runtimeRecorder.flush();
+
+    expect(fs.existsSync(runtimeFile)).toBe(false);
+  });
+
   it("keeps colliding sanitized session ids in separate files under an override directory", async () => {
     const tmpDir = makeTempDir();
     const trajectoryDir = path.join(tmpDir, "traces");
     const env = { OPENCLAW_TRAJECTORY_DIR: trajectoryDir };
-    const runtimeRecorder1 = expectTrajectoryRuntimeRecorder(
+    const runtimeRecorder1 = await expectTrajectoryRuntimeRecorder(
       createTrajectoryRuntimeRecorder({
         env,
         sessionId: "abc*def",
         maxRuntimeFileBytes: 2_400,
       }),
     );
-    const runtimeRecorder2 = expectTrajectoryRuntimeRecorder(
+    const runtimeRecorder2 = await expectTrajectoryRuntimeRecorder(
       createTrajectoryRuntimeRecorder({
         env,
         sessionId: "abc_def",
@@ -571,13 +625,13 @@ describe("trajectory runtime", () => {
     const tmpDir = makeTempDir();
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tmpDir);
     try {
-      const runtimeRecorder1 = expectTrajectoryRuntimeRecorder(
+      const runtimeRecorder1 = await expectTrajectoryRuntimeRecorder(
         createTrajectoryRuntimeRecorder({
           sessionId: "abc*def",
           maxRuntimeFileBytes: 2_400,
         }),
       );
-      const runtimeRecorder2 = expectTrajectoryRuntimeRecorder(
+      const runtimeRecorder2 = await expectTrajectoryRuntimeRecorder(
         createTrajectoryRuntimeRecorder({
           sessionId: "abc_def",
           maxRuntimeFileBytes: 2_400,
@@ -616,7 +670,7 @@ describe("trajectory runtime", () => {
         maxRuntimeFileBytes: 2_400,
       });
 
-      const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+      const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
       runtimeRecorder.recordEvent("prompt.submitted", {
         prompt: "hello",
       });
@@ -626,7 +680,7 @@ describe("trajectory runtime", () => {
     },
   );
 
-  it("describes queued writer state for cleanup timeout logs", () => {
+  it("describes queued writer state for cleanup timeout logs", async () => {
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
       sessionFile: "/tmp/session.jsonl",
@@ -646,14 +700,14 @@ describe("trajectory runtime", () => {
       },
     });
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    const runtimeRecorder = await expectTrajectoryRuntimeRecorder(recorder);
 
     expect(runtimeRecorder.describeFlushState()).toBe(
       "pendingWrites=2 queuedBytes=256 activeOperation=file-append yieldBeforeWrite=true activeWriteBytes=128 maxQueuedBytes=1024 maxFileBytes=1024",
     );
   });
 
-  it("writes a session-adjacent pointer when using an override directory", () => {
+  it("writes a session-adjacent pointer when using an override directory", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const trajectoryDir = path.join(tmpDir, "traces");
@@ -668,7 +722,7 @@ describe("trajectory runtime", () => {
       },
     });
 
-    expectTrajectoryRuntimeRecorder(recorder);
+    await expectTrajectoryRuntimeRecorder(recorder);
     const pointer = JSON.parse(
       fs.readFileSync(resolveTrajectoryPointerFilePath(sessionFile), "utf8"),
     ) as { runtimeFile?: string };
@@ -685,8 +739,8 @@ describe("trajectory runtime", () => {
     ).toBe(0x07);
   });
 
-  it("does not record runtime events when explicitly disabled", () => {
-    const recorder = createTrajectoryRuntimeRecorder({
+  it("does not record runtime events when explicitly disabled", async () => {
+    const recorder = await createTrajectoryRuntimeRecorder({
       env: {
         OPENCLAW_TRAJECTORY: "0",
       },
