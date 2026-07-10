@@ -499,6 +499,7 @@ export class ChatPage extends OpenClawLightDomElement {
                 .sessionKey=${this.data?.sessionKey ?? ""}
                 .active=${true}
                 .draft=${this.data?.draft}
+                .showPaneHeader=${false}
                 .onFocusPane=${this.handleFocusPane}
                 .onPaneSessionChange=${this.handlePaneSessionChange}
               ></openclaw-chat-pane>
