@@ -10535,7 +10535,7 @@
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.",
       "surface": "apple",
-      "id": "native.apple.7df05f1ce3b15daa"
+      "id": "native.apple.eff9b913b3ae1c89"
     },
     {
       "kind": "ui-call",
@@ -12071,7 +12071,7 @@
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.",
       "surface": "apple",
-      "id": "native.apple.95fca03f60cf5f1c"
+      "id": "native.apple.16e06dae717734de"
     },
     {
       "kind": "ui-localized-call-multiline",
@@ -12079,7 +12079,7 @@
       "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift",
       "source": "Can't reach gateway at \\(host):\\(port). Verify Tailscale Serve is enabled and publishes this Gateway.",
       "surface": "apple",
-      "id": "native.apple.b94c43fad806cf31"
+      "id": "native.apple.ccfde3d74305d096"
     },
     {
       "kind": "ui-localized-call",
@@ -14639,7 +14639,7 @@
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
       "surface": "apple",
-      "id": "native.apple.c7df4ff152a09c3c"
+      "id": "native.apple.088f07637cc141c9"
     },
     {
       "kind": "ui-call",
@@ -17247,7 +17247,7 @@
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
       "surface": "apple",
-      "id": "native.apple.e72415485f9ce94b"
+      "id": "native.apple.e7a0819bd2f4e1dc"
     },
     {
       "kind": "ui-named-argument",
@@ -17319,7 +17319,7 @@
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
       "surface": "apple",
-      "id": "native.apple.0408032709e27459"
+      "id": "native.apple.124d07cfaa03f5e5"
     },
     {
       "kind": "ui-named-argument",
@@ -17567,7 +17567,7 @@
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.",
       "surface": "apple",
-      "id": "native.apple.2ba16f18b09a37ba"
+      "id": "native.apple.f27f32453c7c27aa"
     },
     {
       "kind": "ui-call",
@@ -18815,7 +18815,7 @@
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetup.swift",
       "source": "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
       "surface": "apple",
-      "id": "native.apple.709117963fcb2055"
+      "id": "native.apple.9947fd4c5e97875f"
     },
     {
       "kind": "ui-call",
@@ -21759,7 +21759,7 @@
       "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift",
       "source": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
       "surface": "apple",
-      "id": "native.apple.0599fffd425d05c3"
+      "id": "native.apple.e992b45cdbccdd10"
     },
     {
       "kind": "ui-named-argument",
@@ -21823,7 +21823,7 @@
       "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift",
       "source": "Play short sounds when Talk Mode switches between listening, thinking, and speaking.",
       "surface": "apple",
-      "id": "native.apple.d066c0eceb45cc17"
+      "id": "native.apple.41f46ea2f1360ba1"
     },
     {
       "kind": "ui-named-argument",
@@ -22583,7 +22583,7 @@
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Preparing audio, tap to cancel",
       "surface": "apple",
-      "id": "native.apple.eb2aeaa5d033ecf1"
+      "id": "native.apple.9e4b306460f4a32d"
     },
     {
       "kind": "conditional-branch",
@@ -22591,7 +22591,7 @@
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Speaking, tap to stop",
       "surface": "apple",
-      "id": "native.apple.89ce6dca6cb78acd"
+      "id": "native.apple.142c01bf6b97e380"
     },
     {
       "kind": "conditional-branch",
@@ -22727,7 +22727,7 @@
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Search sessions",
       "surface": "apple",
-      "id": "native.apple.cd37d734ad5c9bc1"
+      "id": "native.apple.2c37581c7b88f741"
     },
     {
       "kind": "ui-modifier",
@@ -22783,7 +22783,7 @@
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
       "source": "Pinned",
       "surface": "apple",
-      "id": "native.apple.a47d397b093d1ff2"
+      "id": "native.apple.05cb1fecc5844b69"
     },
     {
       "kind": "ui-call",

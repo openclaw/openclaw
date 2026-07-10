@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assignNativeI18nIds,
   collectNativeI18nEntries,
   isConditionalBranchIdentifier,
   NATIVE_I18N_LOCALES,
@@ -12,6 +13,26 @@ import {
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 describe("native app i18n inventory", () => {
+  it("keeps IDs stable across extractor classification changes", () => {
+    const candidate = {
+      kind: "ui-call",
+      line: 10,
+      path: "apps/ios/example.swift",
+      source: "Gateway status",
+      surface: "apple" as const,
+    };
+    const initial = assignNativeI18nIds([candidate]);
+    const reclassified = { ...candidate, kind: "ui-call-multiline", line: 20 };
+
+    expect(assignNativeI18nIds([reclassified])[0]?.id).toBe(initial[0]?.id);
+    expect(
+      assignNativeI18nIds(
+        [reclassified],
+        [{ ...candidate, id: "native.apple.existing-translation" }],
+      )[0]?.id,
+    ).toBe("native.apple.existing-translation");
+  });
+
   it("detects conditional branch identifiers without regex backtracking", () => {
     expect(isConditionalBranchIdentifier("isEnabled")).toBe(true);
     expect(isConditionalBranchIdentifier("hasFA2Enabled")).toBe(true);
@@ -255,7 +276,7 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.source ===
-          "Let the agent move the pointer, click, and type on this Mac. Requires Accessibility permission and stays disarmed until an operator arms it. High risk.",
+          "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
       ),
     ).toBe(true);
     expect(

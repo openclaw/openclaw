@@ -908,13 +908,19 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
   return nested.flat();
 }
 
-function withIds(entries: Candidate[]): NativeI18nEntry[] {
+function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "path" | "source" | "surface">): string {
+  return [entry.surface, entry.path, entry.source].join("\u0000");
+}
+
+export function assignNativeI18nIds(
+  entries: readonly Candidate[],
+  previousEntries: readonly NativeI18nEntry[] = [],
+): NativeI18nEntry[] {
   const seen = new Set<string>();
-  const unique = [
-    ...new Map(
-      entries.map((entry) => [`${entry.surface}\u0000${entry.path}\u0000${entry.source}`, entry]),
-    ).values(),
-  ];
+  const previousIds = new Map(
+    previousEntries.map((entry) => [nativeEntryIdentity(entry), entry.id]),
+  );
+  const unique = [...new Map(entries.map((entry) => [nativeEntryIdentity(entry), entry])).values()];
   return unique
     .toSorted(
       (left, right) =>
@@ -925,17 +931,48 @@ function withIds(entries: Candidate[]): NativeI18nEntry[] {
         compareCodePoints(left.source, right.source),
     )
     .map((entry) => {
+      const previousId = previousIds.get(nativeEntryIdentity(entry));
       const digest = createHash("sha256")
-        .update([entry.surface, entry.path, entry.kind, entry.source].join("\u0000"))
+        .update(nativeEntryIdentity(entry))
         .digest("hex")
         .slice(0, 16);
-      let id = `native.${entry.surface}.${digest}`;
-      if (seen.has(id)) {
-        id = `${id}.${entry.line}`;
+      const baseId = `native.${entry.surface}.${digest}`;
+      let id = previousId && !seen.has(previousId) ? previousId : baseId;
+      for (let suffix = 2; seen.has(id); suffix += 1) {
+        id = `${baseId}.${suffix}`;
       }
       seen.add(id);
       return Object.assign(entry, { id });
     });
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
+}
+
+async function readNativeI18nInventory(): Promise<{
+  entries: NativeI18nEntry[];
+  raw: string;
+}> {
+  let raw: string;
+  try {
+    raw = await readFile(OUTPUT_PATH, "utf8");
+  } catch (error) {
+    if (hasErrorCode(error, "ENOENT")) {
+      return { entries: [], raw: "" };
+    }
+    throw error;
+  }
+
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
+  }
+  const inventory = parsed as { entries?: unknown; version?: unknown };
+  if (inventory.version !== 1 || !Array.isArray(inventory.entries)) {
+    throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
+  }
+  return { entries: inventory.entries as NativeI18nEntry[], raw };
 }
 
 async function mapWithConcurrency<T, R>(
@@ -961,7 +998,12 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
+export async function collectNativeI18nEntries(
+  previousEntries?: readonly NativeI18nEntry[],
+): Promise<NativeI18nEntry[]> {
+  // The checked-in inventory is the stable-ID registry. Reusing IDs for the same
+  // surface/path/source keeps extractor reclassification from orphaning translations.
+  const stableEntries = previousEntries ?? (await readNativeI18nInventory()).entries;
   const roots = (["android", "apple"] as const).flatMap((surface) =>
     SOURCE_ROOTS[surface].map((sourceRoot) => ({ sourceRoot, surface })),
   );
@@ -1006,21 +1048,21 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
   const entries = typedSources.flatMap(({ repoPath, source, surface }) =>
     extractCandidates(surface, repoPath, source, uiCallNames),
   );
-  return withIds(entries);
+  return assignNativeI18nIds(entries, stableEntries);
 }
 
 function render(entries: NativeI18nEntry[]): string {
   return `${JSON.stringify({ version: 1, entries }, null, 2)}\n`;
 }
 
-async function syncNativeI18n(options: { checkOnly: boolean; write: boolean }) {
-  const expected = render(await collectNativeI18nEntries());
-  let current = "";
-  try {
-    current = await readFile(OUTPUT_PATH, "utf8");
-  } catch {
-    // The first sync creates the inventory.
-  }
+async function syncNativeI18n(options: {
+  checkOnly: boolean;
+  write: boolean;
+}): Promise<NativeI18nEntry[]> {
+  const currentInventory = await readNativeI18nInventory();
+  const entries = await collectNativeI18nEntries(currentInventory.entries);
+  const expected = render(entries);
+  const current = currentInventory.raw;
   if (current !== expected && options.checkOnly) {
     throw new Error(
       "native app i18n inventory drift detected. Run `pnpm native:i18n:sync` and commit apps/.i18n/native-source.json.",
@@ -1032,6 +1074,7 @@ async function syncNativeI18n(options: { checkOnly: boolean; write: boolean }) {
   }
   const count = JSON.parse(expected).entries.length as number;
   process.stdout.write(`native-app-i18n: entries=${count} changed=${current !== expected}\n`);
+  return entries;
 }
 
 async function loadGlossary(locale: string): Promise<Array<{ source: string; target: string }>> {
@@ -1164,12 +1207,12 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
 
 async function main() {
   const parsed = parseNativeI18nCommand(process.argv.slice(2));
-  await syncNativeI18n({
+  const entries = await syncNativeI18n({
     checkOnly: parsed.command === "check",
     write: parsed.command === "sync" && parsed.write,
   });
   if (parsed.locale) {
-    await syncNativeLocale(parsed.locale, await collectNativeI18nEntries());
+    await syncNativeLocale(parsed.locale, entries);
   }
 }
 
