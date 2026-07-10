@@ -723,6 +723,10 @@ jobs:
 
       - name: Check CLI startup memory
         shell: bash
+        env:
+          # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
+          # the same built CLI. Keep the tighter Blacksmith regression ceiling.
+          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '350' }}
         run: |
           set +e
           pnpm test:startup:memory
@@ -1165,6 +1169,10 @@ jobs:
         with:
           go-version-file: scripts/docs-i18n/go.mod
           cache-dependency-path: scripts/docs-i18n/go.sum
+
+      - name: Verify docs i18n Go toolchain
+        if: matrix.requires_go == true
+        run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
@@ -1832,9 +1840,12 @@ jobs:
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
           brew update
-          brew install xcodegen swiftlint swiftformat
-          brew upgrade swiftformat
-          swiftformat --version
+          brew install xcodegen
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          "$swift_tools_dir/swiftformat" --version
+          "$swift_tools_dir/swiftlint" version
 
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
@@ -1897,8 +1908,8 @@ jobs:
 
       - name: Swift lint
         run: |
-          swiftlint lint --config config/swiftlint.yml
-          swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
+          ./scripts/lint-swift.sh macos
+          ./scripts/format-swift.sh macos
 
       - name: Swift build (release)
         run: |
@@ -1940,7 +1951,7 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
+            if swift test --package-path apps/macos --parallel --enable-code-coverage; then
               exit 0
             fi
             echo "swift test failed (attempt $attempt/3). Retrying…"
@@ -1984,9 +1995,17 @@ jobs:
       - name: Install iOS Swift tooling
         run: |
           brew update
-          brew install xcodegen swiftlint swiftformat
-          brew upgrade swiftformat
-          swiftformat --version
+          brew install xcodegen
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          "$swift_tools_dir/swiftformat" --version
+          "$swift_tools_dir/swiftlint" version
+
+      - name: Swift lint
+        run: |
+          ./scripts/lint-swift.sh ios
+          ./scripts/format-swift.sh ios
 
       - name: Build iOS app
         run: pnpm ios:build

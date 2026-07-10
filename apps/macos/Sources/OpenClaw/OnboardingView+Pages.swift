@@ -163,6 +163,12 @@ extension OnboardingView {
         .onChange(of: self.state.remoteUrl) { _, _ in
             self.resetRemoteProbeFeedback()
         }
+        .onChange(of: self.state.remoteToken) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
+        .onChange(of: self.state.remoteIdentity) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
     }
 
     private var localGatewaySubtitle: String {
@@ -358,7 +364,9 @@ extension OnboardingView {
                 return "Select a nearby gateway or open Advanced to enter a gateway URL."
             }
             if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
-                return "Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts."
+                return """
+                Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts.
+                """
             }
             return nil
         case .ssh:
@@ -533,6 +541,7 @@ extension OnboardingView {
     private func resetRemoteProbeFeedback() {
         self.remoteProbeState = .idle
         self.remoteAuthIssue = nil
+        self.restartGatewayBoundAISetup()
     }
 
     static func remoteAuthPromptStyle(
@@ -738,20 +747,28 @@ extension OnboardingView {
     /// Exactly one spinner at a time: the install row finishes before the
     /// service row starts, mirroring the actual runCLIInstall phases.
     private var installStepStateForInstall: InstallStepState {
-        if self.cliInstalled { return .done }
+        if self.cliInstalled {
+            return .done
+        }
         if self.installingCLI {
             return self.cliInstallPhase == .startingService ? .done : .running
         }
-        if self.installFailed { return .failed }
+        if self.installFailed {
+            return .failed
+        }
         return .running // status probe still deciding
     }
 
     private var installStepStateForService: InstallStepState {
-        if self.cliInstalled { return .done }
+        if self.cliInstalled {
+            return .done
+        }
         if self.installingCLI {
             return self.cliInstallPhase == .startingService ? .running : .pending
         }
-        if self.installFailed { return .failed }
+        if self.installFailed {
+            return .failed
+        }
         return .pending
     }
 
@@ -993,8 +1010,12 @@ extension OnboardingView {
     }
 
     private func maybeLoadOnboardingSkills() async {
-        if self.onboardingSkillsModel.isLoading { return }
-        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil { return }
+        if self.onboardingSkillsModel.isLoading {
+            return
+        }
+        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil {
+            return
+        }
         self.didLoadOnboardingSkills = true
         await self.onboardingSkillsModel.refresh()
     }

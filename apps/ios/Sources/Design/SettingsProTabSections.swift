@@ -399,7 +399,10 @@ extension SettingsProTab {
                 }
             } footer: {
                 Text(
-                    "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.")
+                    """
+                    The watch receives a one-time pairing code and stores its own device token. \
+                    A reachable secure Gateway URL is required away from the iPhone.
+                    """)
                     .font(OpenClawType.footnote)
             }
 
@@ -552,13 +555,6 @@ extension SettingsProTab {
         Group {
             self.notificationsSection
 
-            self.detailStatusCard(
-                icon: "hand.raised",
-                title: "Privacy",
-                detail: "Control what device context OpenClaw can expose to the gateway.",
-                value: self.privacyDetail,
-                color: .secondary)
-
             self.toggleCard(
                 title: "Camera Access",
                 isOn: self.$cameraEnabled)
@@ -590,12 +586,15 @@ extension SettingsProTab {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                Toggle("Notifications", isOn: self.notificationToggleBinding)
-                    .labelsHidden()
-                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
-                    .accessibilityIdentifier("settings-notifications-toggle")
-                    .accessibilityValue(self.notificationServingActive ? "On" : "Off")
-                    .accessibilityHint("Turns OpenClaw notification delivery on or off")
+                Toggle(isOn: self.notificationToggleBinding) {
+                    Text("Notifications")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                .labelsHidden()
+                .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
+                .accessibilityIdentifier("settings-notifications-toggle")
+                .accessibilityValue(self.notificationServingActive ? "On" : "Off")
+                .accessibilityHint("Turns OpenClaw notification delivery on or off")
             }
 
             HStack(alignment: .top, spacing: 10) {
@@ -703,18 +702,19 @@ extension SettingsProTab {
                         Text("Personal AI on your devices")
                             .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
+                        SettingsBuildMetadataStrip(metadata: DeviceInfoHelper.buildMetadata())
+                            .padding(.top, 8)
                     }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, 4)
-                .accessibilityElement(children: .combine)
+                .accessibilityElement(children: .contain)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
 
             // Concise public details only; deep hardware identifiers live in Diagnostics.
             detailListCard {
-                SettingsDetailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
                 SettingsDetailRow("Device", value: DeviceInfoHelper.deviceFamily())
                 SettingsDetailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
             }
@@ -778,44 +778,69 @@ extension SettingsProTab {
     var locationModeCard: some View {
         Section {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    SettingsIcon(
-                        systemName: "location",
-                        color: self.locationModeRaw == OpenClawLocationMode.off.rawValue ? .secondary : OpenClawBrand
-                            .accent)
-                    VStack(alignment: .leading, spacing: 3) {
+                Button {
+                    self.handleLocationSharingTap()
+                } label: {
+                    HStack {
                         Text("Location")
-                            .font(OpenClawType.subheadSemiBold)
-                        Text("Controls whether location can be shared with gateway tools.")
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .font(OpenClawType.body)
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: 8)
+                        ZStack {
+                            OpenClawToggleIndicator(isOn: self.locationSettingsPresentation.sharingControlIsOn)
+                                .opacity(self.isChangingLocationMode ? 0 : 1)
+                            if self.isChangingLocationMode {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
                     }
-                    Spacer(minLength: 8)
-                    if self.isChangingLocationMode {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
+                    .contentShape(Rectangle())
                 }
-
-                Picker("Location", selection: self.$locationModeRaw) {
-                    Text("Off")
-                        .font(OpenClawType.captionSemiBold)
-                        .tag(OpenClawLocationMode.off.rawValue)
-                    Text("While Using")
-                        .font(OpenClawType.captionSemiBold)
-                        .tag(OpenClawLocationMode.whileUsing.rawValue)
-                    Text("Always")
-                        .font(OpenClawType.captionSemiBold)
-                        .tag(OpenClawLocationMode.always.rawValue)
-                }
-                .pickerStyle(.segmented)
+                .buttonStyle(.plain)
                 .disabled(self.isChangingLocationMode)
+                .accessibilityIdentifier("settings-location-sharing-toggle")
+                .accessibilityLabel("Location Sharing")
+                .accessibilityValue(self.locationSettingsPresentation.sharingControlIsOn ? "On" : "Off")
 
-                Text(self.locationPermissionDetailText)
-                    .font(OpenClawType.caption2)
-                    .foregroundStyle(
-                        self.locationPermissionSummary.needsAttention ? OpenClawBrand.warn : .secondary)
+                if self.locationSettingsPresentation.showsAccessLevel,
+                   let accessLevelText = self.locationSettingsPresentation.accessLevelText
+                {
+                    Divider()
+                    Button {
+                        self.showLocationAccessDialog = true
+                    } label: {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Access Level")
+                                .font(OpenClawType.body)
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                            Text(accessLevelText)
+                                .font(OpenClawType.subhead)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(self.isChangingLocationMode)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("settings-location-access-level")
+                    .accessibilityLabel("Access Level")
+                    .accessibilityValue(accessLevelText)
+                    .accessibilityHint("Chooses While Using the App or Always")
+                }
+
+                if let locationPermissionDetailText {
+                    Text(locationPermissionDetailText)
+                        .font(OpenClawType.caption2)
+                        .foregroundStyle(OpenClawBrand.warn)
+                }
 
                 if let locationPermissionWarningText {
                     Text(locationPermissionWarningText)
@@ -974,29 +999,45 @@ extension SettingsProTab {
     }
 
     func discoveredGatewayRow(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: gateway.name)
-                    .font(OpenClawType.subheadSemiBold)
-                Text(verbatim: self.gatewayDetailLines(gateway).joined(separator: " • "))
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            Button {
-                Task { await self.connect(gateway) }
-            } label: {
-                if self.connectingGatewayID == gateway.id {
-                    ProgressView().controlSize(.small)
+        let availability = self.gatewayController.discoveredGatewayConnectionAvailability(gateway)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(verbatim: gateway.name)
+                        .font(OpenClawType.subheadSemiBold)
+                    Text(verbatim: self.gatewayDetailLines(gateway).joined(separator: " • "))
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                if availability.canConnect {
+                    Button {
+                        Task { await self.connect(gateway) }
+                    } label: {
+                        if self.connectingGatewayID == gateway.id {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text(availability.actionTitle)
+                                .font(OpenClawType.captionSemiBold)
+                        }
+                    }
+                    .font(OpenClawType.captionSemiBold)
+                    .buttonStyle(.bordered)
+                    .disabled(self.connectingGatewayID != nil)
                 } else {
-                    Text("Connect")
+                    Text(availability.actionTitle)
                         .font(OpenClawType.captionSemiBold)
+                        .foregroundStyle(OpenClawBrand.warn)
                 }
             }
-            .font(OpenClawType.captionSemiBold)
-            .buttonStyle(.bordered)
-            .disabled(self.connectingGatewayID != nil)
+
+            if let guidanceText = availability.guidanceText {
+                Text(guidanceText)
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -1010,13 +1051,16 @@ extension SettingsProTab {
             TextField("Port", text: self.manualPortBinding)
                 .font(OpenClawType.body)
                 .keyboardType(.numberPad)
-            Picker("Connection security", selection: self.manualGatewayTLSBinding) {
+            Picker(selection: self.manualGatewayTLSBinding) {
                 Text("Unencrypted")
                     .font(OpenClawType.captionSemiBold)
                     .tag(false)
                 Text("Secure (TLS)")
                     .font(OpenClawType.captionSemiBold)
                     .tag(true)
+            } label: {
+                Text("Connection security")
+                    .font(OpenClawType.captionSemiBold)
             }
             .pickerStyle(.segmented)
             .disabled(self.manualGatewayTransport.requiresTLS)

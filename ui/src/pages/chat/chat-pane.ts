@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type {
   TaskSuggestion,
@@ -7,6 +7,10 @@ import type {
   TaskSuggestionsAcceptResult,
   TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequests,
+} from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -19,6 +23,8 @@ import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette.ts";
+import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -71,10 +77,17 @@ import {
 import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
+  chatPullRequestId,
+  dismissChatPullRequest,
+  listDismissedChatPullRequests,
+} from "./components/chat-pull-requests.ts";
+import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  renderSessionWorkspaceToggle,
   revealSessionWorkspaceFile,
   toggleSessionWorkspace,
+  type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import {
   CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
@@ -138,6 +151,14 @@ class ChatPane extends OpenClawLightDomElement {
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
   ) => void;
+  /** Split mode renders an in-pane header row (title + workspace/split/close
+   * controls); classic single-pane mode renders none. */
+  @property({ attribute: false }) showPaneHeader = false;
+  @property({ attribute: false }) paneTitle = "";
+  @property({ attribute: false }) narrow = false;
+  @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
+  @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
+  @property({ attribute: false }) onClosePane?: (paneId: string) => void;
 
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private state: ChatPageHost | undefined;
@@ -149,6 +170,10 @@ class ChatPane extends OpenClawLightDomElement {
   private readonly taskSuggestionBusyIds = new Set<string>();
   private readonly taskSuggestionOperations = new Map<string, symbol>();
   private taskSuggestionsRequestVersion = 0;
+  private sessionPullRequests: ControlUiSessionPullRequest[] = [];
+  private sessionPullRequestsRateLimited = false;
+  private sessionPullRequestsRequestVersion = 0;
+  private dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
 
   private captureConnectionScope(): ChatPaneConnectionScope | null {
     const context = this.context;
@@ -238,6 +263,60 @@ class ChatPane extends OpenClawLightDomElement {
       // Keep event-delivered cards when a background reconciliation fails.
     }
   }
+
+  private async refreshSessionPullRequests(): Promise<void> {
+    const requestVersion = ++this.sessionPullRequestsRequestVersion;
+    const scope = this.captureConnectionScope();
+    if (
+      !scope ||
+      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "controlUi.sessionPullRequests")
+    ) {
+      this.sessionPullRequests = [];
+      this.sessionPullRequestsRateLimited = false;
+      this.requestUpdate();
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    if (!sessionKey.trim()) {
+      return;
+    }
+    try {
+      const result = await scope.client.request<ControlUiSessionPullRequests>(
+        "controlUi.sessionPullRequests",
+        { sessionKey, ...scopedAgentParamsForSession(scope.state, sessionKey) },
+      );
+      if (
+        requestVersion !== this.sessionPullRequestsRequestVersion ||
+        !this.isConnectionScopeCurrent(scope) ||
+        sessionKey !== scope.state.sessionKey
+      ) {
+        return;
+      }
+      this.sessionPullRequests = result.pullRequests;
+      this.sessionPullRequestsRateLimited = result.rateLimited;
+      this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
+      this.requestUpdate();
+    } catch {
+      // PR chips are an optional affordance; keep the last snapshot so a
+      // transient gateway or GitHub failure does not clear the row.
+    }
+  }
+
+  private resetSessionPullRequests(): void {
+    this.sessionPullRequestsRequestVersion += 1;
+    this.sessionPullRequests = [];
+    this.sessionPullRequestsRateLimited = false;
+    this.dismissedSessionPullRequestIds = new Set();
+  }
+
+  private readonly dismissSessionPullRequest = (pullRequest: ControlUiSessionPullRequest): void => {
+    const sessionKey = this.state?.sessionKey;
+    if (!sessionKey) {
+      return;
+    }
+    this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, pullRequest);
+    this.requestUpdate();
+  };
 
   private handleTaskSuggestionEvent(event: TaskSuggestionEvent): void {
     if (event.action === "created") {
@@ -406,6 +485,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
+    this.resetSessionPullRequests();
     this.markSessionRead(nextSessionRow);
     if (previousSessionKey !== nextSessionKey) {
       state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
@@ -417,6 +497,7 @@ class ChatPane extends OpenClawLightDomElement {
     const historyLoad = loadChatHistory(state);
     state.requestUpdate();
     void this.refreshTaskSuggestions();
+    void this.refreshSessionPullRequests();
     const scheduleHistoryScroll = () => {
       if (state.sessionKey !== nextSessionKey) {
         return;
@@ -720,6 +801,13 @@ class ChatPane extends OpenClawLightDomElement {
         this.applyGatewaySnapshot(snapshot);
       }),
     );
+    // PRs open, merge, and finish CI outside any gateway event stream, so the
+    // chip row refreshes on a coarse timer between session/connect refreshes.
+    const pullRequestTimer = window.setInterval(
+      () => void this.refreshSessionPullRequests(),
+      60_000,
+    );
+    chatState.addCleanup(() => window.clearInterval(pullRequestTimer));
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
@@ -776,6 +864,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
+    this.resetSessionPullRequests();
     this.nativeDraftCleanup?.();
     this.nativeDraftCleanup = null;
     this.announceCommandPaletteTarget(null);
@@ -969,8 +1058,57 @@ class ChatPane extends OpenClawLightDomElement {
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
       void this.refreshTaskSuggestions();
+      void this.refreshSessionPullRequests();
     }
     state.requestUpdate?.();
+  }
+
+  private renderPaneHeader(sessionWorkspace: SessionWorkspaceProps) {
+    return html`
+      <div class="chat-pane__header ${this.active ? "chat-pane__header--active" : ""}">
+        <!-- Static text on purpose: an interactive session picker here would
+             fight pane focus. Panes change sessions via the sidebar or
+             drag-and-drop. -->
+        <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
+        <div class="chat-pane__actions">
+          ${renderSessionWorkspaceToggle(sessionWorkspace, "pane-header")}
+          ${!this.narrow
+            ? html`
+                <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    type="button"
+                    aria-label=${t("chat.splitView.splitDown")}
+                    @click=${() => this.onSplitDown?.(this.paneId)}
+                  >
+                    ${icons.panelBottomOpen}
+                  </button>
+                </openclaw-tooltip>
+                <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    type="button"
+                    aria-label=${t("chat.splitView.splitRight")}
+                    @click=${() => this.onSplitRight?.(this.paneId)}
+                  >
+                    ${icons.panelRightOpen}
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing}
+          <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
+            <button
+              class="btn btn--ghost btn--icon"
+              type="button"
+              aria-label=${t("chat.splitView.closePane")}
+              @click=${() => this.onClosePane?.(this.paneId)}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
+        </div>
+      </div>
+    `;
   }
 
   override render() {
@@ -995,6 +1133,7 @@ class ChatPane extends OpenClawLightDomElement {
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
+    const sessionWorkspace = createSessionWorkspaceProps(state);
     const props: ChatProps = {
       paneId: this.paneId,
       sessionKey: state.sessionKey,
@@ -1099,8 +1238,14 @@ class ChatPane extends OpenClawLightDomElement {
           state.requestUpdate?.();
         },
       }),
-      sessionWorkspace: createSessionWorkspaceProps(state),
+      sessionWorkspace,
+      paneHeaderActive: this.showPaneHeader,
       taskSuggestions: this.taskSuggestions,
+      pullRequests: this.sessionPullRequests.filter(
+        (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
+      ),
+      pullRequestsRateLimited: this.sessionPullRequestsRateLimited,
+      onDismissPullRequest: this.dismissSessionPullRequest,
       taskSuggestionBusyIds: this.taskSuggestionBusyIds,
       canAcceptTaskSuggestions:
         state.connected &&
@@ -1210,7 +1355,10 @@ class ChatPane extends OpenClawLightDomElement {
       onAssistantAttachmentLoaded: () => state.scrollToBottom(),
       basePath: state.basePath,
     };
-    return renderChat(props);
+    if (!this.showPaneHeader) {
+      return renderChat(props);
+    }
+    return html`${this.renderPaneHeader(sessionWorkspace)}${renderChat(props)}`;
   }
 }
 
