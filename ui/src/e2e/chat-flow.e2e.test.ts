@@ -1,6 +1,7 @@
 // Control UI tests cover chat flow behavior.
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -232,7 +233,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     await closeOpenBrowserContexts();
   });
 
-  it("uses one global toolbar row for split view", async () => {
+  it("renders per-pane headers in split view without desktop topbar chrome", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -247,11 +248,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           timestamp: Date.now(),
         },
       ],
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+      sessionKey: "agent:main:session-a",
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.getByText("Split toolbar proof.").waitFor({ timeout: 10_000 });
+
+      // Desktop renders no topbar row: the sidebar owns navigation.
+      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
       const splitEntry = page.getByRole("button", { name: "Open split view" });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
@@ -263,74 +269,95 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           splitEntry.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
         )
         .toBe(true);
-      const topbar = page.locator(".topbar");
-      // Desktop renders no topbar row until split view needs the toolbar row.
-      await expect.poll(() => topbar.isVisible()).toBe(false);
       await splitEntry.click();
 
-      const toolbar = page.locator(".chat-split-toolbar");
-      const toolbarPanes = page.locator(".chat-split-toolbar__pane");
-      await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(2);
-      await expect.poll(() => toolbarPanes.count()).toBe(2);
+      // Each pane owns an in-flow header (title + workspace/split/close
+      // actions); no fixed toolbar layer mirrors the split geometry.
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+      const headers = page.locator(".chat-pane__header");
+      await expect.poll(() => panes.count()).toBe(2);
+      await expect.poll(() => headers.count()).toBe(2);
       await expect
         .poll(async () => {
-          const visible = await Promise.all(
-            (await toolbarPanes.all()).map((pane) => pane.isVisible()),
-          );
+          const visible = await Promise.all((await headers.all()).map((pane) => pane.isVisible()));
           return visible.every(Boolean);
         })
         .toBe(true);
-      // The empty topbar returns as the split toolbar's backdrop row.
-      await expect.poll(() => topbar.isVisible()).toBe(true);
       await expect.poll(() => splitEntry.count()).toBe(0);
+      // The pane header hosts the session workspace toggle (the old collapsed
+      // rail strip is gone).
+      await expect.poll(() => headers.first().locator(".chat-workspace-toggle").count()).toBe(1);
+      await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      const [topbarBox, toolbarBox] = await Promise.all([
-        topbar.boundingBox(),
-        toolbar.boundingBox(),
-      ]);
-      expect(topbarBox).not.toBeNull();
-      expect(toolbarBox).not.toBeNull();
-      if (!topbarBox || !toolbarBox) {
-        throw new Error("expected the split toolbar and global topbar to have layout boxes");
+      // Pane headers render a static session title; keyboard focus lands on
+      // the pane buttons and marks the pane active.
+      await headers.first().getByRole("button", { name: "Split down" }).focus();
+      await expect.poll(() => headers.first().getAttribute("class")).toContain("--active");
+
+      const cells = page.locator(".chat-split-view__cell");
+      const lastPane = page.locator(".chat-split-view__pane").last();
+      await lastPane.click({ position: { x: 20, y: 80 } });
+      await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
+      await expect.poll(() => headers.last().getAttribute("class")).toContain("--active");
+      const targetHeader = headers.first();
+      await expect
+        .poll(() =>
+          targetHeader.evaluate((header) => {
+            const owner = header.closest("openclaw-chat-pane");
+            return (
+              owner === header.parentElement && owner?.classList.contains("chat-split-view__pane")
+            );
+          }),
+        )
+        .toBe(true);
+
+      const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+      await dataTransfer.evaluate(
+        (transfer, data) => {
+          transfer.setData(data.mime, data.sessionKey);
+        },
+        { mime: SESSION_DRAG_MIME, sessionKey: "agent:main:session-b" },
+      );
+      const unrelatedTarget = page.locator(".chat-split-view");
+      const unrelatedDrag = {
+        bubbles: true,
+        clientX: 0,
+        clientY: 0,
+        dataTransfer,
+      };
+      await unrelatedTarget.dispatchEvent("dragenter", unrelatedDrag);
+      await unrelatedTarget.dispatchEvent("dragover", unrelatedDrag);
+      await expect.poll(() => page.locator(".chat-split-view__drop-indicator").count()).toBe(0);
+      await unrelatedTarget.dispatchEvent("drop", unrelatedDrag);
+      await expect.poll(() => panes.count()).toBe(2);
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("session"))
+        .toBe("agent:main:session-a");
+
+      // Start with no retained pane preview and target the visible header.
+      const targetBox = await targetHeader.boundingBox();
+      if (!targetBox) {
+        throw new Error("expected the pane header to have a layout box");
       }
-      expect(Math.abs(topbarBox.y - toolbarBox.y)).toBeLessThanOrEqual(1);
-      expect(Math.abs(topbarBox.height - toolbarBox.height)).toBeLessThanOrEqual(1);
+      const directHeaderDrag = {
+        bubbles: true,
+        clientX: targetBox.x + targetBox.width / 2,
+        clientY: targetBox.y + targetBox.height / 2,
+        dataTransfer,
+      };
+      await targetHeader.dispatchEvent("dragenter", directHeaderDrag);
+      await targetHeader.dispatchEvent("dragover", directHeaderDrag);
+      await expect.poll(() => page.locator(".chat-split-view__drop-indicator").count()).toBe(1);
+      await targetHeader.dispatchEvent("drop", directHeaderDrag);
+      await dataTransfer.dispose();
 
-      // Pane headers render a static session title (no form control may sit in
-      // the titlebar drag strip); keyboard focus lands on the pane buttons.
-      await toolbarPanes.first().getByRole("button", { name: "Split down" }).focus();
-      await expect.poll(() => toolbarPanes.first().getAttribute("class")).toContain("--active");
-
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--safe-area-top", "20px");
-        document.documentElement.style.setProperty("--safe-area-left", "24px");
-        document.documentElement.style.setProperty("--safe-area-right", "24px");
-        document.body.style.paddingTop = "20px";
-        document.body.style.paddingRight = "24px";
-        document.body.style.paddingLeft = "24px";
-      });
-      const insetToolbarBox = await toolbar.boundingBox();
-      expect(insetToolbarBox?.y).toBe(20);
-      expect(insetToolbarBox?.x).toBeGreaterThan(topbarBox.x);
-
-      await page.setViewportSize({ height: 900, width: 1100 });
-      const navToggle = page.getByRole("button", { name: "Expand sidebar" });
-      await expect.poll(() => navToggle.isVisible()).toBe(true);
-      const [navToggleBox, narrowToolbarBox] = await Promise.all([
-        navToggle.boundingBox(),
-        toolbar.boundingBox(),
-      ]);
-      expect(navToggleBox).not.toBeNull();
-      expect(narrowToolbarBox).not.toBeNull();
-      if (!navToggleBox || !narrowToolbarBox) {
-        throw new Error("expected the drawer toggle and split toolbar to have layout boxes");
-      }
-      expect(narrowToolbarBox.x).toBeGreaterThanOrEqual(navToggleBox.x + navToggleBox.width);
-
-      const firstPane = page.locator(".chat-split-view__pane").first();
-      await firstPane.click({ position: { x: 20, y: 80 } });
-      await expect.poll(() => firstPane.getAttribute("class")).toContain("--active");
-      await expect.poll(() => toolbarPanes.first().getAttribute("class")).toContain("--active");
+      await expect.poll(() => panes.count()).toBe(3);
+      await expect
+        .poll(() => page.locator(".chat-pane__session-title").allTextContents())
+        .toContain("Session B");
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("session"))
+        .toBe("agent:main:session-b");
     } finally {
       await closeBrowserContext(context);
     }
@@ -1003,7 +1030,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.locator(".chat-workspace-open").click();
       await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
 
       await page.getByRole("button", { name: "Copy path" }).click();
@@ -1072,23 +1099,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Expand session workspace" }).waitFor({
-        timeout: 10_000,
-      });
+      // Collapsed rails render nothing; the floating opener (with the
+      // changed-file badge) is the only pointer affordance.
+      const opener = page.locator(".chat-workspace-open");
+      await opener.waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
-      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
-      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
-      // The rail docks flush to the window edge in both states (no content gutter).
-      const railEdgeGap = () =>
-        page.locator(".chat-workspace-rail").evaluate((element) => {
-          return window.innerWidth - element.getBoundingClientRect().right;
-        });
-      expect(await railEdgeGap()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await opener.click();
       await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
         timeout: 10_000,
       });
+      expect(await opener.count()).toBe(0);
       await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
       await page.getByText("preview.png").waitFor({ timeout: 10_000 });
       await page.getByText("Project files").waitFor({ timeout: 10_000 });
@@ -1097,16 +1119,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
       expect(await gateway.getRequests("artifacts.list")).toHaveLength(1);
-      expect(await railEdgeGap()).toBe(0);
+      // The rail docks flush to the window edge (no content gutter).
+      expect(
+        await page.locator(".chat-workspace-rail").evaluate((element) => {
+          return window.innerWidth - element.getBoundingClientRect().right;
+        }),
+      ).toBe(0);
 
       await page.getByRole("button", { name: "Collapse session workspace" }).click();
-      await page.getByRole("button", { name: "Expand session workspace" }).waitFor({
-        timeout: 10_000,
-      });
-      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
-      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+      await opener.waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await opener.click();
       await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
         timeout: 10_000,
       });
@@ -1149,7 +1173,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.locator(".chat-workspace-open").click();
       await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
         timeout: 10_000,
       });
@@ -2133,9 +2157,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       expect(await modelSelect.textContent()).toContain("GPT-5.5");
 
-      // The picker stays open after an immediate apply; the pinned default
-      // option clears the override without a save step.
-      await main.locator('[data-chat-model-option=""]').click();
+      // The picker stays open after an immediate apply. Return to the default
+      // model's provider and select its real catalog row to clear the override.
+      await main.locator('[data-chat-model-provider="anthropic"]').click();
+      const defaultModel = main.locator(
+        '[data-chat-model-option="anthropic/claude-opus-4-5"][data-chat-model-default="true"]',
+      );
+      await defaultModel.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await defaultModel.textContent()).toContain("Default");
+      expect(await main.locator('[data-chat-model-option=""]').count()).toBe(0);
+      await defaultModel.click();
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
         key: "agent:ops:session-a",

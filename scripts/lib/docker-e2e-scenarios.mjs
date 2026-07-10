@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 export const DEFAULT_LIVE_RETRIES = 1;
 const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
-  /[\\/]\\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
+  /[\\/]\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
   process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT
     ? ".release-harness"
     : ".";
@@ -262,6 +262,17 @@ function kitchenSinkRpcLane() {
 }
 
 export const mainLanes = [
+  lane(
+    "docker-selected-plugins",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:selected-plugins",
+    {
+      e2eImageKind: false,
+      estimateSeconds: 600,
+      resources: ["docker"],
+      timeoutMs: 30 * 60 * 1000,
+      weight: 4,
+    },
+  ),
   serviceLane("compose-setup", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:compose-setup", {
     stateScenario: "empty",
     timeoutMs: 20 * 60 * 1000,

@@ -138,8 +138,8 @@ export type ActivateSetupInferenceDeps = {
   runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
-  transformConfigWithPendingPluginInstalls?: typeof import("../cli/plugins-install-record-commit.js").transformConfigWithPendingPluginInstalls;
-  refreshPluginRegistryAfterConfigMutation?: typeof import("../cli/plugins-registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
+  transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
+  refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
   resolvePluginProviders?: typeof resolvePluginProviders;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
@@ -150,7 +150,7 @@ export type ActivateSetupInferenceDeps = {
   markRetainedManagedNpmInstall?: typeof import("../plugins/managed-npm-retention.js").markRetainedManagedNpmInstall;
   clearLoadInstalledPluginIndexInstallRecordsCache?: typeof import("../plugins/installed-plugin-index-records.js").clearLoadInstalledPluginIndexInstallRecordsCache;
   clearPluginMetadataLifecycleCaches?: typeof import("../plugins/plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-  invalidatePluginRuntimeDiscoveryAfterConfigMutation?: typeof import("../cli/plugins-registry-refresh.js").invalidatePluginRuntimeDiscoveryAfterConfigMutation;
+  invalidatePluginRuntimeDiscoveryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").invalidatePluginRuntimeDiscoveryAfterConfigMutation;
   createTempDir?: () => Promise<string>;
   removeTempDir?: (dir: string) => Promise<void>;
   timeoutMs?: number;
@@ -880,7 +880,7 @@ async function activateSetupInferenceUnredacted(
     let codexPluginPatch: unknown;
     if (params.kind === "codex-cli") {
       const { stripPendingPluginInstallRecords } =
-        await import("../cli/plugins-install-record-commit.js");
+        await import("../plugins/install-record-commit.js");
       // This explicit Codex CLI choice owns its runtime independently of the
       // user's existing OpenAI provider route (which may use a custom base URL).
       const codexInstallBase = stripPendingPluginInstallRecords(testPlan.config);
@@ -1014,7 +1014,7 @@ async function activateSetupInferenceUnredacted(
     }
     if (needsPersistence) {
       const { stripPendingPluginInstallRecords } =
-        await import("../cli/plugins-install-record-commit.js");
+        await import("../plugins/install-record-commit.js");
       const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
       const selectModel = plan.persistModelRef
         ? await createCrestodianModelSelectionUpdater({
@@ -1053,7 +1053,7 @@ async function activateSetupInferenceUnredacted(
       // failure is inside the rollback boundary below.
       const transformConfig =
         deps.transformConfigWithPendingPluginInstalls ??
-        (await import("../cli/plugins-install-record-commit.js"))
+        (await import("../plugins/install-record-commit.js"))
           .transformConfigWithPendingPluginInstalls;
       let manualAuthReceipt: ManualAuthPersistenceReceipt | undefined;
       if (plan.manualAuth) {
@@ -1170,8 +1170,7 @@ async function activateSetupInferenceUnredacted(
     if (codexPluginPatch !== undefined && committedConfig) {
       const refreshPluginRegistry =
         deps.refreshPluginRegistryAfterConfigMutation ??
-        (await import("../cli/plugins-registry-refresh.js"))
-          .refreshPluginRegistryAfterConfigMutation;
+        (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
       try {
         await refreshPluginRegistry({
           config: committedConfig,
@@ -1410,7 +1409,7 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
   try {
     const invalidateRuntimeDiscovery =
       deps.invalidatePluginRuntimeDiscoveryAfterConfigMutation ??
-      (await import("../cli/plugins-registry-refresh.js"))
+      (await import("../plugins/registry-refresh.js"))
         .invalidatePluginRuntimeDiscoveryAfterConfigMutation;
     await invalidateRuntimeDiscovery({ logger: log });
   } catch {

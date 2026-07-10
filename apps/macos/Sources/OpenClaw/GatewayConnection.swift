@@ -883,7 +883,9 @@ extension GatewayConnection {
 
     func healthSnapshot(timeoutMs: Double? = nil) async throws -> HealthSnapshot {
         let data = try await requestRaw(method: .health, timeoutMs: timeoutMs)
-        if let snap = decodeHealthSnapshot(from: data) { return snap }
+        if let snap = decodeHealthSnapshot(from: data) {
+            return snap
+        }
         throw GatewayDecodingError(method: Method.health.rawValue, message: "failed to decode health snapshot")
     }
 
@@ -926,9 +928,15 @@ extension GatewayConnection {
         var params: [String: AnyCodable] = [
             "skillKey": AnyCodable(skillKey),
         ]
-        if let enabled { params["enabled"] = AnyCodable(enabled) }
-        if let apiKey { params["apiKey"] = AnyCodable(apiKey) }
-        if let env, !env.isEmpty { params["env"] = AnyCodable(env) }
+        if let enabled {
+            params["enabled"] = AnyCodable(enabled)
+        }
+        if let apiKey {
+            params["apiKey"] = AnyCodable(apiKey)
+        }
+        if let env, !env.isEmpty {
+            params["env"] = AnyCodable(env)
+        }
         return try await self.requestDecoded(method: .skillsUpdate, params: params)
     }
 
@@ -947,8 +955,12 @@ extension GatewayConnection {
             return OpenClawSessionsPreviewPayload(ts: 0, previews: [])
         }
         var params: [String: AnyCodable] = ["keys": AnyCodable(resolvedKeys)]
-        if let limit { params["limit"] = AnyCodable(limit) }
-        if let maxChars { params["maxChars"] = AnyCodable(maxChars) }
+        if let limit {
+            params["limit"] = AnyCodable(limit)
+        }
+        if let maxChars {
+            params["maxChars"] = AnyCodable(maxChars)
+        }
         let timeout = timeoutMs.map { Double($0) }
         return try await self.requestDecoded(
             method: .sessionsPreview,
@@ -971,8 +983,12 @@ extension GatewayConnection {
         if let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty {
             params["agentId"] = AnyCodable(agentID)
         }
-        if let limit { params["limit"] = AnyCodable(limit) }
-        if let maxChars { params["maxChars"] = AnyCodable(maxChars) }
+        if let limit {
+            params["limit"] = AnyCodable(limit)
+        }
+        if let maxChars {
+            params["maxChars"] = AnyCodable(maxChars)
+        }
         let timeout = timeoutMs.map { Double($0) }
         if let route {
             let data = try await request(
@@ -1045,7 +1061,10 @@ extension GatewayConnection {
 
     func chatAbort(sessionKey: String, runId: String) async throws -> Bool {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        struct AbortResponse: Decodable { let ok: Bool?; let aborted: Bool? }
+        struct AbortResponse: Decodable {
+            let ok: Bool?
+            let aborted: Bool?
+        }
         let res: AbortResponse = try await requestDecoded(
             method: .chatAbort,
             params: ["sessionKey": AnyCodable(resolvedKey), "runId": AnyCodable(runId)])
@@ -1054,7 +1073,9 @@ extension GatewayConnection {
 
     func talkMode(enabled: Bool, phase: String? = nil) async {
         var params: [String: AnyCodable] = ["enabled": AnyCodable(enabled)]
-        if let phase { params["phase"] = AnyCodable(phase) }
+        if let phase {
+            params["phase"] = AnyCodable(phase)
+        }
         try? await self.requestVoid(method: .talkMode, params: params)
     }
 

@@ -368,6 +368,74 @@ describe("qa mock openai server", () => {
     expect(text.match(/[.!?]+(?:\s|$)/g)).toHaveLength(2);
   });
 
+  it("recovers the stranded-final fixture by calling the message tool on the retry prompt", async () => {
+    const server = await startMockServer();
+
+    const initialBody = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(
+          "qa stranded final recovery check. Include `QA-STRANDED-85714` in a thorough multi-sentence answer, but do not call any tool yet.",
+        ),
+      ],
+    });
+
+    const initialText = initialBody.output?.[0]?.content?.[0]?.text ?? "";
+    expect(initialText).toContain("QA-STRANDED-85714");
+    expect(initialText.length).toBeGreaterThanOrEqual(120);
+    expect(outputItems(initialBody).some((item) => item.type === "function_call")).toBe(false);
+
+    const retryBody = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(
+          [
+            "qa stranded final recovery check.",
+            "Your previous reply was not delivered to the conversation because you did not call message(action=send).",
+            initialText,
+          ].join(" "),
+        ),
+      ],
+    });
+
+    const toolCall = outputToolCall(retryBody, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({
+      action: "send",
+      message: "QA-STRANDED-85714",
+    });
+  });
+
+  it("keeps the retry-failure stranded-final fixture as text without a message tool call", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(
+          [
+            "Your previous reply was not delivered to the conversation because you did not call message(action=send).",
+            "Include `QA-STRANDED-RETRY-FAIL-RAW` in a thorough multi-sentence answer, but do not call any tool.",
+          ].join(" "),
+        ),
+      ],
+    });
+
+    const text = body.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text).toContain("QA-STRANDED-RETRY-FAIL-RAW");
+    expect(text.length).toBeGreaterThanOrEqual(120);
+    expect(outputItems(body).some((item) => item.type === "function_call")).toBe(false);
+  });
+
   it("keeps final-only marker preview deltas separate from the final answer", async () => {
     const server = await startMockServer({ finalOnlyMarkerPauseMs: 1 });
     const response = await fetch(`${server.baseUrl}/v1/responses`, {
@@ -3938,6 +4006,26 @@ describe("qa mock openai server", () => {
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("session_status");
     expect(String(toolPlanOutput.arguments)).toContain("current");
+  });
+
+  it("plans the explicit web_fetch fixture prompt as the canonical direct call", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Call web_fetch exactly once with URL https://example.com/ and maxChars 500, wait for its result, then summarize. If web_fetch is already callable, call it directly without tool_search. Otherwise use tool_search to locate it first, then call web_fetch. A tool_search result alone does not complete the task; do not finish before web_fetch returns. QA routing marker: tool search qa check target=web_fetch.";
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [makeUserInput(prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("web_fetch");
+    expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
+      url: "https://example.com/",
+      maxChars: 500,
+    });
   });
 
   it("summarizes QA tool-search bridge outputs with the nested plugin result marker", async () => {

@@ -55,7 +55,7 @@ openclaw crestodian --json
 openclaw crestodian --message "models"
 openclaw crestodian --message "validate config"
 openclaw crestodian --message "setup workspace ~/Projects/work" --yes
-openclaw crestodian --message "set default model openai/gpt-5.5" --yes
+openclaw crestodian --message "set default model openai/gpt-5.6" --yes
 openclaw onboard --modern
 ```
 
@@ -75,7 +75,8 @@ restart gateway
 agents
 create agent work workspace ~/Projects/work
 models
-set default model openai/gpt-5.5
+configure model provider
+set default model openai/gpt-5.6
 channels
 channel info slack
 connect slack

@@ -1620,7 +1620,7 @@ describe("activateSetupInference", () => {
     });
     const runEmbeddedAgent = vi.fn(async (_params: unknown) => {
       events.push("live-test");
-      return successfulRun("openai", "gpt-5.5");
+      return successfulRun("openai", "gpt-5.6-sol");
     });
     let persistedConfig: OpenClawConfig = {
       ...initialConfig,
@@ -1640,9 +1640,10 @@ describe("activateSetupInference", () => {
           })
         ).nextConfig;
         const configuredRuntime =
-          transformed.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime?.id ??
-          transformed.agents?.list?.find((agent) => agent.id === "ops")?.models?.["openai/gpt-5.5"]
-            ?.agentRuntime?.id;
+          transformed.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.agentRuntime?.id ??
+          transformed.agents?.list?.find((agent) => agent.id === "ops")?.models?.[
+            "openai/gpt-5.6-sol"
+          ]?.agentRuntime?.id;
         events.push(configuredRuntime === "codex" ? "persist-plugin-config" : "unexpected-write");
         pendingCodexInstalls.push(transformed.plugins?.installs?.codex);
         persistedConfig = withoutPluginInstallRecords(transformed);
@@ -1686,10 +1687,13 @@ describe("activateSetupInference", () => {
               expect.objectContaining({
                 id: "ops",
                 model: {
-                  primary: "openai/gpt-5.5",
+                  primary: "openai/gpt-5.6-sol",
                   fallbacks: ["google/gemini-3.1-pro-preview"],
                 },
-                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+                models: {
+                  "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+                  "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+                },
               }),
             ],
           },
@@ -1699,7 +1703,7 @@ describe("activateSetupInference", () => {
             },
           },
         }),
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         agentId: "ops",
       }),
     );
@@ -1738,10 +1742,13 @@ describe("activateSetupInference", () => {
             expect.objectContaining({
               id: "ops",
               model: {
-                primary: "openai/gpt-5.5",
+                primary: "openai/gpt-5.6-sol",
                 fallbacks: ["google/gemini-3.1-pro-preview"],
               },
-              models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+              },
             }),
           ],
         },
@@ -1766,10 +1773,13 @@ describe("activateSetupInference", () => {
           expect.objectContaining({
             id: "ops",
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "openai/gpt-5.6-sol",
               fallbacks: ["google/gemini-3.1-pro-preview"],
             },
-            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            },
           }),
         ],
       },
@@ -1877,7 +1887,7 @@ describe("activateSetupInference", () => {
           runtimeConfig,
         })) as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
-        runEmbeddedAgent: vi.fn(async () => successfulRun("openai", "gpt-5.5")) as never,
+        runEmbeddedAgent: vi.fn(async () => successfulRun("openai", "gpt-5.6-sol")) as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
         createTempDir: makeTempDir,
@@ -2080,7 +2090,7 @@ describe("activateSetupInference", () => {
     const runEmbeddedAgent = vi
       .fn()
       .mockRejectedValueOnce(new Error("401 invalid_api_key"))
-      .mockResolvedValueOnce(successfulRun("openai", "gpt-5.5"));
+      .mockResolvedValueOnce(successfulRun("openai", "gpt-5.6-sol"));
     const clearInstallRecords = vi.fn(() => {
       installedRecordCache = undefined;
     });
@@ -2137,7 +2147,7 @@ describe("activateSetupInference", () => {
     });
 
     expect(first).toMatchObject({ ok: false, status: "auth" });
-    expect(second).toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
+    expect(second).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
     expect(createdRecords).toStrictEqual(installRecords);
     expect(markRetained).toHaveBeenCalledWith({
       packageDir: installRecords[0].installPath,
@@ -2230,7 +2240,7 @@ describe("activateSetupInference", () => {
           installed: true,
           status: "installed" as const,
         })) as never,
-        runEmbeddedAgent: vi.fn(async () => successfulRun("openai", "gpt-5.5")) as never,
+        runEmbeddedAgent: vi.fn(async () => successfulRun("openai", "gpt-5.6-sol")) as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         readPersistedInstalledPluginIndexInstallRecords: readInstallRecords,
         markRetainedManagedNpmInstall: markRetainedInstall,
@@ -2240,7 +2250,10 @@ describe("activateSetupInference", () => {
     });
 
     if (testCase.succeeds) {
-      await expect(activation).resolves.toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
+      await expect(activation).resolves.toMatchObject({
+        ok: true,
+        modelRef: "openai/gpt-5.6-sol",
+      });
     } else {
       await expect(activation).rejects.toThrow("simulated post-write failure");
     }

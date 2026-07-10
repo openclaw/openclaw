@@ -341,6 +341,15 @@ export async function releaseTelegramSpooledUpdateClaim(
   );
 }
 
+export async function abandonTelegramSpooledUpdateClaim(
+  update: ClaimedTelegramSpooledUpdate,
+): Promise<void> {
+  await createTelegramIngressQueue(path.dirname(update.pendingPath)).release(
+    queueMutationTarget(update),
+    { recordAttempt: false },
+  );
+}
+
 export async function refreshTelegramSpooledUpdateClaim(
   update: ClaimedTelegramSpooledUpdate,
   options?: { refreshedAt?: number },
