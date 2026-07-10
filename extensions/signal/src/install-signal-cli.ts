@@ -327,38 +327,46 @@ export async function installSignalCliFromRelease(
   }
 
   const tmpDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-signal-"));
-  const archivePath = path.join(tmpDir, asset.name);
-
-  runtime.log(`Downloading signal-cli ${version} (${asset.name})…`);
-  await downloadToFile(asset.browser_download_url, archivePath);
-
-  const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
-  await fs.mkdir(installRoot, { recursive: true });
-
-  if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
-    return { ok: false, error: `Unsupported archive type: ${asset.name}` };
-  }
+  // The download archive is scratch space; the extracted binary is installed
+  // under CONFIG_DIR below. Always remove the temp dir, including on the success
+  // path and early returns, so repeated installs do not leak multi-hundred-MB
+  // archives under the temp directory.
   try {
-    await extractSignalCliArchive(archivePath, installRoot, 60_000);
-  } catch (err) {
-    const message = formatErrorMessage(err);
-    return {
-      ok: false,
-      error: `Failed to extract ${asset.name}: ${message}`,
-    };
+    const archivePath = path.join(tmpDir, asset.name);
+
+    runtime.log(`Downloading signal-cli ${version} (${asset.name})…`);
+    await downloadToFile(asset.browser_download_url, archivePath);
+
+    const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
+    await fs.mkdir(installRoot, { recursive: true });
+
+    if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
+      return { ok: false, error: `Unsupported archive type: ${asset.name}` };
+    }
+    try {
+      await extractSignalCliArchive(archivePath, installRoot, 60_000);
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      return {
+        ok: false,
+        error: `Failed to extract ${asset.name}: ${message}`,
+      };
+    }
+
+    const cliPath = await findSignalCliBinary(installRoot);
+    if (!cliPath) {
+      return {
+        ok: false,
+        error: `signal-cli binary not found after extracting ${asset.name}`,
+      };
+    }
+
+    await fs.chmod(cliPath, 0o755).catch(() => {});
+
+    return { ok: true, cliPath, version };
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   }
-
-  const cliPath = await findSignalCliBinary(installRoot);
-  if (!cliPath) {
-    return {
-      ok: false,
-      error: `signal-cli binary not found after extracting ${asset.name}`,
-    };
-  }
-
-  await fs.chmod(cliPath, 0o755).catch(() => {});
-
-  return { ok: true, cliPath, version };
 }
 
 // ---------------------------------------------------------------------------

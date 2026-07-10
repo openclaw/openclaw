@@ -372,6 +372,54 @@ describe("installSignalCliFromRelease", () => {
     });
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
+
+  it("removes the download temp dir even when extraction fails", async () => {
+    const originalPlatform = process.platform;
+    const originalArch = process.arch;
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    Object.defineProperty(process, "arch", { configurable: true, value: "x64" });
+    // Capture the real temp dir mkdtemp creates so we can assert it is removed.
+    const createdTempDirs: string[] = [];
+    const originalMkdtemp = fs.mkdtemp.bind(fs);
+    const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix) => {
+      const dir = await originalMkdtemp(prefix as string);
+      if (String(dir).includes("openclaw-signal-")) {
+        createdTempDirs.push(dir);
+      }
+      return dir;
+    });
+    try {
+      // First call: release metadata with a Linux-native asset.
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(
+        okDownloadResponse(
+          JSON.stringify({
+            tag_name: "v0.0.0-leak-test",
+            assets: [
+              {
+                name: "signal-cli-0.0.0-Linux-native.tar.gz",
+                browser_download_url: "https://example.com/linux-native.tar.gz",
+              },
+            ],
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+      // Second call (downloadToFile): bytes that are not a valid tarball, so
+      // extractSignalCliArchive throws and the function returns an error.
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(okDownloadResponse("not-a-real-archive"));
+
+      const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+
+      expect(result.ok).toBe(false);
+      // The temp dir created during this call must have been removed by the finally.
+      expect(createdTempDirs.length).toBe(1);
+      await expect(fs.stat(createdTempDirs[0] as string)).rejects.toThrow();
+    } finally {
+      mkdtempSpy.mockRestore();
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+      Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
+    }
+  });
 });
 
 describe("installSignalCli", () => {
