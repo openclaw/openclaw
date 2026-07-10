@@ -212,6 +212,16 @@ export async function removeSessionTrajectoryArtifacts(params: {
   if (registryOwnedPath) {
     runtimeCandidates.add(registryOwnedPath);
   }
+  const canRemovePointer = !restrictToStoreDir || isPathWithinDir(storeDir, pointerPath);
+  // The runtime file and its pointer are one incarnation-owned artifact pair:
+  // whichever canonical path this session actually owns is where BOTH must
+  // retire/remove in the SAME locked turn, so a racing acquisition on that
+  // exact path can never observe a half-deleted pair — a fresh pointer
+  // published after this turn releases, or this turn's removal clobbering a
+  // pointer a racing claim just published (round 4 P1).
+  const primaryCanonicalPath =
+    registryOwnedPath ?? canonicalizePathForComparison(defaultRuntimePath);
+  let pointerHandledInPrimaryTurn = false;
 
   for (const runtimePath of runtimeCandidates) {
     const canonicalRuntimePath = canonicalizePathForComparison(runtimePath);
@@ -228,13 +238,17 @@ export async function removeSessionTrajectoryArtifacts(params: {
     ) {
       continue;
     }
-    const deleted = await withTrajectoryPathLock(canonicalRuntimePath, async () => {
+    const removePointerHere = canRemovePointer && canonicalRuntimePath === primaryCanonicalPath;
+    if (removePointerHere) {
+      pointerHandledInPrimaryTurn = true;
+    }
+    const result = await withTrajectoryPathLock(canonicalRuntimePath, async () => {
       // Validate ownership from the registry's own record, not just the
       // pre-lock heuristic above: a concurrent reassignment could have moved
       // this canonical path to a different owner between that check and
       // lock admission, and no cross-session delete may ever go through.
       if (!mayTrajectoryPathBeRemovedBySession(canonicalRuntimePath, params.sessionId)) {
-        return null;
+        return { runtime: null, pointer: null };
       }
       // Retire before unlinking, in the same locked turn: a writer's flush
       // turn queued behind this one must observe "retired" and no-op instead
@@ -245,15 +259,28 @@ export async function removeSessionTrajectoryArtifacts(params: {
         ownerSessionId: params.sessionId,
         retired: true,
       });
-      return await removeRegularFile(runtimePath, "runtime");
+      const runtime = await removeRegularFile(runtimePath, "runtime");
+      const pointerRemoved = removePointerHere
+        ? await removeRegularFile(pointerPath, "pointer")
+        : null;
+      return { runtime, pointer: pointerRemoved };
     });
-    if (deleted) {
-      removed.push(deleted);
+    if (result.runtime) {
+      removed.push(result.runtime);
+    }
+    if (result.pointer) {
+      removed.push(result.pointer);
     }
   }
 
-  if (!restrictToStoreDir || isPathWithinDir(storeDir, pointerPath)) {
-    const deletedPointer = await removeRegularFile(pointerPath, "pointer");
+  // Fallback: none of the runtime candidates landed on primaryCanonicalPath's
+  // own locked turn (e.g. mayRemoveRuntimeTarget rejected it) — still remove
+  // the pointer, locked on the same canonical path a racing claim would use,
+  // rather than the old fully-unlocked step this replaces.
+  if (canRemovePointer && !pointerHandledInPrimaryTurn) {
+    const deletedPointer = await withTrajectoryPathLock(primaryCanonicalPath, () =>
+      removeRegularFile(pointerPath, "pointer"),
+    );
     if (deletedPointer) {
       removed.push(deletedPointer);
     }

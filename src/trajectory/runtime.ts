@@ -518,6 +518,15 @@ export async function createTrajectoryRuntimeRecorder(
   const lease = await acquireTrajectoryWriterLease({
     sessionId: params.sessionId,
     candidatePath,
+    // Publish inside the same locked turn the claim happens in, not after
+    // acquireTrajectoryWriterLease returns — see its own comment (round 4 P1).
+    onClaimed: ({ filePath: claimedFilePath }) => {
+      writeTrajectoryPointerBestEffort({
+        filePath: claimedFilePath,
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+      });
+    },
   });
   const filePath = lease.filePath;
   const maxRuntimeFileBytes = Math.max(
@@ -526,11 +535,6 @@ export async function createTrajectoryRuntimeRecorder(
   );
   const writer =
     params.writer ?? getTrajectoryWindowWriter(filePath, maxRuntimeFileBytes, lease.incarnation);
-  writeTrajectoryPointerBestEffort({
-    filePath,
-    sessionFile: params.sessionFile,
-    sessionId: params.sessionId,
-  });
   let seq = 0;
   const traceId = params.sessionId;
 

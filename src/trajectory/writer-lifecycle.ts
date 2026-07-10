@@ -99,36 +99,48 @@ export function claimTrajectoryPathIncarnation(
  * delete/retire turn for the same canonical path (P1-A) — including the awaited
  * unlink inside that turn, since the whole turn (bump + unlink) shares one lock
  * admission and this claim queues behind it rather than racing it.
+ *
+ * onClaimed, when provided, runs INSIDE the same locked turn immediately after a
+ * successful (non-collision) claim — before the lock releases. The runtime file
+ * and its discovery pointer are one incarnation-owned artifact pair; publishing
+ * the pointer here (rather than after acquireTrajectoryWriterLease returns) closes
+ * the window where a concurrent delete could retire the path between the claim
+ * and the publish, which would otherwise either leave a pointer-only orphan (the
+ * publish lands after delete already ran) or let delete's own pointer removal
+ * clobber a freshly published pointer for a still-live claim (round 4 P1).
  */
 export async function acquireTrajectoryWriterLease(params: {
   sessionId: string;
   candidatePath: string;
+  onClaimed?: (claim: { filePath: string; incarnation: number }) => void;
 }): Promise<{ filePath: string; incarnation: number }> {
   let candidatePath = params.candidatePath;
   for (;;) {
     const canonicalPath = canonicalizeTrajectoryPath(candidatePath);
     const claim = await withTrajectoryPathLock(canonicalPath, () => {
       const existing = registry.get(canonicalPath);
+      const claimed = (incarnation: number) => {
+        params.onClaimed?.({ filePath: candidatePath, incarnation });
+        return { collision: false as const, incarnation };
+      };
       if (!existing) {
-        return {
-          collision: false as const,
-          incarnation: claimTrajectoryPathIncarnation(canonicalPath, {
+        return claimed(
+          claimTrajectoryPathIncarnation(canonicalPath, {
             ownerSessionId: params.sessionId,
             retired: false,
           }),
-        };
+        );
       }
       if (existing.ownerSessionId === params.sessionId) {
         if (!existing.retired) {
-          return { collision: false as const, incarnation: existing.incarnation };
+          return claimed(existing.incarnation);
         }
-        return {
-          collision: false as const,
-          incarnation: claimTrajectoryPathIncarnation(canonicalPath, {
+        return claimed(
+          claimTrajectoryPathIncarnation(canonicalPath, {
             ownerSessionId: params.sessionId,
             retired: false,
           }),
-        };
+        );
       }
       // Different owner already holds this canonical path: disambiguate rather
       // than share a file between two unrelated sessions (F4/F6).
