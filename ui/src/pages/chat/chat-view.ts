@@ -2,10 +2,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
+import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
+import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
-import type { ProviderQuotaPillProps } from "../../components/provider-quota-pill.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -15,13 +16,16 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import {
   handleChatAttachmentDrop,
   renderChatComposer,
   resetChatComposerState,
 } from "./components/chat-composer.ts";
+import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import {
   renderSessionWorkspaceRail,
+  renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import "./components/chat-sidebar.ts";
@@ -30,6 +34,7 @@ import type {
   SidebarContent,
   SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
+import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
   isChatThreadSearchOpen,
   renderChatPinnedMessages,
@@ -40,7 +45,7 @@ import {
 } from "./components/chat-thread.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
-import type { RealtimeTalkInputDevice } from "./realtime-talk-input.ts";
+import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "./tool-stream.ts";
@@ -71,18 +76,14 @@ export type ChatProps = {
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
+  realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  realtimeTalkInputOpen?: boolean;
-  realtimeTalkInputDevices?: RealtimeTalkInputDevice[];
-  realtimeTalkInputDeviceId?: string;
-  realtimeTalkInputLoading?: boolean;
-  realtimeTalkInputError?: string | null;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
-  providerQuota?: ProviderQuotaPillProps;
+  providerUsage?: ProviderUsageDisplayProps;
   focusMode?: boolean;
   onLoadSidebarFullMessage?: (
     request: SidebarFullMessageRequest,
@@ -118,8 +119,6 @@ export type ChatProps = {
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
-  onToggleRealtimeTalkInput?: () => void;
-  onRealtimeTalkInputSelect?: (deviceId: string) => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
@@ -151,6 +150,18 @@ export type ChatProps = {
   onClearReply?: () => void;
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: SessionWorkspaceProps;
+  /** True when a split pane header hosts the workspace toggle; suppresses the
+   * single-pane floating opener so only one affordance renders. */
+  paneHeaderActive?: boolean;
+  taskSuggestions?: TaskSuggestion[];
+  taskSuggestionBusyIds?: ReadonlySet<string>;
+  canAcceptTaskSuggestions?: boolean;
+  canDismissTaskSuggestions?: boolean;
+  onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
+  onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
+  pullRequests?: ControlUiSessionPullRequest[];
+  pullRequestsRateLimited?: boolean;
+  onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
 
 export function resetChatViewState(paneId?: string) {
@@ -162,7 +173,7 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const canCompose = props.connected && props.canSend;
+  const canCompose = props.canSend;
   let chatSection: HTMLElement | null = null;
 
   const thread = renderChatThread({
@@ -177,6 +188,7 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
+    runActive: Boolean(props.canAbort),
     sessions: props.sessions,
     assistantName: props.assistantName,
     assistantAvatar: props.assistantAvatar,
@@ -226,7 +238,7 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     draft: props.draft,
     sessions: props.sessions,
-    providerQuota: props.providerQuota,
+    providerUsage: props.providerUsage,
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
     attachments: props.attachments,
@@ -235,12 +247,8 @@ export function renderChat(props: ChatProps) {
     realtimeTalkActive: props.realtimeTalkActive,
     realtimeTalkStatus: props.realtimeTalkStatus,
     realtimeTalkDetail: props.realtimeTalkDetail,
+    realtimeTalkInputLevel: props.realtimeTalkInputLevel,
     realtimeTalkConversation: props.realtimeTalkConversation,
-    realtimeTalkInputOpen: props.realtimeTalkInputOpen,
-    realtimeTalkInputDevices: props.realtimeTalkInputDevices,
-    realtimeTalkInputDeviceId: props.realtimeTalkInputDeviceId,
-    realtimeTalkInputLoading: props.realtimeTalkInputLoading,
-    realtimeTalkInputError: props.realtimeTalkInputError,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -250,8 +258,6 @@ export function renderChat(props: ChatProps) {
     onSend: props.onSend,
     onCompact: props.onCompact,
     onToggleRealtimeTalk: props.onToggleRealtimeTalk,
-    onToggleRealtimeTalkInput: props.onToggleRealtimeTalkInput,
-    onRealtimeTalkInputSelect: props.onRealtimeTalkInputSelect,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,
@@ -349,16 +355,55 @@ export function renderChat(props: ChatProps) {
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
           ? "chat-workbench--workspace-collapsed"
-          : ""}"
+          : ""} ${props.sessionWorkspace?.dock === "bottom" ? "chat-workbench--dock-bottom" : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
+        ${props.sessionWorkspace?.collapsed && !props.paneHeaderActive
+          ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
+          : nothing}
+        ${props.sessionWorkspace?.dockDragging
+          ? html`
+              <div class="chat-workbench__dock-zones" aria-hidden="true">
+                <div
+                  class="chat-workbench__dock-zone chat-workbench__dock-zone--right ${props
+                    .sessionWorkspace.dockDragZone === "right"
+                    ? "chat-workbench__dock-zone--active"
+                    : ""}"
+                >
+                  <span>${t("chat.workspaceFiles.dockRight")}</span>
+                </div>
+                <div
+                  class="chat-workbench__dock-zone chat-workbench__dock-zone--bottom ${props
+                    .sessionWorkspace.dockDragZone === "bottom"
+                    ? "chat-workbench__dock-zone--active"
+                    : ""}"
+                >
+                  <span>${t("chat.workspaceFiles.dockBottom")}</span>
+                </div>
+              </div>
+            `
+          : nothing}
         <div class="chat-workbench__main">
           <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
             <div
               class="chat-main"
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
             >
-              ${thread} ${chatColumnFooter}
+              ${thread}
+              ${renderChatTaskSuggestions({
+                suggestions: props.taskSuggestions ?? [],
+                busyIds: props.taskSuggestionBusyIds ?? new Set(),
+                canAccept: props.canAcceptTaskSuggestions === true,
+                canDismiss: props.canDismissTaskSuggestions === true,
+                onAccept: (suggestion) => props.onAcceptTaskSuggestion?.(suggestion),
+                onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
+              })}
+              ${renderChatPullRequests({
+                pullRequests: props.pullRequests ?? [],
+                rateLimited: props.pullRequestsRateLimited === true,
+                onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
+              })}
+              ${chatColumnFooter}
             </div>
 
             ${sidebarOpen

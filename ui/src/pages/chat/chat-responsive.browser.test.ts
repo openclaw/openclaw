@@ -20,6 +20,10 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
+const LONG_SIDE_RESULT_BODY = Array.from(
+  { length: 80 },
+  (_, index) => `<p>Line ${index + 1}: keep the complete side result readable.</p>`,
+).join("");
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
@@ -38,6 +42,13 @@ type ControlRect = {
   scrollTop?: number;
   text?: string;
   display?: string;
+};
+
+type ChatFixtureOptions = {
+  composerAttachment?: boolean;
+  sideResultBody?: string;
+  singleAgent?: boolean;
+  slashMenu?: boolean;
 };
 
 function expectFiniteRect(rect: Pick<ControlRect, "x" | "y" | "width" | "height">) {
@@ -234,21 +245,14 @@ function chatHeaderControlsHtml(hidden = false) {
   `;
 }
 
-function chatHtml(
-  opts: {
-    composerAttachment?: boolean;
-    sideResult?: boolean;
-    singleAgent?: boolean;
-    slashMenu?: boolean;
-  } = {},
-) {
+function chatHtml(opts: ChatFixtureOptions = {}) {
   return `
     <div class="shell shell--chat" data-chat-responsive-fixture>
       <header class="topbar">
         <div class="topnav-shell">
           <div class="topnav-shell__actions">
-            <button class="topbar-search"><span class="topbar-search__label">Search</span><kbd class="topbar-search__kbd">K</kbd></button>
-            <div class="topbar-status">${chatControlsHtml({ agent: !opts.singleAgent })}</div>
+            <button class="topbar-search">${iconSvg()}</button>
+            <div>${chatControlsHtml({ agent: !opts.singleAgent })}</div>
           </div>
         </div>
       </header>
@@ -288,14 +292,14 @@ function chatHtml(
             </div>
           </div>
           ${
-            opts.sideResult
+            opts.sideResultBody !== undefined
               ? `<section class="chat-side-result" role="status" aria-live="polite">
                   <div class="chat-side-result__header">
                     <div class="chat-side-result__label-row"><span class="chat-side-result__label">BTW</span><span class="chat-side-result__meta">Not saved to chat history</span></div>
                     <button class="btn chat-side-result__dismiss">${iconSvg()}</button>
                   </div>
                   <div class="chat-side-result__question">What should I check next?</div>
-                  <div class="chat-side-result__body"><p>Inspect the responsive controls and keep the transcript usable.</p></div>
+                  <div class="chat-side-result__body">${opts.sideResultBody}</div>
                 </section>`
               : ""
           }
@@ -367,11 +371,20 @@ function chatHtml(
                         </svg>
                       </summary>
                       <section class="context-usage__popover">
-                        <div class="context-usage__quota">
-                          <a class="chat-controls__quota chat-controls__quota--ok" href="/usage">
-                            <span class="chat-controls__quota-label">Usage Remaining</span>
-                            <span class="chat-controls__quota-value">28%</span>
+                        <div class="context-usage__section-label context-usage__plan-header">
+                          <span>Plan usage</span>
+                          <a class="context-usage__plan-link" href="/usage" data-chat-provider-usage="true">
+                            <span class="context-usage__plan-badge">Max (20x)</span>${iconSvg()}
                           </a>
+                        </div>
+                        <div class="context-usage__limits">
+                          <div class="context-usage__limit">
+                            <div class="context-usage__limit-head">
+                              <span class="context-usage__limit-label">Weekly · all models</span>
+                              <span class="context-usage__limit-meta"><strong>72%</strong></span>
+                            </div>
+                            <div class="context-usage__limit-bar"><span style="width: 72%"></span></div>
+                          </div>
                         </div>
                       </section>
                     </details>
@@ -392,16 +405,7 @@ function chatHtml(
   `;
 }
 
-async function openFixture(
-  width: number,
-  height: number,
-  opts: {
-    composerAttachment?: boolean;
-    sideResult?: boolean;
-    singleAgent?: boolean;
-    slashMenu?: boolean;
-  } = {},
-) {
+async function openFixture(width: number, height: number, opts: ChatFixtureOptions = {}) {
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
@@ -496,7 +500,7 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(metrics.body).toBeLessThanOrEqual(metrics.viewport + 1);
 }
 
-describeBrowserLayout("chat responsive browser layout", () => {
+describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   beforeAll(async () => {
     sharedBrowser = await chromium.launch({
       executablePath: chromiumExecutablePath,
@@ -635,6 +639,43 @@ describeBrowserLayout("chat responsive browser layout", () => {
       await page.mouse.move(0, 0);
       expect(await details.getAttribute("open")).toBe("");
       expect(await context.isVisible()).toBe(true);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("renders encoded media extensions from assistant output and transcript fields", async () => {
+    if (!realChatServer) {
+      throw new Error("Expected the Control UI server to be ready");
+    }
+    const imageUrl = "https://cdn.example/render%2Epng?download=1";
+    const videoUrl = "https://cdn.example/clip%2Emp4?download=1";
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.route("https://cdn.example/**", (route) => route.abort());
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            content: `MEDIA:${imageUrl}`,
+            role: "assistant",
+            timestamp: Date.UTC(2026, 6, 9, 10, 0),
+          },
+          {
+            content: "Encoded transcript video",
+            MediaPath: videoUrl,
+            role: "user",
+            timestamp: Date.UTC(2026, 6, 9, 10, 1),
+          },
+        ],
+      });
+      await page.goto(`${realChatServer.baseUrl}chat`);
+
+      const image = page.locator("img.chat-message-image");
+      const video = page.locator("video");
+      await image.waitFor({ timeout: 10_000 });
+      await video.waitFor({ timeout: 10_000 });
+      expect(await image.getAttribute("src")).toBe(imageUrl);
+      expect(await video.getAttribute("src")).toBe(videoUrl);
     } finally {
       await closeBrowserPage(page);
     }
@@ -1674,14 +1715,70 @@ describeBrowserLayout("chat responsive browser layout", () => {
     }
   });
 
+  it.each([
+    [1024, 768],
+    [1366, 900],
+  ] as const)(
+    "scrolls long BTW side result bodies instead of expanding the card at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height, {
+        sideResultBody: LONG_SIDE_RESULT_BODY,
+      });
+      try {
+        const body = await page.locator(".chat-side-result__body").evaluate((node) => {
+          const style = getComputedStyle(node as HTMLElement);
+          return {
+            overflowY: style.overflowY,
+            clientHeight: (node as HTMLElement).clientHeight,
+            scrollHeight: (node as HTMLElement).scrollHeight,
+          };
+        });
+        expect(body.overflowY).toBe("auto");
+        expect(body.clientHeight).toBeLessThan(body.scrollHeight);
+        expect(body.clientHeight).toBeLessThanOrEqual(480);
+
+        const scrollTop = await page.locator(".chat-side-result__body").evaluate((node) => {
+          const element = node as HTMLElement;
+          element.scrollTop = element.scrollHeight;
+          return element.scrollTop;
+        });
+        expect(scrollTop).toBeGreaterThan(0);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
   it("renders BTW side results as a mobile overlay without horizontal overflow", async () => {
-    const page = await openFixture(320, 568, { sideResult: true });
+    const page = await openFixture(320, 568, {
+      sideResultBody: LONG_SIDE_RESULT_BODY,
+    });
     try {
       await expectNoHorizontalOverflow(page);
-      const position = await page
-        .locator(".chat-side-result")
-        .evaluate((node) => getComputedStyle(node).position);
-      expect(position).toBe("fixed");
+      const card = await page.locator(".chat-side-result").evaluate((node) => {
+        const element = node as HTMLElement;
+        const style = getComputedStyle(element);
+        return {
+          clientHeight: element.clientHeight,
+          overflowY: style.overflowY,
+          position: style.position,
+          scrollHeight: element.scrollHeight,
+        };
+      });
+      const bodyOverflowY = await page
+        .locator(".chat-side-result__body")
+        .evaluate((node) => getComputedStyle(node).overflowY);
+      expect(card.position).toBe("fixed");
+      expect(card.overflowY).toBe("auto");
+      expect(card.clientHeight).toBeLessThan(card.scrollHeight);
+      expect(bodyOverflowY).toBe("visible");
+
+      const scrollTop = await page.locator(".chat-side-result").evaluate((node) => {
+        const element = node as HTMLElement;
+        element.scrollTop = element.scrollHeight;
+        return element.scrollTop;
+      });
+      expect(scrollTop).toBeGreaterThan(0);
     } finally {
       await closeBrowserPage(page);
     }

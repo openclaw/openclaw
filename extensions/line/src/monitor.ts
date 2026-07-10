@@ -46,7 +46,7 @@ import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
-export interface MonitorLineProviderOptions {
+interface MonitorLineProviderOptions {
   channelAccessToken: string;
   channelSecret: string;
   accountId?: string;
@@ -57,7 +57,7 @@ export interface MonitorLineProviderOptions {
   webhookPath?: string;
 }
 
-export interface LineProviderMonitor {
+interface LineProviderMonitor {
   account: ResolvedLineAccount;
   handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
   stop: () => void;

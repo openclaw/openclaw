@@ -6,6 +6,7 @@
  * `DeliverDeps.mediaSender`.
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "../utils/image-size.js";
@@ -242,7 +243,7 @@ async function sendTextChunks(
     allowDm: true,
     log,
     onSuccess: (chunk) =>
-      `Sent text chunk (${chunk.length}/${text.length} chars): ${chunk.slice(0, 50)}...`,
+      `Sent text chunk (${chunk.length}/${text.length} chars): ${truncateUtf16Safe(chunk, 50)}...`,
     onError: (err) => `Failed to send text chunk: ${formatErrorMessage(err)}`,
   });
 }
@@ -271,7 +272,7 @@ export async function sendTextOnlyReply(
     forcePlainText: true,
     log,
     onSuccess: (chunk) =>
-      `Sent text-only chunk (${chunk.length}/${safeText.length} chars): ${chunk.slice(0, 50)}...`,
+      `Sent text-only chunk (${chunk.length}/${safeText.length} chars): ${truncateUtf16Safe(chunk, 50)}...`,
     onError: (err) => `Failed to send text-only chunk: ${formatErrorMessage(err)}`,
   });
 }
@@ -600,7 +601,7 @@ export async function sendPlainReply(
       if (!collectedImageUrls.includes(url)) {
         collectedImageUrls.push(url);
         log?.debug?.(
-          `Collected ${isDataUrl ? "Base64" : "media URL"}: ${isDataUrl ? `(length: ${url.length})` : url.slice(0, 80) + "..."}`,
+          `Collected ${isDataUrl ? "Base64" : "media URL"}: ${isDataUrl ? `(length: ${url.length})` : truncateUtf16Safe(url, 80) + "..."}`,
         );
       }
       return true;
@@ -632,7 +633,7 @@ export async function sendPlainReply(
     if (url && !collectedImageUrls.includes(url)) {
       if (isHttpUrl(url)) {
         collectedImageUrls.push(url);
-        log?.debug?.(`Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
+        log?.debug?.(`Extracted HTTP image from markdown: ${truncateUtf16Safe(url, 80)}...`);
       } else if (isLocalFilePath(url)) {
         if (!localMediaToSend.includes(url)) {
           localMediaToSend.push(url);
@@ -650,7 +651,7 @@ export async function sendPlainReply(
     const url = m[1];
     if (url && !collectedImageUrls.includes(url)) {
       collectedImageUrls.push(url);
-      log?.debug?.(`Extracted bare image URL: ${url.slice(0, 80)}...`);
+      log?.debug?.(`Extracted bare image URL: ${truncateUtf16Safe(url, 80)}...`);
     }
   }
 
@@ -743,7 +744,7 @@ export async function sendPlainReply(
       ...(actx.mediaLocalRoots ? { mediaLocalRoots: actx.mediaLocalRoots } : {}),
       ...(actx.mediaReadFile ? { mediaReadFile: actx.mediaReadFile } : {}),
       log,
-      onSuccess: (mediaUrl) => `Forwarded tool media: ${mediaUrl.slice(0, 80)}...`,
+      onSuccess: (mediaUrl) => `Forwarded tool media: ${truncateUtf16Safe(mediaUrl, 80)}...`,
       onResultError: (_mediaUrl, error) => `Tool media forward error: ${error}`,
       onThrownError: (_mediaUrl, error) => `Tool media forward failed: ${error}`,
     });
@@ -826,7 +827,7 @@ async function sendMarkdownReply(
         const size = await getImageSize(url);
         imagesToAppend.push(formatQQBotMarkdownImage(url, size));
         log?.debug?.(
-          `Formatted HTTP image: ${size ? `${size.width}x${size.height}` : "default size"} - ${url.slice(0, 60)}...`,
+          `Formatted HTTP image: ${size ? `${size.width}x${size.height}` : "default size"} - ${truncateUtf16Safe(url, 60)}...`,
         );
       } catch (err) {
         log?.debug?.(`Failed to get image size, using default: ${formatErrorMessage(err)}`);
@@ -846,7 +847,7 @@ async function sendMarkdownReply(
         const size = await getImageSize(imgUrl);
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, size));
         log?.debug?.(
-          `Updated image with size: ${size ? `${size.width}x${size.height}` : "default"} - ${imgUrl.slice(0, 60)}...`,
+          `Updated image with size: ${size ? `${size.width}x${size.height}` : "default"} - ${truncateUtf16Safe(imgUrl, 60)}...`,
         );
       } catch (err) {
         log?.debug?.(
@@ -923,7 +924,8 @@ async function sendPlainTextReply(
         imageUrl,
         mediaSender: deps.mediaSender,
         log,
-        onSuccess: (nextImageUrl) => `Sent image via sendPhoto: ${nextImageUrl.slice(0, 80)}...`,
+        onSuccess: (nextImageUrl) =>
+          `Sent image via sendPhoto: ${truncateUtf16Safe(nextImageUrl, 80)}...`,
         onError: (error) => `Failed to send image: ${error}`,
       });
     }

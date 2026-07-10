@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -58,6 +59,7 @@ vi.mock("./builtin-openclaw.js", () => ({
   }),
 }));
 vi.mock("../model-auth.js", () => ({
+  applySecretRefHeaderSentinels: (model: unknown) => model,
   getApiKeyForModel: compactAuthMocks.getApiKeyForModel,
 }));
 vi.mock("../embedded-agent-runner/model.js", () => ({
@@ -290,6 +292,37 @@ function agentModelRuntimeConfig(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it("unwraps sentinels only at the plugin harness handoff", async () => {
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      createAttemptResult("codex"),
+    );
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+    const secret = "plugin-provider-secret";
+    const sentinel = mintSecretSentinel(secret, { label: "model-auth:codex" });
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    params.resolvedApiKey = sentinel;
+    params.model = {
+      ...params.model,
+      headers: { Authorization: `Bearer ${sentinel}`, "X-Optional": null } as never,
+    };
+
+    await runAgentHarnessAttempt(params);
+
+    const handedOff = pluginRunAttempt.mock.calls[0]?.[0];
+    expect(handedOff?.resolvedApiKey).toBe(secret);
+    expect(handedOff?.model.headers?.Authorization).toBe(`Bearer ${secret}`);
+    expect(handedOff?.model.headers?.["X-Optional"]).toBeNull();
+    expect(params.resolvedApiKey).toBe(sentinel);
+  });
+
   it("fails when a forced plugin harness is unavailable and fallback is omitted", async () => {
     process.env.OPENCLAW_AGENT_RUNTIME = "codex";
 
@@ -536,6 +569,42 @@ describe("runAgentHarnessAttempt", () => {
     { name: "explicit empty allowlist", config: { tools: { allow: [] } } as OpenClawConfig },
   ])("leaves plugin side questions unrestricted for an $name", ({ config }) => {
     expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toBeUndefined();
+  });
+
+  it("leaves owner WebChat unrestricted by wildcard sender policy for plugin harnesses", () => {
+    const config = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["*"] },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolvePluginHarnessPolicyToolsAllow({
+        ...createAttemptParams(config),
+        messageProvider: "webchat",
+        senderIsOwner: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps non-owner WebChat restricted by wildcard sender policy for plugin harnesses", () => {
+    const config = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["*"] },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolvePluginHarnessPolicyToolsAllow({
+        ...createAttemptParams(config),
+        messageProvider: "webchat",
+        senderIsOwner: false,
+      }),
+    ).toEqual([]);
   });
 
   it("leaves OpenClaw harness params unchanged for channel group sender deny-all policy", async () => {

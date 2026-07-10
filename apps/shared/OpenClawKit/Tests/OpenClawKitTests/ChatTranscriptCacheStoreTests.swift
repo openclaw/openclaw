@@ -62,6 +62,7 @@ private func outboxCommand(
     id: String = UUID().uuidString,
     sessionKey: String = "main",
     text: String,
+    attachments: [OpenClawChatOutboxAttachment] = [],
     thinking: String = "off",
     createdAt: Double = Date().timeIntervalSince1970) -> OpenClawChatOutboxCommand
 {
@@ -69,6 +70,7 @@ private func outboxCommand(
         id: id,
         sessionKey: sessionKey,
         text: text,
+        attachments: attachments,
         thinking: thinking,
         createdAt: createdAt,
         status: .queued,
@@ -430,6 +432,18 @@ struct ChatTranscriptCacheStoreTests {
             nil,
             nil,
             nil) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            raw,
+            "ALTER TABLE outbox_commands DROP COLUMN attachment_bytes",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            raw,
+            "ALTER TABLE outbox_commands DROP COLUMN attachments",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
         #expect(sqlite3_exec(raw, "PRAGMA user_version = 2", nil, nil, nil) == SQLITE_OK)
         sqlite3_close_v2(raw)
 
@@ -572,6 +586,18 @@ struct ChatTranscriptCacheStoreTests {
             nil,
             nil,
             nil) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            raw,
+            "ALTER TABLE outbox_commands DROP COLUMN attachment_bytes",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            raw,
+            "ALTER TABLE outbox_commands DROP COLUMN attachments",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
         #expect(sqlite3_exec(raw, "PRAGMA user_version = 3", nil, nil, nil) == SQLITE_OK)
         sqlite3_close_v2(raw)
 
@@ -587,7 +613,7 @@ struct ChatTranscriptCacheStoreTests {
         ])
     }
 
-    @Test func `v4 migration adds routing identity without touching outbox`() async throws {
+    @Test func `v4 migration adds routing identity and attachment storage`() async throws {
         let url = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         do {
@@ -599,6 +625,18 @@ struct ChatTranscriptCacheStoreTests {
         var raw: OpaquePointer?
         #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
         #expect(sqlite3_exec(raw, "DROP TABLE gateway_routing_identity", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            raw,
+            "ALTER TABLE outbox_commands DROP COLUMN attachment_bytes",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            raw,
+            "ALTER TABLE outbox_commands DROP COLUMN attachments",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
         #expect(sqlite3_exec(raw, "PRAGMA user_version = 4", nil, nil, nil) == SQLITE_OK)
         sqlite3_close_v2(raw)
 
@@ -611,6 +649,38 @@ struct ChatTranscriptCacheStoreTests {
             defaultAgentID: "main"))
         await migrated.storeSessionRoutingIdentity(identity)
         #expect(await migrated.loadSessionRoutingIdentity() == identity)
+    }
+
+    @Test func `v5 migration preserves commands while adding attachment storage`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        do {
+            let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+            #expect(await store.enqueueCommand(outboxCommand(id: "c-v5", text: "preserve me")))
+            await store.retire()
+        }
+
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            raw,
+            "ALTER TABLE outbox_commands DROP COLUMN attachment_bytes",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            raw,
+            "ALTER TABLE outbox_commands DROP COLUMN attachments",
+            nil,
+            nil,
+            nil) == SQLITE_OK)
+        #expect(sqlite3_exec(raw, "PRAGMA user_version = 5", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close_v2(raw)
+
+        let migrated = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let command = try #require(await migrated.loadCommands().first)
+        #expect(command.id == "c-v5")
+        #expect(command.attachments.isEmpty)
     }
 
     @Test func `unknown schema preserves durable outbox bytes and fails closed`() async throws {
@@ -1064,6 +1134,64 @@ struct ChatCommandOutboxStoreTests {
         // Deleting a row frees capacity again.
         #expect(await store.cancelCommand(id: "c-0") == .updated)
         #expect(await store.enqueueCommand(outboxCommand(id: "c-after-delete", text: "fits now")))
+    }
+
+    @Test func `attachment byte admission enforces command and gateway bounds`() {
+        let commandBound = OpenClawChatSQLiteTranscriptCache.maxAttachmentBytesPerCommand
+        let gatewayBound = OpenClawChatSQLiteTranscriptCache.maxQueuedAttachmentBytes
+
+        #expect(OpenClawChatSQLiteTranscriptCache.canEnqueueAttachmentBytes(
+            commandBytes: commandBound,
+            queuedBytes: gatewayBound - commandBound))
+        #expect(!OpenClawChatSQLiteTranscriptCache.canEnqueueAttachmentBytes(
+            commandBytes: commandBound + 1,
+            queuedBytes: 0))
+        #expect(!OpenClawChatSQLiteTranscriptCache.canEnqueueAttachmentBytes(
+            commandBytes: 1,
+            queuedBytes: gatewayBound))
+        #expect(!OpenClawChatSQLiteTranscriptCache.canEnqueueAttachmentBytes(
+            commandBytes: -1,
+            queuedBytes: 0))
+    }
+
+    @Test func `enqueue persists attachment bytes and refuses a full byte budget`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let attachment = OpenClawChatOutboxAttachment(
+            type: "file",
+            mimeType: "audio/mp4",
+            fileName: "voice-note.m4a",
+            data: Data([0x01]))
+        do {
+            let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+            #expect(await store.enqueueCommand(outboxCommand(
+                id: "c-audio",
+                text: "voice note",
+                attachments: [attachment])))
+            await store.retire()
+        }
+
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            raw,
+            """
+            UPDATE outbox_commands
+            SET attachment_bytes = \(OpenClawChatSQLiteTranscriptCache.maxQueuedAttachmentBytes)
+            WHERE client_uuid = 'c-audio' AND attachment_bytes = 1
+            """,
+            nil,
+            nil,
+            nil) == SQLITE_OK)
+        #expect(sqlite3_changes(raw) == 1)
+        sqlite3_close_v2(raw)
+
+        let fullStore = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        #expect(await !fullStore.enqueueCommand(outboxCommand(
+            id: "c-overflow",
+            text: "one byte too many",
+            attachments: [attachment])))
+        #expect(await fullStore.loadCommands().map(\.id) == ["c-audio"])
     }
 
     @Test func `outbox rows are scoped per gateway identity`() async throws {

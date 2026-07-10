@@ -1,31 +1,22 @@
-import { getSafeLocalStorage } from "../../local-storage.ts";
+// Pure helpers for the gateway-owned custom session group catalog.
+// Catalog storage and member updates live on the gateway (sessions.groups.*);
+// the SessionCapability mirrors the catalog into state.groups.
 
-export const SESSION_CUSTOM_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
-
-export function loadStoredSessionCustomGroups(): string[] {
-  try {
-    const raw = getSafeLocalStorage()?.getItem(SESSION_CUSTOM_GROUPS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return [
-      ...new Set(
-        parsed.flatMap((name) => {
-          const normalized = typeof name === "string" ? name.trim() : "";
-          return normalized ? [normalized] : [];
-        }),
-      ),
-    ];
-  } catch {
-    return [];
+/** Move one custom group before another while preserving every other group. */
+export function reorderSessionCustomGroups(
+  groups: readonly string[],
+  source: string,
+  target: string,
+  position: "before" | "after" = "before",
+): string[] {
+  const ordered = [...new Set(groups.map((name) => name.trim()).filter(Boolean))];
+  const sourceIndex = ordered.indexOf(source);
+  const targetIndex = ordered.indexOf(target);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
+    return ordered;
   }
-}
-
-export function saveStoredSessionCustomGroups(groups: readonly string[]) {
-  try {
-    getSafeLocalStorage()?.setItem(SESSION_CUSTOM_GROUPS_STORAGE_KEY, JSON.stringify(groups));
-  } catch {
-    // Assigned groups still persist server-side via the session category field.
-  }
+  const [moved] = ordered.splice(sourceIndex, 1);
+  const targetInsertionIndex = ordered.indexOf(target) + (position === "after" ? 1 : 0);
+  ordered.splice(targetInsertionIndex, 0, moved);
+  return ordered;
 }

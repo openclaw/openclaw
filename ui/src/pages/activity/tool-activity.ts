@@ -28,7 +28,7 @@ const ACTIVITY_STATUS_SUMMARY_LABELS: Record<ActivityStatus, string> = {
   error: "failed",
 };
 
-export type ToolActivityEvent = {
+type ToolActivityEvent = {
   runId: string;
   ts: number;
   receivedAt: number;

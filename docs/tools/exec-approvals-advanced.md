@@ -46,7 +46,9 @@ Validation is deterministic from argv shape only (no host filesystem existence
 checks), which prevents file-existence oracle behavior from allow/deny
 differences. File-oriented options are denied for default safe bins; long
 options validate fail-closed (unknown flags and ambiguous abbreviations are
-rejected).
+rejected). Recognized read-only boolean flags of the default bins (for example
+`wc -l`, `tr -d`, `uniq -c`) are accepted, while unrecognized short flags stay
+fail-closed and fall through to manual approval.
 
 Denied flags by safe-bin profile:
 
@@ -55,18 +57,18 @@ Denied flags by safe-bin profile:
 - `grep`: `--dereference-recursive`, `--directories`, `--exclude-from`, `--file`, `--recursive`, `-R`, `-d`, `-f`, `-r`
 - `jq`: `--argfile`, `--from-file`, `--library-path`, `--rawfile`, `--slurpfile`, `-L`, `-f`
 - `sort`: `--compress-program`, `--files0-from`, `--output`, `--random-source`, `--temporary-directory`, `-T`, `-o`
+- `tail`: `--follow`, `--retry`, `-F`, `-f`
 - `wc`: `--files0-from`
 
 [//]: # "SAFE_BIN_DENIED_FLAGS:END"
 
 Safe bins also force argv tokens to be treated as **literal text** at execution
 time (no globbing and no `$VARS` expansion) for stdin-only segments, so
-patterns like `*` or `$HOME/...` cannot be used to smuggle file reads. `awk`
-and `sed` are always denied as safe bins (their semantics cannot be validated
-to stdin-only); `jq` can be opted in, but OpenClaw still rejects `env`-style
-filters (for example `jq env` or `jq -n env`) in safe-bin mode so `jq` cannot
-dump the host process environment without an explicit allowlist path or
-approval prompt.
+patterns like `*` or `$HOME/...` cannot be used to smuggle file reads. `awk`,
+`sed`, and `jq` are always denied as safe bins because their semantics cannot be
+validated to stdin-only: `jq` can read environment data and load jq code from
+modules or startup files. Use an explicit allowlist entry or approval prompt for
+those tools instead of `safeBins`.
 
 ### Trusted binary directories
 
@@ -131,7 +133,7 @@ Custom profile example:
 {
   tools: {
     exec: {
-      safeBins: ["jq", "myfilter"],
+      safeBins: ["myfilter"],
       safeBinProfiles: {
         myfilter: {
           minPositional: 0,

@@ -136,6 +136,26 @@ describe("exec foreground failures", () => {
     tempDirs.cleanup();
   });
 
+  it("keeps the background fallback warning when gateway exec actually runs inline", async () => {
+    mockSuccessfulSpawn();
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+    });
+
+    const result = await tool.execute("call-background-disabled-foreground", {
+      command: "echo ok",
+      background: true,
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(requireTextContent(result)).toContain(
+      "Warning: background execution is disabled; running synchronously.",
+    );
+  });
+
   it("returns a failed text result when the default timeout is exceeded", async () => {
     const tool = createExecTool({
       security: "full",

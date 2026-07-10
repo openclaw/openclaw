@@ -113,12 +113,12 @@ creates a device pairing request that must be approved.
 Use an already connected Control UI session with `operator.admin` access:
 
 1. Open the Control UI and select **Nodes**.
-2. In **Devices**, click **Pair mobile device**.
+2. In **Nodes & devices**, click **Pair mobile device**.
 3. On your phone, open the OpenClaw app → **Settings** → **Gateway**.
 4. Scan the QR code or paste the setup code, then connect.
 
 Official OpenClaw iOS and Android apps are approved automatically when their
-setup-code metadata matches. If **Devices** shows a pending request (for
+setup-code metadata matches. If **Pending approval** shows a request (for
 example, for a non-official client or mismatched metadata), review its role and
 scopes before approving it.
 
@@ -183,7 +183,7 @@ openclaw devices reject <requestId>
 When an explicit approval is denied because the approving paired-device session
 was opened with pairing-only scope, the CLI retries the same request with
 `operator.admin`. This lets an existing admin-capable paired device recover a new
-Control UI/browser pairing without editing `devices/paired.json` by hand. The
+Control UI/browser pairing without editing the pairing store by hand. The
 Gateway still validates the retried connection; tokens that cannot authenticate
 with `operator.admin` remain blocked.
 
@@ -219,15 +219,19 @@ approval.
 
 ### Node pairing state storage
 
-Stored under `~/.openclaw/devices/`:
+Stored in the shared SQLite state database at `~/.openclaw/state/openclaw.sqlite`:
 
-- `pending.json` (short-lived; pending requests expire after 5 minutes)
-- `paired.json` (paired devices + tokens)
+- pending device pairing requests (short-lived; they expire after 5 minutes)
+- paired devices + tokens
+
+Older gateways kept this state in `~/.openclaw/devices/*.json`; those files are
+imported into SQLite at gateway startup and archived with a `.migrated` suffix.
 
 ### Notes
 
-- The legacy `node.pair.*` API (CLI: `openclaw nodes pending|approve|reject|remove|rename`) is a
-  separate gateway-owned pairing store. WS nodes still require device pairing.
+- The `node.pair.*` API (CLI: `openclaw nodes pending|approve|reject|remove|rename`) manages
+  node capability approvals stored on the same paired device records. WS nodes
+  still require device pairing; see [Node pairing](/gateway/pairing).
 - The pairing record is the durable source of truth for approved roles. Active
   device tokens stay bounded to that approved role set; a stray token entry
   outside the approved roles does not create new access.

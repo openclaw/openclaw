@@ -62,7 +62,11 @@ function captureTencentPayload(params: {
 }) {
   let captured: Record<string, unknown> | undefined;
   const baseStreamFn: StreamFn = (_model, context, options) => {
-    const payload = buildOpenAICompletionsParams(_model as OpenAICompletionsModel, context, options);
+    const payload = buildOpenAICompletionsParams(
+      _model as OpenAICompletionsModel,
+      context,
+      options as Parameters<typeof buildOpenAICompletionsParams>[2],
+    );
     options?.onPayload?.(payload, _model);
     captured = payload;
     return {} as ReturnType<StreamFn>;

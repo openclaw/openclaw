@@ -29,7 +29,6 @@ function createSettings(): UiSettings {
     navWidth: 280,
     sidebarPinnedRoutes: ["overview", "workboard", "agents"],
     sidebarMoreExpanded: false,
-    borderRadius: 50,
   };
 }
 
@@ -44,7 +43,6 @@ function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps
     model: {
       activeRunId: null,
       connected: true,
-      draftScope: {},
       gatewayAvailable: true,
       loading: false,
       modelCatalog: [],
@@ -70,6 +68,13 @@ function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps
       voice: "marin",
       vadThreshold: "",
     },
+    realtimeTalkInputDevices: [
+      { deviceId: "built-in", label: "Built-in Microphone" },
+      { deviceId: "usb", label: "USB Audio Interface" },
+    ],
+    realtimeTalkInputDeviceId: "built-in",
+    onRealtimeTalkInputRefresh: () => undefined,
+    onRealtimeTalkInputSelect: () => undefined,
     onRealtimeTalkOptionsChange: () => undefined,
     ...overrides,
   } as unknown as ChatControlsProps;
@@ -90,6 +95,7 @@ describe("chat composer settings", () => {
       ),
     ).toEqual(["Chat", "Voice"]);
     expect(container.querySelector('[aria-label="Voice options"]')).not.toBeNull();
+    expect(container.querySelector('[data-talk-select="microphone"] select')).not.toBeNull();
   });
 
   it("keeps voice options editable from Settings", () => {
@@ -106,6 +112,39 @@ describe("chat composer settings", () => {
     voice.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ voice: "cedar" });
+  });
+
+  it("keeps microphone selection in Voice settings", () => {
+    const container = document.createElement("div");
+    const onRealtimeTalkInputSelect = vi.fn();
+    render(renderChatControls(createProps({ onRealtimeTalkInputSelect })), container);
+
+    const microphone = container.querySelector<HTMLSelectElement>(
+      '[data-talk-select="microphone"] select',
+    );
+    expect(microphone).toBeInstanceOf(HTMLSelectElement);
+    if (!(microphone instanceof HTMLSelectElement)) {
+      throw new Error("expected microphone select");
+    }
+    expect(microphone.value).toBe("built-in");
+    microphone.value = "usb";
+    microphone.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onRealtimeTalkInputSelect).toHaveBeenCalledWith("usb");
+  });
+
+  it("refreshes microphone access from Voice settings", () => {
+    const container = document.createElement("div");
+    const onRealtimeTalkInputRefresh = vi.fn();
+    render(renderChatControls(createProps({ onRealtimeTalkInputRefresh })), container);
+
+    const refresh = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Refresh: Microphone input"]',
+    );
+    expect(refresh).toBeInstanceOf(HTMLButtonElement);
+    refresh?.click();
+
+    expect(onRealtimeTalkInputRefresh).toHaveBeenCalledOnce();
   });
 
   it("keeps the composer control cluster limited to model and Settings controls", () => {

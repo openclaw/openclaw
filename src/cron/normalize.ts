@@ -100,6 +100,7 @@ function coerceSchedule(schedule: UnknownRecord) {
       ? rawKind
       : undefined;
   const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
+  const timezone = normalizeOptionalString(schedule.tz);
   const commandRaw = normalizeOptionalString(schedule.command) ?? "";
   const cwdRaw = normalizeOptionalString(schedule.cwd) ?? "";
   const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
@@ -122,6 +123,11 @@ function coerceSchedule(schedule: UnknownRecord) {
     next.expr = exprRaw;
   } else if ("expr" in next) {
     delete next.expr;
+  }
+  if (timezone) {
+    next.tz = timezone;
+  } else if ("tz" in next) {
+    delete next.tz;
   }
 
   if (everyMs !== undefined && everyMs >= 1) {
@@ -351,6 +357,15 @@ function coercePayload(payload: UnknownRecord) {
     delete next.toolsAllow;
   }
   return next;
+}
+
+function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
+  const script = typeof trigger.script === "string" ? trigger.script.trim() : "";
+  const once = parseBoolean(trigger.once);
+  return {
+    script,
+    ...(once !== undefined ? { once } : {}),
+  };
 }
 
 function coerceDelivery(delivery: UnknownRecord) {
@@ -613,6 +628,16 @@ export function normalizeCronJobInput(
 
   if (isRecord(base.payload)) {
     next.payload = coercePayload(base.payload);
+  }
+
+  if ("trigger" in base) {
+    if (base.trigger === null) {
+      next.trigger = null;
+    } else if (isRecord(base.trigger)) {
+      next.trigger = coerceTrigger(base.trigger);
+    } else {
+      delete next.trigger;
+    }
   }
 
   if (isRecord(base.delivery)) {

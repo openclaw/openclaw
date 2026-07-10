@@ -7,8 +7,8 @@ export const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_NAMESPACE =
   "qmd-runtime-cache.collection-validation";
 export const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE =
   "qmd-runtime-cache.multi-collection-probe";
-export const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_MAX_ENTRIES = 1_000;
-export const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_MAX_ENTRIES = 1_000;
+const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_MAX_ENTRIES = 1_000;
+const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_MAX_ENTRIES = 1_000;
 export const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_TTL_MS = 5 * 60_000;
 export const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_TTL_MS = 10 * 60_000;
 
@@ -40,7 +40,7 @@ export type QmdRuntimeMultiCollectionProbeCacheContext = QmdRuntimeCacheContextB
   sources: readonly string[];
 };
 
-export type QmdRuntimeCacheCollectionValidationEntry = {
+type QmdRuntimeCacheCollectionValidationEntry = {
   version: 1;
   createdAtMs: number;
   expiresAtMs: number;
@@ -52,7 +52,7 @@ export type QmdRuntimeCacheCollectionValidationEntry = {
   };
 };
 
-export type QmdRuntimeCacheMultiCollectionProbeEntry = {
+type QmdRuntimeCacheMultiCollectionProbeEntry = {
   version: 1;
   createdAtMs: number;
   expiresAtMs: number;
@@ -62,7 +62,7 @@ export type QmdRuntimeCacheMultiCollectionProbeEntry = {
   };
 };
 
-export type QmdRuntimeCacheResult<T> =
+type QmdRuntimeCacheResult<T> =
   | {
       state: "hit";
       value: T;
@@ -142,7 +142,7 @@ function buildMultiCollectionProbeCacheContextInput(
   return JSON.stringify(buildRuntimeCacheContextRecord(params));
 }
 
-export function buildQmdCollectionValidationCacheContextHash(
+function buildQmdCollectionValidationCacheContextHash(
   params: QmdRuntimeCollectionValidationCacheContext,
 ): string {
   return hashText(buildCollectionValidationCacheContextInput(params));

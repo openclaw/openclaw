@@ -10,6 +10,7 @@ import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.MobileColorsAccessor
+import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentSoft
 import ai.openclaw.app.ui.mobileBorder
@@ -32,6 +33,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -53,7 +55,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -278,39 +283,59 @@ private fun ChatLinkPreview(
   LaunchedEffect(messageId, url) {
     result = chatLinkPreviewStore.get(url)
   }
+  val imageUrl = (result as? LinkPreviewResult.Loaded)?.metadata?.imageUrl
+  var previewImage by remember(messageId, url, imageUrl) { mutableStateOf<ImageBitmap?>(null) }
+  LaunchedEffect(imageUrl) {
+    previewImage =
+      when (val image = imageUrl?.let { chatLinkPreviewImageStore.get(it) }) {
+        is LinkPreviewImageResult.Loaded -> image.bitmap.asImageBitmap()
+        LinkPreviewImageResult.Failed, null -> null
+      }
+  }
   val uriHandler = LocalUriHandler.current
+  val cardShape = RoundedCornerShape(ClawTheme.radii.sheet)
   Surface(
     onClick = { uriHandler.openUri(url) },
-    shape = RoundedCornerShape(10.dp),
+    shape = cardShape,
     color = mobileCardSurface,
     border = BorderStroke(1.dp, mobileBorder),
   ) {
-    Column(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
-      verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-      Text(domain, style = mobileCaption2, color = mobileTextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      when (val preview = result) {
-        null -> Text("Loading preview…", style = mobileCaption1, color = mobileTextSecondary)
-        LinkPreviewResult.Failed -> Text("No preview available", style = mobileCallout, color = mobileTextSecondary)
-        is LinkPreviewResult.Loaded -> {
-          preview.metadata.title?.let { title ->
-            Text(
-              text = title,
-              style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
-              color = mobileText,
-              maxLines = 2,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
-          preview.metadata.description?.let { description ->
-            Text(
-              text = description,
-              style = mobileCaption1,
-              color = mobileTextSecondary,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
+    Column(modifier = Modifier.fillMaxWidth()) {
+      previewImage?.let { image ->
+        Image(
+          bitmap = image,
+          contentDescription = null,
+          contentScale = ContentScale.Crop,
+          modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp).clip(cardShape),
+        )
+      }
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+      ) {
+        Text(domain, style = mobileCaption2, color = mobileTextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        when (val preview = result) {
+          null -> Text("Loading preview…", style = mobileCaption1, color = mobileTextSecondary)
+          LinkPreviewResult.Failed -> Text("No preview available", style = mobileCallout, color = mobileTextSecondary)
+          is LinkPreviewResult.Loaded -> {
+            preview.metadata.title?.let { title ->
+              Text(
+                text = title,
+                style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
+                color = mobileText,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            preview.metadata.description?.let { description ->
+              Text(
+                text = description,
+                style = mobileCaption1,
+                color = mobileTextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
           }
         }
       }

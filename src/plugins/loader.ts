@@ -348,7 +348,7 @@ function matchesScopedPluginOrDreamingSidecar(params: {
   );
 }
 
-export class PluginLoadFailureError extends Error {
+class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
   readonly registry: PluginRegistry;
 
@@ -387,6 +387,7 @@ const fullWorkspacePluginLoaderCacheState = new PluginLoaderCacheState<CachedPlu
 );
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
+  "gateway",
   "config",
   "agent",
   "subagent",

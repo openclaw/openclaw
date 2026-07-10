@@ -1,11 +1,13 @@
 /** Operator CLI for bounded metadata-only run/tool audit pages. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   AuditEvent,
   AuditListParams,
   AuditListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -38,7 +40,7 @@ function parseAuditTimestamp(value: string | undefined, flag: string): number | 
     }
   }
   const parsed = Date.parse(trimmed);
-  if (!Number.isNaN(parsed)) {
+  if (!Number.isNaN(parsed) && parseAbsoluteTimeMs(trimmed) !== null) {
     return parsed;
   }
   throw new Error(`${flag} must be an ISO timestamp or Unix milliseconds.`);
@@ -63,7 +65,9 @@ function short(value: string | undefined, maxChars: number): string {
   if (!sanitized) {
     return "-";
   }
-  return sanitized.length <= maxChars ? sanitized : `${sanitized.slice(0, maxChars - 1)}…`;
+  return sanitized.length <= maxChars
+    ? sanitized
+    : `${truncateUtf16Safe(sanitized, maxChars - 1)}…`;
 }
 
 function formatAuditRows(events: AuditEvent[]): string[] {

@@ -1,4 +1,5 @@
 // Chat-owned message thread presentation and thread-local interaction state.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
@@ -78,6 +79,8 @@ type ChatThreadProps = {
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
+  /** True while the session has an abortable live run (marks running tool rows). */
+  runActive?: boolean;
   sessions: SessionsListResult | null;
   assistantName: string;
   assistantAvatar: string | null;
@@ -431,7 +434,7 @@ export function renderChatPinnedMessages(
                       >${role === "user" ? userRoleLabel : "Assistant"}</span
                     >
                     <span class="agent-chat__pinned-text"
-                      >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
+                      >${truncateUtf16Safe(text, 100)}${text.length > 100 ? "..." : ""}</span
                     >
                     <openclaw-tooltip content="Unpin">
                       <button
@@ -458,6 +461,7 @@ export function renderChatPinnedMessages(
 let activeReplyContextMenu: HTMLElement | null = null;
 let activeReplyContextMenuPaneId: string | null = null;
 let contextMenuDocumentClickHandler: ((event: MouseEvent) => void) | null = null;
+let contextMenuDocumentContextMenuHandler: ((event: MouseEvent) => void) | null = null;
 let contextMenuKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
 
 function removeReplyContextMenu(paneId?: string) {
@@ -471,6 +475,10 @@ function removeReplyContextMenu(paneId?: string) {
   if (contextMenuDocumentClickHandler) {
     document.removeEventListener("click", contextMenuDocumentClickHandler);
     contextMenuDocumentClickHandler = null;
+  }
+  if (contextMenuDocumentContextMenuHandler) {
+    document.removeEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
+    contextMenuDocumentContextMenuHandler = null;
   }
   if (contextMenuKeydownHandler) {
     document.removeEventListener("keydown", contextMenuKeydownHandler);
@@ -531,7 +539,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   }
   const senderEl = group.querySelector(".chat-sender-name");
   const senderLabel = senderEl?.textContent?.trim() ?? undefined;
-  const text = (bubble as HTMLElement).dataset.messageText?.trim().slice(0, 500) ?? "";
+  const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
   if (!text) {
     return;
   }
@@ -577,6 +585,11 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
         removeReplyContextMenu();
       }
     };
+    contextMenuDocumentContextMenuHandler = (nextEvent: MouseEvent) => {
+      if (!menu.contains(nextEvent.target as Node | null)) {
+        removeReplyContextMenu();
+      }
+    };
     const handleKeydown = (nextEvent: KeyboardEvent) => {
       if (nextEvent.key === "Escape") {
         nextEvent.preventDefault();
@@ -587,6 +600,8 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
     };
     contextMenuKeydownHandler = handleKeydown;
     document.addEventListener("click", contextMenuDocumentClickHandler);
+    // Capture closes this owner even when the next menu stops event propagation.
+    document.addEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
     document.addEventListener("keydown", handleKeydown);
   });
 }
@@ -713,6 +728,7 @@ export function renderChatThread(props: ChatThreadProps) {
             props.fullMessageAgentId,
             showReasoning,
             props.showToolCalls,
+            Boolean(props.runActive),
             Boolean(props.autoExpandToolCalls),
             props.assistantName,
             assistantIdentity.avatar,
@@ -783,6 +799,7 @@ export function renderChatThread(props: ChatThreadProps) {
                     agentId: props.fullMessageAgentId,
                     showReasoning,
                     showToolCalls: props.showToolCalls,
+                    runActive: props.runActive,
                     autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
                     isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
                     onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {

@@ -4,10 +4,9 @@
  * output, cache, reasoning, and total token accounting fields.
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { Usage } from "../llm/types.js";
 
-export type ContextUsage =
-  | { state: "available"; promptTokens: number; totalTokens: number }
-  | { state: "unavailable" };
+export type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
 /** Provider/SDK usage payload variants accepted by usage normalization. */
 export type UsageLike = {
@@ -50,6 +49,8 @@ export type UsageLike = {
     prompt_n?: number;
     predicted_n?: number;
   };
+  // Optional cost metadata carried through transcripts for downstream cost accounting.
+  cost?: Partial<Usage["cost"]>;
 };
 
 /** Normalized token counts used by runtime accounting. */
@@ -73,21 +74,7 @@ export type OpenAiChatCompletionsUsage = {
 };
 
 /** Assistant usage snapshot with token counts and computed cost buckets. */
-export type AssistantUsageSnapshot = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  contextUsage?: ContextUsage;
-  totalTokens: number;
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    total: number;
-  };
-};
+export type AssistantUsageSnapshot = Usage;
 
 /** Build a zeroed assistant usage snapshot. */
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {

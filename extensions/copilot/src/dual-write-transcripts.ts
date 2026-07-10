@@ -93,7 +93,7 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
   return `${message.role}:${fingerprintMirrorMessageContent(message)}`;
 }
 
-export interface MirrorCopilotTranscriptParams {
+interface MirrorCopilotTranscriptParams {
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;

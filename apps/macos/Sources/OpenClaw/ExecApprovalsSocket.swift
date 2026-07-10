@@ -146,7 +146,8 @@ enum ExecHostOutputLimiter {
         while start < bytes.endIndex, (bytes[start] & 0xC0) == 0x80 {
             start = bytes.index(after: start)
         }
-        return self.truncationMarker + String(decoding: bytes[start...], as: UTF8.self)
+        let tail = String(bytes: bytes[start...], encoding: .utf8) ?? ""
+        return self.truncationMarker + tail
     }
 }
 

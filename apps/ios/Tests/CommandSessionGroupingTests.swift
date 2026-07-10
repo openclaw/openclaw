@@ -1,3 +1,4 @@
+import Foundation
 import OpenClawChatUI
 import Testing
 @testable import OpenClaw
@@ -21,6 +22,58 @@ struct CommandSessionGroupingTests {
         #expect(sections[0].entries.map(\.key) == ["pinned"])
         #expect(sections[1].entries.map(\.key) == ["alpha-new", "alpha-old"])
         #expect(sections[3].showsHeader)
+    }
+
+    @Test func `known groups render empty sections in alphabetical merge`() {
+        let sections = CommandSessionGrouping.sections(
+            from: [
+                self.entry("beta", category: "Beta", activity: 2),
+                self.entry("plain", activity: 1),
+            ],
+            knownGroups: ["Zulu", "Alpha"])
+
+        #expect(sections.map(\.id) == [
+            .category("Alpha"),
+            .category("Beta"),
+            .category("Zulu"),
+            .ungrouped,
+        ])
+        #expect(sections[0].entries.isEmpty)
+        #expect(sections[1].entries.map(\.key) == ["beta"])
+        #expect(sections[2].entries.isEmpty)
+        #expect(sections[3].showsHeader)
+    }
+
+    @Test func `known groups ignore blanks and duplicates`() {
+        let sections = CommandSessionGrouping.sections(
+            from: [self.entry("beta", category: "Beta", activity: 1)],
+            knownGroups: ["  ", "Beta", "Beta", "Alpha"])
+
+        #expect(sections.map(\.id) == [.category("Alpha"), .category("Beta")])
+
+        let categories = CommandSessionGrouping.categories(
+            from: [self.entry("beta", category: "Beta", activity: 1)],
+            knownGroups: ["", "Beta", "Alpha", "Alpha"])
+        #expect(categories == ["Alpha", "Beta"])
+    }
+
+    @Test func `group members merge active and archived lists deduped by key`() {
+        let members = CommandSessionGrouping.members(
+            of: "Ops",
+            in: [
+                [
+                    self.entry("a", category: "Ops", activity: 1),
+                    self.entry("other", category: "Dev", activity: 2),
+                ],
+                [
+                    self.entry("a", category: "Ops", activity: 1),
+                    self.entry("b", category: " Ops ", activity: 3),
+                    self.entry("plain", activity: 4),
+                ],
+            ])
+
+        #expect(members.map(\.key) == ["a", "b"])
+        #expect(CommandSessionGrouping.members(of: "  ", in: [[self.entry("a", activity: 1)]]).isEmpty)
     }
 
     @Test func `hides ungrouped header without category sections`() {
@@ -90,5 +143,37 @@ struct CommandSessionGroupingTests {
             category: category,
             pinned: pinned,
             lastActivityAt: activity)
+    }
+}
+
+struct SessionGroupStoreTests {
+    @Test func `normalizes trims dedupes and drops blanks`() {
+        #expect(SessionGroupStore.normalized([" Ops ", "Ops", "", "  ", "Dev"]) == ["Ops", "Dev"])
+    }
+
+    @Test func `renaming replaces a stored name in place`() {
+        #expect(SessionGroupStore.renaming(["Dev", "Ops"], from: "Dev", to: "Core") == ["Core", "Ops"])
+        // Renaming onto an existing name collapses the duplicate.
+        #expect(SessionGroupStore.renaming(["Dev", "Ops"], from: "Dev", to: "Ops") == ["Ops"])
+    }
+
+    @Test func `renaming a live-only group appends the new name`() {
+        #expect(SessionGroupStore.renaming(["Ops"], from: "Dev", to: "Core") == ["Ops", "Core"])
+    }
+
+    @Test func `removing and adding keep the list unique`() {
+        #expect(SessionGroupStore.removing(["Dev", "Ops"], "Dev") == ["Ops"])
+        #expect(SessionGroupStore.adding(["Ops"], "Ops") == ["Ops"])
+        #expect(SessionGroupStore.adding(["Ops"], " Dev ") == ["Ops", "Dev"])
+    }
+
+    @Test func `load and save round-trip through user defaults`() {
+        withUserDefaults([SessionGroupStore.defaultsKey: nil]) {
+            #expect(SessionGroupStore.load() == [])
+            SessionGroupStore.save([" Dev ", "Dev", "Ops"])
+            #expect(SessionGroupStore.load() == ["Dev", "Ops"])
+            SessionGroupStore.remember("Core")
+            #expect(SessionGroupStore.load() == ["Dev", "Ops", "Core"])
+        }
     }
 }

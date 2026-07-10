@@ -5,6 +5,7 @@
  * 拆分、路径编码修复，以及统一的发送队列执行器。
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { normalizePath } from "../utils/platform.js";
 import type { OutboundMediaAccessContext } from "./outbound-types.js";
@@ -295,7 +296,7 @@ export async function executeSendQueue(
       }
 
       log?.info(
-        `${prefix} executeSendQueue: sending ${item.type}: ${item.content.slice(0, 80)}...`,
+        `${prefix} executeSendQueue: sending ${item.type}: ${truncateUtf16Safe(item.content, 80)}...`,
       );
 
       if (item.type === "image") {

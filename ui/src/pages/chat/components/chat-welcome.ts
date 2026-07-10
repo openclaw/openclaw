@@ -1,11 +1,8 @@
 // Control UI chat module implements chat welcome behavior.
 import { html } from "lit";
 import { t } from "../../../i18n/index.ts";
-import {
-  assistantAvatarFallbackUrl,
-  resolveAssistantTextAvatar,
-} from "../../../lib/agents/display.ts";
-import { resolveChatAvatarRenderUrl } from "../../../lib/avatar.ts";
+import { assistantAvatarFallbackUrl } from "../../../lib/agents/display.ts";
+import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../../lib/avatar.ts";
 
 type ChatWelcomeProps = {
   assistantName: string;

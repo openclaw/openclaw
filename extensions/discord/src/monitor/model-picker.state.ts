@@ -454,7 +454,7 @@ function chunkBucketsByCount(sortedItems: string[]): DiscordModelPickerBucket[] 
  * "bad customId → reset to defaults" semantics already used for other
  * state fields.
  */
-export function resolveBucket(
+function resolveBucket(
   buckets: DiscordModelPickerBucket[],
   id: string | undefined,
 ): DiscordModelPickerBucket | null {

@@ -101,9 +101,16 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tasks.list", scope: "operator.read" },
   { name: "tasks.get", scope: "operator.read" },
   { name: "tasks.cancel", scope: "operator.write" },
+  { name: "taskSuggestions.list", scope: "operator.read" },
+  { name: "taskSuggestions.create", scope: "operator.write" },
+  { name: "taskSuggestions.accept", scope: "operator.admin" },
+  { name: "taskSuggestions.dismiss", scope: "operator.write" },
   { name: "environments.list", scope: "operator.read" },
   { name: "environments.status", scope: "operator.read" },
   { name: "worktrees.list", scope: "operator.read" },
+  // Read-only git probe, but it accepts arbitrary host paths; keep it at the
+  // same bar as starting worktree sessions instead of plain read scope.
+  { name: "worktrees.branches", scope: "operator.write" },
   { name: "worktrees.create", scope: "operator.admin", controlPlaneWrite: true },
   { name: "worktrees.remove", scope: "operator.admin", controlPlaneWrite: true },
   { name: "worktrees.restore", scope: "operator.admin", controlPlaneWrite: true },
@@ -131,6 +138,10 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "skills.upload.commit", scope: "operator.admin" },
   { name: "skills.install", scope: "operator.admin" },
   { name: "skills.update", scope: "operator.admin" },
+  { name: "skills.curator.status", scope: "operator.read" },
+  { name: "skills.curator.pin", scope: "operator.admin" },
+  { name: "skills.curator.unpin", scope: "operator.admin" },
+  { name: "skills.curator.restore", scope: "operator.admin" },
   { name: "skills.proposals.list", scope: "operator.read" },
   { name: "skills.proposals.inspect", scope: "operator.read" },
   { name: "skills.proposals.create", scope: "operator.admin" },
@@ -159,7 +170,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.compaction.get", scope: "operator.read" },
   { name: "sessions.compaction.branch", scope: "operator.write" },
   { name: "sessions.compaction.restore", scope: "operator.admin" },
-  { name: "sessions.create", scope: "operator.write", startup: true },
+  // Params-aware: explicit cwd can point at any host checkout and requires admin.
+  { name: "sessions.create", scope: "dynamic", startup: true },
   { name: "sessions.send", scope: "operator.write", startup: true },
   { name: "sessions.abort", scope: "operator.write", startup: true },
   // Params-aware: write scope may mutate chat-organization fields
@@ -169,21 +181,27 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.pluginPatch", scope: "operator.admin" },
   { name: "sessions.cleanup", scope: "operator.admin" },
   { name: "sessions.reset", scope: "operator.admin" },
-  { name: "sessions.delete", scope: "operator.admin" },
+  // State-aware: write scope may delete already-archived sessions
+  // (archive-then-delete); the handler enforces the archived requirement and
+  // admin keeps unrestricted delete. Policy in method-scopes.ts + handler.
+  { name: "sessions.delete", scope: "dynamic" },
   { name: "sessions.compact", scope: "operator.admin" },
+  { name: "sessions.groups.list", scope: "operator.read" },
+  { name: "sessions.groups.put", scope: "operator.write" },
+  { name: "sessions.groups.rename", scope: "operator.write" },
+  { name: "sessions.groups.delete", scope: "operator.write" },
   { name: "last-heartbeat", scope: "operator.read" },
   { name: "set-heartbeats", scope: "operator.admin" },
   { name: "wake", scope: "operator.write" },
-  { name: "node.pair.request", scope: "operator.pairing" },
   { name: "node.pair.list", scope: "operator.pairing" },
   { name: "node.pair.approve", scope: "operator.pairing" },
   { name: "node.pair.reject", scope: "operator.pairing" },
   { name: "node.pair.remove", scope: "operator.pairing" },
-  { name: "node.pair.verify", scope: "operator.pairing" },
   { name: "device.pair.list", scope: "operator.pairing" },
   { name: "device.pair.approve", scope: "operator.pairing" },
   { name: "device.pair.reject", scope: "operator.pairing" },
   { name: "device.pair.remove", scope: "operator.pairing" },
+  { name: "device.pair.rename", scope: "operator.pairing" },
   { name: "device.token.rotate", scope: "operator.pairing" },
   { name: "device.token.revoke", scope: "operator.pairing" },
   { name: "device.pair.setupCode", scope: "operator.admin", advertise: false },
@@ -262,6 +280,14 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.workspace.list", scope: "operator.read" },
   { name: "agents.workspace.get", scope: "operator.read" },
   { name: "tts.speak", scope: "operator.write" },
+  { name: "plugins.list", scope: "operator.read" },
+  { name: "plugins.search", scope: "operator.read" },
+  { name: "plugins.install", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.setEnabled", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.uninstall", scope: "operator.admin", controlPlaneWrite: true },
+  // Session PR chips read the session's own checkout metadata, matching the
+  // sessions.files.* trusted-operator read domain.
+  { name: "controlUi.sessionPullRequests", scope: "operator.read" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
@@ -286,7 +312,7 @@ export function listCoreGatewayMethodNames(): string[] {
 }
 
 /** Looks up the raw core method scope, including node and dynamic sentinel scopes. */
-export function resolveCoreGatewayMethodScope(method: string): GatewayMethodScope | undefined {
+function resolveCoreGatewayMethodScope(method: string): GatewayMethodScope | undefined {
   return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope;
 }
 

@@ -65,6 +65,7 @@ class SecurePrefs(
     private const val appearanceThemeModeKey = "appearance.themeMode"
     private const val chatModelFavoritesKey = "chat.modelFavorites"
     private const val chatModelRecentsKey = "chat.modelRecents"
+    private const val sessionCustomGroupsKey = "sessions.customGroups"
     private const val maxChatModelRecents = 5
     private const val gatewayCustomHeadersKeyPrefix = "gateway.customHeaders."
   }
@@ -214,6 +215,11 @@ class SecurePrefs(
 
   private val _modelRecents = MutableStateFlow(loadChatModelRefs(chatModelRecentsKey))
   val modelRecents: StateFlow<List<String>> = _modelRecents
+
+  // Custom session group names the user created locally; assigned groups also
+  // persist server-side via the session category field (mirrors web localStorage).
+  private val _sessionCustomGroups = MutableStateFlow(loadChatModelRefs(sessionCustomGroupsKey))
+  val sessionCustomGroups: StateFlow<List<String>> = _sessionCustomGroups
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -525,17 +531,6 @@ class SecurePrefs(
     defaultValue: Int,
   ): Int = plainPrefs.getInt(key, defaultValue)
 
-  internal fun putPlainString(
-    key: String,
-    value: String,
-  ) {
-    plainPrefs.edit { putString(key, value) }
-  }
-
-  internal fun removePlainKey(key: String) {
-    plainPrefs.edit { remove(key) }
-  }
-
   internal fun movePlainString(
     sourceKey: String,
     destinationKey: String?,
@@ -647,6 +642,12 @@ class SecurePrefs(
     val next = (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents)
     persistChatModelRefs(chatModelRecentsKey, next)
     _modelRecents.value = next
+  }
+
+  fun setSessionCustomGroups(groups: List<String>) {
+    val sanitized = groups.map(String::trim).filter { it.isNotEmpty() }.distinct()
+    persistChatModelRefs(sessionCustomGroupsKey, sanitized)
+    _sessionCustomGroups.value = sanitized
   }
 
   private fun persistChatModelRefs(

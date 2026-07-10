@@ -49,6 +49,7 @@ function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles |
   if (maintenance.mediaCleanup) {
     clearInterval(maintenance.mediaCleanup);
   }
+  maintenance.skillCuratorCleanup();
 }
 
 /** Runs maintenance that is intentionally delayed until after the gateway is ready. */

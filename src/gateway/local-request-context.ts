@@ -47,7 +47,7 @@ const unavailableCron: CronServiceContract = {
 };
 
 /** Creates the minimal gateway context used by embedded local agent execution. */
-export function createLocalGatewayRequestContext(
+function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");

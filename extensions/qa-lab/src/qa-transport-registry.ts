@@ -30,7 +30,7 @@ export type QaTransportAdapterFactoryResult<
 
 export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 
-export type QaTransportAdapterFactoryRegistry = {
+type QaTransportAdapterFactoryRegistry = {
   create: (context: QaTransportFactoryContext) => Promise<QaTransportAdapterFactoryResult>;
 };
 
@@ -40,7 +40,7 @@ async function createBuiltInQaTransport(
   context: QaTransportFactoryContext,
 ): Promise<QaTransportAdapter | undefined> {
   if (context.driver === "qa-channel" && context.channelId === "qa-channel") {
-    return createQaChannelTransport(context.state);
+    return createQaChannelTransport(context.state, context.adapterOptions?.transportPolicy);
   }
   if (context.driver === "crabline") {
     const { resolveOpenClawCrablineChannelDriverSelection } = await import("@openclaw/crabline");
@@ -48,6 +48,7 @@ async function createBuiltInQaTransport(
     const { createQaCrablineTransportAdapter } = await import("./crabline-transport.js");
     return await createQaCrablineTransportAdapter({
       outputDir: context.outputDir,
+      transportPolicy: context.adapterOptions?.transportPolicy,
       selection,
       state: context.state,
     });
@@ -93,9 +94,12 @@ export function createQaTransportAdapterFactoryRegistry(
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`failed to create QA transport ${context.driver}:${context.channelId}: ${message}`, {
-          cause: error,
-        });
+        throw new Error(
+          `failed to create QA transport ${context.driver}:${context.channelId}: ${message}`,
+          {
+            cause: error,
+          },
+        );
       }
       return {
         adapter,

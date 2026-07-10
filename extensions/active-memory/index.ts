@@ -1434,7 +1434,7 @@ function toSingleLineLogValue(value: unknown): string {
     .replace(/\s+/g, " ")
     .trim();
   return singleLine.length > MAX_LOG_VALUE_CHARS
-    ? `${singleLine.slice(0, MAX_LOG_VALUE_CHARS)}...`
+    ? `${truncateUtf16Safe(singleLine, MAX_LOG_VALUE_CHARS)}...`
     : singleLine;
 }
 
@@ -2251,20 +2251,20 @@ async function readPartialAssistantText(
         if (remaining <= 0) {
           return true;
         }
-        const nextText = text.slice(0, remaining);
+        const nextText = truncateUtf16Safe(text, remaining);
+        if (!nextText) {
+          return true;
+        }
         texts.push(nextText);
         collectedChars += separatorChars + nextText.length;
-        return collectedChars >= resolvedLimits.maxChars;
+        // A surrogate backoff leaves spare code units; stop instead of skipping ahead.
+        return nextText.length < text.length || collectedChars >= resolvedLimits.maxChars;
       }
       return false;
     },
   });
-  const joined = texts
-    .map((text) => text.trim())
-    .filter(Boolean)
-    .join("\n")
-    .slice(0, resolvedLimits.maxChars)
-    .trim();
+  // Accepted chunks and separators are charged before append, so the join is already bounded.
+  const joined = texts.join("\n").trim();
   return joined || null;
 }
 
@@ -2640,7 +2640,10 @@ function buildQuery(params: {
       remainingUser -= 1;
       selected.push({
         role: "user",
-        text: turn.text.trim().replace(/\s+/g, " ").slice(0, params.config.recentUserChars),
+        text: truncateUtf16Safe(
+          turn.text.trim().replace(/\s+/g, " "),
+          params.config.recentUserChars,
+        ),
       });
       continue;
     }
@@ -2650,7 +2653,10 @@ function buildQuery(params: {
     remainingAssistant -= 1;
     selected.push({
       role: "assistant",
-      text: turn.text.trim().replace(/\s+/g, " ").slice(0, params.config.recentAssistantChars),
+      text: truncateUtf16Safe(
+        turn.text.trim().replace(/\s+/g, " "),
+        params.config.recentAssistantChars,
+      ),
     });
   }
   const recentTurns = selected.toReversed().filter((turn) => turn.text.length > 0);
@@ -2711,7 +2717,7 @@ function normalizeSearchQueryText(text: string): string {
 function clampSearchQuery(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS
-    ? normalized.slice(0, MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS).trim()
+    ? truncateUtf16Safe(normalized, MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS).trim()
     : normalized;
 }
 
@@ -2735,11 +2741,10 @@ function buildSearchQuery(params: {
   if (!previousUser) {
     return latest || clampSearchQuery(params.latestUserMessage);
   }
-  const context = clampSearchQuery(
-    normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text)),
-  )
-    .slice(0, 120)
-    .trim();
+  const context = truncateUtf16Safe(
+    clampSearchQuery(normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text))),
+    120,
+  ).trim();
   return clampSearchQuery(context ? `${context} ${latest}` : latest);
 }
 
@@ -3755,6 +3760,7 @@ export default definePluginEntry({
 });
 
 const testing = {
+  buildSearchQuery,
   buildCacheKey,
   buildCircuitBreakerKey,
   buildMetadata,

@@ -21,7 +21,10 @@ const AUTOMATIC_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
   CHECK_IDS.policyToolsElevatedEnabled,
   CHECK_IDS.policyToolsRequiredDenyMissing,
   CHECK_IDS.policyGatewayControlUiInsecure,
+  CHECK_IDS.policyGatewayHttpEndpointEnabled,
   CHECK_IDS.policyGatewayRemoteEnabled,
+  CHECK_IDS.policyIngressOpenGroupsDenied,
+  CHECK_IDS.policyIngressGroupMentionRequired,
   CHECK_IDS.policyDataHandlingRedactionDisabled,
   CHECK_IDS.policyDataHandlingTelemetryContentCapture,
 ]);
@@ -93,8 +96,14 @@ function applyAutomaticPatch(
       return mergeRequiredDenyTools(cfg, findings);
     case CHECK_IDS.policyGatewayControlUiInsecure:
       return disableInsecureControlUi(cfg, findings);
+    case CHECK_IDS.policyGatewayHttpEndpointEnabled:
+      return setFindingConfigValues(cfg, findings, "enabled", false);
     case CHECK_IDS.policyGatewayRemoteEnabled:
       return disableRemoteGatewayMode(cfg, findings);
+    case CHECK_IDS.policyIngressOpenGroupsDenied:
+      return setFindingConfigValues(cfg, findings, "groupPolicy", "allowlist");
+    case CHECK_IDS.policyIngressGroupMentionRequired:
+      return setFindingConfigValues(cfg, findings, "requireMention", true);
     case CHECK_IDS.policyDataHandlingRedactionDisabled:
       if (hasScopedPolicyRequirement(findings)) {
         return skippedUnsafeScopedRepair(
@@ -245,6 +254,36 @@ function disableTelemetryContentCapture(cfg: OpenClawConfig): RepairPatch {
   };
 }
 
+function setFindingConfigValues(
+  cfg: OpenClawConfig,
+  findings: readonly HealthFinding[],
+  fieldName: string,
+  value: unknown,
+): RepairPatch {
+  const next = cloneConfig(cfg);
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const finding of findings) {
+    if (isScopedInheritedChannelDefaultFinding(finding)) {
+      warnings.push(
+        `Skipped scoped channel ingress repair for ${configPathLabel(finding.ocPath ?? "")}. The finding reports inherited channels.defaults config, so changing it would affect more than the scoped channel target.`,
+      );
+      continue;
+    }
+    if (
+      finding.ocPath === undefined ||
+      configPathSegments(finding.ocPath).at(-1) !== fieldName ||
+      !setValueAtOcPath(next, finding.ocPath, value)
+    ) {
+      continue;
+    }
+    changes.push(`Set ${configPathLabel(finding.ocPath)}=${String(value)} for policy conformance.`);
+  }
+  return changes.length > 0
+    ? { config: next as OpenClawConfig, changes: uniqueStrings(changes), warnings }
+    : { config: cfg, changes, warnings: uniqueStrings(warnings) };
+}
+
 function cloneConfig(cfg: OpenClawConfig): ConfigRecord {
   return structuredClone(cfg) as ConfigRecord;
 }
@@ -298,7 +337,41 @@ function configPathSegments(ocPath: string): readonly string[] {
   if (!ocPath.startsWith(prefix)) {
     return [];
   }
-  return ocPath.slice(prefix.length).split("/").filter(Boolean);
+  return splitConfigPath(ocPath.slice(prefix.length));
+}
+
+function splitConfigPath(path: string): readonly string[] {
+  const segments: string[] = [];
+  let current = "";
+  let quoted = false;
+  let escaped = false;
+  for (const char of path) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (quoted && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && char === "/") {
+      if (current !== "") {
+        segments.push(current);
+      }
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (current !== "") {
+    segments.push(current);
+  }
+  return quoted ? [] : segments;
 }
 
 function configPathLabel(ocPath: string): string {
@@ -315,6 +388,40 @@ function configPathLabel(ocPath: string): string {
 
 function missingRequiredTool(finding: HealthFinding): string | undefined {
   return finding.message.match(/required tool '([^']+)'/)?.[1]?.trim();
+}
+
+function setValueAtOcPath(cfg: ConfigRecord, ocPath: string, value: unknown): boolean {
+  const segments = configPathSegments(ocPath);
+  if (segments.length === 0) {
+    return false;
+  }
+  let current: unknown = cfg;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (segment === undefined || segment.startsWith("#")) {
+      return false;
+    }
+    if (!isRecord(current)) {
+      return false;
+    }
+    const existing = current[segment];
+    if (existing !== undefined && !isRecord(existing)) {
+      return false;
+    }
+    if (existing === undefined) {
+      current[segment] = {};
+    }
+    current = current[segment];
+  }
+  if (!isRecord(current)) {
+    return false;
+  }
+  const last = segments.at(-1);
+  if (last === undefined || last.startsWith("#") || current[last] === value) {
+    return false;
+  }
+  current[last] = value;
+  return true;
 }
 
 function workspaceRepairsEnabled(ctx: HealthRepairContext): boolean {
@@ -342,6 +449,13 @@ function hasScopedPolicyRequirement(findings: readonly HealthFinding[]): boolean
 
 function skippedUnsafeScopedRepair(cfg: OpenClawConfig, warning: string): RepairPatch {
   return { config: cfg, changes: [], warnings: [warning] };
+}
+
+function isScopedInheritedChannelDefaultFinding(finding: HealthFinding): boolean {
+  return (
+    hasScopedPolicyRequirement([finding]) &&
+    finding.ocPath?.startsWith("oc://openclaw.config/channels/defaults/") === true
+  );
 }
 
 function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {

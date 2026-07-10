@@ -29,7 +29,7 @@ class AndroidScreenshotModeTest {
   }
 
   @Test
-  fun defaultsUnknownScenesToConnect() {
+  fun defaultsUnknownScenesToHome() {
     val parsed =
       parseAndroidScreenshotModeIntent(
         Intent(Intent.ACTION_MAIN)
@@ -37,6 +37,14 @@ class AndroidScreenshotModeTest {
           .putExtra(extraAndroidScreenshotScene, "unknown"),
       )
 
-    assertEquals(AndroidScreenshotScene.Connect, parsed)
+    assertEquals(AndroidScreenshotScene.Home, parsed)
+  }
+
+  @Test
+  fun mapsScenesToProductionShellDestinations() {
+    assertEquals(HomeDestination.Connect, AndroidScreenshotScene.Home.homeDestination)
+    assertEquals(HomeDestination.Chat, AndroidScreenshotScene.Chat.homeDestination)
+    assertEquals(HomeDestination.Voice, AndroidScreenshotScene.Voice.homeDestination)
+    assertEquals(HomeDestination.Settings, AndroidScreenshotScene.Settings.homeDestination)
   }
 }

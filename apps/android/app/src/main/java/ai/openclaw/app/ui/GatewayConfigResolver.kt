@@ -18,6 +18,13 @@ internal data class GatewayEndpointConfig(
   val displayUrl: String,
 )
 
+/** Effective transport shown by manual gateway forms before they connect. */
+internal data class GatewayManualTransportPresentation(
+  val requiresTls: Boolean,
+  val effectiveTls: Boolean,
+  val helperText: String?,
+)
+
 /** Decoded setup-code payload; only one credential family is expected to be populated. */
 internal data class GatewaySetupCode(
   val url: String,
@@ -374,6 +381,53 @@ internal fun composeGatewayManualUrl(
   val scheme = if (tls) "https" else "http"
   return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(bareHost, port)}"
 }
+
+/** Keeps manual transport controls aligned with the runtime's remote-host TLS policy. */
+internal fun gatewayManualTransportPresentation(
+  hostInput: String,
+  requestedTls: Boolean,
+): GatewayManualTransportPresentation {
+  val host = hostInput.trim()
+  if (host.isEmpty()) {
+    return gatewayManualTransportPresentation(
+      requiresTls = false,
+      effectiveTls = requestedTls,
+    )
+  }
+
+  if (host.contains("://")) {
+    val config = parseGatewayEndpointResult(host).config
+    if (config != null) {
+      return gatewayManualTransportPresentation(
+        requiresTls = !isLocalCleartextGatewayHost(config.host),
+        effectiveTls = config.tls,
+      )
+    }
+  }
+
+  val normalizedHost = host.trimEnd('/')
+  val requiresTls = !isLocalCleartextGatewayHost(normalizedHost)
+  val effectiveTls = requestedTls || requiresTls
+  return gatewayManualTransportPresentation(
+    requiresTls = requiresTls,
+    effectiveTls = effectiveTls,
+  )
+}
+
+private fun gatewayManualTransportPresentation(
+  requiresTls: Boolean,
+  effectiveTls: Boolean,
+): GatewayManualTransportPresentation =
+  GatewayManualTransportPresentation(
+    requiresTls = requiresTls,
+    effectiveTls = effectiveTls,
+    helperText =
+      when {
+        requiresTls -> "Secure connection is required for this host."
+        effectiveTls -> null
+        else -> "Use only on a trusted private network."
+      },
+  )
 
 private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
 

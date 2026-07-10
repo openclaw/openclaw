@@ -9,7 +9,6 @@ import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,17 +24,18 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Session browser for active, current, and archived chat sessions. */
@@ -82,11 +83,18 @@ internal fun SessionsScreen(
   var filter by rememberSaveable { mutableStateOf(SessionFilter.Recent) }
   var compactLayout by rememberSaveable { mutableStateOf(false) }
   var recentFirst by rememberSaveable { mutableStateOf(true) }
+  var sortMenuExpanded by remember { mutableStateOf(false) }
   var renameSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
   var groupSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
   var deleteSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
+  var searchText by rememberSaveable { mutableStateOf("") }
+  var searchResults by remember { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
+  val searchQuery = searchText.trim()
+  var renameGroupName by rememberSaveable { mutableStateOf<String?>(null) }
+  var deleteGroupName by rememberSaveable { mutableStateOf<String?>(null) }
+  var newGroupDialogVisible by rememberSaveable { mutableStateOf(false) }
   val visibleSessions =
-    sessions
+    (if (searchQuery.isEmpty()) sessions else searchResults)
       .let { rows ->
         when (filter) {
           SessionFilter.Recent -> rows.filter { it.archived != true }
@@ -102,10 +110,11 @@ internal fun SessionsScreen(
           rows.sortedBy { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
         }
       }
-  val sections = groupSessionEntries(visibleSessions)
+  val storedGroups by viewModel.sessionCustomGroups.collectAsState()
+  val sections = groupSessionEntries(visibleSessions, knownGroups = storedGroups)
+  // Stored group names stay offered as move targets even while they have no members.
   val categories =
-    sessions
-      .mapNotNull { it.category?.trim()?.takeIf(String::isNotEmpty) }
+    (sessions.mapNotNull { it.category?.trim()?.takeIf(String::isNotEmpty) } + storedGroups)
       .distinctBy { it.lowercase() }
       .sortedWith(String.CASE_INSENSITIVE_ORDER)
 
@@ -113,6 +122,23 @@ internal fun SessionsScreen(
     if (isConnected) {
       viewModel.refreshChatSessions(limit = 200, archived = filter == SessionFilter.Archived)
     }
+  }
+
+  // Keyed on the live session list too: row actions (pin/rename/archive/delete)
+  // refresh live state, which re-runs the search so results never go stale.
+  LaunchedEffect(searchQuery, filter, sessions) {
+    if (searchQuery.isEmpty()) {
+      searchResults = emptyList()
+      return@LaunchedEffect
+    }
+    // Debounce keystrokes; the key change cancels superseded fetches, and the
+    // controller falls back to local filtering when the gateway is unreachable.
+    delay(250)
+    searchResults =
+      viewModel.fetchChatSessionList(
+        search = searchQuery,
+        archived = filter == SessionFilter.Archived,
+      )
   }
 
   ClawScaffold(
@@ -132,7 +158,6 @@ internal fun SessionsScreen(
         ) {
           Text(text = "Sessions", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           ClawPlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = onOpenCommand)
-          ClawPlainIconButton(icon = Icons.Default.SwapVert, contentDescription = "Reverse session sort", onClick = { recentFirst = !recentFirst })
         }
       }
 
@@ -145,18 +170,66 @@ internal fun SessionsScreen(
       }
 
       item {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-          Row(
-            modifier =
-              Modifier
-                .clip(RoundedCornerShape(ClawTheme.radii.row))
-                .clickable { recentFirst = !recentFirst }
-                .padding(horizontal = 2.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        OutlinedTextField(
+          value = searchText,
+          onValueChange = { searchText = it },
+          modifier = Modifier.fillMaxWidth(),
+          placeholder = { Text(text = "Search sessions", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+          singleLine = true,
+        )
+      }
+
+      item {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+          Surface(
+            modifier = Modifier.widthIn(min = 140.dp, max = 180.dp).heightIn(min = 36.dp),
+            shape = RoundedCornerShape(ClawTheme.radii.row),
+            color = Color.Transparent,
+            contentColor = ClawTheme.colors.textMuted,
+            border = BorderStroke(1.dp, ClawTheme.colors.border),
           ) {
-            Text(text = "Sort: ${if (recentFirst) "Newest" else "Oldest"}", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-            Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
+            Column {
+              Surface(
+                onClick = { sortMenuExpanded = !sortMenuExpanded },
+                color = Color.Transparent,
+                contentColor = ClawTheme.colors.textMuted,
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                  Text(text = "Sort: ${if (recentFirst) "Newest first" else "Oldest first"}", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+                  Icon(
+                    imageVector = if (sortMenuExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(13.dp),
+                    tint = ClawTheme.colors.textMuted,
+                  )
+                }
+              }
+              if (sortMenuExpanded) {
+                HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+                listOf(true to "Newest first", false to "Oldest first").forEach { (value, label) ->
+                  Surface(
+                    onClick = {
+                      recentFirst = value
+                      sortMenuExpanded = false
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent,
+                    contentColor = if (recentFirst == value) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+                  ) {
+                    Text(
+                      text = label,
+                      modifier = Modifier.padding(horizontal = 9.dp, vertical = 8.dp),
+                      style = ClawTheme.type.body,
+                      color = if (recentFirst == value) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+                    )
+                  }
+                }
+              }
+            }
           }
           SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = "Toggle session layout", onClick = { compactLayout = !compactLayout })
         }
@@ -183,12 +256,21 @@ internal fun SessionsScreen(
         sections.forEachIndexed { index, section ->
           section.title?.let { title ->
             item(key = "section:$index:$title") {
-              Text(
-                text = title,
-                style = ClawTheme.type.label,
-                color = ClawTheme.colors.textMuted,
-                modifier = Modifier.padding(top = 6.dp),
-              )
+              if (section.isCategory) {
+                SessionGroupHeader(
+                  title = title,
+                  onRename = { renameGroupName = title },
+                  onNewGroup = { newGroupDialogVisible = true },
+                  onDelete = { deleteGroupName = title },
+                )
+              } else {
+                Text(
+                  text = title,
+                  style = ClawTheme.type.label,
+                  color = ClawTheme.colors.textMuted,
+                  modifier = Modifier.padding(top = 6.dp),
+                )
+              }
             }
           }
           items(section.entries, key = { it.key }) { session ->
@@ -271,7 +353,66 @@ internal fun SessionsScreen(
       onDismiss = { groupSessionKey = null },
       onConfirm = { value ->
         groupSessionKey = null
+        // Remember the name so the group survives locally even if the patch later empties it.
+        viewModel.addChatSessionGroup(value)
         coroutineScope.launch { viewModel.patchChatSession(key = session.key, category = value.trim()) }
+      },
+    )
+  }
+
+  renameGroupName?.let { group ->
+    SessionTextDialog(
+      title = "Rename group",
+      stateKey = "group-rename:$group",
+      initialValue = group,
+      confirmLabel = "Rename",
+      allowEmpty = false,
+      onDismiss = { renameGroupName = null },
+      onConfirm = { value ->
+        renameGroupName = null
+        val next = value.trim()
+        if (next.isNotEmpty() && next != group) {
+          coroutineScope.launch { viewModel.renameChatSessionGroup(from = group, to = next) }
+        }
+      },
+    )
+  }
+
+  if (newGroupDialogVisible) {
+    SessionTextDialog(
+      title = "New group",
+      stateKey = "group-new",
+      initialValue = "",
+      confirmLabel = "Create",
+      allowEmpty = false,
+      onDismiss = { newGroupDialogVisible = false },
+      onConfirm = { value ->
+        newGroupDialogVisible = false
+        viewModel.addChatSessionGroup(value)
+      },
+    )
+  }
+
+  deleteGroupName?.let { group ->
+    AlertDialog(
+      onDismissRequest = { deleteGroupName = null },
+      containerColor = ClawTheme.colors.surfaceRaised,
+      title = { Text("Delete group?", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      text = { Text("Sessions in \"$group\" are kept and move back to Ungrouped.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            deleteGroupName = null
+            coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
+          },
+        ) {
+          Text("Delete", color = ClawTheme.colors.danger)
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { deleteGroupName = null }) {
+          Text("Cancel")
+        }
       },
     )
   }
@@ -378,8 +519,8 @@ private fun SessionRow(
           horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
           Surface(
-            modifier = Modifier.size(30.dp),
-            shape = CircleShape,
+            modifier = Modifier.size(32.dp),
+            shape = RoundedCornerShape(ClawTheme.radii.control),
             color = Color.Transparent,
             border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
           ) {
@@ -387,7 +528,7 @@ private fun SessionRow(
               Icon(
                 imageVector = if (active) Icons.Default.StarBorder else Icons.Outlined.ChatBubbleOutline,
                 contentDescription = null,
-                modifier = Modifier.size(15.dp),
+                modifier = Modifier.size(16.dp),
                 tint = ClawTheme.colors.text,
               )
             }
@@ -403,14 +544,22 @@ private fun SessionRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
-              if (active) {
-                Box(modifier = Modifier.size(3.5.dp).clip(CircleShape).background(ClawTheme.colors.success))
-              }
-              if (session.unread == true) {
-                Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(ClawTheme.colors.primary))
-              }
-              if (session.pinned == true) {
-                Icon(imageVector = Icons.Default.PushPin, contentDescription = "Pinned", modifier = Modifier.size(12.dp), tint = ClawTheme.colors.textMuted)
+              if (active || session.unread == true || session.pinned == true) {
+                Row(
+                  modifier = Modifier.size(width = 40.dp, height = 16.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+                ) {
+                  if (active) {
+                    Box(modifier = Modifier.size(4.dp).clip(CircleShape).background(ClawTheme.colors.success))
+                  }
+                  if (session.unread == true) {
+                    Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(ClawTheme.colors.primary))
+                  }
+                  if (session.pinned == true) {
+                    Icon(imageVector = Icons.Default.PushPin, contentDescription = "Pinned", modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
+                  }
+                }
               }
             }
             if (!compact) {
@@ -488,11 +637,47 @@ private fun SessionRow(
             menuExpanded = false
             onSetArchived(true)
           }
-          SessionMenuItem("Delete…") {
-            menuExpanded = false
-            onDelete()
-          }
+          // Delete is archive-gated: the bounded operator session lacks
+          // operator.admin, and the gateway only grants write-scope deletes
+          // for archived sessions. Archived rows keep the Delete item.
         }
+      }
+    }
+  }
+}
+
+/** Category section header; long-press opens the group management menu. */
+@Composable
+private fun SessionGroupHeader(
+  title: String,
+  onRename: () -> Unit,
+  onNewGroup: () -> Unit,
+  onDelete: () -> Unit,
+) {
+  var menuExpanded by remember { mutableStateOf(false) }
+  Box(modifier = Modifier.padding(top = 6.dp)) {
+    Text(
+      text = title,
+      style = ClawTheme.type.label,
+      color = ClawTheme.colors.textMuted,
+      modifier =
+        Modifier.combinedClickable(
+          onClick = {},
+          onLongClick = { menuExpanded = true },
+        ),
+    )
+    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+      SessionMenuItem("Rename group…") {
+        menuExpanded = false
+        onRename()
+      }
+      SessionMenuItem("New group…") {
+        menuExpanded = false
+        onNewGroup()
+      }
+      SessionMenuItem("Delete group…") {
+        menuExpanded = false
+        onDelete()
       }
     }
   }
@@ -587,23 +772,32 @@ private enum class SessionFilter {
 internal data class SessionSection(
   val title: String?,
   val entries: List<ChatSessionEntry>,
+  // Only custom category sections expose group actions; "Pinned"/"Ungrouped" are structural.
+  val isCategory: Boolean = false,
 )
 
 /** Groups pinned sessions once, followed by alphabetical categories and remaining sessions. */
-internal fun groupSessionEntries(entries: List<ChatSessionEntry>): List<SessionSection> {
+internal fun groupSessionEntries(
+  entries: List<ChatSessionEntry>,
+  knownGroups: List<String> = emptyList(),
+): List<SessionSection> {
   if (entries.isEmpty()) return emptyList()
   val pinned = entries.filter { it.pinned == true }
   val remaining = entries.filterNot { it.pinned == true }
-  val categorized = remaining.filter { !it.category.isNullOrBlank() }
+  val populated = remaining.filter { !it.category.isNullOrBlank() }.groupBy { it.category.orEmpty().trim() }
+  // Stored-but-empty groups still render so they stay visible as move targets.
+  val emptyKnown =
+    knownGroups
+      .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+      .distinctBy { it.lowercase() }
+      .filterNot { name -> populated.keys.any { it.equals(name, ignoreCase = true) } }
   val categories =
-    categorized
-      .groupBy { it.category.orEmpty().trim() }
-      .toList()
+    (populated.toList() + emptyKnown.map { it to emptyList<ChatSessionEntry>() })
       .sortedBy { it.first.lowercase() }
   val ungrouped = remaining.filter { it.category.isNullOrBlank() }
   return buildList {
     if (pinned.isNotEmpty()) add(SessionSection(title = "Pinned", entries = pinned))
-    categories.forEach { (category, sessions) -> add(SessionSection(title = category, entries = sessions)) }
+    categories.forEach { (category, sessions) -> add(SessionSection(title = category, entries = sessions, isCategory = true)) }
     if (ungrouped.isNotEmpty()) {
       add(SessionSection(title = "Ungrouped".takeIf { categories.isNotEmpty() }, entries = ungrouped))
     }

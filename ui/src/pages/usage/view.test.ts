@@ -107,6 +107,50 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
 }
 
 describe("renderUsage", () => {
+  it("keeps selected session labels on UTF-16 boundaries", () => {
+    const container = document.createElement("div");
+    const label = `${"a".repeat(19)}🚀${"b".repeat(28)}🚀tail`;
+    const session = {
+      key: "agent:main:emoji",
+      label,
+      agentId: "main",
+      updatedAt: Date.now(),
+      usage: {
+        input: 1,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 1,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
+    } satisfies UsageProps["data"]["sessions"][number];
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: { ...createUsageProps().data, sessions: [session] },
+          filters: {
+            ...createUsageProps().filters,
+            selectedSessions: [session.key],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".filter-chip-label")?.textContent).toContain(
+      `${"a".repeat(19)}…`,
+    );
+    expect(container.querySelector(".session-detail-title")?.textContent?.trim()).toBe(
+      `${"a".repeat(19)}🚀${"b".repeat(28)}…`,
+    );
+  });
+
   it("omits the duplicate inner page heading because the shell owns tab headings", () => {
     const container = document.createElement("div");
 

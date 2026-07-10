@@ -10,6 +10,7 @@ import {
   execFileSync,
   spawn,
 } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
+import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
 import {
@@ -42,6 +44,7 @@ import {
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
+  scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
@@ -50,7 +53,7 @@ import {
   diagnoseChromeCdp,
   formatChromeCdpDiagnostic,
   type ChromeVersion,
-  readChromeVersion,
+  readChromeVersionWithCredentialFallback,
   safeChromeCdpErrorMessage,
 } from "./chrome.diagnostics.js";
 import {
@@ -75,7 +78,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { BrowserProfileUnavailableError } from "./errors.js";
+import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 
@@ -88,6 +91,8 @@ const CHROME_SINGLETON_LOCK_PATHS = [
 const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
 const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
 const CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS = 500;
+const CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES = 64 * 1024;
+const CHROME_STDERR_MARKER_SCAN_TAIL_CHARS = 256;
 const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
   "ssrf_blocked",
   "http_unreachable",
@@ -131,6 +136,49 @@ function diagnosticShowsChromeHttpDiscovery(diagnostic: ChromeCdpDiagnostic | nu
     return true;
   }
   return !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(diagnostic.code);
+}
+
+type ChromeLaunchStderrSignals = {
+  singletonInUse: boolean;
+  missingDisplay: boolean;
+};
+
+function createChromeLaunchStderrDiagnostics(maxBytes: number) {
+  const tail = createBoundedUtf8Tail(maxBytes);
+  const signals: ChromeLaunchStderrSignals = {
+    singletonInUse: false,
+    missingDisplay: false,
+  };
+  let markerScanTail = "";
+
+  const updateSignals = (chunkText: string) => {
+    const scanText = `${markerScanTail}${chunkText}`;
+    signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
+    signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
+    markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
+  };
+
+  return {
+    append(chunk: Buffer | string) {
+      tail.append(chunk);
+      const chunkText = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+      if (chunkText.length > 0) {
+        updateSignals(chunkText);
+      }
+    },
+    toString() {
+      return tail.text();
+    },
+    signals(): ChromeLaunchStderrSignals {
+      return { ...signals };
+    },
+    clear() {
+      tail.clear();
+      signals.singletonInUse = false;
+      signals.missingDisplay = false;
+      markerScanTail = "";
+    },
+  };
 }
 
 function processExists(pid: number): boolean {
@@ -664,6 +712,7 @@ async function ensureManagedChromePortAvailable(
 
 function chromeLaunchHints(params: {
   stderrOutput: string;
+  stderrSignals?: ChromeLaunchStderrSignals;
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
   launchOptions?: ManagedBrowserHeadlessOptions;
@@ -677,12 +726,18 @@ function chromeLaunchHints(params: {
     params.profile,
     params.launchOptions,
   );
-  if (CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput) && !headlessMode.headless) {
+  const missingDisplay =
+    params.stderrSignals?.missingDisplay ??
+    CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput);
+  if (missingDisplay && !headlessMode.headless) {
     hints.push(
       "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
     );
   }
-  if (CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput)) {
+  const singletonInUse =
+    params.stderrSignals?.singletonInUse ??
+    CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput);
+  if (singletonInUse) {
     hints.push(
       `The Chromium profile "${params.profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${params.profile.name}/user-data.`,
     );
@@ -843,7 +898,7 @@ async function fetchChromeVersion(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<ChromeVersion | null> {
   try {
-    return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
+    return await readChromeVersionWithCredentialFallback(cdpUrl, timeoutMs, ssrfPolicy);
   } catch {
     return null;
   }
@@ -856,6 +911,7 @@ export async function getChromeWebSocketUrl(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<string | null> {
   await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
   if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
     // Handshake-ready direct WebSocket endpoint — the cdpUrl is already
     // the WebSocket URL.
@@ -867,7 +923,7 @@ export async function getChromeWebSocketUrl(
   const discoveryUrl = isWebSocketUrl(cdpUrl)
     ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
     : cdpUrl;
-  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy);
   const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
   if (!wsUrl) {
     // /json/version unavailable or returned no WebSocket URL. For bare
@@ -881,7 +937,10 @@ export async function getChromeWebSocketUrl(
     return null;
   }
   const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);
-  await assertCdpEndpointAllowed(normalizedWsUrl, ssrfPolicy, { source: "discovered" });
+  await assertCdpEndpointAllowed(normalizedWsUrl, cdpControlPolicy, {
+    source: "discovered",
+    configuredUrl: cdpUrl,
+  });
   return normalizedWsUrl;
 }
 
@@ -915,7 +974,17 @@ export async function launchOpenClawChrome(
     launchOptions,
   );
   if (missingDisplayError) {
-    throw new BrowserProfileUnavailableError(missingDisplayError);
+    throw new BrowserProfileUnavailableError(missingDisplayError.message, {
+      metadata: {
+        reason: BROWSER_ERROR_REASONS.noDisplayForHeadedProfile,
+        details: {
+          profile: profile.name,
+          requestedHeadless: false,
+          headlessSource: missingDisplayError.headlessSource,
+          displayPresent: false,
+        },
+      },
+    });
   }
 
   // Surface `loopbackMode=block` before spawning Chrome. The CDP fetch and
@@ -962,7 +1031,7 @@ export async function launchOpenClawChrome(
   );
 
   // First launch to create preference files if missing, then decorate and relaunch.
-  const spawnOnce = () => {
+  const spawnOnce = async (onStderr?: (chunk: Buffer | string) => void) => {
     const args = buildOpenClawChromeLaunchArgs({
       resolved,
       profile,
@@ -987,10 +1056,26 @@ export async function launchOpenClawChrome(
     const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
       env,
     });
-    return spawn(preparedSpawn.command, preparedSpawn.args, {
+    const proc = spawn(preparedSpawn.command, preparedSpawn.args, {
       stdio: ["ignore", "ignore", "pipe"],
       env: preparedSpawn.env,
     }) as unknown as ChildProcessWithoutNullStreams;
+    // Spawn and later kill failures arrive through EventEmitter. Keep this
+    // listener for the whole child lifetime so neither path can crash Gateway.
+    proc.on("error", (err) => {
+      log.debug(`managed Chrome process error: ${redactToolPayloadText(String(err))}`);
+    });
+    if (onStderr) {
+      proc.stderr?.on("data", onStderr);
+    }
+    if (proc.pid == null) {
+      await once(proc, "spawn");
+    }
+    const pid = proc.pid;
+    if (pid == null) {
+      throw new Error("Managed Chrome process spawned without a pid.");
+    }
+    return { pid, proc };
   };
 
   const startedAt = Date.now();
@@ -998,7 +1083,7 @@ export async function launchOpenClawChrome(
   // If the profile doesn't exist yet, bootstrap it once so Chrome creates defaults.
   // Then decorate (if needed) before the "real" run.
   if (needsBootstrap) {
-    const bootstrap = spawnOnce();
+    const { proc: bootstrap } = await spawnOnce();
     const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
     while (Date.now() < deadline) {
       if (exists(localStatePath) && exists(preferencesPath)) {
@@ -1045,18 +1130,19 @@ export async function launchOpenClawChrome(
   }
 
   const launchOnceAndWait = async (allowSingletonRecovery: boolean): Promise<RunningChrome> => {
-    const proc = spawnOnce();
-
-    // Collect stderr for diagnostics in case Chrome fails to start.
-    // The listener is removed on success to avoid unbounded memory growth
-    // from a long-lived Chrome process that emits periodic warnings.
-    const stderrChunks: Buffer[] = [];
-    const onStderr = (chunk: Buffer) => {
-      stderrChunks.push(chunk);
+    // Keep a bounded stderr tail for diagnostics in case Chrome fails to start.
+    // Attach before awaiting spawn so immediate diagnostics cannot be lost.
+    const stderrDiagnostics = createChromeLaunchStderrDiagnostics(
+      CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES,
+    );
+    const onStderr = (chunk: Buffer | string) => {
+      stderrDiagnostics.append(chunk);
     };
-    proc.stderr?.on("data", onStderr);
+    let proc: ChildProcessWithoutNullStreams | undefined;
 
     try {
+      const spawned = await spawnOnce(onStderr);
+      proc = spawned.proc;
       const readyDeadline =
         Date.now() + (resolved.localLaunchTimeoutMs ?? CHROME_LAUNCH_READY_WINDOW_MS);
       let launchHttpReachable = false;
@@ -1093,12 +1179,12 @@ export async function launchOpenClawChrome(
         if (launchHttpReachable) {
           log.debug(diagnosticText);
         } else {
-          const stderrOutput =
-            normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
+          const stderrOutput = normalizeOptionalString(stderrDiagnostics.toString()) ?? "";
+          const stderrSignals = stderrDiagnostics.signals();
           const redactedStderrOutput = redactToolPayloadText(stderrOutput);
           if (
             allowSingletonRecovery &&
-            CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
+            stderrSignals.singletonInUse &&
             clearStaleChromeSingletonLocks(userDataDir)
           ) {
             log.warn(
@@ -1108,9 +1194,15 @@ export async function launchOpenClawChrome(
             return await launchOnceAndWait(false);
           }
           const stderrHint = redactedStderrOutput
-            ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+            ? `\nChrome stderr:\n${redactedStderrOutput.slice(-CHROME_STDERR_HINT_MAX_CHARS)}`
             : "";
-          const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
+          const launchHints = chromeLaunchHints({
+            stderrOutput,
+            stderrSignals,
+            resolved,
+            profile,
+            launchOptions,
+          });
           try {
             proc.kill("SIGKILL");
           } catch {
@@ -1122,7 +1214,7 @@ export async function launchOpenClawChrome(
         }
       }
 
-      const pid = proc.pid ?? -1;
+      const pid = spawned.pid;
       log.info(
         `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
       );
@@ -1139,9 +1231,9 @@ export async function launchOpenClawChrome(
       };
     } finally {
       // Chrome started successfully or launch failed — detach the stderr listener
-      // and release the buffer.
-      proc.stderr?.off("data", onStderr);
-      stderrChunks.length = 0;
+      // and release the bounded tail buffer.
+      proc?.stderr?.off("data", onStderr);
+      stderrDiagnostics.clear();
     }
   };
 

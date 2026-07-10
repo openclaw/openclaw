@@ -30,4 +30,5 @@ export type CronRunLogEntry = {
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
+  triggerFired?: boolean;
 } & CronRunTelemetry;

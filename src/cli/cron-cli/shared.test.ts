@@ -90,6 +90,21 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "isolated");
   });
 
+  it.each([
+    ["split surrogate", `${"x".repeat(20)}🚀tail`, `${"x".repeat(20)}...`],
+    ["ASCII boundary", `${"x".repeat(21)}Atail`, `${"x".repeat(21)}...`],
+    ["intact surrogate pair", `${"x".repeat(19)}🚀tail`, `${"x".repeat(19)}🚀...`],
+  ])("keeps %s truncation UTF-16 safe", (_label, name, expected) => {
+    const { logs, runtime } = createRuntimeLogCapture();
+
+    printCronList([createBaseJob({ name })], runtime);
+
+    expectLogsToInclude(logs, expected);
+    const output = logs.join("\n");
+    expect(Buffer.from(output, "utf8").toString("utf8")).toBe(output);
+    expect(output).not.toContain("\uFFFD");
+  });
+
   it("shows declaration metadata and existing run status", () => {
     const job = createBaseJob({
       declarationKey: "daily-report",
@@ -153,6 +168,26 @@ describe("printCronList", () => {
 
     printCronList([job], runtime);
     expectLogsToInclude(logs, "(stagger 5m)");
+  });
+
+  it("marks trigger schedules and shows evaluation details", () => {
+    const job = createBaseJob({
+      schedule: { kind: "every", everyMs: 30_000 },
+      trigger: { script: "json({ fire: true })", once: true },
+      state: {
+        triggerEvalCount: 4,
+        lastTriggerEvalAtMs: Date.now() - 30_000,
+        lastTriggerFireAtMs: Date.now() - 60_000,
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "every 30s+trigger");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "trigger: once=yes; evals=4;");
   });
 
   it("shows on-exit schedules in list and show output", () => {

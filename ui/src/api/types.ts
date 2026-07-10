@@ -312,6 +312,7 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
@@ -369,7 +370,7 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
-export type SessionWorkspaceFileEntry = {
+type SessionWorkspaceFileEntry = {
   path: string;
   workspacePath?: string;
   name: string;
@@ -397,7 +398,7 @@ type SessionWorkspaceBrowserResult = {
   truncated?: boolean;
 };
 
-export type SessionWorkspaceArtifactEntry = {
+type SessionWorkspaceArtifactEntry = {
   id: string;
   type: string;
   title: string;
@@ -468,6 +469,10 @@ type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  /** Managed worktree bound to this session (repo checkout + branch). */
+  worktree?: { id: string; branch: string; repoRoot: string };
+  /** Session-scoped exec node binding (exec host=node routing). */
+  execNode?: string;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
@@ -568,6 +573,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    thinkingLevel?: string;
+    thinkingLevels?: GatewayThinkingLevelOption[];
   };
 };
 

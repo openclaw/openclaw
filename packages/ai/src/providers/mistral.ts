@@ -1,4 +1,5 @@
 // Mistral provider adapts Mistral streams and tool calls to the runtime.
+import { randomUUID } from "node:crypto";
 import { HTTPClient, Mistral, type Fetcher } from "@mistralai/mistralai";
 import type {
   ChatCompletionStreamRequest,
@@ -7,7 +8,9 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   AssistantMessage,
@@ -57,9 +60,10 @@ const MISTRAL_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024;
  */
 export function createBoundedMistralFetcher(
   maxBytes: number = MISTRAL_STREAM_BODY_MAX_BYTES,
+  upstreamFetch: Fetcher = fetch,
 ): Fetcher {
   return async (input, init) => {
-    const response = init == null ? await fetch(input) : await fetch(input, init);
+    const response = init == null ? await upstreamFetch(input) : await upstreamFetch(input, init);
     if (!response.body || typeof response.body.getReader !== "function") {
       return response;
     }
@@ -98,7 +102,7 @@ export function createBoundedMistralFetcher(
  */
 type MistralReasoningEffort = "none" | "high";
 
-export interface MistralOptions extends StreamOptions {
+interface MistralOptions extends StreamOptions {
   toolChoice?:
     | "auto"
     | "none"
@@ -139,7 +143,13 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         // `httpClient` is passed, `ClientSDK.#httpClient` is set from it and
         // every `chat.stream` / `complete` call routes through
         // `HTTPClient.request` → `this.fetcher(req)`).
-        httpClient: new HTTPClient({ fetcher: createBoundedMistralFetcher() }),
+        // Mistral accepts HTTPClient.fetcher, so compose guarded egress with the byte cap.
+        httpClient: new HTTPClient({
+          fetcher: createBoundedMistralFetcher(
+            MISTRAL_STREAM_BODY_MAX_BYTES,
+            getAiTransportHost().buildModelFetch(model) ?? fetch,
+          ),
+        }),
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
@@ -264,6 +274,7 @@ function deriveMistralToolCallId(id: string, attempt: number): string {
   const seed = attempt === 0 ? seedBase : `${seedBase}:${attempt}`;
   return shortHash(seed)
     .replace(/[^a-zA-Z0-9]/g, "")
+    .padEnd(MISTRAL_TOOL_CALL_ID_LENGTH, "0")
     .slice(0, MISTRAL_TOOL_CALL_ID_LENGTH);
 }
 
@@ -287,7 +298,8 @@ function truncateErrorText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, maxChars)}... [truncated ${text.length - maxChars} chars]`;
+  const truncated = truncateUtf16Safe(text, maxChars);
+  return `${truncated}... [truncated ${text.length - truncated.length} chars]`;
 }
 
 function safeJsonStringify(value: unknown): string {
@@ -393,7 +405,161 @@ async function consumeChatStream(
   let currentBlock: TextContent | ThinkingContent | null = null;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
-  const toolBlocksByKey = new Map<string, number>();
+  type ToolBlockIdentity = {
+    explicitIds: Set<string>;
+    functionNames: Set<string>;
+    indexes: Set<number>;
+  };
+  // Persist every identity fact across chunks. The SDK defaults omitted indexes
+  // to zero, so only a unique compatible candidate may receive later arguments.
+  const toolBlockIdentities = new Map<number, ToolBlockIdentity>();
+  const normalizeMissingToolCallId = createMistralToolCallIdNormalizer();
+  // Some Mistral-compatible endpoints omit tool-call ids. Their streamed index
+  // is only response-local, so namespace the fallback before strict-9 hashing.
+  const missingToolCallIdScope = randomUUID();
+  const createMissingToolCallId = (contentIndex: number) =>
+    normalizeMissingToolCallId(`${missingToolCallIdScope}:toolcall:${contentIndex}`);
+
+  const findIdentityCandidates = (
+    matches: (identity: ToolBlockIdentity) => boolean,
+    excludedContentIndexes?: ReadonlySet<number>,
+  ): Set<number> => {
+    const candidates = new Set<number>();
+    for (const [contentIndex, identity] of toolBlockIdentities) {
+      if (!excludedContentIndexes?.has(contentIndex) && matches(identity)) {
+        candidates.add(contentIndex);
+      }
+    }
+    return candidates;
+  };
+
+  const intersectCandidates = (left: Set<number>, right: Set<number>): Set<number> =>
+    new Set([...left].filter((contentIndex) => right.has(contentIndex)));
+
+  const requireSingleCandidate = (candidates: Set<number>): number | undefined => {
+    if (candidates.size > 1) {
+      throw new Error(
+        "Mistral streamed tool-call continuation is ambiguous; refusing to merge arguments",
+      );
+    }
+    return candidates.values().next().value;
+  };
+
+  const requireExistingCandidate = (candidates: Set<number>): number => {
+    const candidate = requireSingleCandidate(candidates);
+    if (candidate === undefined) {
+      throw new Error(
+        "Mistral streamed tool-call identities conflict; refusing to merge arguments",
+      );
+    }
+    return candidate;
+  };
+
+  const resolveToolBlockIndex = (params: {
+    explicitId?: string;
+    functionName?: string;
+    index?: number;
+    usedContentIndexes: ReadonlySet<number>;
+  }): number | undefined => {
+    const explicitId = params.explicitId;
+    const functionName = params.functionName;
+    const toolCallIndex = params.index;
+    const idCandidates = explicitId
+      ? findIdentityCandidates(
+          (identity) => identity.explicitIds.has(explicitId),
+          params.usedContentIndexes,
+        )
+      : new Set<number>();
+    const nameCandidates = functionName
+      ? findIdentityCandidates(
+          (identity) => identity.functionNames.has(functionName),
+          params.usedContentIndexes,
+        )
+      : new Set<number>();
+    const indexCandidates =
+      toolCallIndex === undefined
+        ? new Set<number>()
+        : findIdentityCandidates(
+            (identity) => identity.indexes.has(toolCallIndex),
+            params.usedContentIndexes,
+          );
+
+    if (idCandidates.size > 0) {
+      let candidates = idCandidates;
+      if (nameCandidates.size > 0) {
+        candidates = intersectCandidates(candidates, nameCandidates);
+      }
+      return requireExistingCandidate(candidates);
+    }
+
+    if (nameCandidates.size > 0) {
+      const idCompatibleCandidates = new Set(
+        [...nameCandidates].filter((contentIndex) => {
+          const identity = toolBlockIdentities.get(contentIndex);
+          if (!identity) {
+            return false;
+          }
+          return !explicitId || identity.explicitIds.size === 0;
+        }),
+      );
+      if (
+        idCompatibleCandidates.size <= 1 &&
+        (toolCallIndex === undefined || toolCallIndex === 0)
+      ) {
+        // A unique persistent name is stronger than the SDK's default index
+        // zero. Preserve nonzero indices, which unambiguously start or resume a
+        // different call even when the provider repeats a function name.
+        return requireSingleCandidate(idCompatibleCandidates);
+      }
+      const indexCompatibleCandidates = new Set(
+        [...idCompatibleCandidates].filter((contentIndex) => {
+          const identity = toolBlockIdentities.get(contentIndex);
+          if (!identity) {
+            return false;
+          }
+          return (
+            toolCallIndex === undefined ||
+            identity.indexes.size === 0 ||
+            identity.indexes.has(toolCallIndex)
+          );
+        }),
+      );
+      if (indexCompatibleCandidates.size === 0) {
+        return undefined;
+      }
+      return requireSingleCandidate(indexCompatibleCandidates);
+    }
+
+    if (functionName) {
+      // A new name normally starts a sibling call even when the SDK's omitted
+      // index default aliases an earlier block. It is a continuation only when
+      // one nameless block can safely adopt the name.
+      const namelessCandidates = new Set(
+        [...indexCandidates].filter((contentIndex) => {
+          const identity = toolBlockIdentities.get(contentIndex);
+          return (
+            identity?.functionNames.size === 0 && (!explicitId || identity.explicitIds.size === 0)
+          );
+        }),
+      );
+      return requireSingleCandidate(namelessCandidates);
+    }
+
+    if (explicitId) {
+      // A provider id may arrive after an idless opening fragment. Adopt it
+      // only when one indexed block still lacks an explicit id.
+      const idlessCandidates = new Set(
+        [...indexCandidates].filter(
+          (contentIndex) => toolBlockIdentities.get(contentIndex)?.explicitIds.size === 0,
+        ),
+      );
+      return requireSingleCandidate(idlessCandidates);
+    }
+
+    // With neither id nor name, index is the only remaining identity. Never
+    // guess when the SDK's default index aliases multiple open tool calls.
+    return requireSingleCandidate(indexCandidates);
+  };
 
   const finishCurrentBlock = (block?: typeof currentBlock) => {
     if (!block) {
@@ -510,17 +676,27 @@ async function consumeChatStream(
     }
 
     const toolCalls = delta.toolCalls || [];
+    // One streamed delta carries at most one fragment per logical call. Reusing
+    // a block here would collapse parallel siblings before persistent identity
+    // candidates can distinguish their later continuations.
+    const usedToolBlockIndexes = new Set<number>();
     for (const toolCall of toolCalls) {
       if (currentBlock) {
         finishCurrentBlock(currentBlock);
         currentBlock = null;
       }
-      const callId =
-        toolCall.id && toolCall.id !== "null"
-          ? toolCall.id
-          : deriveMistralToolCallId(`toolcall:${toolCall.index ?? 0}`, 0);
-      const key = `${callId}:${toolCall.index || 0}`;
-      const existingIndex = toolBlocksByKey.get(key);
+      const toolCallIndex =
+        typeof toolCall.index === "number" && Number.isInteger(toolCall.index)
+          ? toolCall.index
+          : undefined;
+      const providedCallId = toolCall.id && toolCall.id !== "null" ? toolCall.id : undefined;
+      const functionName = toolCall.function.name.trim() || undefined;
+      const existingIndex = resolveToolBlockIndex({
+        explicitId: providedCallId,
+        functionName,
+        index: toolCallIndex,
+        usedContentIndexes: usedToolBlockIndexes,
+      });
       let block: (ToolCall & { partialArgs?: string }) | undefined;
 
       if (existingIndex !== undefined) {
@@ -529,22 +705,48 @@ async function consumeChatStream(
           block = existing as ToolCall & { partialArgs?: string };
         }
       }
-
       if (!block) {
+        const contentIndex = output.content.length;
         block = {
           type: "toolCall",
-          id: callId,
-          name: toolCall.function.name,
+          id: providedCallId ?? createMissingToolCallId(contentIndex),
+          name: functionName ?? "",
           arguments: {},
           partialArgs: "",
         };
         output.content.push(block);
-        toolBlocksByKey.set(key, output.content.length - 1);
+        toolBlockIdentities.set(contentIndex, {
+          explicitIds: new Set(providedCallId ? [providedCallId] : []),
+          functionNames: new Set(functionName ? [functionName] : []),
+          indexes: new Set(toolCallIndex === undefined ? [] : [toolCallIndex]),
+        });
         stream.push({
           type: "toolcall_start",
-          contentIndex: output.content.length - 1,
+          contentIndex,
           partial: output,
         });
+      }
+      const contentIndex = output.content.indexOf(block);
+      const identity = toolBlockIdentities.get(contentIndex);
+      if (!identity) {
+        throw new Error("Mistral streamed tool-call identity is missing");
+      }
+      usedToolBlockIndexes.add(contentIndex);
+      if (providedCallId) {
+        block.id = providedCallId;
+        identity.explicitIds.add(providedCallId);
+      }
+      if (functionName) {
+        if (identity.functionNames.size > 0 && !identity.functionNames.has(functionName)) {
+          throw new Error(
+            "Mistral streamed tool-call continuation changed function name; refusing to merge arguments",
+          );
+        }
+        block.name = functionName;
+        identity.functionNames.add(functionName);
+      }
+      if (toolCallIndex !== undefined) {
+        identity.indexes.add(toolCallIndex);
       }
 
       const argsDelta =
@@ -555,7 +757,7 @@ async function consumeChatStream(
       block.arguments = parseStreamingJson(block.partialArgs);
       stream.push({
         type: "toolcall_delta",
-        contentIndex: toolBlocksByKey.get(key)!,
+        contentIndex,
         delta: argsDelta,
         partial: output,
       });
@@ -563,7 +765,7 @@ async function consumeChatStream(
   }
 
   finishCurrentBlock(currentBlock);
-  for (const index of toolBlocksByKey.values()) {
+  for (const index of toolBlockIdentities.keys()) {
     const block = output.content[index];
     if (block.type !== "toolCall") {
       continue;

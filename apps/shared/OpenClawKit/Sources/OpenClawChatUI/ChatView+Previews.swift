@@ -50,7 +50,9 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
                     timestamp: 1),
                 Self.message(
                     role: "assistant",
-                    text: "Gateway is reachable. The only notable item is that push relay is still using local distribution, so device tests should stay on the local lane.",
+                    text: "Gateway is reachable. The only notable item is that push relay "
+                        + "is still using local distribution, so device tests should stay "
+                        + "on the local lane.",
                     timestamp: 2),
                 Self.toolCall(
                     id: "tool-preview-1",
@@ -91,7 +93,11 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
     }
 
-    func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
+    func listSessions(
+        limit _: Int?,
+        search _: String?,
+        archived _: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
         OpenClawChatSessionsListResponse(
             ts: 0,
             path: nil,

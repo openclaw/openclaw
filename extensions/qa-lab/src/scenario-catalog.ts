@@ -66,12 +66,19 @@ const qaScenarioChannelSchema = z
     message: "scenario execution channel ids must use lowercase dotted or dashed tokens",
   });
 
+const qaScenarioTransportPolicySchema = z.object({
+  requireGroupMention: z.literal(true).optional(),
+  senderAllowlist: z.array(z.string().trim().min(1)).min(1).optional(),
+  topLevelReplies: z.literal(true).optional(),
+});
+
 const qaFlowScenarioExecutionSchema = z.object({
   kind: z.literal("flow").default("flow"),
   summary: z.string().trim().min(1).optional(),
   channel: qaScenarioChannelSchema.optional(),
   suiteIsolation: z.literal("isolated").optional(),
   isolationReason: z.string().trim().min(1).optional(),
+  transportPolicy: qaScenarioTransportPolicySchema.optional(),
   config: qaScenarioConfigSchema.optional(),
 });
 
@@ -83,8 +90,13 @@ const qaTestFileScenarioExecutionBaseSchema = z.object({
 });
 
 const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
-  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("vitest") }),
-  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("playwright") }),
+  qaTestFileScenarioExecutionBaseSchema.extend({
+    kind: z.literal("vitest"),
+  }),
+  qaTestFileScenarioExecutionBaseSchema.extend({
+    kind: z.literal("playwright"),
+    testNamePattern: z.string().trim().min(1).optional(),
+  }),
   qaTestFileScenarioExecutionBaseSchema.extend({
     kind: z.literal("script"),
     allowBlockedEvidence: z.boolean().optional(),
@@ -154,6 +166,15 @@ const qaScenarioGatewayRuntimeSchema = z.object({
 
 export const QA_RUNTIME_PARITY_TIERS = ["standard", "optional", "live-only", "soak"] as const;
 const qaRuntimeParityTierSchema = z.enum(QA_RUNTIME_PARITY_TIERS);
+const qaRuntimeParityUsageSchema = z.discriminatedUnion("expectation", [
+  z.object({
+    expectation: z.literal("assistant-message-required"),
+  }),
+  z.object({
+    expectation: z.literal("not-applicable"),
+    reason: z.string().trim().min(1),
+  }),
+]);
 
 const qaFlowCallActionSchema = z.object({
   call: z.string().trim().min(1),
@@ -264,6 +285,7 @@ const qaSeedScenarioBodySchema = z.object({
   surface: z.string().trim().min(1),
   category: z.string().trim().min(1).optional(),
   runtimeParityTier: qaRuntimeParityTierSchema.optional(),
+  runtimeParityUsage: qaRuntimeParityUsageSchema.optional(),
   coverage: qaScenarioCoverageSchema.optional(),
   surfaces: z.array(z.string().trim().min(1)).min(1).optional(),
   risk: z.enum(["low", "medium", "high"]).optional(),
@@ -285,11 +307,21 @@ const qaSeedScenarioSchema = qaSeedScenarioBodySchema.extend({
   title: z.string().trim().min(1),
 });
 
-const qaScenarioFileSchema = z.object({
-  title: z.string().trim().min(1),
-  scenario: qaSeedScenarioBodySchema,
-  flow: qaFlowSchema.optional(),
-});
+const qaScenarioFileSchema = z
+  .object({
+    title: z.string().trim().min(1),
+    scenario: qaSeedScenarioBodySchema,
+    flow: qaFlowSchema.optional(),
+  })
+  .superRefine((file, ctx) => {
+    if (file.scenario.runtimeParityUsage && !file.scenario.runtimeParityTier) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["scenario", "runtimeParityUsage"],
+        message: "runtimeParityUsage requires runtimeParityTier",
+      });
+    }
+  });
 
 const qaScenarioPackSchema = z.object({
   version: z.number().int().positive(),
@@ -311,6 +343,7 @@ const qaScenarioPackFileSchema = z.object({
 export type QaScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QaScenarioFlow = z.infer<typeof qaFlowSchema>;
 export type QaRuntimeParityTier = z.infer<typeof qaRuntimeParityTierSchema>;
+export type QaRuntimeParityUsage = z.infer<typeof qaRuntimeParityUsageSchema>;
 export type QaSeedScenario = z.infer<typeof qaSeedScenarioSchema>;
 export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;

@@ -3,10 +3,23 @@ import Foundation
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
+    case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
     case seqGap
+}
+
+public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
+    public let sessionKey: String?
+    public let agentId: String?
+    public let reason: String
+
+    public init(sessionKey: String?, agentId: String? = nil, reason: String) {
+        self.sessionKey = sessionKey
+        self.agentId = agentId
+        self.reason = reason
+    }
 }
 
 /// One immutable transport route used by an entire outbox flush. Route-aware
@@ -132,8 +145,10 @@ public protocol OpenClawChatTransport: Sendable {
     var outboxRequiresSessionRoutingContract: Bool { get }
 
     func abortRun(sessionKey: String, runId: String) async throws
-    func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse
-    func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    func listSessions(
+        limit: Int?,
+        search: String?,
+        archived: Bool) async throws -> OpenClawChatSessionsListResponse
     func patchSession(
         key: String,
         label: String??,
@@ -144,6 +159,10 @@ public protocol OpenClawChatTransport: Sendable {
     func deleteSession(key: String) async throws
     func forkSession(parentKey: String) async throws -> String
     func setSessionModel(sessionKey: String, model: String?) async throws
+    func patchSessionModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
@@ -232,21 +251,27 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "chat.abort not supported by this transport"])
     }
 
-    public func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
+    public func listSessions(
+        limit _: Int?,
+        search _: String?,
+        archived _: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.list not supported by this transport"])
     }
 
+    /// Conveniences for callers that only page a list. Transports must
+    /// implement the canonical `listSessions(limit:search:archived:)`
+    /// requirement; same-name methods on a conformer are shadowed by these
+    /// sugars and never called through the protocol.
+    public func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
+        try await self.listSessions(limit: limit, search: nil, archived: false)
+    }
+
     public func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse {
-        guard !archived else {
-            throw NSError(
-                domain: "OpenClawChatTransport",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "archived sessions.list not supported by this transport"])
-        }
-        return try await self.listSessions(limit: limit)
+        try await self.listSessions(limit: limit, search: nil, archived: archived)
     }
 
     public func patchSession(
@@ -297,6 +322,15 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.patch(model) not supported by this transport"])
+    }
+
+    public func patchSessionModel(
+        sessionKey: String,
+        agentID _: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
+    {
+        try await self.setSessionModel(sessionKey: sessionKey, model: model)
+        return nil
     }
 
     public func setSessionThinking(sessionKey _: String, thinkingLevel _: String) async throws {

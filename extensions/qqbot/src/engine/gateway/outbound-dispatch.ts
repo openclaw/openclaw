@@ -15,6 +15,7 @@ import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inb
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createQQBotMarkdownChunker } from "../messaging/markdown-table-chunking.js";
 import {
   parseAndSendMediaTags,
@@ -240,7 +241,7 @@ export async function dispatchOutbound(
       }
     }
     if (toolTexts.length > 0) {
-      await sendErrorMessage(toolTexts.slice(-3).join("\n---\n").slice(0, 2000));
+      await sendErrorMessage(truncateUtf16Safe(toolTexts.slice(-3).join("\n---\n"), 2000));
     }
   };
 

@@ -15,6 +15,14 @@ internal fun GatewayModelSummary.providerQualifiedRef(): String {
   return if (id.startsWith(providerPrefix)) id else "$providerPrefix$id"
 }
 
+internal fun thinkingSupportedForSelection(
+  selectedModelRef: String?,
+  catalog: List<GatewayModelSummary>,
+): Boolean {
+  val selected = selectedModelRef ?: return true
+  return catalog.firstOrNull { it.providerQualifiedRef() == selected }?.supportsReasoning != false
+}
+
 internal fun chatModelPickerSections(
   catalog: List<GatewayModelSummary>,
   favorites: List<String>,

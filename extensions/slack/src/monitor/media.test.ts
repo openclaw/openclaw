@@ -997,6 +997,55 @@ describe("resolveSlackThreadHistory", () => {
     ]);
   });
 
+  it("returns no thread history when pagination exceeds the bounded fetched window", async () => {
+    vi.mocked(logVerbose).mockClear();
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 200 }, (_, i) => ({
+          text: `msg-${i + 1}`,
+          user: "U1",
+          ts: `${i + 1}.000`,
+        })),
+        response_metadata: { next_cursor: "cursor-2" },
+      })
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 200 }, (_, i) => ({
+          text: `msg-${i + 201}`,
+          user: "U1",
+          ts: `${i + 201}.000`,
+        })),
+        response_metadata: { next_cursor: "cursor-3" },
+      })
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 200 }, (_, i) => ({
+          text: `msg-${i + 401}`,
+          user: "U1",
+          ts: `${i + 401}.000`,
+        })),
+        response_metadata: { next_cursor: "cursor-4" },
+      });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 3,
+    });
+
+    expect(replies).toHaveBeenCalledTimes(3);
+    expect(requireMockCall(replies, 2, "conversations.replies")[0]).toMatchObject({
+      cursor: "cursor-3",
+      limit: 200,
+    });
+    expect(result).toEqual([]);
+    expectVerboseLogContains("slack thread history capped");
+    expectVerboseLogContains("channel=C1");
+  });
+
   it("includes file-only messages and drops empty-only entries", async () => {
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [
@@ -1095,6 +1144,50 @@ describe("resolveSlackThreadHistory", () => {
       "BMONITOR",
       "BMONITOR",
       undefined,
+    ]);
+  });
+
+  it("keeps native chart values with top-level text in thread history", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "Latency report",
+          bot_id: "BMONITOR",
+          ts: "1.000",
+          blocks: [
+            {
+              type: "data_visualization",
+              title: "Weekly latency",
+              chart: {
+                type: "line",
+                series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
+                axis_config: { categories: ["Mon"] },
+              },
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toEqual([
+      {
+        text: "Latency report\nWeekly latency (line chart)\n- p95: Mon: 250",
+        userId: undefined,
+        botId: "BMONITOR",
+        ts: "1.000",
+        files: undefined,
+      },
     ]);
   });
 

@@ -9,6 +9,7 @@ import {
   type RealtimeTalkConversationState,
 } from "./realtime-talk-conversation.ts";
 import { discoverRealtimeTalkInputs, type RealtimeTalkInputDevice } from "./realtime-talk-input.ts";
+import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
@@ -41,9 +42,9 @@ export type ChatRealtimeState = {
   realtimeTalkActive: boolean;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
+  realtimeTalkInputLevel: RealtimeTalkLevelSignal;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkOptions: RealtimeTalkOptions;
-  realtimeTalkInputOpen: boolean;
   realtimeTalkInputDevices: RealtimeTalkInputDevice[];
   realtimeTalkInputDeviceId: string;
   realtimeTalkInputLoading: boolean;
@@ -59,7 +60,7 @@ export type ChatRealtimeState = {
   toggleRealtimeTalk: () => Promise<void>;
 };
 
-export function createDefaultRealtimeTalkOptions(): RealtimeTalkOptions {
+function createDefaultRealtimeTalkOptions(): RealtimeTalkOptions {
   return {
     model: "",
     voice: "",
@@ -67,14 +68,23 @@ export function createDefaultRealtimeTalkOptions(): RealtimeTalkOptions {
   };
 }
 
+function parseVadThresholdOption(value: string): number | undefined {
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const threshold = Number(normalized);
+  return Number.isFinite(threshold) && threshold >= 0 && threshold <= 1 ? threshold : undefined;
+}
+
 export function createInitialChatRealtimeState(inputDeviceId = "") {
   return {
     realtimeTalkActive: false,
     realtimeTalkStatus: "idle" as RealtimeTalkStatus,
     realtimeTalkDetail: null,
+    realtimeTalkInputLevel: new RealtimeTalkLevelSignal(),
     realtimeTalkConversation: [],
     realtimeTalkOptions: createDefaultRealtimeTalkOptions(),
-    realtimeTalkInputOpen: false,
     realtimeTalkInputDevices: [] as RealtimeTalkInputDevice[],
     realtimeTalkInputDeviceId: inputDeviceId,
     realtimeTalkInputLoading: false,
@@ -99,6 +109,7 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
   state.realtimeTalkActive = false;
   state.realtimeTalkStatus = "idle";
   state.realtimeTalkDetail = null;
+  state.realtimeTalkInputLevel.set(0);
   state.resetRealtimeTalkConversation();
 }
 
@@ -118,6 +129,8 @@ async function refreshRealtimeTalkInputs(
     state.realtimeTalkInputDevices = result.devices;
     state.realtimeTalkInputDeviceId = currentRealtimeTalkInput(state);
     const selectedDeviceMissing =
+      requestPermission &&
+      result.warning === null &&
       state.realtimeTalkInputDeviceId.length > 0 &&
       result.devices.length > 0 &&
       !result.devices.some((device) => device.deviceId === state.realtimeTalkInputDeviceId);
@@ -158,7 +171,6 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     };
     saveSettings(state.settings);
     state.realtimeTalkInputError = null;
-    state.realtimeTalkInputOpen = false;
     state.requestUpdate();
   };
   state.toggleRealtimeTalk = async () => {
@@ -168,6 +180,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.realtimeTalkActive = false;
       state.realtimeTalkStatus = "idle";
       state.realtimeTalkDetail = null;
+      state.realtimeTalkInputLevel.set(0);
       state.resetRealtimeTalkConversation();
       state.requestUpdate();
       return;
@@ -183,24 +196,40 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     const launchOptions: RealtimeTalkLaunchOptions = {
       model: options.model.trim() || undefined,
       voice: options.voice.trim() || undefined,
-      vadThreshold: Number(options.vadThreshold) || undefined,
+      vadThreshold: parseVadThresholdOption(options.vadThreshold),
     };
     state.realtimeTalkInputDeviceId = inputDeviceId ?? "";
     state.realtimeTalkActive = true;
     state.realtimeTalkStatus = "connecting";
     state.realtimeTalkDetail = null;
+    state.realtimeTalkInputLevel.set(0);
     state.resetRealtimeTalkConversation();
     const session = new RealtimeTalkSession(
       state.client,
       state.sessionKey,
       {
         onStatus: (status, detail) => {
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
           state.realtimeTalkStatus = status;
           state.realtimeTalkDetail = detail ?? null;
           state.realtimeTalkActive = status !== "idle";
+          if (status === "idle" || status === "error") {
+            state.realtimeTalkInputLevel.set(0);
+          }
           state.requestUpdate();
         },
+        onInputLevel: (level) => {
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
+          state.realtimeTalkInputLevel.set(level);
+        },
         onTranscript: (entry) => {
+          if (state.realtimeTalkSession !== session) {
+            return;
+          }
           state.realtimeTalkConversationState = updateRealtimeTalkConversation(
             state.realtimeTalkConversationState,
             entry,
@@ -216,11 +245,15 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     try {
       await session.start();
     } catch (error) {
+      if (state.realtimeTalkSession !== session) {
+        return;
+      }
       session.stop();
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
       state.realtimeTalkStatus = "error";
       state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
+      state.realtimeTalkInputLevel.set(0);
       state.requestUpdate();
     }
   };

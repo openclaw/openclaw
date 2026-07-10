@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
@@ -27,19 +28,16 @@ export type RealtimeTalkOptions = {
 
 export type ChatRealtimeTalkOptionsProps = {
   realtimeTalkOptions?: RealtimeTalkOptions;
-  onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
-  canOpenRealtimeTalkSettings?: boolean;
-  onOpenRealtimeTalkSettings?: () => void;
-  embedded?: boolean;
-};
-
-type ChatRealtimeTalkInputProps = {
-  realtimeTalkInputOpen?: boolean;
   realtimeTalkInputDevices?: RealtimeTalkInputDevice[];
   realtimeTalkInputDeviceId?: string;
   realtimeTalkInputLoading?: boolean;
   realtimeTalkInputError?: string | null;
+  onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
+  onRealtimeTalkInputRefresh?: () => void;
   onRealtimeTalkInputSelect?: (deviceId: string) => void;
+  canOpenRealtimeTalkSettings?: boolean;
+  onOpenRealtimeTalkSettings?: () => void;
+  embedded?: boolean;
 };
 
 type ChatRealtimeTalkConversationProps = {
@@ -49,7 +47,7 @@ type ChatRealtimeTalkConversationProps = {
 };
 
 function renderNativeTalkSelect(params: {
-  id: "sensitivity" | "voice";
+  id: "microphone" | "sensitivity" | "voice";
   label: string;
   value: string;
   options: TalkSelectOption[];
@@ -95,6 +93,86 @@ function getTalkSensitivityOptions(): TalkSelectOption[] {
   ];
 }
 
+function renderRealtimeTalkInputSetting(props: ChatRealtimeTalkOptionsProps) {
+  if (!props.onRealtimeTalkInputSelect) {
+    return nothing;
+  }
+  const devices = props.realtimeTalkInputDevices ?? [];
+  const selectedDeviceId = props.realtimeTalkInputDeviceId?.trim() ?? "";
+  const selectedDeviceKnown = devices.some((device) => device.deviceId === selectedDeviceId);
+  const options = [
+    { label: t("chat.composer.systemDefaultMicrophone"), value: "" },
+    ...devices.map((device) => ({ label: device.label, value: device.deviceId })),
+    ...(selectedDeviceId && !selectedDeviceKnown
+      ? [
+          {
+            label: t("chat.composer.microphoneFallback", {
+              number: String(devices.length + 1),
+            }),
+            value: selectedDeviceId,
+          },
+        ]
+      : []),
+  ];
+  const refreshLabel = `${t("common.refresh")}: ${t("chat.composer.microphoneInput")}`;
+  return html`
+    <div class="agent-chat__talk-input-setting">
+      <div class="agent-chat__talk-input-control">
+        ${renderNativeTalkSelect({
+          id: "microphone",
+          label: t("chat.composer.microphoneInput"),
+          value: selectedDeviceId,
+          options,
+          onSelect: props.onRealtimeTalkInputSelect,
+        })}
+        ${props.onRealtimeTalkInputRefresh
+          ? html`
+              <openclaw-tooltip .content=${refreshLabel}>
+                <button
+                  type="button"
+                  class="agent-chat__talk-input-refresh"
+                  aria-label=${refreshLabel}
+                  ?disabled=${props.realtimeTalkInputLoading}
+                  @click=${props.onRealtimeTalkInputRefresh}
+                >
+                  ${props.realtimeTalkInputLoading ? icons.loader : icons.refresh}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing}
+      </div>
+      ${props.realtimeTalkInputLoading
+        ? html`
+            <div
+              class="agent-chat__talk-input-message agent-chat__talk-input-message--loading"
+              role="status"
+              aria-live="polite"
+            >
+              <span class="agent-chat__talk-input-spinner" aria-hidden="true">${icons.loader}</span>
+              <span>${t("chat.composer.loadingMicrophones")}</span>
+            </div>
+          `
+        : nothing}
+      ${!props.realtimeTalkInputLoading && devices.length === 0 && !props.realtimeTalkInputError
+        ? html`<div class="agent-chat__talk-input-message" role="status">
+            ${t("chat.composer.noMicrophones")}
+          </div>`
+        : nothing}
+      ${props.realtimeTalkInputError
+        ? html`<div
+            class="agent-chat__talk-input-message agent-chat__talk-input-message--error"
+            role="alert"
+          >
+            <span class="agent-chat__talk-input-message-icon" aria-hidden="true"
+              >${icons.alertTriangle}</span
+            >
+            <span>${props.realtimeTalkInputError}</span>
+          </div>`
+        : nothing}
+    </div>
+  `;
+}
+
 export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
   const options = props.realtimeTalkOptions;
   const onChange = props.onRealtimeTalkOptionsChange;
@@ -131,6 +209,7 @@ export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
           options: getTalkSensitivityOptions(),
           onSelect: (vadThreshold) => onChange({ vadThreshold }),
         })}
+        ${renderRealtimeTalkInputSetting(props)}
       </div>
       ${props.onOpenRealtimeTalkSettings
         ? html`
@@ -148,77 +227,6 @@ export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
                 : t("chat.composer.talkMoreInSettings")}
             </button>
           `
-        : nothing}
-    </div>
-  `;
-}
-
-export function renderRealtimeTalkInputPicker(props: ChatRealtimeTalkInputProps, menuId: string) {
-  if (!props.realtimeTalkInputOpen || !props.onRealtimeTalkInputSelect) {
-    return nothing;
-  }
-  const selectedDeviceId = props.realtimeTalkInputDeviceId ?? "";
-  const devices = props.realtimeTalkInputDevices ?? [];
-  const renderOption = (deviceId: string, label: string) => {
-    const selected = selectedDeviceId === deviceId;
-    return html`
-      <button
-        type="button"
-        class="agent-chat__talk-input-option ${selected
-          ? "agent-chat__talk-input-option--selected"
-          : ""}"
-        aria-pressed=${selected ? "true" : "false"}
-        @click=${() => props.onRealtimeTalkInputSelect?.(deviceId)}
-      >
-        <span>${label}</span>
-        ${selected
-          ? html`<span class="agent-chat__talk-input-check" aria-hidden="true"
-              >${icons.check}</span
-            >`
-          : nothing}
-      </button>
-    `;
-  };
-  return html`
-    <div
-      class="agent-chat__talk-input-menu"
-      id=${menuId}
-      role="group"
-      aria-label=${t("chat.composer.microphoneInput")}
-    >
-      <div class="agent-chat__talk-input-heading">
-        <span>${t("chat.composer.microphoneInput")}</span>
-        ${props.realtimeTalkInputLoading
-          ? html`<span class="agent-chat__talk-input-spinner" aria-hidden="true"
-              >${icons.loader}</span
-            >`
-          : nothing}
-      </div>
-      <div class="agent-chat__talk-input-options">
-        ${renderOption("", t("chat.composer.systemDefaultMicrophone"))}
-        ${repeat(
-          devices,
-          (device) => device.deviceId,
-          (device) => renderOption(device.deviceId, device.label),
-        )}
-      </div>
-      ${props.realtimeTalkInputLoading && devices.length === 0
-        ? html`<div class="agent-chat__talk-input-message" role="status" aria-live="polite">
-            ${t("chat.composer.loadingMicrophones")}
-          </div>`
-        : nothing}
-      ${!props.realtimeTalkInputLoading && devices.length === 0 && !props.realtimeTalkInputError
-        ? html`<div class="agent-chat__talk-input-message" role="status">
-            ${t("chat.composer.noMicrophones")}
-          </div>`
-        : nothing}
-      ${props.realtimeTalkInputError
-        ? html`<div
-            class="agent-chat__talk-input-message agent-chat__talk-input-message--error"
-            role="alert"
-          >
-            ${props.realtimeTalkInputError}
-          </div>`
         : nothing}
     </div>
   `;

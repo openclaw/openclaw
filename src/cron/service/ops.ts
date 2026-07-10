@@ -53,16 +53,19 @@ import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import type {
   CronAddOptions,
+  CronEvent,
   CronServiceState,
   CronUpdatePrecondition,
   CronWakeMode,
 } from "./state.js";
+import { emit } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 import {
   applyJobResult,
+  applyTriggerNoFireResult,
+  applyTriggerRunResult,
   armTimer,
-  emit,
   executeJobCoreWithTimeout,
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
@@ -498,16 +501,24 @@ type CronRollbackSnapshot = {
 async function persistOrRestore(
   state: CronServiceState,
   snapshot: CronRollbackSnapshot,
-  postPersistAutoDisableNotifications: Array<() => void> = [],
+  opts: {
+    postPersistAutoDisableNotifications?: Array<() => void>;
+    suppressScheduledJobId?: string;
+  } = {},
 ) {
   try {
-    await persist(state);
+    await persist(
+      state,
+      opts.suppressScheduledJobId === undefined
+        ? undefined
+        : { suppressScheduledJobId: opts.suppressScheduledJobId },
+    );
   } catch (err) {
     state.store = snapshot.store;
     state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
     throw err;
   }
-  for (const notify of postPersistAutoDisableNotifications) {
+  for (const notify of opts.postPersistAutoDisableNotifications ?? []) {
     notify();
   }
 }
@@ -593,7 +604,7 @@ async function persistUpdatedJob(params: {
     }
   }
 
-  await persistOrRestore(state, snapshot);
+  await persistOrRestore(state, snapshot, { suppressScheduledJobId: nextJob.id });
   armTimer(state);
   emit(state, {
     jobId: nextJob.id,
@@ -606,6 +617,7 @@ async function persistUpdatedJob(params: {
 function declarativeFields(job: CronJob, includeEnabled: boolean) {
   return {
     schedule: job.schedule,
+    trigger: job.trigger,
     payload: job.payload,
     delivery: job.delivery,
     displayName: job.displayName,
@@ -644,6 +656,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         defaultAgentId: state.deps.defaultAgentId,
         enabledExplicit: opts?.enabledExplicit === true,
         nowMs: now,
+        cronConfig: state.deps.cronConfig,
       });
       const includeEnabled = opts?.enabledExplicit === true;
       if (
@@ -680,7 +693,10 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
     });
 
-    await persistOrRestore(state, snapshot, postPersistAutoDisableNotifications);
+    await persistOrRestore(state, snapshot, {
+      postPersistAutoDisableNotifications,
+      suppressScheduledJobId: job.id,
+    });
     armTimer(state);
 
     state.deps.log.info(
@@ -722,12 +738,14 @@ async function updateLoadedJob(params: {
   applyJobPatch(nextJob, patch, {
     defaultAgentId: state.deps.defaultAgentId,
     scheduleValidationNowMs: now,
+    cronConfig: state.deps.cronConfig,
   });
   finalizeUpdatedJob({
     job,
     nextJob,
     now,
-    schedulingInputsRequested: patch.schedule !== undefined || patch.enabled !== undefined,
+    schedulingInputsRequested:
+      patch.schedule !== undefined || patch.enabled !== undefined || patch.trigger !== undefined,
     scheduleChanged: patch.schedule !== undefined,
   });
   await persistUpdatedJob({ state, snapshot, nextJob });
@@ -768,7 +786,10 @@ export async function remove(state: CronServiceState, id: string) {
       deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
     });
 
-    await persistOrRestore(state, snapshot, postPersistAutoDisableNotifications);
+    await persistOrRestore(state, snapshot, {
+      postPersistAutoDisableNotifications,
+      suppressScheduledJobId: id,
+    });
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed", job: removedJob });
@@ -794,6 +815,7 @@ type PreparedManualRun =
       jobId: string;
       runId?: string;
       taskRunId?: string;
+      terminalTracker?: ManualRunTerminalTracker;
       activeJobMarker?: CronActiveJobMarker;
       startedAt: number;
       executionJob: CronJob;
@@ -803,7 +825,21 @@ type PreparedManualRun =
 type ManualRunOptions = {
   runId?: string;
   payload?: CronPayload;
+  terminalTracker?: ManualRunTerminalTracker;
 };
+
+type ManualRunTerminalTracker = { emitted: boolean };
+
+function emitManualRunFinished(
+  state: CronServiceState,
+  evt: CronEvent & { action: "finished" },
+  tracker?: ManualRunTerminalTracker,
+): void {
+  emit(state, evt);
+  if (tracker) {
+    tracker.emitted = true;
+  }
+}
 
 type ManualRunDisposition =
   | Extract<PreparedManualRun, { ran: false }>
@@ -825,6 +861,8 @@ async function skipInvalidPersistedManualRun(params: {
   state: CronServiceState;
   job: CronJob;
   mode?: "due" | "force";
+  runId?: string;
+  terminalTracker?: ManualRunTerminalTracker;
   error: unknown;
 }) {
   const endedAt = params.state.deps.nowMs();
@@ -846,19 +884,24 @@ async function skipInvalidPersistedManualRun(params: {
     { preserveSchedule: params.mode === "force" },
   );
 
-  emit(params.state, {
-    jobId: params.job.id,
-    action: "finished",
-    status: "skipped",
-    error: errorText,
-    diagnostics,
-    runAtMs: endedAt,
-    durationMs: params.job.state.lastDurationMs,
-    nextRunAtMs: params.job.state.nextRunAtMs,
-    deliveryStatus: params.job.state.lastDeliveryStatus,
-    deliveryError: params.job.state.lastDeliveryError,
-    failureNotificationDelivery: failureNotificationDeliveryFromJobState(params.job),
-  });
+  emitManualRunFinished(
+    params.state,
+    {
+      jobId: params.job.id,
+      action: "finished",
+      status: "skipped",
+      error: errorText,
+      diagnostics,
+      runId: params.runId,
+      runAtMs: endedAt,
+      durationMs: params.job.state.lastDurationMs,
+      nextRunAtMs: params.job.state.nextRunAtMs,
+      deliveryStatus: params.job.state.lastDeliveryStatus,
+      deliveryError: params.job.state.lastDeliveryError,
+      failureNotificationDelivery: failureNotificationDeliveryFromJobState(params.job),
+    },
+    params.terminalTracker,
+  );
 
   if (shouldDelete && params.state.store) {
     params.state.store.jobs = params.state.store.jobs.filter((entry) => entry.id !== params.job.id);
@@ -959,6 +1002,8 @@ async function inspectManualRunPreflight(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
+  runId?: string,
+  terminalTracker?: ManualRunTerminalTracker,
 ): Promise<ManualRunPreflightResult> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
@@ -977,7 +1022,7 @@ async function inspectManualRunPreflight(
     try {
       assertSupportedJobSpec(job);
     } catch (error) {
-      await skipInvalidPersistedManualRun({ state, job, mode, error });
+      await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
     if (typeof job.state.runningAtMs === "number") {
@@ -1015,7 +1060,13 @@ async function prepareManualRun(
   mode?: "due" | "force",
   opts?: ManualRunOptions,
 ): Promise<PreparedManualRun> {
-  const preflight = await inspectManualRunPreflight(state, id, mode);
+  const preflight = await inspectManualRunPreflight(
+    state,
+    id,
+    mode,
+    opts?.runId,
+    opts?.terminalTracker,
+  );
   if (!preflight.ok) {
     return preflight;
   }
@@ -1060,6 +1111,11 @@ async function prepareManualRun(
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
     const executionJob = structuredClone(job);
+    if (mode === "force" && executionJob.trigger) {
+      // Force means run the payload now; strip the gate only from this snapshot
+      // so persisted trigger state and future due evaluations stay intact.
+      delete executionJob.trigger;
+    }
     if (opts?.payload) {
       executionJob.payload = structuredClone(opts.payload);
     }
@@ -1069,6 +1125,7 @@ async function prepareManualRun(
       jobId: job.id,
       runId: opts?.runId ?? taskRunId,
       taskRunId,
+      terminalTracker: opts?.terminalTracker,
       activeJobMarker,
       startedAt: preflight.now,
       executionJob,
@@ -1098,12 +1155,49 @@ async function finishPreparedManualRun(
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
     }
     const endedAt = state.deps.nowMs();
+    const emitMissingQueuedTerminal = () => {
+      const tracker = prepared.terminalTracker;
+      if (!tracker || tracker.emitted) {
+        return;
+      }
+      const job = state.store?.jobs.find((entry) => entry.id === jobId);
+      const triggerSkipped = coreResult.status === "ok" && coreResult.triggerEval?.fired === false;
+      // enqueueRun acknowledges a concrete run id, so every accepted request
+      // needs one terminal event even if the job or service owner changes mid-run.
+      emitManualRunFinished(
+        state,
+        {
+          jobId,
+          action: "finished",
+          job,
+          status: triggerSkipped ? "skipped" : coreResult.status,
+          error: triggerSkipped
+            ? "queued manual run skipped: trigger condition not met"
+            : coreResult.error,
+          summary: triggerSkipped ? undefined : coreResult.summary,
+          diagnostics: coreResult.diagnostics,
+          delivered: coreResult.delivered,
+          delivery: coreResult.delivery,
+          sessionId: coreResult.sessionId,
+          sessionKey: coreResult.sessionKey,
+          runId,
+          runAtMs: startedAt,
+          durationMs: Math.max(0, endedAt - startedAt),
+          nextRunAtMs: job?.state.nextRunAtMs,
+          model: coreResult.model,
+          provider: coreResult.provider,
+          usage: coreResult.usage,
+        },
+        tracker,
+      );
+    };
     tryFinishManualTaskRun(state, {
       taskRunId,
       coreResult,
       endedAt,
     });
     if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
+      emitMissingQueuedTerminal();
       return;
     }
 
@@ -1120,44 +1214,65 @@ async function finishPreparedManualRun(
         return;
       }
 
-      const shouldDelete = applyJobResult(
-        state,
-        job,
-        {
-          status: coreResult.status,
-          error: coreResult.error,
-          diagnostics: coreResult.diagnostics,
-          delivered: coreResult.delivered,
-          provider: coreResult.provider,
+      let shouldDelete = false;
+      if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
+        // Manual due checks share scheduled quiet-tick semantics: persist the
+        // evaluation but create no finished event or run-history entry.
+        applyTriggerNoFireResult(state, job, {
           startedAt,
           endedAt,
-        },
-        { preserveSchedule: mode === "force" },
-      );
+          triggerEval: coreResult.triggerEval,
+        });
+      } else {
+        shouldDelete = applyJobResult(
+          state,
+          job,
+          {
+            status: coreResult.status,
+            error: coreResult.error,
+            diagnostics: coreResult.diagnostics,
+            delivered: coreResult.delivered,
+            provider: coreResult.provider,
+            startedAt,
+            endedAt,
+          },
+          { preserveSchedule: mode === "force" },
+        );
+        applyTriggerRunResult(job, {
+          status: coreResult.status,
+          endedAt,
+          triggerEval: coreResult.triggerEval,
+        });
 
-      emit(state, {
-        jobId: job.id,
-        action: "finished",
-        job,
-        status: coreResult.status,
-        error: coreResult.error,
-        summary: coreResult.summary,
-        diagnostics: coreResult.diagnostics,
-        delivered: job.state.lastDelivered,
-        deliveryStatus: job.state.lastDeliveryStatus,
-        deliveryError: job.state.lastDeliveryError,
-        failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
-        delivery: coreResult.delivery,
-        sessionId: coreResult.sessionId,
-        sessionKey: coreResult.sessionKey,
-        runId,
-        runAtMs: startedAt,
-        durationMs: job.state.lastDurationMs,
-        nextRunAtMs: job.state.nextRunAtMs,
-        model: coreResult.model,
-        provider: coreResult.provider,
-        usage: coreResult.usage,
-      });
+        emitManualRunFinished(
+          state,
+          {
+            jobId: job.id,
+            action: "finished",
+            job,
+            status: coreResult.status,
+            error: coreResult.error,
+            summary: coreResult.summary,
+            diagnostics: coreResult.diagnostics,
+            delivered: job.state.lastDelivered,
+            deliveryStatus: job.state.lastDeliveryStatus,
+            deliveryError: job.state.lastDeliveryError,
+            failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
+            delivery: coreResult.delivery,
+            sessionId: coreResult.sessionId,
+            sessionKey: coreResult.sessionKey,
+            runId,
+            runAtMs: startedAt,
+            durationMs: job.state.lastDurationMs,
+            nextRunAtMs: job.state.nextRunAtMs,
+            ...(coreResult.triggerEval?.fired ? { triggerFired: true } : {}),
+            model: coreResult.model,
+            provider: coreResult.provider,
+            usage: coreResult.usage,
+          },
+          prepared.terminalTracker,
+        );
+      }
 
       if (shouldDelete && state.store) {
         state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
@@ -1202,6 +1317,7 @@ async function finishPreparedManualRun(
     if (finalized) {
       armTimer(state);
     }
+    emitMissingQueuedTerminal();
   } finally {
     clearManualCronJobActive(state, jobId, prepared.activeJobMarker);
   }
@@ -1230,11 +1346,31 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   }
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
+  const terminalTracker: ManualRunTerminalTracker = { emitted: false };
   void enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
-      const result = await run(state, id, mode, { runId });
+      const result = await run(state, id, mode, { runId, terminalTracker });
       if (result.ok && "ran" in result && !result.ran) {
+        if (result.reason !== "invalid-spec") {
+          const finishedAt = state.deps.nowMs();
+          const job = state.store?.jobs.find((entry) => entry.id === id);
+          emitManualRunFinished(
+            state,
+            {
+              jobId: id,
+              action: "finished",
+              job,
+              status: "skipped",
+              error: `queued manual run skipped before execution: ${result.reason}`,
+              runId,
+              runAtMs: finishedAt,
+              durationMs: 0,
+              nextRunAtMs: job?.state.nextRunAtMs,
+            },
+            terminalTracker,
+          );
+        }
         state.deps.log.info(
           { jobId: id, runId, reason: result.reason },
           "cron: queued manual run skipped before execution",
@@ -1252,6 +1388,30 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
       },
     },
   ).catch((err: unknown) => {
+    if (terminalTracker.emitted) {
+      state.deps.log.error(
+        { jobId: id, runId, err: String(err) },
+        "cron: queued manual run failed after emitting its terminal event",
+      );
+      return;
+    }
+    const finishedAt = state.deps.nowMs();
+    const job = state.store?.jobs.find((entry) => entry.id === id);
+    emitManualRunFinished(
+      state,
+      {
+        jobId: id,
+        action: "finished",
+        job,
+        status: "error",
+        error: normalizeCronRunErrorText(err),
+        runId,
+        runAtMs: finishedAt,
+        durationMs: 0,
+        nextRunAtMs: job?.state.nextRunAtMs,
+      },
+      terminalTracker,
+    );
     state.deps.log.error(
       { jobId: id, runId, err: String(err) },
       "cron: queued manual run background execution failed",

@@ -1,13 +1,15 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
+import { isDeepStrictEqual } from "node:util";
+import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
   hasPendingPluginInstallRecords,
   stripPendingPluginInstallRecords,
   unchangedPendingPluginInstallRecordIds,
-} from "../cli/plugins-install-record-commit.js";
-import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
-import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+} from "../plugins/install-record-commit.js";
+import { isPlainObject } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import {
@@ -16,6 +18,35 @@ import {
   getSecurityNoteTitle,
 } from "./setup.security-note.js";
 import type { QuickstartGatewayDefaults } from "./setup.types.js";
+
+function mergeWizardConfigValueOntoLatest(current: unknown, base: unknown, next: unknown): unknown {
+  if (isDeepStrictEqual(next, base)) {
+    return current;
+  }
+  if (isPlainObject(current) && isPlainObject(base) && isPlainObject(next)) {
+    const merged: Record<string, unknown> = { ...current };
+    const keys = new Set([...Object.keys(current), ...Object.keys(base), ...Object.keys(next)]);
+    for (const key of keys) {
+      const mergedValue = mergeWizardConfigValueOntoLatest(current[key], base[key], next[key]);
+      if (mergedValue === undefined) {
+        delete merged[key];
+      } else {
+        merged[key] = mergedValue;
+      }
+    }
+    return merged;
+  }
+  return structuredClone(next);
+}
+
+/** Preserve concurrent edits while applying only changes made by an interactive wizard. */
+export function mergeWizardConfigOntoLatest(
+  current: OpenClawConfig,
+  base: OpenClawConfig,
+  next: OpenClawConfig,
+): OpenClawConfig {
+  return mergeWizardConfigValueOntoLatest(current, base, next) as OpenClawConfig;
+}
 
 /**
  * Config writes go through the pending-plugin-install commit helper so wizard
@@ -32,10 +63,18 @@ export async function writeWizardConfigFile(
   let config = configInput;
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
   if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
+    // Explicit undefined means this writer already migrated its baseline; an omitted
+    // key cannot distinguish fresh pending records from stale authored metadata.
+    if (!Object.hasOwn(opts, "migrationBaseConfig")) {
+      throw new Error(
+        "Wizard config writes with pending plugin installs must declare migration ownership.",
+      );
+    }
     const migrationBaseConfig = opts.migrationBaseConfig;
     if (migrationBaseConfig && hasPendingPluginInstallRecords(migrationBaseConfig)) {
       await commitConfigWriteWithPendingPluginInstalls({
         nextConfig: migrationBaseConfig,
+        sourceConfig: migrationBaseConfig,
         writeOptions: { allowConfigSizeDrop: true },
         commit: async (nextConfig, writeOptions) => {
           return await replaceConfigFile({

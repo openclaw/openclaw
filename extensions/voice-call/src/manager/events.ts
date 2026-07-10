@@ -1,6 +1,7 @@
 // Voice Call plugin module implements events behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
@@ -100,6 +101,7 @@ function createWebhookCall(params: {
       callId,
       phone: params.direction === "outbound" ? params.to : params.from,
     }),
+    agentId: normalizeAgentId(effectiveConfig.agentId),
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],
@@ -292,6 +294,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
       break;
 
     case "call.speaking":
+    case "call.assistant-speech":
       ensureMaxDurationTimerForLiveCall({
         ctx,
         call,
@@ -301,6 +304,9 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
         },
       });
       transitionState(call, "speaking");
+      if (event.type === "call.assistant-speech" && event.transcript.trim()) {
+        addTranscriptEntry(call, "bot", event.transcript);
+      }
       break;
 
     case "call.speech":

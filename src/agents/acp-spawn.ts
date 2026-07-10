@@ -117,7 +117,7 @@ const log = createSubsystemLogger("agents/acp-spawn");
 const ACP_RUNTIME_TIMEOUT_MAX_SECONDS = 24 * 60 * 60;
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
-export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
+type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
 const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnAcpSandboxMode = (typeof ACP_SPAWN_SANDBOX_MODES)[number];
 export const ACP_SPAWN_STREAM_TARGETS = ["parent"] as const;
@@ -197,7 +197,7 @@ const ACP_SPAWN_ERROR_CODES = [
   "spawn_failed",
   "dispatch_failed",
 ] as const;
-export type SpawnAcpErrorCode = (typeof ACP_SPAWN_ERROR_CODES)[number];
+type SpawnAcpErrorCode = (typeof ACP_SPAWN_ERROR_CODES)[number];
 
 type SpawnAcpResultFields = {
   childSessionKey?: string;
@@ -228,9 +228,9 @@ export function isSpawnAcpAcceptedResult(result: SpawnAcpResult): result is Spaw
   return result.status === "accepted";
 }
 
-export const ACP_SPAWN_ACCEPTED_NOTE =
+const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
-export const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
+const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
 
 export function resolveAcpSpawnRuntimePolicyError(params: {

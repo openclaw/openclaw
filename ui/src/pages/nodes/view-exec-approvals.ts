@@ -2,7 +2,12 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { clampText, formatRelativeTimestamp } from "../../lib/format.ts";
-import type { ExecApprovalsAllowlistEntry, ExecApprovalsFile } from "../../lib/nodes/index.ts";
+import {
+  isNativeExecApprovalsSnapshot,
+  type ExecApprovalsAllowlistEntry,
+  type ExecApprovalsFile,
+  type NativeExecApprovalsSnapshot,
+} from "../../lib/nodes/index.ts";
 import {
   resolveConfigAgents as resolveSharedConfigAgents,
   resolveNodeTargets,
@@ -35,6 +40,7 @@ type ExecApprovalsState = {
   loading: boolean;
   saving: boolean;
   form: ExecApprovalsFile | null;
+  nativePolicy: NativeExecApprovalsSnapshot | null;
   defaults: ExecApprovalsResolvedDefaults;
   selectedScope: string;
   selectedAgent: Record<string, unknown> | null;
@@ -145,8 +151,11 @@ function resolveExecApprovalsScope(
 }
 
 export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState {
-  const form = props.execApprovalsForm ?? props.execApprovalsSnapshot?.file ?? null;
-  const ready = Boolean(form);
+  const snapshot = props.execApprovalsSnapshot;
+  const nativePolicy = isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
+  const fileSnapshot = snapshot && !isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
+  const form = nativePolicy ? null : (props.execApprovalsForm ?? fileSnapshot?.file ?? null);
+  const ready = Boolean(form || nativePolicy);
   const defaults = resolveExecApprovalsDefaults(form);
   const agents = resolveExecApprovalsAgents(props.configForm, form);
   const targetNodes = resolveExecApprovalsNodes(props.nodes);
@@ -171,6 +180,7 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
     loading: props.execApprovalsLoading,
     saving: props.execApprovalsSaving,
     form,
+    nativePolicy,
     defaults,
     selectedScope,
     selectedAgent,
@@ -202,7 +212,7 @@ export function renderExecApprovals(state: ExecApprovalsState) {
         </div>
         <button
           class="btn"
-          ?disabled=${state.disabled || !state.dirty || !targetReady}
+          ?disabled=${state.disabled || !state.dirty || !targetReady || Boolean(state.nativePolicy)}
           @click=${state.onSave}
         >
           ${state.saving ? "Saving…" : "Save"}
@@ -217,13 +227,56 @@ export function renderExecApprovals(state: ExecApprovalsState) {
               ${state.loading ? t("common.loading") : t("common.loadApprovals")}
             </button>
           </div>`
-        : html`
-            ${renderExecApprovalsTabs(state)} ${renderExecApprovalsPolicy(state)}
-            ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
-              ? nothing
-              : renderExecApprovalsAllowlist(state)}
-          `}
+        : state.nativePolicy
+          ? renderNativeExecApprovals(state.nativePolicy)
+          : html`
+              ${renderExecApprovalsTabs(state)} ${renderExecApprovalsPolicy(state)}
+              ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
+                ? nothing
+                : renderExecApprovalsAllowlist(state)}
+            `}
     </section>
+  `;
+}
+
+function renderNativeExecApprovals(snapshot: NativeExecApprovalsSnapshot) {
+  const rules = snapshot.enabled && Array.isArray(snapshot.rules) ? snapshot.rules : [];
+  const defaultAction = snapshot.enabled
+    ? snapshot.defaultAction
+    : (snapshot.message ?? "unavailable");
+  return html`
+    <div class="list" style="margin-top: 16px;">
+      <div class="list-item">
+        <div class="list-main">
+          <div class="list-title">Host-native policy</div>
+          <div class="list-sub">Read-only here. Edit from the companion app or CLI.</div>
+        </div>
+        <div class="list-meta"><span class="badge">Native</span></div>
+      </div>
+      <div class="list-item">
+        <div class="list-main">
+          <div class="list-title">Default action</div>
+          <div class="list-sub">${defaultAction}</div>
+        </div>
+        <div class="list-meta">${rules.length} ${rules.length === 1 ? "rule" : "rules"}</div>
+      </div>
+      ${rules.map(
+        (rule) => html`
+          <div class="list-item">
+            <div class="list-main">
+              <div class="list-title">${rule.pattern}</div>
+              <div class="list-sub">
+                ${rule.action} · ${rule.shells?.join(", ") || "all shells"} ·
+                ${rule.enabled === false ? "off" : "on"}
+              </div>
+              ${rule.description
+                ? html`<div class="list-sub">${clampText(rule.description, 120)}</div>`
+                : nothing}
+            </div>
+          </div>
+        `,
+      )}
+    </div>
   `;
 }
 
