@@ -13,6 +13,7 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
@@ -294,7 +295,7 @@ function resolveLocalMediaFileName(filePath: string): string | undefined {
 }
 
 function hasHtmlDocumentShape(text: string): boolean {
-  const sample = text.trimStart().slice(0, 8192);
+  const sample = truncateUtf16Safe(text.trimStart(), 8192);
   return /^(?:<!doctype\s+html\b|<html\b)/iu.test(sample) || /<\/(?:html|body)>/iu.test(sample);
 }
 
