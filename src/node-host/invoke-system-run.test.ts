@@ -187,6 +187,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       cwd?: string;
       approvalDecision?: string | null;
       approvalSource?: string | null;
+      policySnapshot?: unknown;
     };
   } {
     const call = firstMockCallArg(runViaMacAppExecHost, "runViaMacAppExecHost", 0);
@@ -198,6 +199,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         cwd?: string;
         approvalDecision?: string | null;
         approvalSource?: string | null;
+        policySnapshot?: unknown;
       };
     };
   }

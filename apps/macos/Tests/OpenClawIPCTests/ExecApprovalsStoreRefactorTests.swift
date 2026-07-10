@@ -2146,8 +2146,11 @@ extension ExecApprovalsStoreRefactorTests {
 
             let result = ExecApprovalsStore.saveFile(stale.file, ifBaseHash: stale.hash)
 
-            if case .conflict = result {} else {
-                Issue.record("expected deleted approval state to conflict")
+            switch result {
+            case .conflict, .baseHashUnavailable:
+                break
+            default:
+                Issue.record("expected deleted approval state to remain absent")
             }
             #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
         }

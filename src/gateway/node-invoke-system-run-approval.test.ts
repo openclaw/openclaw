@@ -51,6 +51,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     turnSourceThreadId?: string | null;
     approvalSource?: string;
     runId?: string;
+    systemRunPlan?: Record<string, unknown>;
   };
 
   function approvedRunParams(overrides: ApprovedRunParamOverrides): Record<string, unknown> {

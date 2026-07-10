@@ -13,7 +13,10 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { sha256Hex, sha256HexPrefix } from "./crypto-digest.js";
-import { canonicalizeExecApprovalPolicyRules } from "./exec-approval-policy-snapshot.js";
+import {
+  canonicalizeExecApprovalPolicyRules,
+  type ExecApprovalPolicySnapshot,
+} from "./exec-approval-policy-snapshot.js";
 import {
   type AllowAlwaysPattern,
   resolveAllowAlwaysPatternEntries,
@@ -38,6 +41,7 @@ import {
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
+export type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
@@ -2013,14 +2017,6 @@ function buildAllowlistEntryMatchKey(
 ): string {
   return JSON.stringify([entry.pattern, entry.argPattern ?? null]);
 }
-
-export type ExecApprovalPolicySnapshot = {
-  security: ExecSecurity;
-  ask: ExecAsk;
-  askFallback: ExecSecurity;
-  autoAllowSkills: boolean;
-  allowlistRules: readonly Pick<ExecAllowlistEntry, "pattern" | "argPattern" | "source">[];
-};
 
 function buildExecApprovalPolicyRuleKey(
   entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern" | "source">,

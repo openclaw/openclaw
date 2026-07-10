@@ -1,7 +1,17 @@
 // Canonicalizes the portable policy snapshot carried with delayed exec approvals.
-import type { ExecApprovalPolicySnapshot } from "./exec-approvals.js";
+export type ExecApprovalPolicyRule = {
+  pattern: string;
+  argPattern?: string;
+  source?: "allow-always";
+};
 
-type ExecApprovalPolicyRule = ExecApprovalPolicySnapshot["allowlistRules"][number];
+export type ExecApprovalPolicySnapshot = {
+  security: "deny" | "allowlist" | "full";
+  ask: "off" | "on-miss" | "always";
+  askFallback: "deny" | "allowlist" | "full";
+  autoAllowSkills: boolean;
+  allowlistRules: readonly ExecApprovalPolicyRule[];
+};
 
 const utf8Encoder = new TextEncoder();
 
@@ -76,11 +86,11 @@ export function normalizeExecApprovalPolicySnapshot(
     return null;
   }
   const normalizedRules: ExecApprovalPolicyRule[] = [];
-  for (const value of allowlistRules) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+  for (const rawRule of allowlistRules) {
+    if (!rawRule || typeof rawRule !== "object" || Array.isArray(rawRule)) {
       return null;
     }
-    const rule = value as Record<string, unknown>;
+    const rule = rawRule as Record<string, unknown>;
     if (
       typeof rule.pattern !== "string" ||
       (rule.argPattern !== undefined && typeof rule.argPattern !== "string") ||
