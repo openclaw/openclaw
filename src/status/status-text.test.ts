@@ -1,5 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveStatusChannelFeatureLine } from "./status-text.js";
+import type { BuildStatusTextParams } from "./status-text.types.js";
+
+function minimalBuildStatusTextParams(
+  overrides?: Partial<BuildStatusTextParams>,
+): BuildStatusTextParams {
+  return {
+    cfg: {},
+    sessionEntry: { sessionId: "retry-test", updatedAt: 0 },
+    sessionKey: "agent:main:test",
+    statusChannel: "mobilechat",
+    provider: "anthropic",
+    model: "claude-opus-4-5",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => "medium",
+    isGroup: false,
+    defaultGroupActivation: () => "mention",
+    skipDefaultTaskLookup: true,
+    ...overrides,
+  };
+}
 
 describe("buildStatusText channel features", () => {
   it.each([
@@ -64,5 +85,32 @@ describe("buildStatusText channel features", () => {
 
     expect(text).toContain("Telegram rich messages: off");
     expect(text).toContain("enable richMessages for this Telegram account");
+  });
+});
+
+describe("buildStatusText dynamic loader retry cache", () => {
+  it("falls back on import failure and retries in the same module instance", async () => {
+    vi.doMock("./status-plugin-health.runtime.js", async () => {
+      throw new Error("Module load failure");
+    });
+    vi.resetModules();
+    const { buildStatusText: retryingBuildStatusText } = await import("./status-text.js");
+
+    const failText = await retryingBuildStatusText(minimalBuildStatusTextParams());
+    expect(failText).toContain("Plugins: health unavailable");
+
+    vi.doMock("./status-plugin-health.runtime.js", () => ({
+      collectInstalledPluginHealthSnapshot: async () => ({}),
+      collectRuntimePluginHealthSnapshot: () => ({
+        plugins: [],
+        diagnostics: [],
+        contextEngineQuarantines: [],
+        runtimeToolQuarantines: [],
+        channelPluginFailures: [],
+      }),
+    }));
+
+    const successText = await retryingBuildStatusText(minimalBuildStatusTextParams());
+    expect(successText).not.toContain("Plugins: health unavailable");
   });
 });

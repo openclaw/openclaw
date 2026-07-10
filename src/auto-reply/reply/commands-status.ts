@@ -22,13 +22,36 @@ export async function buildStatusReply(
     return undefined;
   }
 
-  return {
-    text: await buildStatusText({
-      ...params,
-      statusChannel: command.channel,
-      statusAccountId: command.accountId,
-    }),
-  };
+  try {
+    const statusText = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error("Status render timeout"));
+      }, 10_000);
+      buildStatusText({
+        ...params,
+        statusChannel: command.channel,
+        statusAccountId: command.accountId,
+      }).then(
+        (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+    return { text: statusText };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logVerbose(`/status render failed: ${message}`);
+    const fallback =
+      message === "Status render timeout"
+        ? "⚠️ Status: timed out rendering response"
+        : `⚠️ Status: error rendering response (${message})`;
+    return { text: fallback };
+  }
 }
 
 export async function buildStatusPluginsReply(
