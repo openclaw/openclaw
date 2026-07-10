@@ -2,6 +2,7 @@
  * Runs model and image fallback chains across provider/model candidates.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE } from "../../packages/agent-core/src/errors.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   resolveAgentModelFallbackValues,
@@ -41,6 +42,7 @@ import {
   describeFailoverError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
+  resolveModelFallbackError,
 } from "./failover-error.js";
 import {
   shouldAllowCooldownProbeForReason,
@@ -86,6 +88,14 @@ import {
 } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
+
+function isTranscriptNotContinuableError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const code = (err as { code?: unknown }).code;
+  return code === TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE;
+}
 
 function hasExactConfiguredProviderModel(params: {
   cfg?: OpenClawConfig;
@@ -167,7 +177,7 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
   return err instanceof FallbackSummaryError;
 }
 
-export type ModelFallbackRunOptions = {
+type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
 };
@@ -403,7 +413,13 @@ async function runFallbackCandidate<T>(params: {
     if (isCommandLaneTaskTimeoutError(err)) {
       throw err;
     }
-    if (isNonProviderRuntimeCoordinationError(err)) {
+    const fallbackError = resolveModelFallbackError(err, {
+      provider: params.provider,
+      model: params.model,
+      sessionId: params.attribution?.sessionId,
+      lane: params.attribution?.lane,
+    });
+    if (fallbackError.kind === "coordination") {
       throw err;
     }
     if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
@@ -415,15 +431,10 @@ async function runFallbackCandidate<T>(params: {
     if (isTerminalAbortFromError(err)) {
       throw err;
     }
-    // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
-    // so they become FailoverErrors and continue the fallback loop instead of aborting.
-    const normalizedFailover = coerceToFailoverError(err, {
-      provider: params.provider,
-      model: params.model,
-      sessionId: params.attribution?.sessionId,
-      lane: params.attribution?.lane,
-    });
-    return { ok: false, error: normalizedFailover ?? err };
+    return {
+      ok: false,
+      error: fallbackError.kind === "failover" ? fallbackError.error : err,
+    };
   }
 }
 
@@ -1372,6 +1383,7 @@ function shouldDiscardDeferredSessionSuspension(params: {
     isTerminalAbortFromError(params.error) ||
     isCommandLaneTaskTimeoutError(params.error) ||
     isNonProviderRuntimeCoordinationError(params.error) ||
+    isTranscriptNotContinuableError(params.error) ||
     isLikelyContextOverflowError(formatErrorMessage(params.error))
   );
 }
@@ -1438,11 +1450,28 @@ async function runWithModelFallbackInternal<T>(
   ) => {
     if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
       appendFailedCandidateAttempt(failedAttempt);
-      return;
+    } else {
+      const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
+      if (fallbackStep) {
+        await params.onFallbackStep?.(fallbackStep);
+      }
     }
-    const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
-    if (fallbackStep) {
-      await params.onFallbackStep?.(fallbackStep);
+    // Emit only real candidate-to-candidate transitions. Terminal candidates
+    // have no destination; cooldown suspension has its own diagnostic path.
+    if (params.sessionId && failedAttempt.nextCandidate) {
+      const described = describeFailoverError(failedAttempt.error);
+      emitFailoverEvent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        lane: params.lane,
+        fromProvider: failedAttempt.candidate.provider,
+        fromModel: failedAttempt.candidate.model,
+        toProvider: failedAttempt.nextCandidate.provider,
+        toModel: failedAttempt.nextCandidate.model,
+        reason: described.reason ?? "unknown",
+        cascadeDepth: failedAttempt.attempt - 1,
+        suspended: false,
+      });
     }
   };
 
@@ -1765,6 +1794,9 @@ async function runWithModelFallbackInternal<T>(
       // the same local condition and surfacing a misleading "All models
       // failed" summary. See #83510.
       if (isNonProviderRuntimeCoordinationError(err)) {
+        throw err;
+      }
+      if (isTranscriptNotContinuableError(err)) {
         throw err;
       }
       if (transientProbeProviderForAttempt) {

@@ -79,7 +79,8 @@ class CronJobDetailTest {
     payload: String =
       """{"kind":"agentTurn","message":"Summarize the day","model":"openai/gpt-5.5","thinking":"high"}""",
   ): JsonObject =
-    Json.parseToJsonElement(
+    Json
+      .parseToJsonElement(
         """
         {
           "id": "job-1",
@@ -108,6 +109,5 @@ class CronJobDetailTest {
           }
         }
         """.trimIndent(),
-      )
-      .jsonObject
+      ).jsonObject
 }

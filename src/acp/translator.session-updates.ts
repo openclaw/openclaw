@@ -32,12 +32,21 @@ function resolveLedgerSessionId(session: { sessionId: string; ledgerSessionId?: 
 
 /** Helper that keeps ACP client updates and replay ledger writes in sync. */
 export class AcpTranslatorSessionUpdates {
+  private stopped = false;
+
   constructor(private options: AcpTranslatorSessionUpdatesOptions) {}
+
+  stop(): void {
+    this.stopped = true;
+  }
 
   async startLedgerSession(
     session: AcpTranslatorLedgerSessionRef,
     options: { complete: boolean; reset?: boolean },
   ): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
     try {
       await this.options.eventLedger.startSession({
         sessionId: resolveLedgerSessionId(session),
@@ -57,6 +66,9 @@ export class AcpTranslatorSessionUpdates {
     sessionId: string;
     sessionKey: string;
   }): Promise<AcpEventLedgerReplay> {
+    if (this.stopped) {
+      return { complete: false, events: [] };
+    }
     try {
       return await this.options.eventLedger.readReplay(params);
     } catch (err) {
@@ -66,6 +78,9 @@ export class AcpTranslatorSessionUpdates {
   }
 
   async readLedgerReplayBySessionId(sessionId: string): Promise<AcpEventLedgerReplay> {
+    if (this.stopped) {
+      return { complete: false, events: [] };
+    }
     try {
       return await this.options.eventLedger.readReplayBySessionId({ sessionId });
     } catch (err) {
@@ -75,6 +90,9 @@ export class AcpTranslatorSessionUpdates {
   }
 
   async readLedgerReplayBySessionKey(sessionKey: string): Promise<AcpEventLedgerReplay> {
+    if (this.stopped) {
+      return { complete: false, events: [] };
+    }
     try {
       return await this.options.eventLedger.readReplayBySessionKey({ sessionKey });
     } catch (err) {
@@ -90,6 +108,9 @@ export class AcpTranslatorSessionUpdates {
     runId: string,
     prompt: PromptRequest["prompt"],
   ): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
     try {
       await this.options.eventLedger.recordUserPrompt({
         sessionId: resolveLedgerSessionId(session),
@@ -113,6 +134,9 @@ export class AcpTranslatorSessionUpdates {
     update: SessionUpdate;
     record?: boolean;
   }): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
     await this.options.connection.sessionUpdate({
       sessionId: params.sessionId,
       update: params.update,
@@ -151,6 +175,9 @@ export class AcpTranslatorSessionUpdates {
     runId?: string;
     update: SessionUpdate;
   }): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
     try {
       await this.options.eventLedger.recordUpdate({
         sessionId: params.ledgerSessionId ?? params.sessionId,
@@ -169,6 +196,9 @@ export class AcpTranslatorSessionUpdates {
   }
 
   private async markLedgerIncomplete(session: AcpTranslatorSessionRef): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
     try {
       await this.options.eventLedger.markIncomplete({
         sessionId: resolveLedgerSessionId(session),

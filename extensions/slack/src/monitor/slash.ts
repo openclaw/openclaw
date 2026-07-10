@@ -582,10 +582,10 @@ export async function registerSlackMonitorSlashCommands(params: {
               sessionKey: menuRoute.sessionKey,
             })
           : {};
-        // Native /think choices need live-discovery metadata; empty keeps config fallback.
+        // Native /think must not wait on provider discovery; persisted rows retain its metadata.
         const menuModelCatalog =
           commandDefinition.key === "think" && menuNeedsModelContext
-            ? await loadModelCatalog({ config: cfg })
+            ? await loadModelCatalog({ config: cfg, readOnly: true })
             : undefined;
         const menu = resolveCommandArgMenu({
           command: commandDefinition,

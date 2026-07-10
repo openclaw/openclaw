@@ -320,6 +320,14 @@ export type CronJobState = {
   lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
+  /** Timestamp of the last trigger script evaluation. */
+  lastTriggerEvalAtMs?: number;
+  /** Number of completed trigger script evaluations. */
+  triggerEvalCount?: number;
+  /** Timestamp of the last trigger evaluation that fired. */
+  lastTriggerFireAtMs?: number;
+  /** JSON state returned by the last trigger script evaluation. */
+  triggerState?: unknown;
   /** Explicit delivery outcome, separate from execution outcome. */
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */
@@ -333,6 +341,33 @@ export type CronJobState = {
   /** Delivery-specific error for the last failed run's failure notification. */
   lastFailureNotificationDeliveryError?: string;
 };
+
+export type CronTrigger = {
+  script: string;
+  once?: boolean;
+};
+
+/**
+ * Closed failure taxonomy for trigger-script evaluation. Mirrors the code-mode
+ * failure codes plus the trigger tool budget; trigger-script.ts asserts the
+ * union stays in sync at compile time. Lives here (leaf module) so the cron
+ * service contract never imports the agents runtime.
+ */
+export type CronTriggerFailureCode =
+  | "aborted"
+  | "invalid_input"
+  | "runtime_unavailable"
+  | "timeout"
+  | "output_limit_exceeded"
+  | "snapshot_limit_exceeded"
+  | "internal_error"
+  | "tool_budget_exceeded";
+
+/** Result union returned by the cron trigger-script evaluator. */
+export type CronTriggerEvaluationResult =
+  | { kind: "evaluated"; fire: boolean; message?: string; state?: unknown }
+  | { kind: "busy" }
+  | { kind: "error"; code: CronTriggerFailureCode; error: string };
 
 /** Fully persisted cron job with spec fields and mutable run state. */
 export type CronJob = CronJobBase<
@@ -349,6 +384,7 @@ export type CronJob = CronJobBase<
     agentId?: string;
     sessionKey?: string;
   };
+  trigger?: CronTrigger;
   state: CronJobState;
 };
 
@@ -380,6 +416,7 @@ export type CronJobPatch = Partial<
   >
 > & {
   displayName?: string | null;
+  trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;

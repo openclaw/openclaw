@@ -9,6 +9,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -252,7 +253,7 @@ function formatWebFetchTerminalPresentation(result: unknown): { text: string } |
 
 function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedContent {
   if (maxChars <= 0) {
-    return { text: "", truncated: true, rawLength: 0, wrappedLength: 0 };
+    return { text: "", truncated: true, rawLength: value.length, wrappedLength: 0 };
   }
   const includeWarning = maxChars >= WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD;
   const wrapperOverhead = includeWarning
@@ -266,7 +267,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
     return {
       text: truncatedWrapper.text,
       truncated: true,
-      rawLength: 0,
+      rawLength: value.length,
       wrappedLength: truncatedWrapper.text.length,
     };
   }
@@ -288,7 +289,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
   return {
     text: wrappedText,
     truncated: truncated.truncated,
-    rawLength: truncated.text.length,
+    rawLength: value.length,
     wrappedLength: wrappedText.length,
   };
 }
@@ -314,7 +315,8 @@ async function spillWebFetchContent(
   }
   // maxChars/maxCharsCap bound the model-visible return text. Recoverable spill
   // uses this fixed file cap so vanished pages can still be read after truncation.
-  const content = value.slice(0, WEB_FETCH_SPILL_MAX_CHARS);
+  const content = truncateUtf16Safe(value, WEB_FETCH_SPILL_MAX_CHARS);
+  const spilledChars = content.length;
   const fullOutputPath = await writePrivateTempFile(
     "openclaw-web-fetch",
     wrapWebContent(content, "web_fetch"),
@@ -324,7 +326,7 @@ async function spillWebFetchContent(
   const spillNote = sourceTruncated
     ? " Spilled available content from truncated response."
     : spillCapped
-      ? ` Spilled first ${WEB_FETCH_SPILL_MAX_CHARS} chars.`
+      ? ` Spilled first ${spilledChars} chars.`
       : "";
   const fullOutputFooter = formatFullOutputFooter(fullOutputPath);
   const footer = `\n\n[Showing truncated web_fetch content. ${fullOutputFooter}.${spillNote}]`;
@@ -335,7 +337,7 @@ async function spillWebFetchContent(
     visible = wrapWebFetchContent(value, maxChars - footer.length);
     text = `${visible.text}${footer}`;
   } else if (compactFooter.length <= maxChars) {
-    visible = { ...wrapped, text: "", rawLength: 0, wrappedLength: 0 };
+    visible = { ...wrapped, text: "", wrappedLength: 0 };
     text = compactFooter;
   }
   return {
@@ -344,7 +346,7 @@ async function spillWebFetchContent(
     text,
     wrappedLength: text.length,
     fullOutputPath,
-    spilledChars: content.length,
+    spilledChars,
     spillTruncated,
   };
 }
@@ -452,6 +454,10 @@ async function normalizeProviderWebFetchPayload(params: {
     params.maxChars,
     payload.truncated === true,
   );
+  const providerRawLength =
+    typeof payload.rawLength === "number" && Number.isFinite(payload.rawLength)
+      ? Math.max(0, Math.floor(payload.rawLength))
+      : wrapped.rawLength;
   const url = params.requestedUrl;
   const finalUrl = normalizeProviderFinalUrl(payload.finalUrl) ?? url;
   const status =
@@ -484,7 +490,7 @@ async function normalizeProviderWebFetchPayload(params: {
     },
     truncated: wrapped.truncated,
     length: wrapped.wrappedLength,
-    rawLength: wrapped.rawLength,
+    rawLength: providerRawLength,
     wrappedLength: wrapped.wrappedLength,
     ...(wrapped.fullOutputPath ? { fullOutputPath: wrapped.fullOutputPath } : {}),
     ...(wrapped.spilledChars !== undefined ? { spilledChars: wrapped.spilledChars } : {}),
@@ -643,7 +649,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     throwIfFetchAborted(params.signal);
     const body = bodyResult.text;
     const responseTruncatedWarning = bodyResult.truncated
-      ? `Response body truncated after ${params.maxResponseBytes} bytes.`
+      ? `Response body incomplete after ${bodyResult.bytesRead} bytes.`
       : undefined;
 
     let title: string | undefined;

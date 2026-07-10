@@ -10,7 +10,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { getRuntimeConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
+import { assertCdpEndpointAllowed, redactCdpUrl } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { createBrowserProfileConfig, deleteBrowserProfileConfig } from "./config-mutations.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
@@ -25,7 +25,7 @@ import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
 /** Input accepted when creating a browser profile. */
-export type CreateProfileParams = {
+type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
@@ -34,7 +34,7 @@ export type CreateProfileParams = {
 };
 
 /** Result returned after creating a browser profile. */
-export type CreateProfileResult = {
+type CreateProfileResult = {
   ok: true;
   profile: string;
   transport: "cdp" | "chrome-mcp";
@@ -46,7 +46,7 @@ export type CreateProfileResult = {
 };
 
 /** Result returned after deleting a browser profile. */
-export type DeleteProfileResult = {
+type DeleteProfileResult = {
   ok: true;
   profile: string;
   deleted: boolean;
@@ -134,7 +134,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       profile: name,
       transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
       cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
-      cdpUrl: resolved.cdpUrl || null,
+      cdpUrl: resolved.cdpUrl ? (redactCdpUrl(resolved.cdpUrl) ?? null) : null,
       userDataDir: resolved.userDataDir ?? null,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,

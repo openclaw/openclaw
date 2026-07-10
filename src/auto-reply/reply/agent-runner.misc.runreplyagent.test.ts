@@ -172,6 +172,24 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
   }),
 }));
 
+// Dedicated suites cover these sidecars; misc runner cases keep them inert to avoid unrelated graphs.
+vi.mock("../../cli/command-secret-targets.js", () => ({
+  getAgentRuntimeCommandSecretTargetIds: () => new Set<string>(),
+  getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+}));
+
+vi.mock("../../agents/harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: async () => undefined,
+}));
+
+vi.mock("../../commitments/runtime.js", () => ({
+  enqueueCommitmentExtraction: () => false,
+}));
+
+vi.mock("./followup-runner.js", () => ({
+  createFollowupRunner: () => vi.fn(async () => undefined),
+}));
+
 vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: (provider: string | undefined | null) =>
     provider === "google" || provider === "google-gemini-cli",
@@ -2657,6 +2675,17 @@ describe("runReplyAgent reminder commitment guard", () => {
       result,
       "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
     );
+  });
+
+  it("does not append a reminder note to a plain memory promise", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remember that preference." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expectReplyText(result, "I'll remember that preference.");
   });
 
   it("keeps reminder commitment unchanged when cron.add succeeded", async () => {

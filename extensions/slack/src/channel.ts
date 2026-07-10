@@ -33,6 +33,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
+  mergeSlackAccountConfig,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
@@ -56,6 +57,7 @@ import {
 } from "./channel-api.js";
 import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
 import { createSlackWebClient } from "./client.js";
+import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
@@ -188,13 +190,14 @@ async function resolveSlackSendContext(params: {
   replyToId?: string | number | null;
   threadId?: string | number | null;
 }) {
-  const send =
-    resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
-    (await loadSlackSendRuntime()).sendMessageSlack;
   // params.cfg is the scoped channel-dispatch config; channel credentials are
   // expected to be resolved from this snapshot. Strict mode
   // is intentional so boot-time misconfigurations surface loudly. See #68237.
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  assertSlackDirectSendAllowed(account);
+  const send =
+    resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
+    (await loadSlackSendRuntime()).sendMessageSlack;
   const token = resolveSlackOperationToken(account, "write");
   const botToken = account.botToken?.trim();
   const tokenOverride = token && token !== botToken ? token : undefined;
@@ -215,6 +218,7 @@ async function setSlackHeartbeatThreadStatus(params: {
     return;
   }
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  assertSlackDirectSendAllowed(account);
   const botToken = normalizeOptionalString(account.botToken);
   if (!botToken) {
     return;
@@ -356,6 +360,9 @@ async function resolveSlackOutboundSessionRoute(params: {
   const isDm = parsed.kind === "user";
   let peerKind: "direct" | "channel" | "group" = isDm ? "direct" : "channel";
   let peerId = parsed.id;
+  let recipientSessionExact = isDm
+    ? /^[UW][A-Z0-9]{8,}$/i.test(parsed.id)
+    : /^C[A-Z0-9]{8,}$/i.test(parsed.id);
   if (!isDm && /^D/i.test(parsed.id)) {
     const conversation = await resolveSlackConversationInfo({
       cfg: params.cfg,
@@ -367,6 +374,7 @@ async function resolveSlackOutboundSessionRoute(params: {
     }
     peerKind = "direct";
     peerId = conversation.user;
+    recipientSessionExact = true;
   } else if (!isDm && /^G/i.test(parsed.id)) {
     const channelType = await resolveSlackChannelType({
       cfg: params.cfg,
@@ -379,6 +387,7 @@ async function resolveSlackOutboundSessionRoute(params: {
     if (channelType === "dm") {
       peerKind = "direct";
     }
+    recipientSessionExact = channelType !== "unknown";
   }
   const peer: RoutePeer = {
     kind: peerKind,
@@ -394,6 +403,7 @@ async function resolveSlackOutboundSessionRoute(params: {
     route: {
       sessionKey: baseSessionKey,
       baseSessionKey,
+      recipientSessionExact,
       peer,
       chatType: peerKind === "direct" ? ("direct" as const) : ("channel" as const),
       from:
@@ -584,6 +594,16 @@ const slackMessageAdapter = {
       ...slackMessageAdapterBase.durableFinal?.capabilities,
       reconcileUnknownSend: true,
     },
+    admitDeferredDelivery: ({ cfg, accountId }) => {
+      const effectiveAccountId =
+        normalizeOptionalString(accountId) ?? resolveDefaultSlackAccountId(cfg);
+      return mergeSlackAccountConfig(cfg, effectiveAccountId).enterpriseOrgInstall === true
+        ? {
+            status: "permanent_rejection" as const,
+            reason: "unsupported_enterprise_slack_delivery",
+          }
+        : { status: "allowed" as const };
+    },
     reconcileUnknownSendKinds: { text: true },
     reconcileUnknownSend: async (ctx) =>
       await (await loadSlackSendRuntime()).reconcileSlackUnknownSend(ctx),
@@ -626,6 +646,12 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           conversationId,
           parentConversationId,
         }),
+    },
+    conversationBindings: {
+      isCurrentConversationBindingSupported: ({ accountId }) => {
+        const cfg = getOptionalSlackRuntime()?.config.current() as OpenClawConfig | undefined;
+        return cfg ? mergeSlackAccountConfig(cfg, accountId).enterpriseOrgInstall !== true : false;
+      },
     },
     messaging: {
       targetPrefixes: ["slack"],
@@ -866,6 +892,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           cfg,
           accountId: resolveDefaultSlackAccountId(cfg),
         });
+        assertSlackDirectSendAllowed(account);
         const { sendMessageSlack } = await loadSlackSendRuntime();
         const token = resolveSlackOperationToken(account, "write");
         await sendMessageSlack(`user:${id}`, message, {

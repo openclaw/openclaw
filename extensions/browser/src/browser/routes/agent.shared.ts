@@ -6,6 +6,7 @@
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
+import { redactCdpErrorText } from "../cdp.helpers.js";
 import { toBrowserErrorResponse } from "../errors.js";
 import {
   assertBrowserNavigationResultAllowed,
@@ -15,7 +16,7 @@ import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
-import { getProfileContext, jsonError } from "./utils.js";
+import { getProfileContext, jsonBrowserError, jsonError } from "./utils.js";
 
 export const SELECTOR_UNSUPPORTED_MESSAGE = [
   "Error: 'selector' is not supported. Use 'ref' from snapshot instead.",
@@ -52,13 +53,13 @@ export function resolveTargetIdFromQuery(query: Record<string, unknown>): string
 export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {
   const mapped = ctx.mapTabError(err);
   if (mapped) {
-    return jsonError(res, mapped.status, mapped.message);
+    return jsonBrowserError(res, mapped);
   }
   const browserMapped = toBrowserErrorResponse(err);
   if (browserMapped) {
-    return jsonError(res, browserMapped.status, browserMapped.message);
+    return jsonBrowserError(res, browserMapped);
   }
-  jsonError(res, 500, String(err));
+  jsonError(res, 500, redactCdpErrorText(String(err)));
 }
 
 /** Resolve the requested browser profile and respond with JSON on failure. */
@@ -150,6 +151,8 @@ export async function withRouteTabContext<T>(
     // Agent routes can address local-managed tabs through Playwright when per-tab WS discovery lags.
     const tab = await profileCtx.ensureTabAvailable(params.targetId, {
       allowPlaywrightFallback: true,
+      signal: params.req.signal,
+      timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
     });
     if (params.enforceCurrentUrlAllowed) {
       await assertBrowserNavigationResultAllowed({
@@ -167,6 +170,8 @@ export async function withRouteTabContext<T>(
           profileCtx,
           targetId: tab.targetId,
           fallbackUrl,
+          signal: params.req.signal,
+          timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
         }),
     });
   } catch (err) {
@@ -184,8 +189,16 @@ export async function resolveSafeRouteTabUrl(params: {
   profileCtx: ProfileContext;
   targetId: string;
   fallbackUrl?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<string | undefined> {
-  const tabs = await params.profileCtx.listTabs().catch(() => []);
+  let tabs: Array<{ targetId: string; url: string }>;
+  try {
+    tabs = await params.profileCtx.listTabs({ signal: params.signal, timeoutMs: params.timeoutMs });
+  } catch {
+    params.signal?.throwIfAborted();
+    tabs = [];
+  }
   const candidateUrl =
     tabs.find((tab) => tab.targetId === params.targetId)?.url ?? params.fallbackUrl;
   if (!candidateUrl) {

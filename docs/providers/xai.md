@@ -110,13 +110,15 @@ see [legacy compatibility aliases](#legacy-compatibility-aliases).
 
 | Family         | Model ids                                                                |
 | -------------- | ------------------------------------------------------------------------ |
+| Grok 4.5       | `grok-4.5` (aliases: `grok-4.5-latest`, `grok-build-latest`)             |
 | Grok Build 0.1 | `grok-build-0.1`                                                         |
 | Grok 4.3       | `grok-4.3`                                                               |
 | Grok 4.20 Beta | `grok-4.20-beta-latest-reasoning`, `grok-4.20-beta-latest-non-reasoning` |
 
 <Tip>
-Use `grok-4.3` for general chat and `grok-build-0.1` for build/coding-focused
-workloads unless you need a Grok 4.20 beta alias.
+Use `grok-4.5` for general chat, coding, and agentic work where it is available.
+Grok 4.3 remains the regional-safe setup default; `grok-build-0.1` and the Grok
+4.20 beta aliases remain selectable.
 </Tip>
 
 ## Feature coverage
@@ -493,9 +495,9 @@ Legacy aliases normalize to the canonical bundled ids:
       `agents.defaults.models["xai/<model>"].params.tool_stream` to `false`
       to disable it.
     - The bundled xAI wrapper strips unsupported strict tool-schema flags and
-      reasoning *effort* payload keys before sending native xAI requests. Only
-      `grok-4.3` / `grok-4.3-*` advertise configurable reasoning effort; all
-      other reasoning-capable xAI models still request
+      reasoning *effort* payload keys before sending native xAI requests. Grok
+      4.5 supports low, medium, and high effort (default high); Grok 4.3 also
+      supports disabling reasoning. All other reasoning-capable xAI models request
       `include: ["reasoning.encrypted_content"]` so prior encrypted reasoning
       can be replayed on follow-up turns.
     - `web_search`, `x_search`, and `code_execution` are exposed as OpenClaw

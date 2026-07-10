@@ -166,35 +166,82 @@ describe("bedrock discovery", () => {
     });
   });
 
-  it("marks known Fable inference profile fallbacks as reasoning capable", async () => {
-    sendMock
-      .mockResolvedValueOnce({
-        modelSummaries: [],
-      })
-      .mockResolvedValueOnce({
-        inferenceProfileSummaries: [
-          {
-            inferenceProfileId: "us.anthropic.claude-fable-5",
-            inferenceProfileName: "US Claude Fable 5",
-            status: "ACTIVE",
-            type: "SYSTEM_DEFINED",
-            models: [
-              {
-                modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-fable-5",
-              },
-            ],
-          },
-        ],
+  it.each([
+    {
+      label: "Fable",
+      profileId: "us.anthropic.claude-fable-5",
+      profileName: "US Claude Fable 5",
+      foundationId: "anthropic.claude-fable-5",
+    },
+    {
+      label: "Mythos",
+      profileId: "us.anthropic.claude-mythos-5",
+      profileName: "US Claude Mythos 5",
+      foundationId: "anthropic.claude-mythos-5",
+    },
+  ])(
+    "marks known $label inference profile fallbacks as reasoning capable",
+    async ({ profileId, profileName, foundationId }) => {
+      sendMock
+        .mockResolvedValueOnce({
+          modelSummaries: [],
+        })
+        .mockResolvedValueOnce({
+          inferenceProfileSummaries: [
+            {
+              inferenceProfileId: profileId,
+              inferenceProfileName: profileName,
+              status: "ACTIVE",
+              type: "SYSTEM_DEFINED",
+              models: [
+                {
+                  modelArn: `arn:aws:bedrock:us-east-1::foundation-model/${foundationId}`,
+                },
+              ],
+            },
+          ],
+        });
+
+      const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+      expect(models).toHaveLength(1);
+      expectModelFields(models[0], {
+        id: profileId,
+        reasoning: true,
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
       });
+    },
+  );
+
+  it("applies the Sonnet 5 contract to inference-profile-only discovery", async () => {
+    sendMock.mockResolvedValueOnce({ modelSummaries: [] }).mockResolvedValueOnce({
+      inferenceProfileSummaries: [
+        {
+          inferenceProfileId: "global.anthropic.claude-sonnet-5",
+          inferenceProfileName: "Global Claude Sonnet 5",
+          status: "ACTIVE",
+          type: "SYSTEM_DEFINED",
+          models: [
+            {
+              modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5",
+            },
+          ],
+        },
+      ],
+    });
 
     const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
 
-    expect(models).toHaveLength(1);
     expectModelFields(models[0], {
-      id: "us.anthropic.claude-fable-5",
+      id: "global.anthropic.claude-sonnet-5",
       reasoning: true,
+      input: ["text", "image"],
       contextWindow: 1_000_000,
+      maxTokens: 128_000,
       thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+      params: { canonicalModelId: "claude-sonnet-5" },
     });
   });
 

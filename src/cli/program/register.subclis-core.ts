@@ -122,6 +122,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerModelsCli",
     },
     {
+      commandNames: ["promos"],
+      loadModule: () => import("../promos-cli.js"),
+      exportName: "registerPromosCli",
+    },
+    {
       commandNames: ["infer", "capability"],
       loadModule: () => import("../capability-cli.js"),
       exportName: "registerCapabilityCli",

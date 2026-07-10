@@ -78,7 +78,7 @@ type ProviderResolutionOutput = Map<string, unknown>;
 
 /** Error for failures that affect an entire configured secret provider. */
 /** Error emitted when a configured secret provider cannot resolve a ref. */
-export class SecretProviderResolutionError extends Error {
+class SecretProviderResolutionError extends Error {
   readonly scope = "provider" as const;
   readonly source: SecretRefSource;
   readonly provider: string;
@@ -97,7 +97,7 @@ export class SecretProviderResolutionError extends Error {
 }
 
 /** Error for failures limited to one SecretRef id under a provider. */
-export class SecretRefResolutionError extends Error {
+class SecretRefResolutionError extends Error {
   readonly scope = "ref" as const;
   readonly source: SecretRefSource;
   readonly provider: string;
@@ -666,7 +666,7 @@ function parseExecValues(params: {
   const responseErrors = isRecord(parsed.errors) ? parsed.errors : null;
   const out: Record<string, unknown> = {};
   for (const id of params.ids) {
-    if (responseErrors && id in responseErrors) {
+    if (responseErrors && Object.hasOwn(responseErrors, id)) {
       const entry = responseErrors[id];
       if (isRecord(entry) && typeof entry.message === "string" && entry.message.trim()) {
         throw refResolutionError({
@@ -683,7 +683,7 @@ function parseExecValues(params: {
         message: `Exec provider "${params.providerName}" failed for id "${id}".`,
       });
     }
-    if (!(id in responseValues)) {
+    if (!Object.hasOwn(responseValues, id)) {
       throw refResolutionError({
         source: "exec",
         provider: params.providerName,

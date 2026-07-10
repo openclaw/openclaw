@@ -704,4 +704,29 @@ describe("memory tools", () => {
     });
     expect(getSupplement).not.toHaveBeenCalled();
   });
+
+  it("returns the primary error when a corpus=all supplement fallback throws", async () => {
+    setMemoryReadFileImpl(async () => {
+      throw new Error("primary read failed");
+    });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => {
+        throw new Error("supplement lookup failed");
+      },
+    });
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_get_all_supplement_throws", {
+      path: "entities/alpha.md",
+      corpus: "all",
+    });
+
+    expect(result.details).toEqual({
+      path: "entities/alpha.md",
+      text: "",
+      disabled: true,
+      error: "primary read failed",
+    });
+  });
 });

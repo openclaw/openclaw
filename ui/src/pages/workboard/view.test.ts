@@ -149,6 +149,7 @@ describe("renderWorkboard", () => {
     const request = vi.fn(async () => ({ card: state.cards[0] }));
     state.loaded = true;
     state.dispatching = true;
+    state.detailCardId = "card-1";
     state.cards = [
       {
         id: "card-1",
@@ -183,6 +184,15 @@ describe("renderWorkboard", () => {
     expect(buttonByLabel(container, "Delete card")?.disabled).toBe(true);
     expect(
       container.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
+    ).toBe(true);
+    const detailActions = container.querySelector<HTMLElement>(".workboard-detail__actions");
+    expect(detailActions).not.toBeNull();
+    expect(buttonByLabel(detailActions!, "Edit card")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Archive card")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Stop session")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Delete card")?.disabled).toBe(true);
+    expect(
+      detailActions!.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
     ).toBe(true);
     expect(container.querySelector<HTMLElement>(".workboard-card")?.getAttribute("draggable")).toBe(
       "false",
@@ -560,6 +570,55 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Repeated run failures");
     expect(container.textContent).not.toContain("Old diagnostic");
     expect(container.textContent).toContain("Needs proof.");
+  });
+
+  it("keeps bounded diagnostic badges UTF-16 safe", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-boundary",
+        title: "Boundary badge",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: {
+          diagnostics: [
+            {
+              kind: "protocol_violation",
+              severity: "warning",
+              title: `${"x".repeat(62)}🚀tail`,
+              detail: "Boundary detail.",
+              firstSeenAt: 1,
+              lastSeenAt: 1,
+              count: 1,
+            },
+          ],
+        },
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".workboard-card__badge--warning")?.textContent?.trim()).toBe(
+      `${"x".repeat(62)}…`,
+    );
   });
 
   it("renders sub-minute heartbeat ages with the duration count interpolation", () => {
@@ -1192,6 +1251,69 @@ describe("renderWorkboard", () => {
       .querySelector<HTMLButtonElement>('button[aria-label="Delete card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onOpenSession).not.toHaveBeenCalled();
+  });
+
+  it("mirrors compact card actions in the detail drawer", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const sessionKey = "agent:main:detail-parity";
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Detail parity",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey,
+      },
+    ];
+    const container = document.createElement("div");
+    const onOpenSession = vi.fn();
+
+    render(
+      renderWorkboard({
+        host,
+        client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: sessionKey,
+            kind: "direct",
+            displayName: "Detail parity session",
+            updatedAt: 2,
+            hasActiveRun: true,
+            status: "running",
+          },
+        ],
+        onOpenSession,
+      }),
+      container,
+    );
+
+    const actions = container.querySelector<HTMLElement>(".workboard-detail__actions");
+    expect(actions).not.toBeNull();
+    expect(buttonByLabel(actions!, "Edit card")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Archive card")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Stop session")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Open session")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Delete card")).not.toBeNull();
+
+    const moveSelect = actions!.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+    expect(moveSelect?.getAttribute("aria-label")).toBe("Status: Detail parity");
+    expect([...moveSelect!.options].map((option) => option.textContent?.trim())).toContain(
+      "Review",
+    );
+
+    buttonByLabel(actions!, "Edit card")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(state.draftOpen).toBe(true);
+    expect(state.editingCardId).toBe("card-1");
   });
 
   it("keeps focus inside the card modal and restores focus on Escape", async () => {
@@ -2765,6 +2887,11 @@ describe("renderWorkboard", () => {
       expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("162px");
       expect(menu?.style.getPropertyValue("--workboard-select-menu-width")).toBe("240px");
       expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
+      expect(menu?.style.visibility).toBe("visible");
+
+      select!.open = false;
+      select!.dispatchEvent(new Event("toggle"));
+      expect(menu?.style.visibility).toBe("hidden");
     } finally {
       innerWidth.mockRestore();
     }

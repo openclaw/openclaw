@@ -2,9 +2,9 @@
 
 // Reports plugin SDK export surface metadata.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import ts from "typescript";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -14,6 +14,9 @@ import {
 } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+let ts;
+
 function usage() {
   return `Usage: node scripts/plugin-sdk-surface-report.mjs [--check]
 
@@ -25,7 +28,7 @@ Options:
 `;
 }
 
-export function parsePluginSdkSurfaceReportArgs(argv) {
+function parsePluginSdkSurfaceReportArgs(argv) {
   const args = { check: false, help: false };
   for (const arg of argv) {
     if (arg === "--check") {
@@ -46,7 +49,7 @@ const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoin
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
 
-export function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
+function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined) {
     return fallback;
@@ -62,7 +65,7 @@ export function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env)
   return parsed;
 }
 
-export function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
+function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined) {
     return fallback;
@@ -87,7 +90,7 @@ export function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.e
   return Object.freeze({ ...fallback, ...overrides });
 }
 
-export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
+const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   health: 1,
   lmstudio: 1,
@@ -102,7 +105,7 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-reply-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 421,
+  "config-types": 423,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -113,7 +116,7 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 588,
+  "infra-runtime": 590,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -169,7 +172,7 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "provider-auth": 20,
   "provider-oauth-runtime": 2,
   "provider-auth-login": 3,
-  "provider-model-shared": 29,
+  "provider-model-shared": 30,
   "provider-stream-family": 40,
   "provider-stream-shared": 29,
   "provider-stream": 40,
@@ -192,17 +195,17 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10453,
+      10471,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5218,
+      5225,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3261,
+      3265,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
@@ -279,6 +282,8 @@ function countWildcardReexports(entrypoints) {
 let exportStatsProgram;
 
 function collectExportStats(entrypoints) {
+  // CLI validation and help do not need the compiler's startup cost.
+  ts ??= require("typescript");
   exportStatsProgram ??= ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
     allowJs: false,
     declaration: true,

@@ -28,12 +28,13 @@ export type SessionWorkspaceProps = {
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onCopyPath: (path: string) => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
   onOpenArtifact: (artifactId: string) => void;
+  onToggleTerminal?: () => void;
 };
 
-export type SessionWorkspaceState = {
+type SessionWorkspaceState = {
   activeId: string | null;
   agentId: string;
   browserPath: string;
@@ -63,6 +64,7 @@ export type SessionWorkspaceHost = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   hello: GatewayHelloOk | null;
+  terminalAvailable?: boolean;
   assistantAgentId?: string | null;
   agentsList?: SessionScopeHost["agentsList"];
   sessionWorkspaceState?: SessionWorkspaceState;
@@ -145,6 +147,20 @@ function fileSidebarContent(name: string, content: string): string {
     return content;
   }
   return `# ${name}\n\n\`\`\`${languageForFile(name)}\n${content}\n\`\`\``;
+}
+
+function basenameForPath(filePath: string): string {
+  return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
+}
+
+export function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
+  if (!root) {
+    return filePath;
+  }
+  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  const base = root.replace(/[\\/]+$/, "");
+  const relative = filePath.replace(/^[\\/]+/, "").replaceAll(/[\\/]/g, separator);
+  return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
 }
 
 function artifactSidebarContent(params: {
@@ -231,6 +247,7 @@ function loadWorkspace(
       }
       const fileItems = files?.files ?? [];
       const artifactItems = artifacts?.artifacts ?? [];
+      const browserItems = files?.browser?.entries ?? [];
       current.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
@@ -241,6 +258,7 @@ function loadWorkspace(
       if (
         current.activeId &&
         !fileItems.some((file) => `file:${file.path}` === current.activeId) &&
+        !browserItems.some((entry) => `file:${entry.path}` === current.activeId) &&
         !artifactItems.some((artifact) => `artifact:${artifact.id}` === current.activeId)
       ) {
         current.activeId = null;
@@ -332,24 +350,75 @@ function openWorkspaceItem<T>(
   })();
 }
 
-function openFile(state: SessionWorkspaceHost, workspace: SessionWorkspaceState, path: string) {
+function openFile(
+  state: SessionWorkspaceHost,
+  workspace: SessionWorkspaceState,
+  path: string,
+  opts: { line?: number | null; requestPath?: string } = {},
+) {
   openWorkspaceItem(
     state,
     workspace,
     `file:${path}`,
-    (request) => state.sessions.getFile(request.sessionKey, path, { agentId: request.agentId }),
+    (request) =>
+      state.sessions.getFile(request.sessionKey, opts.requestPath ?? path, {
+        agentId: request.agentId,
+      }),
     (result) => {
       const file = result.file;
-      return !file || typeof file.content !== "string"
-        ? null
-        : {
-            kind: "markdown",
-            content: fileSidebarContent(file.name || path, file.content),
-            rawText: file.content,
-          };
+      if (!file || typeof file.content !== "string") {
+        return null;
+      }
+      const name = file.name || basenameForPath(path);
+      if (/\.(?:md|markdown|mdx)$/i.test(name) && opts.line == null) {
+        return {
+          kind: "markdown",
+          content: fileSidebarContent(name, file.content),
+          rawText: file.content,
+        };
+      }
+      return {
+        kind: "file",
+        path: file.workspacePath || file.path || path,
+        name,
+        content: file.content,
+        root: result.root ?? null,
+        language: languageForFile(name),
+        line: opts.line ?? null,
+        rawText: file.content,
+      };
     },
     `Failed to load ${path}`,
   );
+}
+
+export function openSessionWorkspaceFile(
+  state: SessionWorkspaceHost,
+  target: { path: string; line?: number | null },
+) {
+  openFile(state, getWorkspaceState(state), target.path, { line: target.line });
+}
+
+export function toggleSessionWorkspace(state: SessionWorkspaceHost) {
+  const workspace = getWorkspaceState(state);
+  workspace.collapsed = !workspace.collapsed;
+  if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
+    loadWorkspace(state, workspace);
+  }
+  requestUpdate(state);
+}
+
+export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
+  const workspace = getWorkspaceState(state);
+  clearWorkspaceSearchTimer(workspace);
+  const normalizedPath = path.replaceAll("\\", "/");
+  const separator = normalizedPath.lastIndexOf("/");
+  workspace.collapsed = false;
+  workspace.browserPath = separator > 0 ? normalizedPath.slice(0, separator) : "";
+  workspace.browserSearch = "";
+  workspace.activeId = `file:${path}`;
+  loadWorkspace(state, workspace, true);
+  requestUpdate(state);
 }
 
 function openArtifact(
@@ -400,13 +469,7 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
     loading: workspace.loading,
     error: workspace.error,
     activeId: workspace.activeId,
-    onToggleCollapsed: () => {
-      workspace.collapsed = !workspace.collapsed;
-      if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
-        loadWorkspace(state, workspace);
-      }
-      requestUpdate(state);
-    },
+    onToggleCollapsed: () => toggleSessionWorkspace(state),
     onRefresh: () => loadWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceSearchTimer(workspace);
@@ -417,7 +480,15 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
     onCopyPath: (path) => {
       void copyToClipboard(path);
     },
-    onOpenFile: (path) => openFile(state, workspace, path),
+    onOpenFile: (path, origin) => {
+      // Session paths are cwd-relative; browser rows are workspace-root-relative.
+      // Keep the origin explicit so a nested cwd cannot shadow the selected browser file.
+      const opts =
+        origin === "workspace"
+          ? { requestPath: workspaceBrowserFilePath(workspace.list?.root, path) }
+          : {};
+      openFile(state, workspace, path, opts);
+    },
     onSearch: (search) => {
       workspace.browserSearch = search;
       clearWorkspaceSearchTimer(workspace);
@@ -427,6 +498,15 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
       }, 160);
     },
     onOpenArtifact: (artifactId) => openArtifact(state, workspace, artifactId),
+    onToggleTerminal: state.terminalAvailable
+      ? () => {
+          window.dispatchEvent(
+            new CustomEvent("openclaw:terminal-toggle", {
+              detail: { dock: "right", open: true },
+            }),
+          );
+        }
+      : undefined,
   };
 }
 
@@ -469,17 +549,32 @@ export function renderSessionWorkspaceRail(
   if (!sessionWorkspace) {
     return nothing;
   }
+  const terminalButton = sessionWorkspace.onToggleTerminal
+    ? html`
+        <openclaw-tooltip .content=${t("terminal.toggle")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal"
+            aria-label=${t("terminal.toggle")}
+            @click=${sessionWorkspace.onToggleTerminal}
+          >
+            ${icons.terminal}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
   if (sessionWorkspace.collapsed) {
     return html`
       <aside
         class="chat-workspace-rail chat-workspace-rail--collapsed"
         aria-label=${t("chat.workspaceFiles.label")}
       >
-        <openclaw-tooltip .content=${t("chat.workspaceFiles.expand")}>
+        <openclaw-tooltip .content=${`${t("chat.workspaceFiles.expand")} (⇧⌘B)`}>
           <button
             type="button"
             class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
             aria-label=${t("chat.workspaceFiles.expand")}
+            aria-keyshortcuts="Meta+Shift+B"
             aria-expanded="false"
             @click=${sessionWorkspace.onToggleCollapsed}
           >
@@ -491,6 +586,7 @@ export function renderSessionWorkspaceRail(
         <span class="chat-workspace-rail__collapsed-icon" aria-hidden="true"
           >${icons.fileText}</span
         >
+        ${terminalButton}
       </aside>
     `;
   }
@@ -502,30 +598,25 @@ export function renderSessionWorkspaceRail(
   const hasSessionItems = files.length > 0 || artifacts.length > 0;
   const hasBrowserItems = (browser?.entries.length ?? 0) > 0;
   const hasItems = hasSessionItems || hasBrowserItems;
-  const renderPathActions = (
-    path: string,
-    options: { preview?: boolean } = {},
-  ): TemplateResult => html`
+  const renderPathActions = (path: string, origin: "session" | "workspace"): TemplateResult => html`
     <span
       class="chat-workspace-rail__row-actions"
       role="group"
       aria-label=${t("chat.workspaceFiles.actions")}
     >
-      ${options.preview === false
-        ? nothing
-        : html`<openclaw-tooltip .content=${t("chat.workspaceFiles.preview")}>
-            <button
-              class="chat-workspace-rail__row-action"
-              type="button"
-              aria-label=${t("chat.workspaceFiles.preview")}
-              @click=${(event: Event) => {
-                event.stopPropagation();
-                sessionWorkspace.onOpenFile(path);
-              }}
-            >
-              ${icons.eye}
-            </button>
-          </openclaw-tooltip>`}
+      <openclaw-tooltip .content=${t("chat.workspaceFiles.preview")}>
+        <button
+          class="chat-workspace-rail__row-action"
+          type="button"
+          aria-label=${t("chat.workspaceFiles.preview")}
+          @click=${(event: Event) => {
+            event.stopPropagation();
+            sessionWorkspace.onOpenFile(path, origin);
+          }}
+        >
+          ${icons.eye}
+        </button>
+      </openclaw-tooltip>
       <openclaw-tooltip .content=${t("chat.workspaceFiles.copyPath")}>
         <button
           class="chat-workspace-rail__row-action"
@@ -576,7 +667,7 @@ export function renderSessionWorkspaceRail(
                   <button
                     class="chat-workspace-rail__file-open"
                     type="button"
-                    @click=${() => sessionWorkspace.onOpenFile(file.path)}
+                    @click=${() => sessionWorkspace.onOpenFile(file.path, "session")}
                   >
                     <span class="chat-workspace-rail__file-icon">${icons.fileText}</span>
                     <span class="chat-workspace-rail__file-main">
@@ -595,7 +686,7 @@ export function renderSessionWorkspaceRail(
                         >${t("chat.workspaceFiles.missing")}</span
                       >`
                     : nothing}
-                  ${renderPathActions(file.path)}
+                  ${renderPathActions(file.path, "session")}
                 </div>
               `;
             })}
@@ -614,38 +705,6 @@ export function renderSessionWorkspaceRail(
           ? t("chat.workspaceFiles.read")
           : t("chat.workspaceFiles.session");
     return html`<span class="chat-workspace-rail__file-badge">${label}</span>`;
-  };
-  const renderBrowserBreadcrumbs = (): TemplateResult | typeof nothing => {
-    if (!browser || browser.search) {
-      return nothing;
-    }
-    const parts = browser.path ? browser.path.split("/").filter(Boolean) : [];
-    let currentPath = "";
-    return html`
-      <div class="chat-workspace-rail__breadcrumbs" aria-label=${t("chat.workspaceFiles.path")}>
-        <button
-          class="chat-workspace-rail__crumb"
-          type="button"
-          @click=${() => sessionWorkspace.onBrowsePath("")}
-        >
-          ${t("chat.workspaceFiles.root")}
-        </button>
-        ${parts.map((part) => {
-          currentPath = currentPath ? `${currentPath}/${part}` : part;
-          const pathForPart = currentPath;
-          return html`
-            <span class="chat-workspace-rail__crumb-separator">/</span>
-            <button
-              class="chat-workspace-rail__crumb"
-              type="button"
-              @click=${() => sessionWorkspace.onBrowsePath(pathForPart)}
-            >
-              ${part}
-            </button>
-          `;
-        })}
-      </div>
-    `;
   };
   const renderBrowserRows = (): TemplateResult => {
     const entries = browser?.entries ?? [];
@@ -667,7 +726,6 @@ export function renderSessionWorkspaceRail(
             />
           </label>
         </div>
-        ${renderBrowserBreadcrumbs()}
         ${browser?.search
           ? html`<div class="chat-workspace-rail__browser-caption">
               ${t("chat.workspaceFiles.searchResults")}
@@ -706,7 +764,6 @@ export function renderSessionWorkspaceRail(
                 const size = entry.kind === "file" ? formatWorkspaceFileSize(entry) : "";
                 const itemId = `file:${entry.path}`;
                 const isActive = itemId === sessionWorkspace.activeId;
-                const canPreview = entry.kind === "file" && Boolean(entry.sessionKind);
                 return html`
                   <div
                     class="chat-workspace-rail__file ${entry.kind === "directory"
@@ -717,13 +774,10 @@ export function renderSessionWorkspaceRail(
                     <button
                       class="chat-workspace-rail__file-open"
                       type="button"
-                      ?disabled=${entry.kind === "file" && !canPreview}
                       @click=${() =>
                         entry.kind === "directory"
                           ? sessionWorkspace.onBrowsePath(entry.path)
-                          : canPreview
-                            ? sessionWorkspace.onOpenFile(entry.path)
-                            : undefined}
+                          : sessionWorkspace.onOpenFile(entry.path, "workspace")}
                     >
                       <span class="chat-workspace-rail__file-icon"
                         >${entry.kind === "directory" ? icons.folder : icons.fileText}</span
@@ -740,9 +794,7 @@ export function renderSessionWorkspaceRail(
                       </span>
                     </button>
                     ${renderBrowserBadge(entry.sessionKind)}
-                    ${entry.kind === "file"
-                      ? renderPathActions(entry.path, { preview: canPreview })
-                      : nothing}
+                    ${entry.kind === "file" ? renderPathActions(entry.path, "workspace") : nothing}
                   </div>
                 `;
               })}
@@ -819,6 +871,7 @@ export function renderSessionWorkspaceRail(
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
+          ${terminalButton}
           <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
             <button
               class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
@@ -830,11 +883,12 @@ export function renderSessionWorkspaceRail(
               ${icons.refresh}
             </button>
           </openclaw-tooltip>
-          <openclaw-tooltip .content=${t("chat.workspaceFiles.collapse")}>
+          <openclaw-tooltip .content=${`${t("chat.workspaceFiles.collapse")} (⇧⌘B)`}>
             <button
               type="button"
               class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
               aria-label=${t("chat.workspaceFiles.collapse")}
+              aria-keyshortcuts="Meta+Shift+B"
               aria-expanded="true"
               @click=${sessionWorkspace.onToggleCollapsed}
             >

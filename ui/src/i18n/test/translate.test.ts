@@ -216,6 +216,16 @@ describe("i18n", () => {
     }
   });
 
+  it("keeps new chat composer commands localized in shipped locale bundles", () => {
+    const checkedKeys = ["chat.composer.addAttachment", "chat.composer.attachFileOption"];
+
+    for (const [locale, value] of Object.entries(shippedLocales)) {
+      for (const key of checkedKeys) {
+        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+      }
+    }
+  });
+
   it("keeps shipped locales structurally aligned with English", () => {
     const englishKeys = flatten(en);
     for (const [locale, value] of Object.entries(shippedLocales)) {

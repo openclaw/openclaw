@@ -60,12 +60,12 @@ describe("realtime voice bridge session runtime", () => {
     });
 
     callbacks?.onAudio(Buffer.from([1, 2]));
-    callbacks?.onClearAudio();
+    callbacks?.onClearAudio("barge-in");
     callbacks?.onMark?.("mark-1");
 
     expect(callbacks?.cfg).toEqual({ talk: { realtime: { provider: "test" } } });
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2]));
-    expect(clearAudio).toHaveBeenCalledTimes(1);
+    expect(clearAudio).toHaveBeenCalledWith("barge-in");
     expect(sendMark).toHaveBeenCalledWith("mark-1");
   });
 

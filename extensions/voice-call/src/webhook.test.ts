@@ -1659,8 +1659,9 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
 });
 
 describe("VoiceCallWebhookServer classic response routing", () => {
-  it("keeps outbound calls on the top-level agent when the dialed number has an inbound route", async () => {
+  it("keeps outbound calls on their frozen agent when the dialed number has an inbound route", async () => {
     const call = createCall(Date.now());
+    call.agentId = "support";
     call.direction = "outbound";
     call.to = "+15550001111";
     call.sessionKey = "agent:top:voice:15550001111";
@@ -1696,8 +1697,9 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     const params = requireFirstMockCall(
       mocks.generateVoiceResponse.mock.calls,
       "classic voice response",
-    )[0] as { voiceConfig?: VoiceCallConfig } | undefined;
+    )[0] as { agentId?: string; voiceConfig?: VoiceCallConfig } | undefined;
     expect(params?.voiceConfig?.agentId).toBe("top");
+    expect(params?.agentId).toBe("support");
     expect(speak).toHaveBeenCalledWith(call.callId, "Hello back", {
       listenAfterPlayback: true,
     });
@@ -1929,6 +1931,48 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
         onTranscript?: (providerCallId: string, transcript: string) => void;
       };
     };
+
+  it("logs streaming transcripts without splitting UTF-16 surrogate pairs", async () => {
+    const manager = {
+      getActiveCalls: () => [],
+      getCallByProviderCallId: vi.fn(() => undefined),
+      endCall: vi.fn(async () => ({ success: true })),
+      speakInitialMessage: vi.fn(async () => {}),
+      processEvent: vi.fn(),
+    } as unknown as CallManager;
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: {
+          openai: {
+            apiKey: "test-key", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(vi.fn()));
+    await server.start();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const transcript = `${"a".repeat(199)}\uD83D\uDE80tail`;
+      getMediaCallbacks(server).config.onTranscript?.("CA-utf16", transcript);
+
+      const transcriptLog = logSpy.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("Transcript for CA-utf16"));
+      expect(transcriptLog).toContain(`${"a".repeat(199)}...`);
+      expect(transcriptLog).not.toContain("\uD83D");
+      expect(transcriptLog).not.toContain("\uDE80");
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+      await server.stop();
+    }
+  });
 
   it("suppresses barge-in clear while outbound conversation initial message is pending", async () => {
     const call = createCall(Date.now() - 1_000);

@@ -13,39 +13,7 @@ const {
   listChangedPaths,
   parseArgs,
   shouldRunNativeI18n,
-} = (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
-  detectChangedScope: (paths: string[]) => {
-    runNode: boolean;
-    runMacos: boolean;
-    runIosBuild: boolean;
-    runAndroid: boolean;
-    runWindows: boolean;
-    runSkillsPython: boolean;
-    runChangedSmoke: boolean;
-    runControlUiI18n: boolean;
-  };
-  detectInstallSmokeScope: (paths: string[]) => {
-    runFastInstallSmoke: boolean;
-    runFullInstallSmoke: boolean;
-  };
-  detectNodeFastScope: (paths: string[]) => {
-    runFastOnly: boolean;
-    runPluginContracts: boolean;
-    runCiRouting: boolean;
-  };
-  shouldRunNativeI18n: (paths: string[]) => boolean;
-  listChangedPaths: (
-    base: string,
-    head?: string,
-    cwd?: string,
-    preferMergeHeadFirstParent?: boolean,
-  ) => string[];
-  parseArgs: (argv: string[]) => {
-    base: string;
-    head: string;
-    mergeHeadFirstParent: boolean;
-  };
-};
+} = await import("../../scripts/ci-changed-scope.mjs");
 
 const markerPaths: string[] = [];
 const tempDirs: string[] = [];
@@ -255,6 +223,21 @@ describe("detectChangedScope", () => {
     });
   });
 
+  it("runs both Apple lanes for shared Swift lint configuration", () => {
+    for (const configPath of ["config/swiftformat", "config/swiftlint.yml"]) {
+      expect(detectChangedScope([configPath])).toEqual({
+        runNode: true,
+        runMacos: true,
+        runIosBuild: true,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
+  });
+
   it("enables the iOS build lane for iOS build helper changes", () => {
     for (const helperPath of [
       "scripts/ios-team-id.sh",
@@ -452,6 +435,24 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    for (const daemonPath of [
+      "src/daemon/schtasks.ts",
+      "src/daemon/schtasks-exec.ts",
+      "src/daemon/schtasks.startup-fallback.test.ts",
+      "src/daemon/runtime-hints.windows-paths.test.ts",
+      "src/daemon/test-helpers/schtasks-fixtures.ts",
+    ]) {
+      expect(detectChangedScope([daemonPath]), daemonPath).toEqual({
+        runNode: true,
+        runMacos: false,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: true,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
     expect(detectChangedScope(["src/shared/runtime-import.ts"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -502,6 +503,23 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    for (const releaseCheckPath of [
+      ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+      "scripts/github/run-openclaw-cross-os-release-checks.sh",
+      "scripts/openclaw-cross-os-release-checks.ts",
+      "test/scripts/openclaw-cross-os-release-workflow.test.ts",
+    ]) {
+      expect(detectChangedScope([releaseCheckPath]), releaseCheckPath).toEqual({
+        runNode: true,
+        runMacos: false,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: true,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
     expect(detectChangedScope(["scripts/install.ps1"])).toEqual({
       runNode: true,
       runMacos: false,

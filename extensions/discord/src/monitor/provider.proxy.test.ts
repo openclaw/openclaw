@@ -230,7 +230,9 @@ describe("createDiscordGatewayPlugin", () => {
     };
   }
 
-  function createProxyTestingOverrides() {
+  function createProxyTestingOverrides(): NonNullable<
+    Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
+  > {
     return {
       createProxyAgent: (proxyUrl: string) =>
         new HttpsProxyAgent(proxyUrl) as unknown as import("node:http").Agent,
@@ -239,10 +241,9 @@ describe("createDiscordGatewayPlugin", () => {
         options?: { agent?: unknown; handshakeTimeout?: number },
       ) {
         webSocketSpy(url, options);
-      } as unknown as new (
-        url: string,
-        options?: { agent?: unknown; handshakeTimeout?: number },
-      ) => import("ws").WebSocket,
+      } as unknown as NonNullable<
+        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
+      >["webSocketCtor"],
       registerClient: async (_plugin: unknown, client: unknown) => {
         baseRegisterClientSpy(client);
       },

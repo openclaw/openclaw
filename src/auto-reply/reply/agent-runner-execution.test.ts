@@ -26,6 +26,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmptyInteractiveReplyPayload,
+  buildKnownAgentRunFailureReplyPayload,
   buildContextOverflowRecoveryText,
   computeContextAwareReserveTokensFloor,
   MAX_LIVE_SWITCH_RETRIES,
@@ -466,9 +467,13 @@ function createMockReplyOperation(): {
       abortSignal: new AbortController().signal,
       resetTriggered: false,
       terminalRecovery: false,
+      acceptedSteeredInboundAudio: false,
       phase: "running",
       result: null,
+      startedAtMs: Date.now(),
+      lastActivityAtMs: Date.now(),
       hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
+      recordActivity: vi.fn(),
       setPhase: vi.fn(),
       updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
@@ -482,6 +487,7 @@ function createMockReplyOperation(): {
       abortByUser: vi.fn(() => true),
       abortForRestart: vi.fn(() => true),
       markTerminalRecovery: vi.fn(),
+      markAcceptedSteeredInboundAudio: vi.fn(),
     },
   };
 }
@@ -1670,6 +1676,7 @@ describe("runAgentTurnWithFallback", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
+    followupRun.run.clientCaps = ["tool-events", "inline-widgets"];
     const typingSignals = createMockTypingSignaler();
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
@@ -1685,6 +1692,7 @@ describe("runAgentTurnWithFallback", () => {
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       provider: "codex-cli",
       model: "gpt-5.4",
+      clientCaps: ["tool-events", "inline-widgets"],
     });
   });
 
@@ -7115,6 +7123,58 @@ describe("runAgentTurnWithFallback", () => {
   );
 
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "surfaces typed periodic rate-limit details in $label chats",
+    async (testCase) => {
+      const periodicLimitMessage = "You've hit your weekly limit · resets 6pm (UTC)";
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(
+        new FailoverError(periodicLimitMessage, {
+          reason: "rate_limit",
+          provider: "anthropic",
+          model: "claude-opus-4-1",
+          rawError: periodicLimitMessage,
+        }),
+      );
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.isError).toBe(true);
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).toContain("weekly limit");
+        expect(result.payload.text).toContain("resets 6pm");
+        expect(result.payload.text).not.toContain("few minutes");
+      }
+    },
+  );
+
+  it("surfaces typed periodic rate-limit details through known failure payloads in group chats", () => {
+    const periodicLimitMessage = "You've hit your weekly limit · resets 6pm (UTC)";
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: new FailoverError(periodicLimitMessage, {
+        reason: "rate_limit",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        rawError: periodicLimitMessage,
+      }),
+      sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload).toBeDefined();
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).not.toBe(SILENT_REPLY_TOKEN);
+    expect(payload?.text).toContain("weekly limit");
+    expect(payload?.text).toContain("resets 6pm");
+    expect(payload?.text).not.toContain("few minutes");
+  });
+
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "surfaces overloaded fallback copy in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("model is overloaded"));
@@ -7134,6 +7194,33 @@ describe("runAgentTurnWithFallback", () => {
       }
     },
   );
+
+  it("surfaces typed overloaded failures without rate-limit cooldown copy", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("529 Please try again", {
+        reason: "overloaded",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        status: 529,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
+      expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+      expect(result.payload.text).toContain("overloaded");
+      expect(result.payload.text).not.toContain("rate-limited");
+      expect(result.payload.text).not.toContain("few minutes");
+    }
+  });
 
   it("surfaces rate-limit fallback copy in Discord group chats when silentReply.group is disallow", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
@@ -7686,6 +7773,60 @@ describe("runAgentTurnWithFallback", () => {
         "⚠️ Model login expired on the gateway for anthropic. Re-auth with `openclaw models auth login --provider anthropic` in a terminal, then try again.",
       );
       expect(result.payload.text).not.toContain("/login codex");
+    }
+  });
+
+  it("surfaces claude-cli re-auth hint over generic provider auth copy for 401 OAuth expiry", async () => {
+    // When the claude subprocess emits a 401 "Failed to authenticate" because
+    // its OAuth token has expired, the error is wrapped as a FailoverError with
+    // reason:"auth" and status:401.  Without the ordering fix, this would be
+    // caught by classifyProviderRequestError before reaching classifyOAuthRefreshFailure,
+    // producing the generic "re-authenticate this provider" copy instead of the
+    // targeted claude-cli re-auth command.
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError(
+        "Provider claude-cli failed: Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        {
+          reason: "auth",
+          provider: "claude-cli",
+          model: "claude-sonnet-4-20250514",
+          status: 401,
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` in a terminal, then try again.",
+      );
+    }
+  });
+
+  it("surfaces claude-cli re-auth hint from structured provider metadata when the message omits claude-cli", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError(
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        {
+          reason: "auth",
+          provider: "claude-cli",
+          model: "claude-sonnet-4-20250514",
+          status: 401,
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` in a terminal, then try again.",
+      );
     }
   });
 

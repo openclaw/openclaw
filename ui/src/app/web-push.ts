@@ -2,7 +2,7 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
-export type WebPushSnapshot = {
+type WebPushSnapshot = {
   supported: boolean;
   permission: NotificationPermission | "unsupported";
   subscribed: boolean;
