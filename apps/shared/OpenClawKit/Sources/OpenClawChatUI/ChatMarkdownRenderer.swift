@@ -14,18 +14,44 @@ struct ChatMarkdownRenderer: View {
         case assistant
     }
 
-    struct InlineMathTypography {
-        static let body = Self(size: OpenClawChatTypography.bodySize, relativeTo: .body)
-        static let callout = Self(size: 16, relativeTo: .callout)
+    enum Typography: Equatable {
+        enum HeadingStyle: Equatable {
+            case hierarchy
+            case prose
+        }
 
-        let size: CGFloat
-        let relativeTo: Font.TextStyle
+        case response
+        case thinking
+
+        var headingStyle: HeadingStyle {
+            self == .response ? .hierarchy : .prose
+        }
+
+        fileprivate var proseFont: Font {
+            self == .response
+                ? OpenClawChatTypography.body
+                : OpenClawChatTypography.callout.italic()
+        }
+
+        fileprivate var inlineMath: (size: CGFloat, relativeTo: Font.TextStyle) {
+            switch self {
+            case .response: (OpenClawChatTypography.bodySize, .body)
+            case .thinking: (16, .callout)
+            }
+        }
+
+        fileprivate func headingFont(level: Int) -> Font {
+            switch self.headingStyle {
+            case .hierarchy: OpenClawChatTypography.heading(level: level)
+            case .prose: self.proseFont
+            }
+        }
     }
 
     let snapshot: ChatMarkdownRenderSnapshot
     let context: Context
     let variant: ChatMarkdownVariant
-    let font: Font
+    let typography: Typography
     let textColor: Color
     var reveal: ChatMarkdownProseReveal?
 
@@ -36,38 +62,37 @@ struct ChatMarkdownRenderer: View {
         text: String,
         context: Context,
         variant: ChatMarkdownVariant,
-        font: Font,
+        typography: Typography = .response,
         textColor: Color,
-        inlineMathTypography: InlineMathTypography = .body,
         isComplete: Bool = true)
     {
         self.init(
             snapshot: ChatMarkdownRenderSnapshot(text: text, isComplete: isComplete),
             context: context,
             variant: variant,
-            font: font,
+            typography: typography,
             textColor: textColor,
-            inlineMathTypography: inlineMathTypography)
+            reveal: nil)
     }
 
     init(
         snapshot: ChatMarkdownRenderSnapshot,
         context: Context,
         variant: ChatMarkdownVariant,
-        font: Font,
+        typography: Typography = .response,
         textColor: Color,
-        inlineMathTypography: InlineMathTypography = .body,
         reveal: ChatMarkdownProseReveal? = nil)
     {
         self.snapshot = snapshot
         self.context = context
         self.variant = variant
-        self.font = font
+        self.typography = typography
         self.textColor = textColor
         self.reveal = reveal
+        let inlineMath = typography.inlineMath
         self._inlineMathFontSize = ScaledMetric(
-            wrappedValue: inlineMathTypography.size,
-            relativeTo: inlineMathTypography.relativeTo)
+            wrappedValue: inlineMath.size,
+            relativeTo: inlineMath.relativeTo)
     }
 
     var body: some View {
@@ -87,7 +112,7 @@ struct ChatMarkdownRenderer: View {
         switch block {
         case let .prose(prose):
             self.proseText(prose, index: index)
-                .font(self.font)
+                .font(self.typography.proseFont)
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
@@ -95,7 +120,7 @@ struct ChatMarkdownRenderer: View {
                 .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
         case let .heading(level, prose):
             self.proseText(prose, index: index)
-                .font(OpenClawChatTypography.heading(level: level))
+                .font(self.typography.headingFont(level: level))
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)

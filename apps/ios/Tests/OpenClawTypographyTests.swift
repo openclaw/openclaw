@@ -184,6 +184,11 @@ struct OpenClawTypographyTests {
                 .deletingLastPathComponent()
                 .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift"),
             encoding: .utf8)
+        let chatMarkdownRenderer = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift"),
+            encoding: .utf8)
 
         #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(proComponents.contains("Text(primaryActionTitle)"))
@@ -298,8 +303,9 @@ struct OpenClawTypographyTests {
             #expect(source.contains(".font(OpenClawType.body)"))
         }
 
-        #expect(chatMessageViews.contains("font: OpenClawChatTypography.body"))
-        #expect(chatMessageViews.contains("OpenClawChatTypography.callout.italic()"))
+        #expect(chatMessageViews.contains("typography: segment.kind.markdownTypography"))
+        #expect(chatMarkdownRenderer.contains("OpenClawChatTypography.body"))
+        #expect(chatMarkdownRenderer.contains("OpenClawChatTypography.callout.italic()"))
         #expect(!chatMessageViews.contains("font: .body"))
         #expect(!chatMessageViews.contains("Font.body"))
         #expect(!chatMessageViews.contains("Font.callout"))
