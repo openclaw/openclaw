@@ -3430,7 +3430,7 @@ describe("google-meet plugin", () => {
             return {
               payload: {
                 result: {
-                  targetId: proxy.body?.targetId ?? "existing-meet-tab",
+                  targetId: "navigated-meet-tab",
                   url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
                 },
               },
@@ -3443,7 +3443,7 @@ describe("google-meet plugin", () => {
                   result: JSON.stringify({
                     inCall: true,
                     title: "Meet",
-                    url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com",
+                    url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
                   }),
                 },
               },
@@ -3502,6 +3502,26 @@ describe("google-meet plugin", () => {
       body: {
         targetId: "existing-meet-tab",
         url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
+      },
+    });
+    const actCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return params.path === "/act";
+    });
+    if (!actCall) {
+      throw new Error("Expected browser.proxy /act node invoke");
+    }
+    expect(
+      requireRecord(requireRecord(actCall[0], "act node invoke").params, "act params"),
+    ).toEqual({
+      method: "POST",
+      path: "/act",
+      timeoutMs: 10000,
+      body: {
+        kind: "evaluate",
+        targetId: "navigated-meet-tab",
+        fn: expect.any(String),
       },
     });
     expect(

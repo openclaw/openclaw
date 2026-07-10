@@ -698,6 +698,9 @@ async function openMeetWithBrowserRequest(params: {
         const navigatedTab = readBrowserTab(navigated);
         if (navigatedTab?.url) {
           tab = navigatedTab;
+          if (navigatedTab.targetId) {
+            targetId = navigatedTab.targetId;
+          }
         }
       }
     }

@@ -599,7 +599,7 @@ describe("google-meet create flow", () => {
             return {
               payload: {
                 result: {
-                  targetId: proxy.body?.targetId ?? "existing-create-tab",
+                  targetId: "navigated-create-tab",
                   url: "https://meet.google.com/new?hl=en",
                 },
               },
@@ -639,7 +639,7 @@ describe("google-meet create flow", () => {
     expect(payload.meetingUri).toBe("https://meet.google.com/reu-sedx-tab");
     const browser = requireRecord(payload.browser, "browser payload");
     expect(browser.nodeId).toBe("node-1");
-    expect(browser.targetId).toBe("existing-create-tab");
+    expect(browser.targetId).toBe("navigated-create-tab");
     findNodeInvokeParams(nodesInvoke, "focus existing tab", (params) => {
       if (!params.params || typeof params.params !== "object") {
         return false;
@@ -665,6 +665,17 @@ describe("google-meet create flow", () => {
         body.targetId === "existing-create-tab" &&
         body.url === "https://meet.google.com/new?hl=en"
       );
+    });
+    findNodeInvokeParams(nodesInvoke, "act uses navigated target id", (params) => {
+      if (!params.params || typeof params.params !== "object") {
+        return false;
+      }
+      const proxy = params.params as Record<string, unknown>;
+      if (!proxy.body || typeof proxy.body !== "object") {
+        return false;
+      }
+      const body = proxy.body as Record<string, unknown>;
+      return proxy.path === "/act" && body.targetId === "navigated-create-tab";
     });
     const openedCreateTab = mockCalls(nodesInvoke, "nodes invoke").some(([value]) => {
       if (!value || typeof value !== "object") {
