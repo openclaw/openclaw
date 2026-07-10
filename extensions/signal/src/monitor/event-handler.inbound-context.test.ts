@@ -7,7 +7,12 @@ vi.useRealTimers();
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
-] = await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
+  { clearSignalReplyAuthorsForTest, resolveSignalReplyAuthorWithPersistence },
+] = await Promise.all([
+  import("./event-handler.test-harness.js"),
+  import("./event-handler.js"),
+  import("../reply-authors.js"),
+]);
 
 type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
@@ -123,8 +128,9 @@ function nextTimerTick(): Promise<void> {
 }
 
 describe("signal createSignalEventHandler inbound context", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
+    await clearSignalReplyAuthorsForTest();
     delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
@@ -213,6 +219,36 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.ReplyToId).toBe("1700000000001");
   });
 
+  it("records group message reply authors for Signal native reply lookup", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000002,
+        dataMessage: {
+          message: "hello group",
+          attachments: [],
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+        },
+      }),
+    );
+
+    await expect(
+      resolveSignalReplyAuthorWithPersistence({
+        accountId: "default",
+        to: "group:g1",
+        replyToId: "1700000000002",
+      }),
+    ).resolves.toBe("+15550002222");
+  });
+
   it.each([
     {
       name: "dataMessage",
@@ -287,6 +323,13 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.MessageSid).toBe("1700000000999");
     expect(context.ReplyToId).toBe("1700000000002");
     expect(context.Timestamp).toBe(1700000000999);
+    await expect(
+      resolveSignalReplyAuthorWithPersistence({
+        accountId: "default",
+        to: "+15550002222",
+        replyToId: "1700000000002",
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("preserves the last debounced message body for native reply quote metadata", async () => {

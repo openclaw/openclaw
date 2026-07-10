@@ -3,8 +3,11 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createReplyToFanout,
+  defineChannelMessageAdapter,
+  resolveOutboundSendDep,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
@@ -39,6 +42,7 @@ import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
+import { resolveSignalReplyAuthorWithPersistence } from "./reply-authors.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
   createSignalPluginBase,
@@ -100,9 +104,15 @@ async function sendSignalOutbound(params: {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string;
   deps?: { [channelId: string]: unknown };
+  replyToId?: string | null;
 }) {
   const { send, maxBytes } = await resolveSignalSendContext(params);
   const to = resolveSignalSendTarget(params);
+  const replyOptions = await resolveSignalReplyOptions({
+    to,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+  });
   return await send(to, params.text, {
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
@@ -110,7 +120,63 @@ async function sendSignalOutbound(params: {
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
+    ...replyOptions,
   });
+}
+
+function resolveDirectSignalReplyAuthor(to: string): string | undefined {
+  const normalized = normalizeSignalMessagingTarget(to);
+  if (!normalized || inferSignalTargetChatType(normalized) !== "direct") {
+    return undefined;
+  }
+  if (normalized.startsWith("username:")) {
+    return `u:${normalized.slice("username:".length)}`;
+  }
+  return normalized;
+}
+
+function resolveSignalReplyOptions(params: {
+  to: string;
+  accountId?: string | null;
+  replyToId?: string | null;
+}): Promise<{ replyToId: string; replyToAuthor?: string } | Record<string, never>> {
+  const replyToId = normalizeOptionalString(params.replyToId);
+  if (!replyToId) {
+    return Promise.resolve({});
+  }
+  const directAuthor = resolveDirectSignalReplyAuthor(params.to);
+  if (directAuthor) {
+    return Promise.resolve({ replyToId, replyToAuthor: directAuthor });
+  }
+  return resolveSignalReplyAuthorWithPersistence({
+    accountId: params.accountId,
+    to: params.to,
+    replyToId,
+  }).then((replyToAuthor) => ({
+    replyToId,
+    ...(replyToAuthor ? { replyToAuthor } : {}),
+  }));
+}
+
+function inferSignalTargetChatType(rawTo: string) {
+  let to = rawTo.trim();
+  if (!to) {
+    return undefined;
+  }
+  if (/^signal:/i.test(to)) {
+    to = to.replace(/^signal:/i, "").trim();
+  }
+  if (!to) {
+    return undefined;
+  }
+  const lower = normalizeLowercaseStringOrEmpty(to);
+  if (lower.startsWith("group:")) {
+    return "group" as const;
+  }
+  if (lower.startsWith("username:") || lower.startsWith("u:")) {
+    return "direct" as const;
+  }
+  return "direct" as const;
 }
 
 type SignalMessageContextExtras = {
@@ -137,6 +203,7 @@ const signalMessageAdapter = defineChannelMessageAdapter({
     capabilities: {
       text: true,
       media: true,
+      replyTo: true,
     },
   },
   send: {
@@ -147,6 +214,7 @@ const signalMessageAdapter = defineChannelMessageAdapter({
         text: ctx.text,
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & SignalMessageContextExtras).deps,
+        replyToId: ctx.replyToId ?? undefined,
       }),
     media: async (ctx) =>
       await sendSignalOutbound({
@@ -158,30 +226,10 @@ const signalMessageAdapter = defineChannelMessageAdapter({
         mediaReadFile: ctx.mediaReadFile,
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & SignalMessageContextExtras).deps,
+        replyToId: ctx.replyToId ?? undefined,
       }),
   },
 });
-
-function inferSignalTargetChatType(rawTo: string) {
-  let to = rawTo.trim();
-  if (!to) {
-    return undefined;
-  }
-  if (/^signal:/i.test(to)) {
-    to = to.replace(/^signal:/i, "").trim();
-  }
-  if (!to) {
-    return undefined;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(to);
-  if (lower.startsWith("group:")) {
-    return "group" as const;
-  }
-  if (lower.startsWith("username:") || lower.startsWith("u:")) {
-    return "direct" as const;
-  }
-  return "direct" as const;
-}
 
 function buildSignalBaseSessionKey(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
@@ -227,6 +275,13 @@ async function sendFormattedSignalText(ctx: {
   text: string;
   accountId?: string | null;
   deps?: { [channelId: string]: unknown };
+  replyToId?: string | null;
+  replyToIdSource?: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendFormattedText"]>
+  >[0]["replyToIdSource"];
+  replyToMode?: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendFormattedText"]>
+  >[0]["replyToMode"];
   abortSignal?: AbortSignal;
   onDeliveryResult?: Parameters<
     NonNullable<ChannelOutboundAdapter["sendFormattedText"]>
@@ -257,15 +312,27 @@ async function sendFormattedSignalText(ctx: {
   if (chunks.length === 0 && ctx.text) {
     chunks = [{ text: ctx.text, styles: [] }];
   }
+  const nextReplyToId = createReplyToFanout({
+    replyToId: ctx.replyToId,
+    replyToIdSource: ctx.replyToIdSource,
+    replyToMode: ctx.replyToMode,
+  });
   const results = [];
   for (const chunk of chunks) {
     ctx.abortSignal?.throwIfAborted();
+    const replyToId = nextReplyToId();
+    const replyOptions = await resolveSignalReplyOptions({
+      to,
+      accountId: ctx.accountId,
+      replyToId,
+    });
     const result = await send(to, chunk.text, {
       cfg: ctx.cfg,
       maxBytes,
       accountId: ctx.accountId ?? undefined,
       textMode: "plain",
       textStyles: chunk.styles,
+      ...replyOptions,
     });
     const deliveryResult = attachChannelToResult(
       "signal",
@@ -286,6 +353,7 @@ async function sendFormattedSignalMedia(ctx: {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
   deps?: { [channelId: string]: unknown };
+  replyToId?: string | null;
   abortSignal?: AbortSignal;
 }) {
   ctx.abortSignal?.throwIfAborted();
@@ -310,6 +378,11 @@ async function sendFormattedSignalMedia(ctx: {
     text: ctx.text,
     styles: [],
   };
+  const replyOptions = await resolveSignalReplyOptions({
+    to,
+    accountId: ctx.accountId,
+    replyToId: ctx.replyToId,
+  });
   const result = await send(to, formatted.text, {
     cfg: ctx.cfg,
     mediaUrl: ctx.mediaUrl,
@@ -319,6 +392,7 @@ async function sendFormattedSignalMedia(ctx: {
     accountId: ctx.accountId ?? undefined,
     textMode: "plain",
     textStyles: formatted.styles,
+    ...replyOptions,
   });
   return attachChannelToResult("signal", attachSignalVisibleText(result, formatted.text));
 }
@@ -581,6 +655,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           text,
           accountId,
           deps,
+          replyToId,
+          replyToIdSource,
+          replyToMode,
           abortSignal,
           onDeliveryResult,
         }) =>
@@ -590,6 +667,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             text,
             accountId,
             deps,
+            replyToId,
+            replyToIdSource,
+            replyToMode,
             abortSignal,
             onDeliveryResult,
           }),
@@ -602,6 +682,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           mediaReadFile,
           accountId,
           deps,
+          replyToId,
           abortSignal,
         }) =>
           await sendFormattedSignalMedia({
@@ -613,18 +694,20 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             mediaReadFile,
             accountId,
             deps,
+            replyToId,
             abortSignal,
           }),
       },
       attachedResults: {
         channel: "signal",
-        sendText: async ({ cfg, to, text, accountId, deps }) =>
+        sendText: async ({ cfg, to, text, accountId, deps, replyToId }) =>
           await sendSignalOutbound({
             cfg,
             to,
             text,
             accountId: accountId ?? undefined,
             deps,
+            replyToId,
           }),
         sendMedia: async ({
           cfg,
@@ -635,6 +718,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           mediaReadFile,
           accountId,
           deps,
+          replyToId,
         }) =>
           await sendSignalOutbound({
             cfg,
@@ -645,6 +729,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             mediaReadFile,
             accountId: accountId ?? undefined,
             deps,
+            replyToId,
           }),
       },
     },

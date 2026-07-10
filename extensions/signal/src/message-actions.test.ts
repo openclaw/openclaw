@@ -66,6 +66,134 @@ describe("signalMessageActions", () => {
     expect(signalMessageActions.supportsAction?.({ action: "react" })).toBe(true);
   });
 
+  it("prepares replyToId as a Signal send reply target alias", () => {
+    const prepared = signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {
+          to: "+15551234567",
+          message: "threaded",
+          replyToId: "1700000000001",
+        },
+      },
+      to: "+15551234567",
+      payload: { text: "threaded" },
+    });
+    expect(prepared).toMatchObject({
+      text: "threaded",
+      replyToId: "1700000000001",
+    });
+  });
+
+  it("leaves canonical Signal send reply targets on the core path", () => {
+    const prepared = signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {
+          to: "+15551234567",
+          message: "threaded",
+          replyTo: "explicit-1",
+        },
+      },
+      to: "+15551234567",
+      payload: { text: "threaded" },
+      replyToId: "explicit-1",
+    });
+    expect(prepared).toBeNull();
+  });
+
+  it("prefers Signal replyToId aliases over canonical replyTo fields", () => {
+    const prepared = signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {
+          to: "+15551234567",
+          message: "threaded",
+          replyTo: "explicit-1",
+          replyToId: "alias-1",
+        },
+      },
+      to: "+15551234567",
+      payload: { text: "threaded" },
+      replyToId: "explicit-1",
+    });
+    expect(prepared).toMatchObject({
+      text: "threaded",
+      replyToId: "alias-1",
+    });
+  });
+
+  it("lets Signal replyToId aliases override ambient core reply targets", () => {
+    const prepared = signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {
+          to: "+15551234567",
+          message: "threaded",
+          replyToId: "alias-1",
+        },
+      },
+      to: "+15551234567",
+      payload: { text: "threaded" },
+      replyToId: "ambient-1",
+    });
+    expect(prepared).toMatchObject({
+      text: "threaded",
+      replyToId: "alias-1",
+    });
+  });
+
+  it("uses replyToId aliases when Signal send replyTo is blank", () => {
+    const prepared = signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {
+          to: "+15551234567",
+          message: "threaded",
+          replyTo: "   ",
+          replyToId: "1700000000001",
+        },
+      },
+      to: "+15551234567",
+      payload: { text: "threaded" },
+    });
+    expect(prepared).toMatchObject({
+      text: "threaded",
+      replyToId: "1700000000001",
+    });
+  });
+
+  it("keeps existing payload reply targets for Signal sends", () => {
+    const prepared = signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {
+          to: "+15551234567",
+          message: "threaded",
+          replyToId: "alias-1",
+        },
+      },
+      to: "+15551234567",
+      payload: { text: "threaded", replyToId: "payload-1" },
+    });
+    expect(prepared).toMatchObject({
+      text: "threaded",
+      replyToId: "payload-1",
+    });
+  });
+
   it("blocks reactions when the action gate is disabled", async () => {
     const cfg = {
       channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
