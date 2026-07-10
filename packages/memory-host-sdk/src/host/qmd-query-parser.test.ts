@@ -25,6 +25,16 @@ complete`,
     expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
   });
 
+  it("skips bracketed log prefixes before embedded result arrays", () => {
+    const results = parseQmdQueryJson(
+      `[INFO] qmd ready
+[{"docid":"abc","score":0.5}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
   it("preserves explicit qmd line metadata when present", () => {
     const results = parseQmdQueryJson(
       '[{"docid":"abc","score":0.5,"start_line":4,"end_line":6,"snippet":"@@ -10,1\\nignored"}]',

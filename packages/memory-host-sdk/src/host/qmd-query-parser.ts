@@ -37,7 +37,7 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
     if (parsed !== null) {
       return parsed;
     }
-    const noisyPayload = extractFirstJsonArray(trimmedStdout);
+    const noisyPayload = findFirstQmdResultArrayPayload(trimmedStdout);
     if (!noisyPayload) {
       throw new Error("qmd query JSON response was not an array");
     }
@@ -127,12 +127,18 @@ function parseQmdLineNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-/** Extract the first complete JSON array from noisy stdout. */
-function extractFirstJsonArray(raw: string): string | null {
-  const start = raw.indexOf("[");
-  if (start < 0) {
-    return null;
+/** Extract the first complete qmd result array from noisy stdout. */
+function findFirstQmdResultArrayPayload(raw: string): string | null {
+  for (let start = raw.indexOf("["); start >= 0; start = raw.indexOf("[", start + 1)) {
+    const payload = extractJsonArrayAt(raw, start);
+    if (payload && parseQmdQueryResultArray(payload) !== null) {
+      return payload;
+    }
   }
+  return null;
+}
+
+function extractJsonArrayAt(raw: string, start: number): string | null {
   let depth = 0;
   let inString = false;
   let escaped = false;
