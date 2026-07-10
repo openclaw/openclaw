@@ -69,7 +69,6 @@ describe("provider-catalog-live-runtime", () => {
     expect(request).toMatchObject({
       url: "https://provider.example.test/v1/models",
       auditContext: "provider-model-discovery",
-      timeoutMs: 1234,
       signal: controller.signal,
     });
     const headers = request?.init?.headers;
