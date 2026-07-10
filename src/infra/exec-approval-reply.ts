@@ -70,6 +70,8 @@ export type ExecApprovalUnavailableReplyParams = {
   accountId?: string;
   reason: ExecApprovalUnavailableReason;
   sentApproverDms?: boolean;
+  host?: ExecHost;
+  nodeId?: string;
 };
 
 function resolveNativeExecApprovalClientList(params?: { excludeChannel?: string }): string {
@@ -80,13 +82,22 @@ function resolveNativeExecApprovalClientList(params?: { excludeChannel?: string 
   );
 }
 
-function buildGenericNativeExecApprovalFallbackText(params?: { excludeChannel?: string }): string {
+function buildGenericNativeExecApprovalFallbackText(params?: {
+  excludeChannel?: string;
+  host?: ExecHost;
+  nodeId?: string;
+}): string {
   const clients = resolveNativeExecApprovalClientList({
     excludeChannel: params?.excludeChannel,
   });
+  let manualRecovery = "Open the approval inbox with `openclaw dashboard --no-open`.";
+  if (params?.host === "node") {
+    const nodeId = normalizeOptionalString(params.nodeId) ?? "<id|name|ip>";
+    manualRecovery += ` Inspect the node's effective exec policy with \`openclaw approvals get --node ${nodeId}\`.`;
+  }
   return clients
-    ? `Approve it from the Web UI or terminal UI, or enable a native chat approval client such as ${clients}. If those accounts already know your owner ID via allowFrom or owner config, OpenClaw can often infer approvers automatically.`
-    : "Approve it from the Web UI or terminal UI.";
+    ? `Approve it from the Web UI or terminal UI, or enable a native chat approval client such as ${clients}. ${manualRecovery} If those accounts already know your owner ID via allowFrom or owner config, OpenClaw can often infer approvers automatically.`
+    : `Approve it from the Web UI or terminal UI. ${manualRecovery}`;
 }
 
 function resolveAllowedDecisions(params: {
@@ -442,7 +453,12 @@ export function buildExecApprovalUnavailableReplyPayload(
     if (setupText) {
       lines.push(setupText);
     } else {
-      lines.push(buildGenericNativeExecApprovalFallbackText());
+      lines.push(
+        buildGenericNativeExecApprovalFallbackText({
+          host: params.host,
+          nodeId: params.nodeId,
+        }),
+      );
     }
   } else if (params.reason === "initiating-platform-unsupported") {
     lines.push(
@@ -451,6 +467,8 @@ export function buildExecApprovalUnavailableReplyPayload(
     lines.push(
       buildGenericNativeExecApprovalFallbackText({
         excludeChannel: params.channel,
+        host: params.host,
+        nodeId: params.nodeId,
       }),
     );
   } else {
@@ -458,7 +476,10 @@ export function buildExecApprovalUnavailableReplyPayload(
       "Exec approval is required, but no interactive approval client is currently available.",
     );
     lines.push(
-      `${buildGenericNativeExecApprovalFallbackText()} Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.`,
+      `${buildGenericNativeExecApprovalFallbackText({
+        host: params.host,
+        nodeId: params.nodeId,
+      })} Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.`,
     );
   }
 
