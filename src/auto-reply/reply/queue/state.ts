@@ -14,7 +14,7 @@ export type FollowupQueueState = {
   abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;
-  /** Items currently checked out for in-flight delivery; drop policy must skip these. */
+  /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
   inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;
   mode: QueueMode;

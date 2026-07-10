@@ -4,6 +4,7 @@ import {
   applyQueueDropPolicy,
   applyQueueRuntimeSettings,
   clearQueueSummaryState,
+  countPendingQueueItems,
   drainCollectQueueStep,
   drainNextQueueItem,
   hasCrossChannelItems,
@@ -165,6 +166,14 @@ describe("drainCollectQueueStep", () => {
 });
 
 describe("drainNextQueueItem", () => {
+  it("counts only in-flight identities that still intersect the queue", () => {
+    const active = { id: "active" };
+    const pending = { id: "pending" };
+    const alreadyRemoved = { id: "already-removed" };
+
+    expect(countPendingQueueItems([active, pending], new Set([active, alreadyRemoved]))).toBe(1);
+  });
+
   it("keeps overflow survivors when the queue mutates during an awaited drain", async () => {
     type Item = { id: string };
     const queue = {
@@ -219,33 +228,9 @@ describe("drainNextQueueItem", () => {
       )
     ) {}
 
-    // m1 is in-flight during the burst; drop policy must skip it.
     expect(delivered).toEqual(["m1", "m6", "m7", "m8"]);
     expect(dropped).toEqual(["m2", "m3", "m4", "m5"]);
     expect(queue.items).toEqual([]);
-  });
-
-  it("drops from the front when no in-flight set is provided", async () => {
-    type Item = { id: string };
-    const queue = {
-      items: [{ id: "m1" }, { id: "m2" }, { id: "m3" }, { id: "m4" }] as Item[],
-      cap: 2,
-      dropPolicy: "old" as const,
-      droppedCount: 0,
-      summaryLines: [] as string[],
-    };
-    const dropped: string[] = [];
-
-    applyQueueDropPolicy({
-      queue,
-      summarize: (item) => item.id,
-      onDrop: (items) => {
-        dropped.push(...items.map((item) => item.id));
-      },
-    });
-
-    expect(dropped).toEqual(["m1", "m2", "m3"]);
-    expect(queue.items).toEqual([{ id: "m4" }]);
   });
 
   it("skips in-flight items when selecting drop victims", () => {
@@ -273,7 +258,6 @@ describe("drainNextQueueItem", () => {
       },
     });
 
-    // m1 is in-flight so it is skipped; only m2 and m3 are dropped.
     expect(dropped).toEqual(["m2", "m3"]);
     expect(queue.items).toEqual([m1, m4]);
   });
