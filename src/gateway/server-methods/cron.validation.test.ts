@@ -168,6 +168,9 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
 }
 
 type CronMethod = keyof typeof cronHandlers;
+type CronJobReadView = CronJob & {
+  nextRunAtMs?: number;
+};
 
 async function invokeCron(
   method: CronMethod,
@@ -586,7 +589,7 @@ describe("cron method validation", () => {
     });
 
     const { respond } = await invokeCronGet({ id: "cron-42" }, job);
-    const payload = respond.mock.calls[0]?.[1] as CronJob | undefined;
+    const payload = respond.mock.calls[0]?.[1] as CronJobReadView | undefined;
 
     expect(payload?.state).toEqual({ nextRunAtMs: 2000 });
     expect(payload?.nextRunAtMs).toBe(2000);
@@ -763,7 +766,7 @@ describe("cron method validation", () => {
     );
 
     const { respond } = await invokeCron("cron.list", { includeDisabled: true }, { context });
-    const payload = respond.mock.calls[0]?.[1] as { jobs?: CronJob[] } | undefined;
+    const payload = respond.mock.calls[0]?.[1] as { jobs?: CronJobReadView[] } | undefined;
     const listedJob = payload?.jobs?.[0];
 
     expect(listedJob?.state).toEqual({ nextRunAtMs: 2000 });
