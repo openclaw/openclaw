@@ -1186,6 +1186,24 @@ describe("createCopilotToolBridge", () => {
       expect(result.sourceTools.map((tool) => tool.name).toSorted()).toEqual(["edit", "read"]);
     });
 
+    it("does not discard lean-mode overrides after tool construction", async () => {
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          config: {
+            agents: { defaults: { experimental: { localModelLean: true } } },
+            tools: { alsoAllow: ["image_generate"] },
+          },
+        } as never,
+        createOpenClawCodingTools: async () => [makeTool({ name: "image_generate" })],
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["image_generate"]);
+    });
+
     it("keeps plugin tools for plugin group allowlists", async () => {
       const createOpenClawCodingTools = vi.fn(async () => [
         makeTool({ name: "memory_search", pluginId: "active-memory" } as never),

@@ -10,6 +10,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-api.ts",
     "install": {
       "clawhubSpec": "clawhub:@openclaw/tencent-provider",
       "npmSpec": "@openclaw/tencent-provider",

@@ -1,4 +1,5 @@
 // Msteams plugin module implements graph thread behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -15,9 +16,11 @@ export type GraphThreadMessage = {
   createdDateTime?: string;
 };
 
-// TTL cache for team ID -> group GUID mapping.
+// Successful lookups use a 10-minute TTL and a 500-entry insertion-order cap.
+// Pruning after insert evicts the oldest team IDs before this process cache grows unbounded.
 const teamGroupIdCache = new Map<string, { groupId: string; expiresAt: number }>();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const TEAM_GROUP_ID_CACHE_MAX_ENTRIES = 500;
 
 function resolveTeamGroupIdCacheExpiresAt(nowRaw = Date.now()): number | undefined {
   const now = asDateTimestampMs(nowRaw);
@@ -84,6 +87,7 @@ export async function resolveTeamGroupId(
         groupId,
         expiresAt,
       });
+      pruneMapToMaxSize(teamGroupIdCache, TEAM_GROUP_ID_CACHE_MAX_ENTRIES);
     }
 
     return groupId;
@@ -107,6 +111,36 @@ export async function fetchChannelMessage(
   const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}?$select=id,from,body,createdDateTime`;
   try {
     return await fetchGraphJson<GraphThreadMessage>({ token, path });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Fetch a single chat message's full text via Graph and return plain text.
+ *
+ * Used to recover the complete quoted message for Teams quote replies: the
+ * inbound blockquote only carries a Teams-truncated `preview` snippet. The
+ * app-only `GET /chats/{chatId}/messages/{messageId}` endpoint IS permitted
+ * with the `Chat.Read.All` application permission (unlike the delegated
+ * `/me/chats` listing used by `resolveGraphChatId`, which 400s app-only).
+ *
+ * Returns undefined on any failure so callers degrade to the truncated preview.
+ */
+export async function fetchChatMessageText(
+  token: string,
+  chatId: string,
+  messageId: string,
+): Promise<string | undefined> {
+  // The get-chatMessage endpoint does not support OData query params (e.g.
+  // `$select`); tenants that enforce the documented contract reject the request,
+  // which would silently fall back to the truncated preview. Request it plainly.
+  const path = `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`;
+  try {
+    const msg = await fetchGraphJson<GraphThreadMessage>({ token, path });
+    const raw = msg.body?.content ?? "";
+    const text = msg.body?.contentType === "html" ? stripHtmlFromTeamsMessage(raw) : raw.trim();
+    return text || undefined;
   } catch {
     return undefined;
   }

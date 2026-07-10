@@ -10,6 +10,7 @@ import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.pub
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
@@ -58,6 +59,8 @@ export type AgentCommandOpts = {
   message: string;
   /** User-visible transcript body; defaults to message and excludes runtime-only context. */
   transcriptMessage?: string;
+  /** Durable media metadata for the user-visible transcript turn. */
+  transcriptMedia?: UserTurnInput["media"];
   /** Optional image attachments for multimodal messages. */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
@@ -152,6 +155,8 @@ export type AgentCommandOpts = {
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+  /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
+  allowGatewaySubagentBinding?: boolean;
   /** Internal local CLI callers can annotate result metadata before JSON/text output. */
   resultMetaOverrides?: AgentCommandResultMetaOverrides;
   /** Called when the actual run model is selected, including fallback retries. */

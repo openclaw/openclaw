@@ -36,6 +36,38 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
+  it("accepts trigger add, patch, and clear shapes", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        trigger: { script: "json({ fire: true })", once: true },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { trigger: { script: "json({ fire: false })" } },
+      }),
+    ).toBe(true);
+    expect(validateCronUpdateParams({ id: "job-1", patch: { trigger: null } })).toBe(true);
+  });
+
+  it("rejects invalid trigger scripts and additional properties", () => {
+    expect(validateCronAddParams({ ...minimalAddParams, trigger: { script: "" } })).toBe(false);
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        trigger: { script: "json({ fire: true })", unexpected: true },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { trigger: { script: "json({ fire: true })", unexpected: true } },
+      }),
+    ).toBe(false);
+  });
+
   it("rejects public caller scope on cron admin params", () => {
     expect(validateCronListParams({ callerScope: agentToolCallerScope })).toBe(false);
     expect(validateCronGetParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(false);

@@ -2,7 +2,9 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
   definePluginEntry,
@@ -58,6 +60,7 @@ const voiceCallConfigSchema = {
     "telnyx.publicKey": { label: "Telnyx Public Key", sensitive: true },
     "twilio.accountSid": { label: "Twilio Account SID" },
     "twilio.authToken": { label: "Twilio Auth Token", sensitive: true },
+    "twilio.region": { label: "Twilio Region", advanced: true },
     "outbound.defaultMode": { label: "Default Call Mode" },
     "outbound.notifyHangupDelaySec": {
       label: "Notify Hangup Delay (sec)",
@@ -371,10 +374,7 @@ export default definePluginEntry({
     };
 
     const describeHistoricalCall = async (rt: VoiceCallRuntime, callId: string) => {
-      const history = await rt.manager.getCallHistory(100);
-      const call = history
-        .toReversed()
-        .find((candidate) => candidate.callId === callId || candidate.providerCallId === callId);
+      const call = await rt.manager.getCallFromMemoryOrStore(callId);
       if (!call) {
         return undefined;
       }
@@ -410,12 +410,14 @@ export default definePluginEntry({
       dtmfSequence?: string;
       sessionKey?: string;
       requesterSessionKey?: string;
+      agentId?: string;
     }) => {
       const result = await params.rt.manager.initiateCall(params.to, params.sessionKey, {
         message: params.message,
         mode: params.mode,
         dtmfSequence: params.dtmfSequence,
         ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
       });
       if (!result.success) {
         respondError(params.respond, result.error || "initiate failed");
@@ -657,7 +659,7 @@ export default definePluginEntry({
             });
             return;
           }
-          const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
+          const call = await rt.manager.getCallFromMemoryOrStore(raw);
           if (!call) {
             respond(true, { found: false });
             return;
@@ -672,13 +674,29 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "voicecall.start",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
           const to = normalizeOptionalString(params?.to) ?? "";
           const message = normalizeOptionalString(params?.message) ?? "";
           const dtmfSequence = normalizeOptionalString(params?.dtmfSequence);
           const sessionKey = normalizeOptionalString(params?.sessionKey);
           const requesterSessionKey = normalizeOptionalString(params?.requesterSessionKey);
+          const requestedAgentId = normalizeOptionalString(params?.agentId);
+          const normalizedAgentId = requestedAgentId
+            ? normalizeAgentId(requestedAgentId)
+            : undefined;
+          const pluginOwnerId = normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId);
+          if (
+            requestedAgentId &&
+            (!pluginOwnerId || normalizedAgentId !== requestedAgentId.toLowerCase())
+          ) {
+            respondError(
+              respond,
+              "agentId requires a trusted plugin caller and a valid agent id",
+              ErrorCodes.INVALID_REQUEST,
+            );
+            return;
+          }
           if (!to) {
             respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
@@ -695,6 +713,7 @@ export default definePluginEntry({
             dtmfSequence,
             sessionKey,
             ...(requesterSessionKey ? { requesterSessionKey } : {}),
+            ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
           });
         } catch (err) {
           sendError(respond, err);
@@ -703,18 +722,14 @@ export default definePluginEntry({
       VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
-    api.registerTool({
+    api.registerTool((toolContext) => ({
       name: "voice_call",
       label: "Voice Call",
       description: "Make phone calls and have voice conversations via the voice-call plugin.",
       parameters: VoiceCallToolSchema,
       async execute(_toolCallId, params) {
         const rawParams = asParamRecord(params);
-        const json = (payload: unknown) => ({
-          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-          details: payload,
-        });
-
+        const agentId = normalizeOptionalString(toolContext.agentId);
         try {
           const rt = await ensureRuntime();
 
@@ -736,6 +751,7 @@ export default definePluginEntry({
                     rawParams.mode === "notify" || rawParams.mode === "conversation"
                       ? rawParams.mode
                       : undefined,
+                  ...(agentId ? { agentId } : {}),
                 });
                 if (!result.success) {
                   throw new Error(result.error || "initiate failed");
@@ -794,8 +810,7 @@ export default definePluginEntry({
                 if (!callId) {
                   throw new Error("callId required");
                 }
-                const call =
-                  rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
+                const call = await rt.manager.getCallFromMemoryOrStore(callId);
                 return json(
                   call ? { found: true, call: toVoiceCallStatus(call) } : { found: false },
                 );
@@ -809,7 +824,7 @@ export default definePluginEntry({
             if (!sid) {
               throw new Error("sid required for status");
             }
-            const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
+            const call = await rt.manager.getCallFromMemoryOrStore(sid);
             return json(call ? { found: true, call: toVoiceCallStatus(call) } : { found: false });
           }
 
@@ -823,6 +838,7 @@ export default definePluginEntry({
             {
               dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
               message: normalizeOptionalString(rawParams.message),
+              ...(agentId ? { agentId } : {}),
               ...(normalizeOptionalString(rawParams.requesterSessionKey)
                 ? { requesterSessionKey: normalizeOptionalString(rawParams.requesterSessionKey) }
                 : {}),
@@ -838,7 +854,7 @@ export default definePluginEntry({
           });
         }
       },
-    });
+    }));
 
     api.registerCli(
       ({ program }) =>

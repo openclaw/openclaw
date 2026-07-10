@@ -57,6 +57,24 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });
 
+  it("parses true/false strings while keeping invalid-value defaults local", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          enabled: " TRUE ",
+          verboseLogging: "false",
+          storage: { separateReports: "invalid" },
+          phases: { light: { enabled: " FALSE " } },
+        },
+      },
+    });
+
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.verboseLogging).toBe(false);
+    expect(resolved.storage.separateReports).toBe(false);
+    expect(resolved.phases.light.enabled).toBe(false);
+  });
+
   it("lets execution defaults and phase execution override the top-level dreaming model", () => {
     const resolved = resolveMemoryDreamingConfig({
       pluginConfig: {

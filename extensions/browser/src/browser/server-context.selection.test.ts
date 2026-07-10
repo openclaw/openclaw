@@ -89,6 +89,30 @@ describe("browser profile tab selection", () => {
     expect(listTabs).toHaveBeenCalledTimes(2);
   });
 
+  it("passes the request budget to tab discovery", async () => {
+    const ready = tab("READY", "ws://127.0.0.1/devtools/page/READY");
+    const { selection, listTabs } = createSelectionHarness({ snapshots: [[ready]] });
+    const ctrl = new AbortController();
+
+    await expect(
+      selection.ensureTabAvailable(undefined, { signal: ctrl.signal, timeoutMs: 1234 }),
+    ).resolves.toEqual(ready);
+
+    expect(listTabs).toHaveBeenCalledWith({ signal: ctrl.signal, timeoutMs: 1234 });
+  });
+
+  it("does not start tab discovery for an aborted request", async () => {
+    const { selection, listTabs } = createSelectionHarness({ snapshots: [[tab("READY")]] });
+    const ctrl = new AbortController();
+    ctrl.abort(new Error("request cancelled"));
+
+    await expect(selection.ensureTabAvailable(undefined, { signal: ctrl.signal })).rejects.toThrow(
+      /request cancelled/i,
+    );
+
+    expect(listTabs).not.toHaveBeenCalled();
+  });
+
   it("preserves a target-id-only opened tab for a Playwright-backed caller", async () => {
     vi.useFakeTimers();
     const openedTab = tab("OPENED");

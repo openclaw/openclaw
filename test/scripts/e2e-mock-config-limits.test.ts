@@ -2,11 +2,11 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
-import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { getFreePort } from "../../src/test-utils/ports.js";
 
 const mockOpenAiPath = "scripts/e2e/mock-openai-server.mjs";
 const webSearchMockPath = "scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs";
@@ -42,22 +42,6 @@ function runScript(scriptPath: string, env: Record<string, string>) {
     killSignal: "SIGKILL",
     timeout: 3_000,
   });
-}
-
-async function freePort() {
-  const server = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  if (!address || typeof address === "string") {
-    throw new Error("failed to allocate a local port");
-  }
-  return address.port;
 }
 
 async function waitForListening(child: ChildProcess, port: number, output: () => string) {
@@ -127,7 +111,7 @@ async function withMockServer(
     },
   ) => Promise<void>,
 ) {
-  const port = await freePort();
+  const port = await getFreePort();
   let stderr = "";
   let stdout = "";
   const child = spawn(process.execPath, [scriptPath], {

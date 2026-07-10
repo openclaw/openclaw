@@ -162,6 +162,16 @@ describe("slack native approval adapter", () => {
     expect(text).not.toContain("`channels.slack.execApprovals.approvers`");
   });
 
+  it("does not reuse exec setup copy for plugin approval setup", () => {
+    expect(
+      slackApprovalCapability.describeExecApprovalSetup?.({
+        channel: "slack",
+        channelLabel: "Slack",
+      }),
+    ).toContain("`channels.slack.execApprovals.approvers`");
+    expect(slackApprovalCapability.describePluginApprovalSetup).toBeUndefined();
+  });
+
   it("resolves origin targets from slack turn source", async () => {
     const target = await resolveExecOriginTarget();
 

@@ -104,6 +104,32 @@ describe("deliverReplies identity passthrough", () => {
     expect(options).not.toHaveProperty("identity");
   });
 
+  it("forwards the validated Enterprise event scope and exact listener client", async () => {
+    sendMock.mockResolvedValue({ messageId: "123.456", channelId: "C123" });
+    const listenerClient = { chat: { postMessage: vi.fn() } } as never;
+    const eventScope = {
+      apiAppId: "A1",
+      enterpriseId: "E1",
+      isEnterpriseInstall: true as const,
+      teamId: "T1",
+      client: listenerClient,
+    };
+
+    await deliverReplies(
+      baseParams({
+        cfg: { channels: { slack: { enterpriseOrgInstall: true } } },
+        eventScope,
+        mediaMaxBytes: 1024,
+      }),
+    );
+
+    const options = requireSendCall()[2];
+    expect(options.client).toBe(listenerClient);
+    expect(options.enterpriseEventScope).toBe(eventScope);
+    expect(options.textLimit).toBe(4000);
+    expect(options.mediaMaxBytes).toBe(1024);
+  });
+
   it("delivers block-only replies through to sendMessageSlack", async () => {
     sendMock.mockResolvedValue(undefined);
     const blocks = [

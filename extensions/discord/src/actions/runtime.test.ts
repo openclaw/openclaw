@@ -1309,7 +1309,7 @@ describe("handleDiscordMessagingAction", () => {
 
     expect(sendVoiceMessageDiscord).toHaveBeenCalledWith("channel:123", "/tmp/voice.mp3", {
       cfg: DISCORD_TEST_CFG,
-      replyTo: undefined,
+      reply: undefined,
       silent: true,
     });
     expect(sendMessageDiscord).not.toHaveBeenCalled();
@@ -1445,7 +1445,7 @@ describe("handleDiscordMessagingAction", () => {
       filename: undefined,
       mediaLocalRoots: undefined,
       mediaReadFile: undefined,
-      replyTo: undefined,
+      reply: undefined,
       components: undefined,
       embeds: undefined,
       silent: false,

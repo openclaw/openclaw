@@ -4,7 +4,7 @@ import path from "node:path";
 import { MEDIA_MAX_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-support.js";
-import { persistBrowserProxyFiles } from "./proxy-files.js";
+import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./proxy-files.js";
 
 describe("persistBrowserProxyFiles", () => {
   let tempHome: TempHomeEnv;
@@ -51,5 +51,19 @@ describe("persistBrowserProxyFiles", () => {
     await expect(
       fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
     ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("rewrites nested download paths after node file persistence", () => {
+    const result = {
+      ok: true,
+      download: { path: "/tmp/openclaw/downloads/report.pdf" },
+    };
+
+    applyBrowserProxyPaths(
+      result,
+      new Map([["/tmp/openclaw/downloads/report.pdf", "/tmp/openclaw-media/report.pdf"]]),
+    );
+
+    expect(result.download.path).toBe("/tmp/openclaw-media/report.pdf");
   });
 });

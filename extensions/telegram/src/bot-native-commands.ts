@@ -31,6 +31,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { codexChannelLoginRuntime } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -106,6 +107,7 @@ import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
+
 export {
   buildTelegramNativeCommandCallbackData,
   parseTelegramNativeCommandCallbackData,
@@ -198,24 +200,18 @@ function buildTelegramCommandMenuModelContext(params: {
   };
 }
 
-let telegramNativeCommandDeliveryRuntimePromise:
-  | Promise<typeof import("./bot-native-commands.delivery.runtime.js")>
-  | undefined;
+const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
+  () => import("./bot-native-commands.delivery.runtime.js"),
+);
 
-async function loadTelegramNativeCommandDeliveryRuntime() {
-  telegramNativeCommandDeliveryRuntimePromise ??=
-    import("./bot-native-commands.delivery.runtime.js");
-  return await telegramNativeCommandDeliveryRuntimePromise;
-}
+const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
+  () => import("./bot-native-commands.runtime.js"),
+);
 
-let telegramNativeCommandRuntimePromise:
-  | Promise<typeof import("./bot-native-commands.runtime.js")>
-  | undefined;
-
-async function loadTelegramNativeCommandRuntime() {
-  telegramNativeCommandRuntimePromise ??= import("./bot-native-commands.runtime.js");
-  return await telegramNativeCommandRuntimePromise;
-}
+export const testing = {
+  loadNativeCommandRuntime: loadTelegramNativeCommandRuntime,
+};
+export { testing as __testing };
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 
@@ -404,25 +400,13 @@ function resolveTelegramFastCommandState(params: {
   }
 }
 
-async function resolveTelegramDefaultThinkingLevel(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-}): Promise<string> {
-  return resolveThinkingDefaultWithRuntimeCatalog({
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
-  });
-}
-
 async function resolveTelegramThinkMenuCurrentLevel(params: {
   cfg: OpenClawConfig;
   agentId: string;
   provider?: string;
   model?: string;
   thinkingLevel?: string;
+  catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
 }): Promise<string> {
   const explicit = normalizeOptionalString(params.thinkingLevel);
   if (explicit) {
@@ -438,10 +422,11 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  return await resolveTelegramDefaultThinkingLevel({
+  return await resolveThinkingDefaultWithRuntimeCatalog({
     cfg: params.cfg,
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
+    loadModelCatalog: async () => params.catalog,
   });
 }
 
@@ -1410,10 +1395,10 @@ export const registerTelegramNativeCommands = ({
                 sessionKey: targetSessionKeyForMenu,
               }))
             : {};
-        // Native /think choices need live-discovery metadata; empty keeps config fallback.
+        // Native /think must not wait on provider discovery; persisted rows retain its metadata.
         const menuModelCatalog =
           commandDefinition?.key === "think" && menuNeedsModelContext
-            ? await loadModelCatalog({ config: runtimeCfg })
+            ? await loadModelCatalog({ config: runtimeCfg, readOnly: true })
             : undefined;
         const menu = commandDefinition
           ? resolveCommandArgMenu({
@@ -1434,6 +1419,7 @@ export const registerTelegramNativeCommands = ({
                     cfg: runtimeCfg,
                     agentId: route.agentId,
                     ...menuModelContext,
+                    catalog: menuModelCatalog ?? [],
                   })
                 : undefined,
             currentFastModeStatus:

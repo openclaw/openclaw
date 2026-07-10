@@ -2,8 +2,13 @@
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
-import { normalizeCompatibilityConfigValues } from "./legacy-config-core-migrate.js";
+import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
+
+function repairBindingsForTest(config: OpenClawConfig) {
+  const changes: string[] = [];
+  return { config: pruneBindingsForMissingAgents(config, changes), changes };
+}
 
 function migrateLegacyConfigForTest(raw: unknown): {
   config: OpenClawConfig | null;
@@ -31,7 +36,7 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
 
 describe("compatibility binding repair migrate", () => {
   it("prunes bindings for missing agents when agents.list is valid", () => {
-    const res = normalizeCompatibilityConfigValues({
+    const res = repairBindingsForTest({
       agents: {
         list: [{ id: "alpha" }],
       },
@@ -56,7 +61,7 @@ describe("compatibility binding repair migrate", () => {
       ],
     } as unknown as OpenClawConfig;
 
-    const res = normalizeCompatibilityConfigValues(cfg);
+    const res = repairBindingsForTest(cfg);
 
     expect(res.config.bindings).toEqual(cfg.bindings);
     expect(res.changes).not.toContain("Removed 1 binding that referenced missing agents.list ids.");

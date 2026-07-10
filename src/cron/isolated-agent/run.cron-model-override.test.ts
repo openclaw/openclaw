@@ -140,11 +140,13 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       modelProvider?: string;
       systemSent?: boolean;
     }> = [];
+    // One persistent store across persist calls: the lifecycle claim guard
+    // treats a store that lost the entry between calls as a foreign owner.
+    const persistentStore: Record<string, unknown> = {};
     updateSessionStoreMock.mockImplementation(
       async (_path: string, cb: (s: Record<string, unknown>) => void) => {
-        const store: Record<string, unknown> = {};
-        cb(store);
-        const entry = Object.values(store)[0] as
+        cb(persistentStore);
+        const entry = Object.values(persistentStore)[0] as
           | { model?: string; modelProvider?: string; systemSent?: boolean }
           | undefined;
         if (entry) {

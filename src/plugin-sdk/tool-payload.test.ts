@@ -242,6 +242,34 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
     ).toBeNull();
   });
 
+  it("counts serialized XML parameter payload limits in UTF-8 bytes", () => {
+    const parameter = ["<parameter=content>", "é".repeat(20), "</parameter>"].join("\n");
+    const raw = ["<function=write>", parameter, "</function>"].join("\n");
+    expect(parameter.length).toBeLessThan(64);
+    expect(new TextEncoder().encode(parameter).byteLength).toBeGreaterThan(64);
+
+    expect(
+      parseStandalonePlainTextToolCallBlocks(raw, {
+        allowedToolNames: ["write"],
+        maxPayloadBytes: 64,
+      }),
+    ).toBeNull();
+  });
+
+  it("counts serialized JSON payload limits in UTF-8 bytes", () => {
+    const payload = JSON.stringify({ content: "é".repeat(20) });
+    const raw = ["[write]", payload, "[/write]"].join("\n");
+    expect(payload.length).toBeLessThan(48);
+    expect(new TextEncoder().encode(payload).byteLength).toBeGreaterThan(48);
+
+    expect(
+      parseStandalonePlainTextToolCallBlocks(raw, {
+        allowedToolNames: ["write"],
+        maxPayloadBytes: 48,
+      }),
+    ).toBeNull();
+  });
+
   it("respects allowed tool names for Harmony calls", () => {
     const blocks = parseStandalonePlainTextToolCallBlocks(
       'commentary to=write code {"path":"/tmp/file.txt","content":"x"}',

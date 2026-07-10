@@ -16,7 +16,7 @@ import { resolveGroupActivationFor } from "./group-activation.js";
 
 export type { StatusReactionController };
 
-export type WhatsAppStatusReactionParams = {
+type WhatsAppStatusReactionParams = {
   cfg: OpenClawConfig;
   msg: AdmittedWebInboundMessage;
   agentId: string;
@@ -76,7 +76,7 @@ export async function createWhatsAppStatusReactionController(
     isGroup,
     directEnabled,
     groupMode,
-    wasMentioned: params.msg.wasMentioned === true,
+    wasMentioned: (params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned) === true,
     groupActivated: activation === "always",
   });
 

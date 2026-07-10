@@ -1,7 +1,6 @@
 // Main interactive configure/update wizard implementation.
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
@@ -23,10 +22,11 @@ import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { isPlainObject, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
+import { mergeWizardConfigOntoLatest } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -80,26 +80,6 @@ function validateGatewayPortInput(value: unknown): string | undefined {
 
 function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
   return setupPluginConfigModuleLoader.load();
-}
-
-function mergeWizardConfigOntoLatest(current: unknown, base: unknown, next: unknown): unknown {
-  if (isDeepStrictEqual(next, base)) {
-    return current;
-  }
-  if (isPlainObject(current) && isPlainObject(base) && isPlainObject(next)) {
-    const merged: Record<string, unknown> = { ...current };
-    const keys = new Set([...Object.keys(current), ...Object.keys(base), ...Object.keys(next)]);
-    for (const key of keys) {
-      const mergedValue = mergeWizardConfigOntoLatest(current[key], base[key], next[key]);
-      if (mergedValue === undefined) {
-        delete merged[key];
-      } else {
-        merged[key] = mergedValue;
-      }
-    }
-    return merged;
-  }
-  return structuredClone(next);
 }
 
 async function resolveGatewaySecretInputForWizard(params: {
@@ -585,11 +565,7 @@ export async function runConfigureWizard(
             const diskConfig = freshSnapshot.valid
               ? (freshSnapshot.sourceConfig ?? freshSnapshot.config)
               : {};
-            nextConfig = mergeWizardConfigOntoLatest(
-              diskConfig,
-              mergeBaseConfig,
-              nextConfig,
-            ) as OpenClawConfig;
+            nextConfig = mergeWizardConfigOntoLatest(diskConfig, mergeBaseConfig, nextConfig);
             continue;
           }
           throw err;
@@ -655,6 +631,7 @@ export async function runConfigureWizard(
       if (channelMode === "configure") {
         nextConfig = await setupChannels(nextConfig, runtime, prompter, {
           allowDisable: true,
+          allowIMessageInstall: true,
           allowSignalInstall: true,
           deferStatusUntilSelection: true,
           skipConfirm: true,

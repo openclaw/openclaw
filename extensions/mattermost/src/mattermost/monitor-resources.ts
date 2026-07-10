@@ -1,4 +1,5 @@
 // Mattermost plugin module implements monitor resources behavior.
+import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -15,13 +16,30 @@ import {
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
 
-export type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
+type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 export type MattermostMediaInfo = {
   path: string;
   contentType?: string;
   kind: MattermostMediaKind;
 };
+
+export function formatMattermostInboundMediaText(params: {
+  body: string;
+  mediaPlaceholder: string;
+  expectedCount: number;
+  mediaCount: number;
+}): string {
+  const unavailableCount = Math.max(0, params.expectedCount - params.mediaCount);
+  if (unavailableCount === 0) {
+    return params.body;
+  }
+  return formatInboundMediaUnavailableText({
+    body: params.body,
+    mediaPlaceholder: params.mediaCount === 0 ? params.mediaPlaceholder : undefined,
+    notice: `[mattermost ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
+  });
+}
 
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;

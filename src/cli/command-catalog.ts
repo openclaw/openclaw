@@ -36,6 +36,7 @@ export type CliCommandPathPolicy = {
   routeConfigGuard: CliRouteConfigGuardPolicy;
   loadPlugins: CliCommandPluginLoadPolicy;
   pluginRegistry: CliPluginRegistryPolicy;
+  ownsProtocolStdout: boolean;
   hideBanner: boolean;
   ensureCliPath: boolean;
   networkProxy: CliNetworkProxyPolicyResolver;
@@ -258,6 +259,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
   },
   { commandPath: ["acp"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["acp"],
+    exact: true,
+    policy: { ownsProtocolStdout: true },
+  },
   { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true, networkProxy: "bypass" } },
   { commandPath: ["chat"], policy: { networkProxy: "bypass" } },
@@ -267,16 +273,26 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["daemon"], policy: { networkProxy: "bypass" } },
   { commandPath: ["devices"], policy: { networkProxy: "bypass" } },
   {
+    commandPath: ["worktrees"],
+    policy: { loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["doctor"],
     policy: {
       bypassConfigGuard: true,
       loadPlugins: "never",
     },
   },
+  { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
   { commandPath: ["logs"], policy: { networkProxy: "bypass" } },
   { commandPath: ["mcp"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["mcp", "serve"],
+    exact: true,
+    policy: { ownsProtocolStdout: true },
+  },
   {
     commandPath: ["node"],
     policy: { networkProxy: "bypass" },

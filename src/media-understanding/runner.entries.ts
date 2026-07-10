@@ -7,6 +7,7 @@ import {
   normalizeNullableString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
 import {
@@ -32,6 +33,7 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -43,13 +45,13 @@ import {
 import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
-import { fileExists } from "./fs.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
@@ -65,20 +67,7 @@ import type {
 } from "./types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
-type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
-type IsProviderAuthError = typeof import("../agents/model-auth.js").isProviderAuthError;
-
-let cachedModelAuth: {
-  resolveApiKeyForProvider: ResolveApiKeyForProvider;
-  requireApiKey: RequireApiKey;
-  isProviderAuthError: IsProviderAuthError;
-} | null = null;
-
-async function loadModelAuth() {
-  cachedModelAuth ??= await import("../agents/model-auth.js");
-  return cachedModelAuth;
-}
+const loadModelAuth = createLazyRuntimeModule(async () => await import("../agents/model-auth.js"));
 
 function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;
@@ -112,7 +101,7 @@ function trimOutput(text: string, maxChars?: number): string {
   if (!maxChars || trimmed.length <= maxChars) {
     return trimmed;
   }
-  return trimmed.slice(0, maxChars).trim();
+  return truncateUtf16Safe(trimmed, maxChars).trim();
 }
 
 function extractSherpaOnnxText(raw: string): { matched: boolean; text: string } {
@@ -166,11 +155,20 @@ function isAntigravityCliCommand(command: string): boolean {
 }
 
 function findArgValue(args: string[], keys: string[]): string | undefined {
-  for (let i = 0; i < args.length; i += 1) {
-    if (keys.includes(args[i] ?? "")) {
-      const value = args[i + 1];
+  for (const [index, arg] of args.entries()) {
+    if (keys.includes(arg)) {
+      const value = args[index + 1];
       if (value) {
         return value;
+      }
+    }
+    for (const key of keys) {
+      const prefix = `${key}=`;
+      if (arg.startsWith(prefix)) {
+        const value = arg.slice(prefix.length);
+        if (value) {
+          return value;
+        }
       }
     }
   }
@@ -183,16 +181,14 @@ function hasArg(args: string[], keys: string[]): boolean {
 
 function resolveWhisperOutputPath(args: string[], mediaPath: string): string | null {
   const outputDir = findArgValue(args, ["--output_dir", "-o"]);
-  const outputFormat = findArgValue(args, ["--output_format"]);
-  if (!outputDir || !outputFormat) {
+  if (!outputDir) {
     return null;
   }
-  const formats = outputFormat.split(",").map((value) => value.trim());
-  if (!formats.includes("txt")) {
+  const outputFormat = findArgValue(args, ["--output_format", "-f"]) ?? "all";
+  if (outputFormat !== "txt" && outputFormat !== "all") {
     return null;
   }
-  const base = path.parse(mediaPath).name;
-  return path.join(outputDir, `${base}.txt`);
+  return path.join(outputDir, `${path.parse(mediaPath).name}.txt`);
 }
 
 function resolveWhisperCppOutputPath(args: string[]): string | null {
@@ -208,15 +204,30 @@ function resolveWhisperCppOutputPath(args: string[]): string | null {
 
 function resolveParakeetOutputPath(args: string[], mediaPath: string): string | null {
   const outputDir = findArgValue(args, ["--output-dir"]);
-  const outputFormat = findArgValue(args, ["--output-format"]);
-  if (!outputDir) {
+  const outputFormat =
+    findArgValue(args, ["--output-format"]) ?? (process.env.PARAKEET_OUTPUT_FORMAT || "srt");
+  const outputTemplate =
+    findArgValue(args, ["--output-template"]) ??
+    (process.env.PARAKEET_OUTPUT_TEMPLATE || "{filename}");
+  if (
+    !outputDir ||
+    (outputFormat !== "txt" && outputFormat !== "all") ||
+    outputTemplate !== "{filename}"
+  ) {
     return null;
   }
-  if (outputFormat && outputFormat !== "txt") {
-    return null;
+  return path.join(outputDir, `${path.parse(mediaPath).name}.txt`);
+}
+
+async function readCliTranscriptFile(filePath: string): Promise<string> {
+  try {
+    return (await fs.readFile(filePath, "utf8")).trim();
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return "";
+    }
+    throw error;
   }
-  const base = path.parse(mediaPath).name;
-  return path.join(outputDir, `${base}.txt`);
 }
 
 async function resolveCliOutput(params: {
@@ -234,13 +245,10 @@ async function resolveCliOutput(params: {
         : commandId === "parakeet-mlx"
           ? resolveParakeetOutputPath(params.args, params.mediaPath)
           : null;
-  if (fileOutput && (await fileExists(fileOutput))) {
-    try {
-      const content = await fs.readFile(fileOutput, "utf8");
-      if (content.trim()) {
-        return content.trim();
-      }
-    } catch {}
+  if (fileOutput) {
+    // A known file-output contract is authoritative: falling back would expose
+    // progress/status stdout as user speech when transcription is empty or missing.
+    return await readCliTranscriptFile(fileOutput);
   }
 
   if (commandId === "gemini") {
@@ -409,7 +417,13 @@ function resolveEntryRunOptions(params: {
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
   config?: MediaUnderstandingConfig;
-}): { maxBytes: number; maxChars?: number; timeoutMs: number; prompt: string } {
+}): {
+  maxBytes: number;
+  maxChars?: number;
+  timeoutMs: number;
+  prompt: string;
+  hasConfiguredPrompt: boolean;
+} {
   const { capability, entry, cfg } = params;
   const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
   const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
@@ -419,12 +433,16 @@ function resolveEntryRunOptions(params: {
       cfg.tools?.media?.[capability]?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS[capability],
   );
-  const prompt = resolvePrompt(
-    capability,
-    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt,
+  const configuredPrompt =
+    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt;
+  const prompt = resolvePrompt(capability, configuredPrompt, maxChars);
+  return {
+    maxBytes,
     maxChars,
-  );
-  return { maxBytes, maxChars, timeoutMs, prompt };
+    timeoutMs,
+    prompt,
+    hasConfiguredPrompt: Boolean(configuredPrompt?.trim()),
+  };
 }
 
 function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
@@ -439,6 +457,28 @@ function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefin
     prompt: overrides["_requestPromptOverride"],
     language: overrides["_requestLanguageOverride"],
   };
+}
+
+function resolveAudioProviderPrompt(params: {
+  prompt: string;
+  hasConfiguredPrompt: boolean;
+  language?: string;
+}): string | undefined {
+  const language = params.language?.trim().toLowerCase();
+  const isEnglish =
+    !language ||
+    language === "en" ||
+    language === "eng" ||
+    language === "english" ||
+    language.startsWith("en-") ||
+    language.startsWith("en_");
+  if (params.hasConfiguredPrompt || isEnglish) {
+    return params.prompt;
+  }
+  // OpenAI-compatible transcription prompts guide style/context and should
+  // match the audio language; omit OpenClaw's English default for non-English
+  // language hints unless the user supplied an explicit prompt.
+  return undefined;
 }
 
 type ProviderExecutionAuth =
@@ -739,7 +779,7 @@ export async function runProviderEntry(params: {
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
   const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
-  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
+  const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } = resolveEntryRunOptions({
     capability,
     entry,
     cfg,
@@ -815,6 +855,18 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
+    const audioLanguage =
+      requestOverrides.language ??
+      entry.language ??
+      params.config?.language ??
+      cfg.tools?.media?.audio?.language;
+    const audioPrompt =
+      requestOverrides.prompt ??
+      resolveAudioProviderPrompt({
+        prompt,
+        hasConfiguredPrompt,
+        language: audioLanguage,
+      });
     const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
       capability,
       providerId,
@@ -853,12 +905,8 @@ export async function runProviderEntry(params: {
       headers,
       request,
       model,
-      language:
-        requestOverrides.language ??
-        entry.language ??
-        params.config?.language ??
-        cfg.tools?.media?.audio?.language,
-      prompt: requestOverrides.prompt ?? prompt,
+      language: audioLanguage,
+      prompt: audioPrompt,
       query: providerQuery,
       timeoutMs,
       fetchFn,

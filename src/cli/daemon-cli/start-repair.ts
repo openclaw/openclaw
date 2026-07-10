@@ -28,6 +28,7 @@ export async function repairLoadedGatewayServiceForStart(params: {
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const existingEnvironment = params.state.command?.environment;
+  const existingEnvironmentValueSources = params.state.command?.environmentValueSources;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv: existingEnvironment,
@@ -65,6 +66,7 @@ export async function repairLoadedGatewayServiceForStart(params: {
       runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
       wrapperPath,
       existingEnvironment,
+      existingEnvironmentValueSources,
       config: cfg,
       warn: (message) => {
         warnings.push(message);

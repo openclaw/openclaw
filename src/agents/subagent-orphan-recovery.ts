@@ -23,6 +23,7 @@ import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
 import {
   evaluateSubagentRecoveryGate,
@@ -72,7 +73,8 @@ function reclassifyLegacyRestartInterruptedRun(runRecord: SubagentRunRecord): vo
  */
 function buildResumeMessage(task: string, lastHumanMessage?: string): string {
   const maxTaskLen = 2000;
-  const truncatedTask = task.length > maxTaskLen ? `${task.slice(0, maxTaskLen)}...` : task;
+  const truncatedTask =
+    task.length > maxTaskLen ? `${truncateUtf16Safe(task, maxTaskLen)}...` : task;
 
   let message =
     `[System] Your previous turn was interrupted by a gateway reload. ` +

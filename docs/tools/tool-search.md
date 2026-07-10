@@ -223,7 +223,7 @@ Use the compact directory surface instead for OpenClaw runs:
 }
 ```
 
-Tune code-mode timeout and search result limits:
+Tune code-mode timeout and search result limits (values shown are the defaults):
 
 ```json5
 {
@@ -237,6 +237,9 @@ Tune code-mode timeout and search result limits:
   },
 }
 ```
+
+The runtime clamps `codeTimeoutMs` to 1000-60000, `maxSearchLimit` to 1-50, and
+`searchDefaultLimit` to 1..`maxSearchLimit`.
 
 Disable it:
 

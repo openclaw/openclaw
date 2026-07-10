@@ -79,6 +79,47 @@ describe("nextcloud talk room info", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("caps cached room info entries", async () => {
+    const cacheEntryLimit = 1000;
+    fetchWithSsrFGuard.mockImplementation(async () => ({
+      response: jsonResponse({
+        ocs: {
+          data: {
+            type: 1,
+          },
+        },
+      }),
+      release: vi.fn(async () => {}),
+    }));
+    const account = {
+      accountId: "acct-cache-cap",
+      baseUrl: "https://nc.example.com",
+      config: {
+        apiUser: "bot",
+        apiPassword: "secret",
+      },
+    } as never;
+
+    for (let index = 0; index <= cacheEntryLimit; index += 1) {
+      await resolveNextcloudTalkRoomKind({
+        account,
+        roomToken: `room-${index}`,
+      });
+    }
+    await resolveNextcloudTalkRoomKind({ account, roomToken: "room-0" });
+    const callsAfterOldestRetry = fetchWithSsrFGuard.mock.calls.length;
+    await resolveNextcloudTalkRoomKind({
+      account,
+      roomToken: `room-${cacheEntryLimit}`,
+    });
+
+    expect(callsAfterOldestRetry).toBe(cacheEntryLimit + 2);
+    expect(fetchWithSsrFGuard.mock.calls).toHaveLength(callsAfterOldestRetry);
+    expect(fetchWithSsrFGuard.mock.calls.at(-1)?.[0]).toMatchObject({
+      url: "https://nc.example.com/ocs/v2.php/apps/spreed/api/v4/room/room-0",
+    });
+  });
+
   it("normalizes signed decimal room type strings through the shared parser", async () => {
     fetchWithSsrFGuard.mockResolvedValue({
       response: jsonResponse({

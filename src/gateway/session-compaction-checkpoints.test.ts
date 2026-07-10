@@ -633,7 +633,7 @@ describe("session-compaction-checkpoints", () => {
     ]);
   });
 
-  test("file-backed checkpoint store restores from the stored transcript boundary", async () => {
+  test("file-backed checkpoint store branches active state and restores source management state", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-store-"));
     tempDirs.push(dir);
 
@@ -658,10 +658,13 @@ describe("session-compaction-checkpoints", () => {
 
     const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
     const storePath = path.join(dir, "sessions.json");
+    const managedAt = Date.now() - 2;
     await writeSessionStore(storePath, MAIN_SESSION_KEY, {
       sessionId: "current-session",
       sessionFile,
       updatedAt: Date.now() - 1,
+      archivedAt: managedAt,
+      pinnedAt: managedAt,
       totalTokens: 200,
       compactionCheckpoints: [
         {
@@ -681,6 +684,19 @@ describe("session-compaction-checkpoints", () => {
       ],
     });
     const store = createFileBackedCompactionCheckpointStore();
+    const branched = await store.branchCheckpointSession({
+      storePath,
+      sourceKey: MAIN_SESSION_KEY,
+      nextKey: "agent:main:dashboard:checkpoint-branch",
+      checkpointId: "checkpoint-1",
+    });
+
+    if (branched.status !== "created") {
+      throw new Error("expected branched checkpoint transcript");
+    }
+    expect(branched.entry.archivedAt).toBeUndefined();
+    expect(branched.entry.pinnedAt).toBeUndefined();
+
     const restored = await store.restoreCheckpointSession({
       storePath,
       sessionKey: MAIN_SESSION_KEY,
@@ -691,6 +707,8 @@ describe("session-compaction-checkpoints", () => {
       throw new Error("expected restored checkpoint transcript");
     }
     expect(restored.entry.totalTokens).toBe(45);
+    expect(restored.entry.archivedAt).toBe(managedAt);
+    expect(restored.entry.pinnedAt).toBe(managedAt);
     const restoredSessionFile = requireNonEmptyString(
       restored.entry.sessionFile,
       "restored session file missing",

@@ -346,7 +346,6 @@ class InvokeDispatcherTest {
       camera = CameraCaptureManager(appContext),
       externalAudioCaptureActive = MutableStateFlow(false),
       showCameraHud = { _, _, _ -> },
-      triggerCameraFlash = {},
       invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
     )
 }
@@ -355,6 +354,8 @@ private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
   override fun hasFinePermission(context: Context): Boolean = false
 
   override fun hasCoarsePermission(context: Context): Boolean = false
+
+  override fun hasBackgroundPermission(context: Context): Boolean = false
 
   override suspend fun fetchLocation(
     desiredProviders: List<String>,

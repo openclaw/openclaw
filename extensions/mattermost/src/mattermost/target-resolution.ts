@@ -9,7 +9,7 @@ import {
 } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
-export type MattermostOpaqueTargetResolution = {
+type MattermostOpaqueTargetResolution = {
   kind: "user" | "channel";
   id: string;
   to: string;

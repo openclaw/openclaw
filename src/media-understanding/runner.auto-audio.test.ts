@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import type { MediaUnderstandingConfig } from "../config/types.tools.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { clearMediaUnderstandingBinaryCacheForTests, runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
@@ -398,6 +399,78 @@ describe("runCapability auto audio entries", () => {
     expect(requireCapabilityOutput(result, 0).text).toBe("ok");
     expect(seenLanguage).toBe("en");
     expect(seenPrompt).toBe("Focus on names");
+  });
+
+  it("omits the implicit English audio prompt when a non-English language is configured", async () => {
+    let seenLanguage: string | undefined;
+    let seenPrompt: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
+        seenLanguage = req.language;
+        seenPrompt = req.prompt;
+        return { text: "ok", model: req.model ?? "unknown" };
+      },
+      cfgExtra: {
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              language: "ru",
+              models: [{ provider: "openai", model: "whisper-1" }],
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>,
+    });
+
+    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
+    expect(seenLanguage).toBe("ru");
+    expect(seenPrompt).toBeUndefined();
+  });
+
+  it("keeps explicit and English-compatible audio prompts", async () => {
+    const seenPrompts: Array<string | undefined> = [];
+    const runCase = async (audio: MediaUnderstandingConfig) => {
+      await runAutoAudioCase({
+        transcribeAudio: async (req) => {
+          seenPrompts.push(req.prompt);
+          return { text: "ok", model: req.model ?? "unknown" };
+        },
+        cfgExtra: {
+          tools: {
+            media: {
+              audio,
+            },
+          },
+        } as Partial<OpenClawConfig>,
+      });
+    };
+
+    await runCase({
+      enabled: true,
+      language: "ru",
+      prompt: "Transcribe in Russian.",
+      models: [{ provider: "openai", model: "whisper-1" }],
+    });
+    for (const language of ["en-US", "eng", "english"]) {
+      await runCase({
+        enabled: true,
+        language,
+        models: [{ provider: "openai", model: "whisper-1" }],
+      });
+    }
+    await runCase({
+      enabled: true,
+      models: [{ provider: "openai", model: "whisper-1" }],
+    });
+
+    expect(seenPrompts).toEqual([
+      "Transcribe in Russian.",
+      "Transcribe the audio.",
+      "Transcribe the audio.",
+      "Transcribe the audio.",
+      "Transcribe the audio.",
+    ]);
   });
 
   it("uses mistral when only mistral key is configured", async () => {

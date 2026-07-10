@@ -6,6 +6,7 @@
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -76,7 +77,7 @@ function buildReviewerUserPrompt(input: ExecAutoReviewInput): string {
 
 function normalizeRationale(value: unknown, fallback: string): string {
   const text = normalizeOptionalString(typeof value === "string" ? value : undefined);
-  return (text ?? fallback).slice(0, 500);
+  return truncateUtf16Safe(text ?? fallback, 500);
 }
 
 function textLooksLikeReviewerDirective(value: string): boolean {

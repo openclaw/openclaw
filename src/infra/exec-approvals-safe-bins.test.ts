@@ -177,10 +177,10 @@ describe("exec approvals safe bins", () => {
 
   const cases: SafeBinCase[] = [
     {
-      name: "allows safe bins with non-path args",
+      name: "blocks jq safe bins even with non-path args",
       argv: ["jq", ".foo"],
       resolvedPath: "/usr/bin/jq",
-      expected: true,
+      expected: false,
     },
     {
       name: "blocks jq env builtin even when jq is explicitly opted in",
@@ -197,6 +197,30 @@ describe("exec approvals safe bins", () => {
     {
       name: "blocks jq $ENV property access even when jq is explicitly opted in",
       argv: ["jq", "($ENV).OPENAI_API_KEY"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq include directives even when jq is explicitly opted in",
+      argv: ["jq", 'include "envdump"; envdump'],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq import directives even when jq is explicitly opted in",
+      argv: ["jq", 'import "envdump" as envdump; envdump::read'],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq field names that match directive keywords",
+      argv: ["jq", ".include + .import"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq object keys that match directive keywords",
+      argv: ["jq", "{include: .foo, import : .bar}"],
       resolvedPath: "/usr/bin/jq",
       expected: false,
     },
@@ -322,13 +346,13 @@ describe("exec approvals safe bins", () => {
       return;
     }
     const ok = isSafeBinUsage({
-      argv: ["jq", ".foo"],
+      argv: ["head", "-n", "1"],
       resolution: {
-        rawExecutable: "jq",
-        resolvedPath: "/custom/bin/jq",
-        executableName: "jq",
+        rawExecutable: "head",
+        resolvedPath: "/custom/bin/head",
+        executableName: "head",
       },
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
       trustedSafeBinDirs: new Set(["/custom/bin"]),
     });
     expect(ok).toBe(true);
@@ -339,35 +363,35 @@ describe("exec approvals safe bins", () => {
       return;
     }
     const resolution = {
-      rawExecutable: "jq",
-      resolvedPath: "/opt/homebrew/bin/jq",
-      resolvedRealPath: "/opt/homebrew/Cellar/jq/1.7.1/bin/jq",
-      executableName: "jq",
+      rawExecutable: "head",
+      resolvedPath: "/opt/homebrew/bin/head",
+      resolvedRealPath: "/opt/homebrew/Cellar/coreutils/9.5/bin/head",
+      executableName: "head",
     };
     expect(
       isSafeBinUsage({
-        argv: ["jq", ".foo"],
+        argv: ["head", "-n", "1"],
         resolution,
-        safeBins: normalizeSafeBins(["jq"]),
+        safeBins: normalizeSafeBins(["head"]),
         trustedSafeBinDirs: new Set(["/opt/homebrew/bin"]),
       }),
     ).toBe(false);
     expect(
       isSafeBinUsage({
-        argv: ["jq", ".foo"],
+        argv: ["head", "-n", "1"],
         resolution,
-        safeBins: normalizeSafeBins(["jq"]),
+        safeBins: normalizeSafeBins(["head"]),
         trustedSafeBinDirs: getTrustedSafeBinDirs({
-          extraDirs: ["/opt/homebrew/Cellar/jq/1.7.1/bin"],
+          extraDirs: ["/opt/homebrew/Cellar/coreutils/9.5/bin"],
           refresh: true,
         }),
       }),
     ).toBe(true);
     expect(
       isSafeBinUsage({
-        argv: ["jq", ".foo"],
+        argv: ["head", "-n", "1"],
         resolution,
-        safeBins: normalizeSafeBins(["jq"]),
+        safeBins: normalizeSafeBins(["head"]),
         trustedSafeBinDirs: new Set(["/tmp/other-bin"]),
       }),
     ).toBe(false);
@@ -375,13 +399,13 @@ describe("exec approvals safe bins", () => {
 
   it("supports injected platform for deterministic safe-bin checks", () => {
     const ok = isSafeBinUsage({
-      argv: ["jq", ".foo"],
+      argv: ["head", "-n", "1"],
       resolution: {
-        rawExecutable: "jq",
-        resolvedPath: "/usr/bin/jq",
-        executableName: "jq",
+        rawExecutable: "head",
+        resolvedPath: "/usr/bin/head",
+        executableName: "head",
       },
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
       platform: "win32",
     });
     expect(ok).toBe(false);
@@ -392,13 +416,13 @@ describe("exec approvals safe bins", () => {
       return;
     }
     const baseParams = {
-      argv: ["jq", ".foo"],
+      argv: ["head", "-n", "1"],
       resolution: {
-        rawExecutable: "jq",
-        resolvedPath: "/tmp/custom/jq",
-        executableName: "jq",
+        rawExecutable: "head",
+        resolvedPath: "/tmp/custom/head",
+        executableName: "head",
       },
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
     };
     expect(
       isSafeBinUsage({
@@ -527,13 +551,13 @@ describe("exec approvals safe bins", () => {
       ok: true as const,
       segments: [
         {
-          raw: "jq .foo",
-          argv: ["jq", ".foo"],
+          raw: "head -n 1",
+          argv: ["head", "-n", "1"],
           resolution: makeMockCommandResolution({
             execution: makeMockExecutableResolution({
-              rawExecutable: "jq",
-              resolvedPath: "/custom/bin/jq",
-              executableName: "jq",
+              rawExecutable: "head",
+              resolvedPath: "/custom/bin/head",
+              executableName: "head",
             }),
           }),
         },
@@ -542,7 +566,7 @@ describe("exec approvals safe bins", () => {
     const denied = evaluateExecAllowlist({
       analysis,
       allowlist: [],
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
       trustedSafeBinDirs: new Set(["/usr/bin"]),
       cwd: "/tmp",
     });
@@ -551,7 +575,7 @@ describe("exec approvals safe bins", () => {
     const allowed = evaluateExecAllowlist({
       analysis,
       allowlist: [],
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
       trustedSafeBinDirs: new Set(["/custom/bin"]),
       cwd: "/tmp",
     });

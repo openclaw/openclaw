@@ -1,15 +1,10 @@
 // WebSocket client helpers for gateway network E2E scenarios.
 import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
+import { sleep as delay } from "../../../lib/sleep.mjs";
 import { waitForWebSocketOpen } from "../websocket-open.mjs";
 import { readGatewayNetworkClientConnectTimeoutMs } from "./limits.mjs";
 import { onceFrame } from "./ws-frames.mjs";
-
-function delay(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 function remainingDeadlineMs(deadline) {
   return Math.max(1, deadline - Date.now());
@@ -25,7 +20,7 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export function hasGatewayHealthSummaryPayload(response) {
+function hasGatewayHealthSummaryPayload(response) {
   if (!isRecord(response) || !isRecord(response.payload)) {
     return false;
   }
@@ -48,7 +43,7 @@ export function responseError(method, response) {
   return new Error(`${method} failed: ${message}`);
 }
 
-export function isRetryableStartupError(message) {
+function isRetryableStartupError(message) {
   return (
     message.includes("gateway starting") ||
     message.includes("closed before frame") ||

@@ -134,19 +134,7 @@ export function stringifyNonErrorCause(value: unknown): string {
   }
 }
 
-export function toErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
+export { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {
@@ -176,9 +164,6 @@ export function detectErrorKind(err: unknown): ErrorKind | undefined {
   ) {
     return "refusal";
   }
-  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
-    return "timeout";
-  }
   if (
     message.includes("rate limit") ||
     message.includes("too many requests") ||
@@ -186,6 +171,9 @@ export function detectErrorKind(err: unknown): ErrorKind | undefined {
     code === "429"
   ) {
     return "rate_limit";
+  }
+  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
+    return "timeout";
   }
   if (
     message.includes("context length") ||

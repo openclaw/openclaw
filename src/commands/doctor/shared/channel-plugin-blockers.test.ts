@@ -76,6 +76,51 @@ describe("channel plugin blockers", () => {
     });
   });
 
+  it("uses provided manifest records without loading the registry", () => {
+    const registrySpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        channels: {
+          discord: {
+            token: "configured",
+          },
+        },
+      },
+      {},
+      {},
+      {
+        manifestRecords: [
+          {
+            id: "discord",
+            origin: "global",
+            channels: ["discord"],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            enabledByDefault: false,
+            rootDir: "/plugins/discord",
+            source: "test",
+            manifestPath: "/plugins/discord/plugin.json",
+          },
+        ],
+      },
+    );
+
+    expect(registrySpy).not.toHaveBeenCalled();
+    expect(hits).toEqual([
+      {
+        channelId: "discord",
+        pluginId: "discord",
+        reason: "missing explicit enablement",
+      },
+    ]);
+  });
+
   it("reports blockers for enabled-only channel intent", () => {
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
       plugins: [

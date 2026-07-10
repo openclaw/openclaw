@@ -2,6 +2,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { messageAction, postbackAction, uriAction } from "./actions.js";
 import {
   createActionCard,
@@ -187,7 +188,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createInfoCard(title, body, footer);
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${body}`.slice(0, 400),
+                altText: truncateUtf16Safe(`${title}: ${body}`, 400),
                 contents: bubble,
               },
             });
@@ -202,7 +203,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createImageCard(imageUrl, title, caption);
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${caption}`.slice(0, 400),
+                altText: truncateUtf16Safe(`${title}: ${caption}`, 400),
                 contents: bubble,
               },
             });
@@ -219,7 +220,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             });
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${body}`.slice(0, 400),
+                altText: truncateUtf16Safe(`${title}: ${body}`, 400),
                 contents: bubble,
               },
             });
@@ -236,7 +237,10 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createListCard(title, items);
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${items.map((i) => i.title).join(", ")}`.slice(0, 400),
+                altText: truncateUtf16Safe(
+                  `${title}: ${items.map((i) => i.title).join(", ")}`,
+                  400,
+                ),
                 contents: bubble,
               },
             });
@@ -257,8 +261,8 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createReceiptCard({ title, items, total, footer });
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${items.map((i) => `${i.name} ${i.value}`).join(", ")}`.slice(
-                  0,
+                altText: truncateUtf16Safe(
+                  `${title}: ${items.map((i) => `${i.name} ${i.value}`).join(", ")}`,
                   400,
                 ),
                 contents: bubble,

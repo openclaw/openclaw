@@ -4,6 +4,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
@@ -111,6 +112,7 @@ export function preservePendingAssistantUsage(
     output,
     cacheRead,
     cacheWrite,
+    ...(pendingUsage.contextUsage ? { contextUsage: { ...pendingUsage.contextUsage } } : {}),
     totalTokens: pendingUsage.total ?? input + output + cacheRead + cacheWrite,
     ...(pendingUsage.reasoningTokens !== undefined
       ? { reasoningTokens: pendingUsage.reasoningTokens }
@@ -1229,14 +1231,17 @@ export function handleMessageEnd(
     if (
       hasAssistantVisibleReply({ text: cleanedTextLocal, mediaUrls: mediaUrlsLocal, audioAsVoice })
     ) {
-      ctx.emitBlockReply({
-        text: cleanedTextLocal,
-        mediaUrls: mediaUrlsLocal?.length ? mediaUrlsLocal : undefined,
-        audioAsVoice,
-        replyToId,
-        replyToTag,
-        replyToCurrent,
-      });
+      ctx.emitBlockReply(
+        {
+          text: cleanedTextLocal,
+          mediaUrls: mediaUrlsLocal?.length ? mediaUrlsLocal : undefined,
+          audioAsVoice,
+          replyToId,
+          replyToTag,
+          replyToCurrent,
+        },
+        { assistantMessageIndex: ctx.state.assistantMessageIndex },
+      );
     }
   };
 
@@ -1302,7 +1307,7 @@ export function handleMessageEnd(
           )
         ) {
           ctx.log.debug(
-            `Skipping message_end block reply - already sent via messaging tool: ${text.slice(0, 50)}...`,
+            `Skipping message_end block reply - already sent via messaging tool: ${truncateUtf16Safe(text, 50)}...`,
           );
         } else {
           const alreadyDeliveredFinalText = Boolean(
@@ -1351,7 +1356,9 @@ export function handleMessageEnd(
     if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
       return flushBlockReplyBufferResult
         .then(() => {
-          const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+          const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+            reason: "message_end",
+          });
           if (isPromiseLike<void>(onBlockReplyFlushResult)) {
             return onBlockReplyFlushResult;
           }
@@ -1361,7 +1368,7 @@ export function handleMessageEnd(
           finalizeMessageEnd();
         });
     }
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush();
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush({ reason: "message_end" });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.finally(() => {
         finalizeMessageEnd();

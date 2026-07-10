@@ -1,7 +1,10 @@
 // Phone Control API module exposes the plugin public contract.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  archiveLegacyStateSource,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor";
 
 type ArmGroup = "camera" | "screen" | "writes" | "all";
 
@@ -29,15 +32,6 @@ const ARM_STATE_KEY = "current";
 
 function resolveArmStatePath(stateDir: string): string {
   return path.join(stateDir, "plugins", "phone-control", "armed.json");
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -99,28 +93,6 @@ async function readLegacyArmState(filePath: string): Promise<ArmStateFile | null
   }
 }
 
-async function archiveLegacySource(params: {
-  filePath: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  if (await fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated Phone Control armed-state source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived Phone Control armed-state legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(
-      `Failed archiving Phone Control armed-state legacy source: ${String(err)}`,
-    );
-  }
-}
-
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "phone-control-armed-json-to-plugin-state",
@@ -156,7 +128,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
       await store.register(ARM_STATE_KEY, state);
       changes.push("Migrated Phone Control armed state -> plugin state");
-      await archiveLegacySource({ filePath, changes, warnings });
+      await archiveLegacyStateSource({
+        filePath,
+        label: "Phone Control armed-state",
+        changes,
+        warnings,
+      });
       return { changes, warnings };
     },
   },

@@ -1,6 +1,6 @@
 // Xai plugin module implements runtime model compat behavior.
-// Reasoning effort is configurable only for grok-4.3*; encrypted reasoning include/replay is
-// handled separately in stream.ts for all reasoning-capable xAI models.
+// Reasoning effort is configurable only for current flagship Grok models; encrypted reasoning
+// include/replay is handled separately in stream.ts for every reasoning-capable xAI model.
 import { applyXaiModelCompat } from "./model-compat.js";
 
 type XaiRuntimeModelCompat = {
@@ -39,7 +39,10 @@ function normalizeXaiCompatModelId(id: unknown): string {
 
 function supportsConfigurableXaiReasoningEffort(model: XaiRuntimeModelCompat): boolean {
   const id = normalizeXaiCompatModelId(model.id);
-  return model.reasoning === true && (id === "grok-4.3" || id.startsWith("grok-4.3-"));
+  const isConfigurableModel = ["grok-4.3", "grok-4.5"].some(
+    (prefix) => id === prefix || id.startsWith(`${prefix}-`),
+  );
+  return model.reasoning === true && isConfigurableModel;
 }
 
 function resolveXaiReasoningEffortCompat(model: XaiRuntimeModelCompat): Record<string, unknown> {

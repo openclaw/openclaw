@@ -541,6 +541,7 @@ final class AppState {
                 key: "transport",
                 value: RemoteTransport.ssh.rawValue) || changed
 
+            let existingTarget = Self.sanitizeSSHTarget(remote["sshTarget"] as? String ?? "")
             let sanitizedTarget = Self.sanitizeSSHTarget(draft.remoteTarget)
             let expectedRemoteHost = CommandResolver.parseSSHTarget(sanitizedTarget)?.host ?? draft.remoteHost
             let existingUrl = (remote["url"] as? String)?
@@ -551,6 +552,12 @@ final class AppState {
             changed = Self.updateGatewayString(&remote, key: "url", value: desiredUrl) || changed
             changed = Self.updateGatewayString(&remote, key: "sshTarget", value: sanitizedTarget) || changed
             changed = Self.updateGatewayString(&remote, key: "sshIdentity", value: draft.remoteIdentity) || changed
+            if existingTarget != sanitizedTarget {
+                changed = Self.updateGatewayString(
+                    &remote,
+                    key: "sshHostKeyPolicy",
+                    value: "strict") || changed
+            }
         }
 
         if draft.remoteTokenDirty {
@@ -573,6 +580,7 @@ final class AppState {
     private func applyConfigFromDisk() {
         let root = OpenClawConfigFile.loadDict()
         self.applyConfigOverrides(root)
+        MacNodeModeCoordinator.shared.refresh()
     }
 
     private func applyConfigOverrides(_ root: [String: Any]) {

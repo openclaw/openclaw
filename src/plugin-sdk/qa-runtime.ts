@@ -1,13 +1,15 @@
-// QA runtime helpers register and execute plugin QA scenarios from local files.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
+// QA runtime helpers register and execute plugin QA scenarios from local files.
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Command } from "commander";
 import { formatErrorMessage } from "./error-runtime.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 import { runExec } from "./process-runtime.js";
+import type { QaRunnerCliRegistration } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
@@ -89,10 +91,7 @@ type LiveTransportQaCommanderOptions = {
 };
 
 /** Commander registration hook for one live-transport QA subcommand. */
-export type LiveTransportQaCliRegistration = {
-  commandName: string;
-  register(qa: Command): void;
-};
+export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
 
 /** Help text customizations for live credential source and role flags. */
 export type LiveTransportQaCredentialCliOptions = {
@@ -114,6 +113,7 @@ export type LiveTransportQaCliRegistrationOptions = {
   allowFailuresHelp?: string;
   scenarioHelp: string;
   sutAccountHelp: string;
+  adapterFactory?: QaRunnerCliRegistration["adapterFactory"];
   run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
 };
 
@@ -155,6 +155,7 @@ function mapLiveTransportQaCommanderOptions(
 function registerLiveTransportQaCli(
   params: LiveTransportQaCliRegistrationOptions & {
     qa: Command;
+    run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
   },
 ) {
   const command = params.qa
@@ -208,6 +209,7 @@ export function createLiveTransportQaCliRegistration(
 ): LiveTransportQaCliRegistration {
   return {
     commandName: params.commandName,
+    adapterFactory: params.adapterFactory,
     register(qa: Command) {
       registerLiveTransportQaCli({
         ...params,
@@ -732,22 +734,8 @@ export async function startLiveTransportQaOutputTee(params: {
         output.end(resolve);
       });
       if (outputError) {
-        throw toLintErrorObject(outputError, "Non-Error thrown");
+        throw toErrorObject(outputError, "Non-Error thrown");
       }
     },
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

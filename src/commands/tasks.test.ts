@@ -24,6 +24,7 @@ import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
+  tasksListCommand,
   tasksMaintenanceCommand,
   tasksShowCommand,
 } from "./tasks.js";
@@ -598,6 +599,30 @@ describe("tasks commands", () => {
         .join("\n");
       expect(joined).toContain(`taskId: ${task.taskId}`);
       expect(joined).toContain("startedAt: n/a");
+    });
+  });
+
+  it("keeps task list summaries within their UTF-16 column limit", async () => {
+    await withTaskCommandStateDir(async () => {
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-utf16-summary",
+        status: "succeeded",
+        task: "Inspect task summary",
+        terminalSummary: `${"y".repeat(78)}🚀xx`,
+      });
+      const runtime = createRuntime();
+
+      await tasksListCommand({}, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(`${"y".repeat(78)}…`);
+      expect(output).not.toContain("🚀");
     });
   });
 

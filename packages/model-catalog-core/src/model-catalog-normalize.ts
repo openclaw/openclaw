@@ -383,6 +383,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "requiresToolResultName",
     "requiresAssistantAfterToolResult",
     "requiresThinkingAsText",
+    "requiresReasoningContentOnAssistantMessages",
     "zaiToolStream",
     "sendSessionAffinityHeaders",
     "sendSessionIdHeader",
