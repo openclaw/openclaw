@@ -89,18 +89,11 @@ function supportsForcedDocumentMediaType(mediaType: string): boolean {
   return mediaType.startsWith("image/") || mediaType.startsWith("video/");
 }
 
-async function writeJsonIfMissing(filePath: string, value: unknown): Promise<void> {
-  try {
-    await fs.writeFile(filePath, `${JSON.stringify(value)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
-      throw err;
-    }
-  }
+async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+  await fs.writeFile(filePath, `${JSON.stringify(value)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
 }
 
 function normalizeDirectLidJid(raw: unknown): string | null {
@@ -158,11 +151,8 @@ async function persistOutboundLidMapping(params: {
   }
   await fs.mkdir(params.authDir, { recursive: true });
   await Promise.all([
-    writeJsonIfMissing(
-      path.join(params.authDir, `lid-mapping-${params.phoneDigits}.json`),
-      lidDigits,
-    ),
-    writeJsonIfMissing(
+    writeJsonFile(path.join(params.authDir, `lid-mapping-${params.phoneDigits}.json`), lidDigits),
+    writeJsonFile(
       path.join(params.authDir, `lid-mapping-${lidDigits}_reverse.json`),
       params.phoneDigits,
     ),

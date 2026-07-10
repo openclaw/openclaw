@@ -715,6 +715,26 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     );
   });
 
+  it("overwrites stale local LID mappings with the live lookup result", async () => {
+    fs.writeFileSync(path.join(authDir, "lid-mapping-19999990000.json"), JSON.stringify("111111"));
+    const getLIDForPN = vi.fn(async () => "444555@lid");
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate, getLIDForPN },
+      defaultAccountId: "main",
+      authDir,
+    });
+
+    await api.sendMessage("19999990000@s.whatsapp.net", "hello");
+
+    expect(sendMessage).toHaveBeenCalledWith("444555@lid", { text: "hello" });
+    expect(fs.readFileSync(path.join(authDir, "lid-mapping-19999990000.json"), "utf8")).toBe(
+      '"444555"\n',
+    );
+    expect(fs.readFileSync(path.join(authDir, "lid-mapping-444555_reverse.json"), "utf8")).toBe(
+      '"19999990000"\n',
+    );
+  });
+
   it("fails before sendMessage when reachout timelock is active without a trusted-contact token", async () => {
     const keysGet = vi.fn(async () => ({}));
     const keys = {
