@@ -21,6 +21,7 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
+import { readResponseWithLimit } from "../../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
 
@@ -31,6 +32,13 @@ const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 1_000;
 const ARCHIVE_EXTRACT_TIMEOUT_MS = 60_000;
+/**
+ * Cap for GitHub release JSON responses.
+ * Measured payloads as of 2026-07: fd 43,723 bytes (21 assets),
+ * ripgrep 59,752 bytes (28 assets). 1 MiB provides substantial
+ * headroom for routine GitHub release metadata growth.
+ */
+const MAX_RELEASE_JSON_BYTES = 1 * 1024 * 1024;
 const CONTENT_LENGTH_RE = /^\d+$/;
 
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
@@ -156,7 +164,22 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as { tag_name: string };
+    // Reject declared sizes above the cap before reading, matching the
+    // content-length guard in downloadFile.
+    const rawContentLength = response.headers.get("content-length");
+    if (rawContentLength !== null) {
+      const contentLength = rawContentLength.trim();
+      if (CONTENT_LENGTH_RE.test(contentLength)) {
+        const declaredBytes = Number(contentLength);
+        if (!Number.isSafeInteger(declaredBytes) || declaredBytes > MAX_RELEASE_JSON_BYTES) {
+          await cancelUnreadResponseBody(response);
+          throw new Error(`Release JSON exceeds the ${MAX_RELEASE_JSON_BYTES}-byte response limit`);
+        }
+      }
+    }
+
+    const buffer = await readResponseWithLimit(response, MAX_RELEASE_JSON_BYTES);
+    const data = JSON.parse(buffer.toString("utf-8")) as { tag_name: string };
     return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();

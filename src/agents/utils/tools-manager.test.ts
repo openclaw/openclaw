@@ -70,6 +70,100 @@ describe("ensureTool", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("rejects release JSON whose declared content-length exceeds the 1 MiB cap", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const release = vi.fn(async () => {});
+    const response = new Response("{}", {
+      status: 200,
+      headers: { "content-length": "1048577" },
+    });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("cancels oversized release JSON body streams", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const release = vi.fn(async () => {});
+    // No content-length header so the oversize detection must come from
+    // the stream reader, not the pre-check.
+    // 3 chunks of 400KB = 1,200KB > 1 MiB cap
+    const chunkSize = 400 * 1024;
+    const largeBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const chunk = new Uint8Array(chunkSize);
+        controller.enqueue(chunk);
+        controller.enqueue(chunk);
+        controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    const response = new Response(largeBody, { status: 200 });
+    const originalGetReader = response.body!.getReader.bind(response.body);
+    let readerCancelSpy: ReturnType<typeof vi.fn>;
+    vi.spyOn(response.body!, "getReader").mockImplementation(
+      function (this: ReadableStream, options) {
+        const reader = originalGetReader(options);
+        readerCancelSpy = vi.spyOn(reader, "cancel");
+        return reader;
+      },
+    );
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+
+    expect(readerCancelSpy!).toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("parses a realistic release JSON response within the 1 MiB cap", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const releaseCheckRelease = vi.fn(async () => {});
+    // Simulate a realistic GitHub release payload (~60KB, matching
+    // measured ripgrep sizes) with a declared content-length.
+    const assets = Array.from({ length: 28 }, (_, i) => ({
+      name: `ripgrep-14.1.1-x86_64-unknown-linux-musl-${i}.tar.gz`,
+      size: 2_000_000 + i * 100_000,
+    }));
+    const payload = JSON.stringify({ tag_name: "14.1.1", assets });
+    const downloadRelease = vi.fn(async () => {});
+    extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
+      writeFileSync(join(params.destDir, "rg"), "binary");
+    });
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(payload, {
+          status: 200,
+          headers: { "content-length": String(payload.length) },
+        }),
+        release: releaseCheckRelease,
+        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
+      })
+      .mockResolvedValueOnce({
+        response: new Response("archive", { status: 200 }),
+        release: downloadRelease,
+        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive.tar.gz",
+      });
+
+    const result = await ensureTool("rg", true);
+
+    expect(result).toBe(join(tempAgentDir!, "bin", "rg"));
+    expect(releaseCheckRelease).toHaveBeenCalledOnce();
+    expect(downloadRelease).toHaveBeenCalledOnce();
+  });
+
   it("cancels download error bodies before releasing guarded fetches", async () => {
     const { ensureTool } = await import("./tools-manager.js");
     const releaseCheckRelease = vi.fn(async () => {});
