@@ -85,12 +85,21 @@ describe("matrix client storage paths", () => {
     }
   });
 
+  function createTestLogger() {
+    return {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+  }
+
   function setupStateDir(
     cfg: Record<string, unknown> = {
       channels: {
         matrix: {},
       },
     },
+    logger = createTestLogger(),
   ): string {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-storage-"));
     const stateDir = path.join(homeDir, ".openclaw");
@@ -99,11 +108,7 @@ describe("matrix client storage paths", () => {
     installMatrixTestRuntime({
       cfg,
       logging: {
-        getChildLogger: () => ({
-          info: () => {},
-          warn: () => {},
-          error: () => {},
-        }),
+        getChildLogger: () => logger,
       },
       stateDir,
     });
@@ -662,7 +667,8 @@ describe("matrix client storage paths", () => {
   });
 
   it("reuses an existing token-hash storage root for the same device after the access token changes", () => {
-    setupStateDir();
+    const logger = createTestLogger();
+    setupStateDir(undefined, logger);
     const oldStoragePaths = seedExistingStorageRoot({
       accessToken: "secret-token-old",
       deviceId: "DEVICE123",
@@ -683,6 +689,54 @@ describe("matrix client storage paths", () => {
     expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
     expect(rotatedStoragePaths.tokenHash).toBe(oldStoragePaths.tokenHash);
     expect(rotatedStoragePaths.storagePath).toBe(oldStoragePaths.storagePath);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns with structured metadata when populated token-hash storage roots accumulate", () => {
+    const logger = createTestLogger();
+    const stateDir = setupStateDir(undefined, logger);
+    const oldStoragePaths = seedExistingStorageRoot({
+      accessToken: "secret-token-old",
+      deviceId: "DEVICE123",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-old" }).tokenHash,
+        deviceId: "DEVICE123",
+      },
+    });
+    const canonicalPaths = seedCanonicalStorageRoot({
+      stateDir,
+      accessToken: "secret-token-new",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-new" }).tokenHash,
+        deviceId: "DEVICE123",
+      },
+    });
+    fs.mkdirSync(path.join(canonicalPaths.rootDir, "crypto"), { recursive: true });
+
+    const resolvedPaths = resolveDefaultStoragePaths({
+      accessToken: "secret-token-new",
+      deviceId: "DEVICE123",
+    });
+
+    expect(resolvedPaths.rootDir).toBe(canonicalPaths.rootDir);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "matrix: multiple populated token-hash storage roots detected",
+      {
+        parentDir: path.dirname(canonicalPaths.rootDir),
+        canonicalTokenHash: canonicalPaths.tokenHash,
+        selectedTokenHash: canonicalPaths.tokenHash,
+        populatedTokenHashes: [canonicalPaths.tokenHash, oldStoragePaths.tokenHash],
+        populatedSiblingTokenHashes: [oldStoragePaths.tokenHash],
+        populatedRootCount: 2,
+      },
+    );
   });
 
   it("reads legacy storage metadata until doctor migrates it to SQLite", () => {

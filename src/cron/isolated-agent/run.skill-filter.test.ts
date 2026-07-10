@@ -5,7 +5,7 @@ import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   buildWorkspaceSkillSnapshotMock,
   dispatchCronDeliveryMock,
-  getCliSessionIdMock,
+  getCliSessionBindingMock,
   isCliProviderMock,
   lookupContextTokensMock,
   loadRunCronIsolatedAgentTurn,
@@ -306,7 +306,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
-        expect(params.abortSignal).toBe(abortController.signal);
+        expect(params.abortSignal).not.toBe(abortController.signal);
+        expect(params.abortSignal?.aborted).toBe(false);
         if (!markCliStarted) {
           throw new Error("Expected CLI start marker callback to be initialized");
         }
@@ -336,7 +337,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
     it("does not pass stored cliSessionId on fresh isolated runs (isNewSession=true)", async () => {
       // Simulate a persisted CLI session ID from a previous run.
-      getCliSessionIdMock.mockReturnValue("prev-cli-session-abc");
+      getCliSessionBindingMock.mockReturnValue({ sessionId: "prev-cli-session-abc" });
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockResolvedValue({
         payloads: [{ text: "output" }],
@@ -367,7 +368,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     });
 
     it("reuses stored cliSessionId on continuation runs (isNewSession=false)", async () => {
-      getCliSessionIdMock.mockReturnValue("existing-cli-session-def");
+      getCliSessionBindingMock.mockReturnValue({ sessionId: "existing-cli-session-def" });
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockResolvedValue({
         payloads: [{ text: "output" }],

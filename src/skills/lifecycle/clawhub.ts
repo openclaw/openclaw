@@ -1,5 +1,4 @@
 // ClawHub lifecycle helpers fetch skill registry metadata and package details.
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -26,6 +25,7 @@ import {
   type ClawHubSkillSearchResult,
   type ClawHubSkillVerificationResponse,
 } from "../../infra/clawhub.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
@@ -466,21 +466,6 @@ function buildDownloadedArtifactLock(
   };
 }
 
-function buildInstallTelemetrySkills(
-  skills: ClawHubSkillsLockfile["skills"],
-): Record<string, { version: string; installedAt: number; registry?: string }> {
-  return Object.fromEntries(
-    Object.entries(skills).map(([slug, entry]) => [
-      slug,
-      {
-        version: entry.version,
-        installedAt: entry.installedAt,
-        ...(entry.registry ? { registry: entry.registry } : {}),
-      },
-    ]),
-  );
-}
-
 function snapshotClawHubSkillVerification(
   verification: ClawHubSkillVerificationResponse,
 ): ClawHubSkillVerificationLock {
@@ -525,7 +510,7 @@ async function readInstalledSkillFileLock(
       const content = await fs.readFile(candidate);
       return {
         path: marker,
-        sha256: createHash("sha256").update(content).digest("hex"),
+        sha256: sha256Hex(content),
       };
     } catch {
       continue;
@@ -1508,8 +1493,9 @@ async function performClawHubSkillInstall(
       await writeClawHubSkillsLockfile(params.workspaceDir, lock);
       await reportClawHubSkillInstallTelemetry({
         baseUrl: params.baseUrl,
-        root: params.workspaceDir,
-        skills: buildInstallTelemetrySkills(lock.skills),
+        slug: params.slug,
+        ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+        version,
       }).catch(() => undefined);
 
       return {

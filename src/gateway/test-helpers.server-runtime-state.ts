@@ -22,6 +22,7 @@ export async function createGatewayRuntimeStateForTest(
     openResponsesEnabled: false,
     resolvedAuth: {} as never,
     getResolvedAuth: () => ({}) as never,
+    isTerminalEnabled: () => false,
     hooksConfig: () => null,
     getHookClientIpConfig: () => ({}) as never,
     pluginRegistry,

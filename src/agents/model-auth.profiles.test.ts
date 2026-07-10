@@ -733,6 +733,33 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("skips malformed stored ZAI command profiles and uses current env auth", async () => {
+    await withEnvAsync(
+      {
+        ZAI_API_KEY: "zai-current-key", // pragma: allowlist secret
+        Z_AI_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "zai",
+          store: {
+            version: 1,
+            profiles: {
+              "zai:default": {
+                type: "api_key",
+                provider: "zai",
+                key: "openclaw onboard --auth-choice zai-coding-global",
+              },
+            },
+          },
+        });
+        expect(resolved.apiKey).toBe("zai-current-key");
+        expect(resolved.source).toContain("ZAI_API_KEY");
+        expect(resolved.profileId).toBeUndefined();
+      },
+    );
+  });
+
   it("keeps stored provider auth ahead of env by default", async () => {
     await withEnvAsync({ OPENAI_API_KEY: "env-openai-key" }, async () => {
       const resolved = await resolveApiKeyForProvider({

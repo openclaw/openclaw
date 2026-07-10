@@ -3,7 +3,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
@@ -32,8 +33,10 @@ type RegisteredAgentDatabaseRow = {
   size_bytes: number | null;
 };
 
+const agentDbTempDirs: string[] = [];
+
 function createTempStateDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-"));
+  return makeTempDir(agentDbTempDirs, "openclaw-agent-db-");
 }
 
 function listRegisteredAgentDatabasesForTest(options: { env?: NodeJS.ProcessEnv } = {}) {
@@ -49,6 +52,10 @@ function listRegisteredAgentDatabasesForTest(options: { env?: NodeJS.ProcessEnv 
     sizeBytes: row.size_bytes,
   }));
 }
+
+afterAll(() => {
+  cleanupTempDirs(agentDbTempDirs);
+});
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -401,5 +408,49 @@ describe("openclaw agent database", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
     ).toThrow(/newer schema version 2/);
+  });
+
+  it("closes cached handles on normal process exit so no stale WAL remains", () => {
+    const stateDir = createTempStateDir();
+    const agentModuleUrl = new URL("./openclaw-agent-db.ts", import.meta.url).href;
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+          import fs from "node:fs";
+          import { openOpenClawAgentDatabase } from ${JSON.stringify(agentModuleUrl)};
+
+          const database = openOpenClawAgentDatabase({
+            agentId: "worker-1",
+            env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_AGENT_DB_EXIT_TEST_DIR },
+          });
+          const walPath = database.path + "-wal";
+          console.log(JSON.stringify({
+            agentDatabasePath: database.path,
+            agentWalBytesBeforeExit: fs.existsSync(walPath) ? fs.statSync(walPath).size : 0,
+          }));
+        `,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_AGENT_DB_EXIT_TEST_DIR: stateDir },
+      },
+    );
+    const result = JSON.parse(output) as {
+      agentDatabasePath: string;
+      agentWalBytesBeforeExit: number;
+    };
+    if (result.agentWalBytesBeforeExit === 0) {
+      // Rollback-journal filesystems (NFS/SMB tmp dirs) never produce a WAL.
+      return;
+    }
+    // The child never closes explicitly; only the exit hook can retire the WAL.
+    const walPath = `${result.agentDatabasePath}-wal`;
+    const walBytesAfterExit = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0;
+    expect(walBytesAfterExit).toBe(0);
   });
 });

@@ -23,6 +23,7 @@ import {
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   resolveFirecrawlApiKey,
@@ -73,7 +74,7 @@ async function readFirecrawlJsonResponse(
   return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
 }
 
-export type FirecrawlSearchParams = {
+type FirecrawlSearchParams = {
   cfg?: OpenClawConfig;
   query: string;
   count?: number;
@@ -89,7 +90,7 @@ export type FirecrawlSearchParams = {
   access?: "credential" | "keyless";
 };
 
-export type FirecrawlScrapeParams = {
+type FirecrawlScrapeParams = {
   cfg?: OpenClawConfig;
   url: string;
   extractMode: "markdown" | "text";
@@ -251,7 +252,7 @@ async function postFirecrawlJson<T>(
             detail = errorBody.text;
           }
         }
-        const safeDetail = wrapWebContent(detail.slice(0, 1_000), "web_fetch");
+        const safeDetail = wrapWebContent(truncateUtf16Safe(detail, 1_000), "web_fetch");
         throw new Error(`${params.errorLabel} API error (${response.status}): ${safeDetail}`);
       }
       return await parse(response);
@@ -517,6 +518,10 @@ export function parseFirecrawlScrapePayload(params: {
   }
   const rawText = params.extractMode === "text" ? markdownToText(markdown) : markdown;
   const truncated = truncateText(rawText, params.maxChars);
+  const wrappedText = wrapExternalContent(truncated.text, {
+    source: "web_fetch",
+    includeWarning: false,
+  });
   return {
     url: params.url,
     finalUrl:
@@ -540,14 +545,8 @@ export function parseFirecrawlScrapePayload(params: {
     },
     truncated: truncated.truncated,
     rawLength: rawText.length,
-    wrappedLength: wrapExternalContent(truncated.text, {
-      source: "web_fetch",
-      includeWarning: false,
-    }).length,
-    text: wrapExternalContent(truncated.text, {
-      source: "web_fetch",
-      includeWarning: false,
-    }),
+    wrappedLength: wrappedText.length,
+    text: wrappedText,
     warning:
       typeof params.payload.warning === "string" && params.payload.warning
         ? wrapExternalContent(params.payload.warning, {

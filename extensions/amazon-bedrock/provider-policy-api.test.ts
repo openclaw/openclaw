@@ -74,6 +74,11 @@ describe("amazon-bedrock provider-policy-api", () => {
       preservesCatalogOptOut: true,
     },
     {
+      canonicalModelId: "claude-mythos-5",
+      defaultLevel: "high",
+      preservesCatalogOptOut: true,
+    },
+    {
       canonicalModelId: "claude-opus-4-8",
       defaultLevel: "off",
       preservesCatalogOptOut: false,

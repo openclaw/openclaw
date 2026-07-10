@@ -23,7 +23,7 @@ function requireFirstMockArg(mock: { mock: { calls: unknown[][] } }, label: stri
 }
 
 describe("runCronIsolatedAgentTurn isolated session identity", () => {
-  setupRunCronIsolatedAgentTurnSuite();
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
   it("uses a run-scoped key for embedded isolated cron execution", async () => {
     resolveCronSessionMock.mockReturnValue(
@@ -198,6 +198,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       promptCacheKey?: string;
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
+      cleanupCliLiveSessionOnRunEnd?: boolean;
     };
     expect(runRequest.sessionId).toBe("isolated-cli-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
@@ -205,6 +206,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expect(runRequest.cleanupCliLiveSessionOnRunEnd).toBe(true);
   });
 
   it("runs externally sourced CLI hook turns", async () => {

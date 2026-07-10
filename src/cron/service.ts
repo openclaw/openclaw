@@ -1,9 +1,15 @@
 /** Stateful CronService facade around the locked service operation helpers. */
-import type { CronServiceContract, CronServiceRunResult } from "./service-contract.js";
+import type {
+  CronServiceContract,
+  CronServiceRunOptions,
+  CronServiceRunResult,
+} from "./service-contract.js";
 import type { CronListPageOptions } from "./service/list-page-types.js";
 import * as ops from "./service/ops.js";
 import {
+  type CronAddOptions,
   type CronServiceDeps,
+  type CronUpdatePrecondition,
   type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
@@ -39,20 +45,32 @@ export class CronService implements CronServiceContract {
     return await ops.listPage(this.state, opts);
   }
 
-  async add(input: CronJobCreate) {
-    return await ops.add(this.state, input);
+  async add(input: CronJobCreate, opts?: CronAddOptions) {
+    return await ops.add(this.state, input, opts);
   }
 
   async update(id: string, patch: CronJobPatch) {
     return await ops.update(this.state, id, patch);
   }
 
+  async updateWithPrecondition(
+    id: string,
+    patch: CronJobPatch,
+    precondition: CronUpdatePrecondition,
+  ) {
+    return await ops.updateWithPrecondition(this.state, id, patch, precondition);
+  }
+
   async remove(id: string) {
     return await ops.remove(this.state, id);
   }
 
-  async run(id: string, mode?: "due" | "force"): Promise<CronServiceRunResult> {
-    return await ops.run(this.state, id, mode);
+  async run(
+    id: string,
+    mode?: "due" | "force",
+    opts?: CronServiceRunOptions,
+  ): Promise<CronServiceRunResult> {
+    return await ops.run(this.state, id, mode, opts);
   }
 
   async enqueueRun(id: string, mode?: "due" | "force"): Promise<CronServiceRunResult> {

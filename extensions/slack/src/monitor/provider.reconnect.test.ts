@@ -10,7 +10,12 @@ import {
   formatSlackSocketReconnectMessage,
   formatSlackSocketStartRetryMessage,
 } from "./provider.js";
-import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
+import {
+  formatSlackSocketModeSharedConnectionWarning,
+  formatUnknownError,
+  registerSlackSocketModeConnectionDiagnostics,
+  waitForSlackSocketDisconnect,
+} from "./reconnect-policy.js";
 
 class FakeEmitter {
   private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
@@ -140,6 +145,62 @@ describe("slack socket reconnect helpers", () => {
     ).toBe(
       "code: slack_webapi_platform_error; slack error: missing_scope; needed: connections:write; slack message: [ERROR] missing required scope",
     );
+  });
+
+  it("formats shared Socket Mode connection warnings with remediation", () => {
+    expect(formatSlackSocketModeSharedConnectionWarning(2)).toContain(
+      "slack socket mode reports 2 active connections for this Slack app",
+    );
+    expect(formatSlackSocketModeSharedConnectionWarning(2)).toContain(
+      "equivalent routing and authorization",
+    );
+  });
+
+  it("warns once when Slack reports a shared Socket Mode app token", () => {
+    const client = new FakeEmitter();
+    const onSharedConnection = vi.fn();
+    const unregister = registerSlackSocketModeConnectionDiagnostics({
+      app: { receiver: { client } },
+      onSharedConnection,
+    });
+
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "events_api", payload: { text: "hello" } })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: "2" })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 1 })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 2 })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 3 })),
+      false,
+    );
+
+    expect(onSharedConnection).toHaveBeenCalledTimes(1);
+    expect(onSharedConnection).toHaveBeenCalledWith(2);
+
+    unregister();
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 2 })),
+      false,
+    );
+    expect(onSharedConnection).toHaveBeenCalledTimes(1);
+    expect(client.listenerCount("ws_message")).toBe(0);
   });
 
   it("formats socket start retries with an explicit reason field", () => {

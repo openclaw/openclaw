@@ -370,6 +370,7 @@ describe("processEvent (functional)", () => {
     {
       name: "speaking",
       expectedState: "speaking",
+      expectedTranscript: [],
       createEvent: (timestamp: number): NormalizedEvent => ({
         id: "evt-live-speaking",
         type: "call.speaking",
@@ -380,8 +381,22 @@ describe("processEvent (functional)", () => {
       }),
     },
     {
+      name: "assistant speech",
+      expectedState: "speaking",
+      expectedTranscript: [{ speaker: "bot", text: "hello" }],
+      createEvent: (timestamp: number): NormalizedEvent => ({
+        id: "evt-live-assistant-speech",
+        type: "call.assistant-speech",
+        callId: "call-live",
+        providerCallId: "provider-live",
+        timestamp,
+        transcript: "hello",
+      }),
+    },
+    {
       name: "listening",
       expectedState: "listening",
+      expectedTranscript: [{ speaker: "user", text: "hello" }],
       createEvent: (timestamp: number): NormalizedEvent => ({
         id: "evt-live-listening",
         type: "call.speech",
@@ -394,7 +409,7 @@ describe("processEvent (functional)", () => {
     },
   ])(
     "starts max-duration enforcement when $name arrives before answered",
-    async ({ expectedState, createEvent }) => {
+    async ({ expectedState, expectedTranscript, createEvent }) => {
       const now = new Date("2026-03-22T12:00:00.000Z").getTime();
       vi.useFakeTimers();
       vi.setSystemTime(now);
@@ -436,6 +451,9 @@ describe("processEvent (functional)", () => {
       }
       expect(call.state).toBe(expectedState);
       expect(call.answeredAt).toBe(liveTimestamp);
+      expect(call.transcript.map(({ speaker, text }) => ({ speaker, text }))).toEqual(
+        expectedTranscript,
+      );
       expect(ctx.maxDurationTimers.has("call-live")).toBe(true);
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -633,7 +651,7 @@ describe("processEvent (functional)", () => {
     processEvent(ctx, event);
 
     const call = requireFirstActiveCall(ctx);
-    expect(call.sessionKey).toBe(`voice:call:${call.callId}`);
+    expect(call.sessionKey).toBe(`agent:main:voice:call:${call.callId}`);
   });
 
   it("applies per-number inbound greeting and stores the matched route key", () => {
@@ -646,6 +664,7 @@ describe("processEvent (functional)", () => {
         inboundGreeting: "Hello from global.",
         numbers: {
           "+15550002222": {
+            agentId: "cards",
             inboundGreeting: "Silver Fox Cards, how can I help?",
           },
         },
@@ -667,6 +686,7 @@ describe("processEvent (functional)", () => {
     const call = requireFirstActiveCall(ctx);
     expect(call.metadata?.initialMessage).toBe("Silver Fox Cards, how can I help?");
     expect(call.metadata?.numberRouteKey).toBe("+15550002222");
+    expect(call.agentId).toBe("cards");
   });
 
   it("deduplicates by dedupeKey even when event IDs differ", () => {
@@ -687,7 +707,7 @@ describe("processEvent (functional)", () => {
     });
     ctx.providerCallIdMap.set("provider-dedupe", "call-dedupe");
 
-    processEvent(ctx, {
+    const firstResult = processEvent(ctx, {
       id: "evt-1",
       dedupeKey: "stable-key-1",
       type: "call.speech",
@@ -698,7 +718,7 @@ describe("processEvent (functional)", () => {
       isFinal: true,
     });
 
-    processEvent(ctx, {
+    const replayResult = processEvent(ctx, {
       id: "evt-2",
       dedupeKey: "stable-key-1",
       type: "call.speech",
@@ -715,6 +735,12 @@ describe("processEvent (functional)", () => {
     }
     expect(call.transcript).toHaveLength(1);
     expect(Array.from(ctx.processedEventIds)).toEqual(["stable-key-1"]);
+    expect(firstResult).toMatchObject({
+      kind: "final-speech",
+      transcript: "hello",
+      waiterResolved: false,
+    });
+    expect(replayResult).toEqual({ kind: "ignored" });
   });
 
   it("keeps retryable call.error events replayable", () => {

@@ -24,6 +24,7 @@ import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
+  tasksListCommand,
   tasksMaintenanceCommand,
   tasksShowCommand,
 } from "./tasks.js";
@@ -238,6 +239,80 @@ describe("tasks commands", () => {
       );
       expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
+    });
+  });
+
+  it("routes ACP task cancellation through the live gateway before local fallback", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:jarvis:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-acp-cancel",
+        task: "Cancel ACP child",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      mocks.callGateway.mockResolvedValueOnce({
+        found: true,
+        cancelled: true,
+        task: {
+          taskId: task.taskId,
+          runtime: "acp",
+          runId: task.runId,
+        },
+      });
+      const runtime = createRuntime();
+
+      await tasksCancelCommand({ lookup: task.taskId }, runtime);
+
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "tasks.cancel",
+          params: { taskId: task.taskId },
+          timeoutMs: 5_000,
+        }),
+      );
+      expect(runtime.log).toHaveBeenCalledWith(
+        `Cancelled ${task.taskId} (acp) run run-acp-cancel.`,
+      );
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    });
+  });
+
+  it("fails ACP task cancellation loudly when the live gateway is unavailable", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:jarvis:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-acp-cancel-gateway-down",
+        task: "Cancel ACP child",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+      const runtime = createRuntime();
+
+      await tasksCancelCommand({ lookup: task.taskId }, runtime);
+
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "tasks.cancel",
+          params: { taskId: task.taskId },
+          timeoutMs: 5_000,
+        }),
+      );
+      expect(runtime.error).toHaveBeenCalledWith(
+        "ACP task cancellation requires the live Gateway tasks.cancel path: gateway unavailable",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).not.toHaveBeenCalled();
     });
   });
 
@@ -524,6 +599,30 @@ describe("tasks commands", () => {
         .join("\n");
       expect(joined).toContain(`taskId: ${task.taskId}`);
       expect(joined).toContain("startedAt: n/a");
+    });
+  });
+
+  it("keeps task list summaries within their UTF-16 column limit", async () => {
+    await withTaskCommandStateDir(async () => {
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-utf16-summary",
+        status: "succeeded",
+        task: "Inspect task summary",
+        terminalSummary: `${"y".repeat(78)}🚀xx`,
+      });
+      const runtime = createRuntime();
+
+      await tasksListCommand({}, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(`${"y".repeat(78)}…`);
+      expect(output).not.toContain("🚀");
     });
   });
 

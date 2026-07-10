@@ -156,12 +156,11 @@ type ModelRefInputObject = {
   maxTokens?: number;
 };
 
-export type { AttemptParamsLike as CopilotPoolAcquireInput, ModelRef };
 export { SUPPORTED_PROVIDERS };
 
-export type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
+type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
 
-export interface CopilotAttemptDeps {
+interface CopilotAttemptDeps {
   pool: CopilotClientPool;
   now?: () => number;
   createToolBridge?: typeof createCopilotToolBridge;
@@ -618,6 +617,11 @@ export async function runCopilotAttempt(
   // safe way to defer the binding without creating a circular dep.
   // See tool-bridge.ts CopilotSessionHolder.
   const sessionRef: { current: SessionLike | undefined } = { current: undefined };
+  const computerContextEpoch: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  } = { value: 0 };
 
   try {
     let sdkTools: SdkTool[];
@@ -644,6 +648,7 @@ export async function runCopilotAttempt(
         // channel/routing, model context, run hooks). See
         // tool-bridge.ts buildOpenClawCodingToolsOptions().
         attemptParams: input,
+        computerContextEpoch,
         sessionRef,
         onYieldDetected: () => {
           yieldDetected = true;
@@ -716,6 +721,7 @@ export async function runCopilotAttempt(
           developerInstructions: originalDeveloperInstructions,
           messages,
           ctx: hookContext,
+          bootstrapContextRunKind: input.bootstrapContextRunKind,
           ...("beforeAgentStartResult" in input
             ? { beforeAgentStartResult: input.beforeAgentStartResult }
             : {}),
@@ -845,6 +851,11 @@ export async function runCopilotAttempt(
       onAssistantDelta: input.onAssistantDelta,
       onAgentEvent: input.onAgentEvent,
       onNativeSubagentEvent: (event) => nativeSubagentTaskMirror?.handleEvent(event),
+      onContextCompacted: () => {
+        computerContextEpoch.value += 1;
+        delete computerContextEpoch.frameToolCallId;
+        delete computerContextEpoch.frameImageIdentity;
+      },
       onCompactionStart: async () => {
         const sessionFile = readString(input.sessionFile);
         if (!sessionFile) {
@@ -1070,10 +1081,25 @@ export async function runCopilotAttempt(
   // the user message.
   const syntheticUserText = readString(input.transcriptPrompt) ?? readString(input.prompt);
   const tailUserText = readTailUserText(messages);
+  const tailUserIndex = messages.findLastIndex((message) => message.role === "user");
+  const currentTurnMessages = messages.map((message, index) => {
+    if (syntheticUserText !== tailUserText || index !== tailUserIndex) {
+      return message;
+    }
+    return attachCopilotMirrorIdentity(
+      { ...message, idempotencyKey: `${input.runId}:user` } as unknown as AgentMessage,
+      `${input.runId}:prompt`,
+    );
+  });
   const syntheticUser: AgentMessage | undefined =
     syntheticUserText && syntheticUserText !== tailUserText
       ? attachCopilotMirrorIdentity(
-          { role: "user", content: syntheticUserText, timestamp: now() } as AgentMessage,
+          {
+            role: "user",
+            content: syntheticUserText,
+            timestamp: now(),
+            idempotencyKey: `${input.runId}:user`,
+          } as unknown as AgentMessage,
           `${input.runId}:prompt`,
         )
       : undefined;
@@ -1081,7 +1107,7 @@ export async function runCopilotAttempt(
     ? attachCopilotMirrorIdentity(lastAssistant, `${input.runId}:assistant:final`)
     : undefined;
   const messagesSnapshot: AgentMessage[] = [
-    ...messages,
+    ...currentTurnMessages,
     ...(syntheticUser ? [syntheticUser] : []),
     ...(taggedLastAssistant ? [taggedLastAssistant] : []),
   ];
@@ -1219,7 +1245,7 @@ function createResult(
     sessionIdUsed?: string;
     timedOut?: boolean;
     timedOutDuringCompaction?: boolean;
-    toolMetas?: Array<{ meta?: string; toolName: string }>;
+    toolMetas?: AgentHarnessAttemptResult["toolMetas"];
     usage?: AssistantUsageSnapshot;
     yieldDetected?: boolean;
   },
@@ -1515,7 +1541,7 @@ function createSystemMessageContent(
   const extraSystemPrompt = readString(params.extraSystemPrompt)?.trim();
   if (extraSystemPrompt && !isRawCopilotModelRun(params)) {
     const contextHeader =
-      params.promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+      params.promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     sections.push(`${contextHeader}\n${extraSystemPrompt}`);
   }
   return sections.length > 0 ? sections.join("\n\n") : undefined;
@@ -1596,7 +1622,7 @@ function readResolvedAttemptPath(value: unknown): string | undefined {
   return resolveUserPath(raw);
 }
 
-export function resolveModelRef(params: AttemptParamsLike): ModelRef {
+function resolveModelRef(params: AttemptParamsLike): ModelRef {
   const rawModel = (params as { runtimeModel?: unknown }).runtimeModel ?? params.model;
   if (rawModel && typeof rawModel === "object") {
     const model = rawModel as ModelRefInputObject;
@@ -1613,9 +1639,7 @@ export function resolveModelRef(params: AttemptParamsLike): ModelRef {
         readString((params as { provider?: unknown }).provider) ??
         "unknown-provider",
       baseUrl: readString(model.baseUrl),
-      azureApiVersion: readString(
-        model.azureApiVersion ?? model.params?.azureApiVersion,
-      ),
+      azureApiVersion: readString(model.azureApiVersion ?? model.params?.azureApiVersion),
       headers: model.headers,
       authHeader: model.authHeader,
       requestAuthMode: readString(requestTransport?.auth?.mode ?? rawRequest?.auth?.mode),
@@ -1734,7 +1758,7 @@ export function toError(error: unknown): Error {
  * version bump that changes the wording will safely fall through to
  * the generic prompt-error path.
  */
-export function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
+function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
   if (error === null || typeof error !== "object") {
     return false;
   }

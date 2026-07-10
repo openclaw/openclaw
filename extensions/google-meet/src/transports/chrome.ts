@@ -23,6 +23,7 @@ import {
 import {
   asBrowserTabs,
   callBrowserProxyOnNode,
+  forceMeetEnglishUi,
   isSameMeetUrlForReuse,
   normalizeMeetUrlForReuse,
   readBrowserTab,
@@ -433,7 +434,7 @@ function meetStatusScript(params: {
     notes.push("Muted Meet microphone for observe-only mode.");
   }
   const join = !readOnly && ${JSON.stringify(params.autoJoin)}
-    ? findButton(/join now|ask to join/i)
+    ? findButton(/join now|ask to join|join here too/i)
     : null;
   if (join) join.click();
   const microphoneChoice = findButton(/\\buse microphone\\b/i);
@@ -690,7 +691,7 @@ async function openMeetWithBrowserRequest(params: {
       await params.callBrowser({
         method: "POST",
         path: "/tabs/open",
-        body: { url: params.url },
+        body: { url: forceMeetEnglishUi(params.url) },
         timeoutMs,
       }),
     );

@@ -165,11 +165,15 @@ export async function resolveSystemRunExecArgv(params: {
     params.shellCommand &&
     params.policy.analysisOk &&
     params.policy.allowlistSatisfied &&
-    params.segments.length === 1 &&
-    params.segments[0]?.argv.length > 0
+    params.segments.length === 1
   ) {
-    // Windows shell transports expose a parsed argv segment that is safer than the wrapper argv.
-    execArgv = params.segments[0].argv;
+    // Exact-path matches stay bound to the resolved executable, while the bare
+    // wildcard contract can still authorize unresolved Windows commands.
+    const plannedArgv = resolvePlannedSegmentArgv(params.segments[0]);
+    if (!plannedArgv) {
+      return null;
+    }
+    execArgv = plannedArgv;
   }
   if (
     params.security === "allowlist" &&

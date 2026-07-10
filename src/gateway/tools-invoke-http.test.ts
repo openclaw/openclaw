@@ -532,6 +532,7 @@ describe("POST /tools/invoke", () => {
     setMainAllowedTools({ allow: ["tools_invoke_test"] });
     hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
       blocked: true,
+      kind: "veto",
       reason: "blocked by test hook",
     });
 
@@ -1115,6 +1116,8 @@ describe("tools.invoke Gateway RPC", () => {
     setMainAllowedTools({ allow: ["tools_invoke_test"] });
     hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
       blocked: true,
+      kind: "failure",
+      disposition: "blocked",
       deniedReason: "plugin-approval",
       reason: "Plugin approval required",
       params: { mode: "ok" },

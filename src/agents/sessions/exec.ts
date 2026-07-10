@@ -3,6 +3,8 @@
  */
 
 import { spawn } from "node:child_process";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { killProcessTree } from "../../process/kill-tree.js";
 import { waitForChildProcess } from "../utils/child-process.js";
 
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
@@ -62,9 +64,12 @@ function appendCapturedOutput(
       truncatedChars: current.truncatedChars,
     };
   }
+  const nextText = truncateTail
+    ? sliceUtf16Safe(combined, overflowChars)
+    : sliceUtf16Safe(combined, 0, maxOutputChars);
   return {
-    text: truncateTail ? combined.slice(overflowChars) : combined.slice(0, maxOutputChars),
-    truncatedChars: current.truncatedChars + overflowChars,
+    text: nextText,
+    truncatedChars: current.truncatedChars + combined.length - nextText.length,
   };
 }
 
@@ -81,8 +86,10 @@ export async function execCommand(
   return new Promise((resolve) => {
     const proc = spawn(command, args, {
       cwd,
+      detached: process.platform !== "win32",
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     let stdout: OutputCapture = { text: "", truncatedChars: 0 };
@@ -136,13 +143,20 @@ export async function execCommand(
     const killProcess = () => {
       if (!killed) {
         killed = true;
-        proc.kill("SIGTERM");
-        forceKillTimer = setTimeout(() => {
-          if (!settled) {
-            proc.kill("SIGKILL");
-          }
-        }, FORCE_KILL_GRACE_MS);
-        forceKillTimer.unref?.();
+        if (proc.pid) {
+          killProcessTree(proc.pid, {
+            detached: process.platform !== "win32",
+            graceMs: FORCE_KILL_GRACE_MS,
+          });
+        } else {
+          proc.kill("SIGTERM");
+          forceKillTimer = setTimeout(() => {
+            if (!settled) {
+              proc.kill("SIGKILL");
+            }
+          }, FORCE_KILL_GRACE_MS);
+          forceKillTimer.unref?.();
+        }
       }
     };
 
@@ -161,6 +175,11 @@ export async function execCommand(
         killProcess();
       }, options.timeout);
     }
+
+    // Output pipes may fail independently; process termination remains authoritative.
+    const ignoreOutputStreamError = () => {};
+    proc.stdout?.on("error", ignoreOutputStreamError);
+    proc.stderr?.on("error", ignoreOutputStreamError);
 
     proc.stdout?.on("data", (data) => {
       const before = stdout.truncatedChars;

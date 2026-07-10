@@ -16,6 +16,7 @@ export {
 export {
   collectConfiguredMemoryEmbeddingProviderIds,
   collectConfiguredMemoryEmbeddingStartupProviderOwners,
+  collectRegisteredEmbeddingProviderIds,
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
   resolveChannelPluginIds,
   resolveChannelPluginIdsFromRegistry,

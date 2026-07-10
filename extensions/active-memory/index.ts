@@ -37,6 +37,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -827,12 +828,18 @@ function updateActiveMemoryGlobalEnabledInConfig(
   };
 }
 
-function requiresAdminToMutateActiveMemoryGlobal(gatewayClientScopes?: readonly string[]): boolean {
-  return Array.isArray(gatewayClientScopes) && !gatewayClientScopes.includes("operator.admin");
+function lacksAdminToMutateActiveMemoryGlobal(params: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  if (Array.isArray(params.gatewayClientScopes)) {
+    return !params.gatewayClientScopes.includes("operator.admin");
+  }
+  return params.senderIsOwner !== true;
 }
 
 const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
-  "⚠️ /active-memory global enable/disable changes require operator.admin for gateway clients.";
+  "⚠️ /active-memory global enable/disable changes require owner or operator.admin.";
 
 function normalizePluginConfig(
   pluginConfig: unknown,
@@ -1084,6 +1091,8 @@ function buildRecallPrompt(params: {
     "Questions like 'what is my favorite food', 'do you remember my flight preferences', or 'what do i usually get' should normally return memory when relevant results exist.",
     "If the provided conversation context already contains recalled-memory summaries, debug output, or prior memory/tool traces, ignore that surfaced text unless the latest user message clearly requires re-checking it.",
     "Return memory only when it would materially help the other model answer the user's latest message.",
+    "Mutable operational facts (cron/job health, automation status, deployments, incidents, service availability) go stale quickly: include the source timestamp when available, say when the memory may be stale, and tell the answering model to verify live before relying on it.",
+    "Do not summarize mutable operational facts as simply current/running/healthy unless the memory result itself contains a current source timestamp and matching health state.",
     "If the connection is weak, broad, or only vaguely related, reply with NONE.",
     "If nothing clearly useful is found, reply with NONE.",
     "Return exactly one of these two forms:",
@@ -1425,7 +1434,7 @@ function toSingleLineLogValue(value: unknown): string {
     .replace(/\s+/g, " ")
     .trim();
   return singleLine.length > MAX_LOG_VALUE_CHARS
-    ? `${singleLine.slice(0, MAX_LOG_VALUE_CHARS)}...`
+    ? `${truncateUtf16Safe(singleLine, MAX_LOG_VALUE_CHARS)}...`
     : singleLine;
 }
 
@@ -2242,20 +2251,20 @@ async function readPartialAssistantText(
         if (remaining <= 0) {
           return true;
         }
-        const nextText = text.slice(0, remaining);
+        const nextText = truncateUtf16Safe(text, remaining);
+        if (!nextText) {
+          return true;
+        }
         texts.push(nextText);
         collectedChars += separatorChars + nextText.length;
-        return collectedChars >= resolvedLimits.maxChars;
+        // A surrogate backoff leaves spare code units; stop instead of skipping ahead.
+        return nextText.length < text.length || collectedChars >= resolvedLimits.maxChars;
       }
       return false;
     },
   });
-  const joined = texts
-    .map((text) => text.trim())
-    .filter(Boolean)
-    .join("\n")
-    .slice(0, resolvedLimits.maxChars)
-    .trim();
+  // Accepted chunks and separators are charged before append, so the join is already bounded.
+  const joined = texts.join("\n").trim();
   return joined || null;
 }
 
@@ -2557,18 +2566,24 @@ function truncateSummary(summary: string, maxSummaryChars: number): string {
     return trimmed;
   }
 
-  const bounded = trimmed.slice(0, maxSummaryChars).trimEnd();
-  const nextChar = trimmed.charAt(maxSummaryChars);
+  const ellipsis = "…";
+  if (maxSummaryChars <= ellipsis.length) {
+    return ellipsis.slice(0, Math.max(0, maxSummaryChars));
+  }
+  const contentMaxChars = maxSummaryChars - ellipsis.length;
+  const rawBounded = trimmed.slice(0, contentMaxChars).trimEnd();
+  const bounded = truncateUtf16Safe(trimmed, contentMaxChars).trimEnd();
+  const nextChar = trimmed.charAt(contentMaxChars);
   if (!nextChar || /\s/.test(nextChar)) {
-    return bounded;
+    return `${bounded}${ellipsis}`;
   }
 
-  const lastBoundary = bounded.search(/\s\S*$/);
+  const lastBoundary = rawBounded.search(/\s\S*$/);
   if (lastBoundary > 0) {
-    return bounded.slice(0, lastBoundary).trimEnd();
+    return `${truncateUtf16Safe(trimmed, lastBoundary).trimEnd()}${ellipsis}`;
   }
 
-  return bounded;
+  return `${bounded}${ellipsis}`;
 }
 
 function buildMetadata(summary: string | null): string | undefined {
@@ -2625,7 +2640,10 @@ function buildQuery(params: {
       remainingUser -= 1;
       selected.push({
         role: "user",
-        text: turn.text.trim().replace(/\s+/g, " ").slice(0, params.config.recentUserChars),
+        text: truncateUtf16Safe(
+          turn.text.trim().replace(/\s+/g, " "),
+          params.config.recentUserChars,
+        ),
       });
       continue;
     }
@@ -2635,7 +2653,10 @@ function buildQuery(params: {
     remainingAssistant -= 1;
     selected.push({
       role: "assistant",
-      text: turn.text.trim().replace(/\s+/g, " ").slice(0, params.config.recentAssistantChars),
+      text: truncateUtf16Safe(
+        turn.text.trim().replace(/\s+/g, " "),
+        params.config.recentAssistantChars,
+      ),
     });
   }
   const recentTurns = selected.toReversed().filter((turn) => turn.text.length > 0);
@@ -2696,7 +2717,7 @@ function normalizeSearchQueryText(text: string): string {
 function clampSearchQuery(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS
-    ? normalized.slice(0, MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS).trim()
+    ? truncateUtf16Safe(normalized, MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS).trim()
     : normalized;
 }
 
@@ -2720,11 +2741,10 @@ function buildSearchQuery(params: {
   if (!previousUser) {
     return latest || clampSearchQuery(params.latestUserMessage);
   }
-  const context = clampSearchQuery(
-    normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text)),
-  )
-    .slice(0, 120)
-    .trim();
+  const context = truncateUtf16Safe(
+    clampSearchQuery(normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text))),
+    120,
+  ).trim();
   return clampSearchQuery(context ? `${context} ${latest}` : latest);
 }
 
@@ -3487,6 +3507,7 @@ export default definePluginEntry({
       name: "active-memory",
       description: "Enable, disable, or inspect Active Memory for this session.",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const tokens = ctx.args?.trim().split(/\s+/).filter(Boolean) ?? [];
         const isGlobal = tokens.includes("--global");
@@ -3501,7 +3522,12 @@ export default definePluginEntry({
               text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.`,
             };
           }
-          if (requiresAdminToMutateActiveMemoryGlobal(ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutateActiveMemoryGlobal({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
             };
@@ -3734,6 +3760,7 @@ export default definePluginEntry({
 });
 
 const testing = {
+  buildSearchQuery,
   buildCacheKey,
   buildCircuitBreakerKey,
   buildMetadata,

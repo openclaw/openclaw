@@ -1,4 +1,3 @@
-// Memory Host SDK module implements embeddings behavior.
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
@@ -9,20 +8,15 @@ import {
   type LlamaEmbeddingContext,
   type LlamaModel,
 } from "./node-llama.js";
+// Memory Host SDK module implements embeddings behavior.
+import { toLintErrorObject } from "./retry-utils.js";
 import { normalizeOptionalString } from "./string-utils.js";
 
 type DisposableResource = {
   dispose?: () => Promise<void> | void;
 };
 
-export type {
-  EmbeddingProvider,
-  EmbeddingProviderFallback,
-  EmbeddingProviderId,
-  EmbeddingProviderOptions,
-  EmbeddingProviderRequest,
-  GeminiTaskType,
-} from "./embeddings.types.js";
+export type { EmbeddingProvider } from "./embeddings.types.js";
 
 export { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 
@@ -30,6 +24,15 @@ export type LocalEmbeddingProviderRuntimeOptions = {
   workerScriptPath?: string;
   nodeLlamaCppImportUrl?: string;
 };
+
+function copyEmbeddingVector(vector: ArrayLike<number>, maxLength?: number): number[] {
+  const length = Math.min(maxLength ?? vector.length, vector.length);
+  const values: number[] = [];
+  for (let index = 0; index < length; index += 1) {
+    values.push(vector[index]);
+  }
+  return values;
+}
 
 async function disposeResources(
   resources: Array<DisposableResource | null | undefined>,
@@ -144,9 +147,7 @@ export async function createLocalEmbeddingProviderInProcess(
   const outputDimensionality =
     typeof options.outputDimensionality === "number" ? options.outputDimensionality : undefined;
   const normalize = (vector: ArrayLike<number>): number[] =>
-    sanitizeAndNormalizeEmbedding(
-      outputDimensionality ? Array.from(vector).slice(0, outputDimensionality) : Array.from(vector),
-    );
+    sanitizeAndNormalizeEmbedding(copyEmbeddingVector(vector, outputDimensionality));
 
   return {
     id: "local",
@@ -195,18 +196,4 @@ export async function createLocalEmbeddingProviderInProcess(
       return closePromise;
     },
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

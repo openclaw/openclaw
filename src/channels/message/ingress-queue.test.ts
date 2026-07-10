@@ -248,6 +248,119 @@ describe("channel ingress queue", () => {
         lastAttemptAt: 20,
         lastError: "retry",
       });
+
+      const reclaimed = await queue.claim("b", { ownerId: "replacement" });
+      if (!reclaimed) {
+        throw new Error("Expected the released ingress event to be claimable");
+      }
+      expect(await queue.release(reclaimed, { recordAttempt: false, releasedAt: 30 })).toBe(true);
+      expect((await queue.listPending()).find((record) => record.id === "b")).toMatchObject({
+        attempts: 1,
+        lastAttemptAt: 20,
+        lastError: "retry",
+        updatedAt: 30,
+      });
+    });
+  });
+
+  it("claims next pending row by id when requested", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("0002", { text: "second" }, { receivedAt: 1 });
+      await queue.enqueue("0001", { text: "first" }, { receivedAt: 2 });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        orderBy: "id",
+      });
+
+      expect(claimed?.id).toBe("0001");
+    });
+  });
+
+  it("claims next only from candidate ids when provided", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("a", { text: "outside snapshot" }, { receivedAt: 1 });
+      await queue.enqueue("b", { text: "inside snapshot" }, { receivedAt: 2 });
+
+      expect(
+        await queue.claimNext({
+          ownerId: "worker",
+          candidateIds: ["b"],
+        }),
+      ).toMatchObject({ id: "b" });
+      expect(await queue.claimNext({ candidateIds: [] })).toBeNull();
+    });
+  });
+
+  it("derives missing lane keys before claiming next", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ lane: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("a", { lane: "blocked" }, { receivedAt: 1 });
+      await queue.enqueue("b", { lane: "open" }, { receivedAt: 2 });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        blockedLaneKeys: ["blocked"],
+        deriveLaneKey: (record) => record.payload.lane,
+      });
+
+      expect(claimed?.id).toBe("b");
+      expect(claimed?.laneKey).toBe("open");
+      expect(
+        (await queue.listPending()).find((record) => record.id === "a")?.laneKey,
+      ).toBeUndefined();
+    });
+  });
+
+  it("blocks lanes claimed by candidate rows before claiming later candidates", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ lane: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("a", { lane: "chat-1" }, { receivedAt: 1 });
+      await queue.enqueue("b", { lane: "chat-1" }, { receivedAt: 2 });
+      await queue.enqueue("c", { lane: "chat-2" }, { receivedAt: 3 });
+      await queue.claim("a", { ownerId: "sibling-worker" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        candidateIds: ["a", "b", "c"],
+        orderBy: "id",
+        deriveLaneKey: (record) => record.payload.lane,
+      });
+
+      expect(claimed?.id).toBe("c");
+      expect(claimed?.laneKey).toBe("chat-2");
+      const sameLanePending = (await queue.listPending()).find((record) => record.id === "b");
+      expect(sameLanePending?.laneKey).toBeUndefined();
     });
   });
 

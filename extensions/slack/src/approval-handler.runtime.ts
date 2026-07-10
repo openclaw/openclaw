@@ -19,6 +19,7 @@ import { buildApprovalPresentationFromActionDescriptors } from "openclaw/plugin-
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   isSlackAnyNativeApprovalClientEnabled,
   resolveSlackApprovalKind,
@@ -55,7 +56,7 @@ type SlackExecApprovalConfig = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>["execApprovals"]
 >;
 
-export type SlackApprovalHandlerContext = {
+type SlackApprovalHandlerContext = {
   app: App;
   config: SlackExecApprovalConfig;
 };
@@ -73,7 +74,14 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
 }
 
 function truncateSlackMrkdwn(text: string, maxChars: number): string {
-  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`;
+  const limit = Math.max(0, Math.floor(maxChars));
+  if (text.length <= limit) {
+    return text;
+  }
+  if (limit <= 1) {
+    return truncateUtf16Safe(text, limit);
+  }
+  return `${truncateUtf16Safe(text, limit - 1)}…`;
 }
 
 function buildSlackCodeBlock(text: string): string {

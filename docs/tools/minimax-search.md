@@ -30,9 +30,10 @@ snippets, and related queries.
 </Steps>
 
 OpenClaw also accepts `MINIMAX_CODING_API_KEY`, `MINIMAX_OAUTH_TOKEN`, and
-`MINIMAX_API_KEY` as env aliases. `MINIMAX_API_KEY` should point at a
-search-enabled Token Plan credential; ordinary MiniMax model API keys may not
-be accepted by the Token Plan search endpoint.
+`MINIMAX_API_KEY` as env aliases, checked in that order after
+`MINIMAX_CODE_PLAN_KEY`. `MINIMAX_API_KEY` should point at a search-enabled
+Token Plan credential; ordinary MiniMax model API keys may not be accepted by
+the Token Plan search endpoint.
 
 ## Config
 
@@ -89,10 +90,10 @@ can satisfy the MiniMax Search bearer credential.
 
 ## Supported parameters
 
-| Parameter | Type    | Constraints | Description                                                                 |
-| --------- | ------- | ----------- | --------------------------------------------------------------------------- |
-| `query`   | string  | required    | Search query string.                                                        |
-| `count`   | integer | 1-10        | Number of results to return. OpenClaw trims the returned list to this size. |
+| Parameter | Type    | Constraints     | Description                                                                 |
+| --------- | ------- | --------------- | --------------------------------------------------------------------------- |
+| `query`   | string  | required        | Search query string.                                                        |
+| `count`   | integer | 1-10, default 5 | Number of results to return. OpenClaw trims the returned list to this size. |
 
 Provider-specific filters are not currently supported.
 

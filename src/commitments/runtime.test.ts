@@ -398,4 +398,312 @@ describe("commitment extraction runtime", () => {
     );
     expect(processed).toBe(DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS);
   });
+
+  function mapBatchToCandidates({ items }: { items: CommitmentExtractionItem[] }) {
+    return {
+      candidates: items.map((item, index) => ({
+        itemId: item.itemId,
+        kind: "event_check_in" as const,
+        sensitivity: "routine" as const,
+        source: "inferred_user_context" as const,
+        reason: `Follow up ${index + 1}`,
+        suggestedText: `How did item ${index + 1} go?`,
+        dedupeKey: `event:${item.sourceMessageId ?? index}`,
+        confidence: 0.93,
+        dueWindow: {
+          earliest: "2026-04-30T17:00:00.000Z",
+          latest: "2026-04-30T23:00:00.000Z",
+          timezone: "America/Los_Angeles",
+        },
+      })),
+    };
+  }
+
+  it("restores and reprocesses a batch after a non-terminal extractor failure", async () => {
+    const cfg = await createConfig();
+    let attempts = 0;
+    const extractBatch = vi.fn(async (params: { items: CommitmentExtractionItem[] }) => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("transient extraction failure");
+      }
+      return mapBatchToCandidates(params);
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:user-1",
+        channel: "telegram",
+        sourceMessageId: "m1",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs: nowMs + 1,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:user-1",
+        channel: "telegram",
+        sourceMessageId: "m2",
+        userText: "I have a dentist appointment tomorrow.",
+        assistantText: "Hope it goes smoothly.",
+      }),
+    ).toBe(true);
+
+    // First drain: the extractor throws a non-terminal error and nothing persists.
+    await expect(drainCommitmentExtractionQueue()).rejects.toThrow("transient extraction failure");
+    expect(extractBatch).toHaveBeenCalledTimes(1);
+    const emptyStore = await loadCommitmentStore();
+    expect(emptyStore.commitments).toHaveLength(0);
+
+    // Retry: the restored batch is reprocessed once, in the same order, with no
+    // duplicate persistence or extraction.
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(2);
+    expect(extractBatch).toHaveBeenCalledTimes(2);
+
+    const firstCallIds = extractBatch.mock.calls[0]?.[0].items.map((item) => item.itemId);
+    const retryCallIds = extractBatch.mock.calls[1]?.[0].items.map((item) => item.itemId);
+    expect(retryCallIds).toEqual(firstCallIds);
+
+    const store = await loadCommitmentStore();
+    expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual([
+      "event:m1",
+      "event:m2",
+    ]);
+
+    // A third drain has nothing left to do: no duplicate reprocessing.
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(0);
+    expect(extractBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores a failed batch to the front, preserving order across batches", async () => {
+    const cfg = await createConfig();
+    const seenOrder: string[] = [];
+    let attempts = 0;
+    const extractBatch = vi.fn(async ({ items }: { items: CommitmentExtractionItem[] }) => {
+      attempts += 1;
+      if (attempts === 1) {
+        // Fail the first batch only; record nothing so order reflects success runs.
+        throw new Error("transient extraction failure");
+      }
+      for (const item of items) {
+        seenOrder.push(item.sourceMessageId ?? "");
+      }
+      return { candidates: [] };
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    // Enqueue more than one batch (batchMaxItems = 8) so the restored batch must
+    // land ahead of the tail rather than being appended.
+    const total = 10;
+    for (let index = 0; index < total; index += 1) {
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs: nowMs + index,
+          agentId: "main",
+          sessionKey: "agent:main:telegram:user-1",
+          channel: "telegram",
+          sourceMessageId: `m${index}`,
+          userText: `Commitment candidate ${index}`,
+          assistantText: "I will follow up.",
+        }),
+      ).toBe(true);
+    }
+
+    await expect(drainCommitmentExtractionQueue()).rejects.toThrow("transient extraction failure");
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(total);
+
+    const expectedOrder = Array.from({ length: total }, (_v, index) => `m${index}`);
+    expect(seenOrder).toEqual(expectedOrder);
+  });
+
+  it("keeps the existing drop/stop behavior on terminal extraction failures", async () => {
+    const cfg = await createConfig();
+    const extractBatch = vi.fn(async () => {
+      throw new Error('No API key found for provider "openai".');
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:user-1",
+        channel: "telegram",
+        sourceMessageId: "m1",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+
+    await expect(drainCommitmentExtractionQueue()).rejects.toThrow("No API key found");
+    expect(extractBatch).toHaveBeenCalledTimes(1);
+
+    // Terminal failures drop the agent's queued work; a retry must not reprocess
+    // the dropped batch.
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(0);
+    expect(extractBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules a retry when a non-terminal failure leaves the queue full", async () => {
+    const cfg = await createConfig();
+    const scheduled: Array<() => void> = [];
+    let attempts = 0;
+    const extractBatch = vi.fn(
+      async (_params: {
+        items: CommitmentExtractionItem[];
+      }): Promise<CommitmentExtractionBatchResult> => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error("transient extraction failure");
+        }
+        return { candidates: [] };
+      },
+    );
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: (callback) => {
+        scheduled.push(callback);
+        return { unref() {} } as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: () => undefined,
+    });
+
+    for (let index = 0; index < DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS; index += 1) {
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs: nowMs + index,
+          agentId: "main",
+          sessionKey: "agent:main:telegram:user-1",
+          channel: "telegram",
+          sourceMessageId: `m${index}`,
+          userText: `Commitment candidate ${index}`,
+          assistantText: "I will follow up.",
+        }),
+      ).toBe(true);
+    }
+    // The single-slot debounce schedules exactly one drain while filling.
+    expect(scheduled).toHaveLength(1);
+
+    // Fire the scheduled drain: the first batch fails (non-terminal) and is
+    // restored, leaving the queue full again with no pending timer.
+    scheduled[0]?.();
+    await vi.waitFor(() => {
+      expect(extractBatch).toHaveBeenCalledTimes(1);
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    // A new request is dropped because the queue is full, but the restored batch
+    // must still get a retry scheduled, otherwise it would be stuck forever.
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs: nowMs + DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:user-1",
+        channel: "telegram",
+        sourceMessageId: "overflow",
+        userText: "Overflow candidate",
+        assistantText: "I will follow up.",
+      }),
+    ).toBe(false);
+    expect(scheduled).toHaveLength(2);
+
+    // The drain is healthy after the failure: the full queue reprocesses cleanly.
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(
+      DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS,
+    );
+  });
+
+  it("re-arms the drain after a timer-fired non-terminal failure with no later enqueue", async () => {
+    const cfg = await createConfig();
+    const scheduled: Array<() => void> = [];
+    let attempts = 0;
+    const extractBatch = vi.fn(async (params: { items: CommitmentExtractionItem[] }) => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("transient extraction failure");
+      }
+      return mapBatchToCandidates(params);
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: (callback) => {
+        scheduled.push(callback);
+        return { unref() {} } as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:user-1",
+        channel: "telegram",
+        sourceMessageId: "m1",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+    // The enqueue schedules exactly one drain via the single-slot debounce.
+    expect(scheduled).toHaveLength(1);
+
+    // Fire the scheduled drain. The timer callback clears the pending timer first,
+    // then the extractor throws a non-terminal error and the batch is restored.
+    scheduled[0]?.();
+    await vi.waitFor(() => {
+      expect(extractBatch).toHaveBeenCalledTimes(1);
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    // Regression guard for the timer-fired-failure path: with no later enqueue to
+    // reschedule it, the restored batch must still have a fresh drain armed, or it
+    // would sit only in memory and be lost on process exit.
+    expect(scheduled).toHaveLength(2);
+
+    // Firing that re-armed drain reprocesses the same batch and persists it.
+    scheduled[1]?.();
+    await vi.waitFor(() => {
+      expect(extractBatch).toHaveBeenCalledTimes(2);
+    });
+    await vi.waitFor(async () => {
+      const store = await loadCommitmentStore();
+      expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual(["event:m1"]);
+    });
+
+    // The successful drain empties the queue, so no further retry is armed.
+    expect(scheduled).toHaveLength(2);
+  });
 });

@@ -15,6 +15,7 @@ import {
   createMattermostClient,
   createMattermostPost,
   normalizeMattermostBaseUrl,
+  readMattermostError,
   updateMattermostPost,
 } from "./client.js";
 
@@ -155,6 +156,38 @@ describe("normalizeMattermostBaseUrl", () => {
   });
 });
 
+// ── readMattermostError ───────────────────────────────────────────────
+
+describe("readMattermostError", () => {
+  it("bounds null-body JSON errors without response.json/text", async () => {
+    const response = new Response(null, {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+
+    await expect(readMattermostError(response)).resolves.toBe("");
+
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("parses bounded JSON error messages from response bodies", async () => {
+    const response = new Response(JSON.stringify({ message: "invalid token", id: "app.error" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+
+    await expect(readMattermostError(response)).resolves.toBe("invalid token");
+
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+});
+
 // ── createMattermostClient ───────────────────────────────────────────
 
 describe("createMattermostClient", () => {
@@ -170,6 +203,29 @@ describe("createMattermostClient", () => {
     await expect(client.request("/users/me")).resolves.toEqual({ id: "u1" });
 
     expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads guarded null-body Mattermost errors without response.json/text", async () => {
+    const release = vi.fn(async () => {});
+    const response = new Response(null, {
+      status: 503,
+      statusText: "Service Unavailable",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).rejects.toThrow(
+      "Mattermost API 503 Service Unavailable: unknown error",
+    );
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(textSpy).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -197,6 +253,68 @@ describe("createMattermostClient", () => {
     expect(caught?.message).toContain("upstream unavailable");
     expect(caught?.message).not.toContain("tail");
     expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds and cancels oversized guarded Mattermost success JSON bodies", async () => {
+    const release = vi.fn(async () => {});
+    let canceled = false;
+    let pulled = 0;
+    const oversizeChunk = new Uint8Array(2 * 1024 * 1024).fill(0x7b); // 2 MiB of '{'
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        // Flood far past the 16 MiB JSON cap; an unbounded reader would buffer
+        // the whole stream before parsing.
+        controller.enqueue(oversizeChunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    let caught: Error | undefined;
+    try {
+      await client.request("/users/me");
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("JSON response exceeds 16777216 bytes");
+    // The reader is cancelled at the cap instead of draining the flood: ~8
+    // chunks of 2 MiB reach the 16 MiB ceiling, never the unbounded tail.
+    expect(canceled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(12);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects oversized guarded Mattermost success text bodies instead of truncating", async () => {
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedResponse(`${"plain success ".repeat(7000)}tail`, {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response: tracked.response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).rejects.toThrow(
+      "Mattermost API /users/me: text response exceeds 65536 bytes",
+    );
     expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
   });

@@ -9,9 +9,13 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
-import { resolveLmstudioInferenceBase } from "./models.js";
+import {
+  normalizeLmstudioConfiguredCatalogEntries,
+  resolveLmstudioInferenceBase,
+} from "./models.js";
 import {
   buildLmstudioAuthHeaders,
   resolveLmstudioProviderHeaders,
@@ -63,6 +67,31 @@ async function resolveLmstudioApiKey(
     }
     throw error;
   }
+}
+
+function resolveEmbeddingPreloadContextLength(params: {
+  model: string;
+  models: unknown;
+  providerContextTokens: unknown;
+  providerContextWindow: unknown;
+}): number | undefined {
+  const configuredModel = normalizeLmstudioConfiguredCatalogEntries(params.models).find(
+    (entry) => normalizeLmstudioModel(entry.id) === params.model,
+  );
+  if (configuredModel?.contextTokens !== undefined) {
+    return configuredModel.contextTokens;
+  }
+  // Provider contextTokens is the model default, so it caps an explicit model
+  // window only when that model did not declare its own effective token cap.
+  const providerContextTokens = asPositiveSafeInteger(params.providerContextTokens);
+  if (configuredModel?.contextWindow !== undefined && providerContextTokens !== undefined) {
+    return Math.min(configuredModel.contextWindow, providerContextTokens);
+  }
+  return (
+    providerContextTokens ??
+    configuredModel?.contextWindow ??
+    asPositiveSafeInteger(params.providerContextWindow)
+  );
 }
 
 /** Creates the LM Studio embedding provider client and preloads the target model before return. */
@@ -119,6 +148,12 @@ export async function createLmstudioEmbeddingProvider(
     headers,
     ssrfPolicy,
   };
+  const requestedContextLength = resolveEmbeddingPreloadContextLength({
+    model,
+    models: providerConfig?.models,
+    providerContextTokens: providerConfig?.contextTokens,
+    providerContextWindow: providerConfig?.contextWindow,
+  });
 
   try {
     await ensureLmstudioModelLoaded({
@@ -127,6 +162,7 @@ export async function createLmstudioEmbeddingProvider(
       headers: headerOverrides,
       ssrfPolicy,
       modelKey: model,
+      requestedContextLength,
       timeoutMs: 120_000,
     });
   } catch (error) {

@@ -120,6 +120,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
           agentId,
           channel: CHANNEL_ID,
           accountId,
+          recipientSessionExact: parsed.kind === "dm",
           peer: {
             kind: parsed.chatType === "direct" ? "direct" : "channel",
             id: buildClickClackTarget(parsed),
@@ -133,6 +134,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
           replyToId,
           threadId: threadId ?? (parsed.kind === "thread" ? parsed.id : undefined),
           currentSessionKey,
+          useSuffix: false,
           canRecoverCurrentThread: () => true,
         });
       },

@@ -184,6 +184,28 @@ describe("evaluateChannelHealth", () => {
     });
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
+
+  it.each([
+    {
+      name: "distinguishes a stopped terminal channel",
+      snapshot: { running: false, terminalDisconnect: true },
+      expected: { healthy: false, reason: "terminal-disconnect" },
+    },
+    {
+      name: "keeps ordinary stopped channels restartable",
+      snapshot: { running: false, terminalDisconnect: false },
+      expected: { healthy: false, reason: "not-running" },
+    },
+    {
+      name: "ignores stale terminal state while running",
+      snapshot: { running: true, connected: true, terminalDisconnect: true },
+      expected: { healthy: true, reason: "healthy" },
+    },
+  ] as const)("$name", ({ snapshot, expected }) => {
+    expect(
+      evaluateHealth({ enabled: true, configured: true, ...snapshot }, { channelId: "whatsapp" }),
+    ).toEqual(expected);
+  });
 });
 
 describe("resolveChannelRestartReason", () => {

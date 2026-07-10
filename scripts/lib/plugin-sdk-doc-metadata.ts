@@ -108,6 +108,9 @@ export const pluginSdkDocMetadata = {
   "message-tool-delivery-hints": {
     category: "runtime",
   },
+  "tool-results": {
+    category: "utilities",
+  },
   "provider-selection-runtime": {
     category: "provider",
   },
@@ -115,6 +118,9 @@ export const pluginSdkDocMetadata = {
     category: "provider",
   },
   "runtime-store": {
+    category: "runtime",
+  },
+  "session-store-runtime": {
     category: "runtime",
   },
   "session-transcript-runtime": {

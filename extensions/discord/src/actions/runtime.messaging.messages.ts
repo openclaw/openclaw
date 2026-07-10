@@ -250,8 +250,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       if (!results || typeof results !== "object") {
         return jsonResult({ ok: true, results });
       }
-      const resultsRecord = results as Record<string, unknown>;
-      const messages = resultsRecord.messages;
+      const messages = results.messages;
       const normalizedMessages = Array.isArray(messages)
         ? messages.map((group) =>
             Array.isArray(group) ? group.map((msg) => ctx.normalizeMessage(msg)) : group,
@@ -260,7 +259,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       return jsonResult({
         ok: true,
         results: {
-          ...resultsRecord,
+          ...results,
           messages: normalizedMessages,
         },
       });

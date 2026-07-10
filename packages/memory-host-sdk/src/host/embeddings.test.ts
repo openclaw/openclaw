@@ -36,7 +36,9 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function mockLocalEmbeddingRuntime(vector = new Float32Array([2.35, 3.45, 0.63, 4.3])) {
+function mockLocalEmbeddingRuntime(
+  vector: ArrayLike<number> = new Float32Array([2.35, 3.45, 0.63, 4.3]),
+) {
   const disposeContext = vi.fn();
   const disposeModel = vi.fn();
   const disposeLlama = vi.fn();
@@ -109,6 +111,26 @@ describe("local embedding provider", () => {
 
     await expect(provider.embedQuery("test query")).resolves.toEqual([0.6, 0.8]);
     await expect(provider.embedBatch(["test document"])).resolves.toEqual([[0.6, 0.8]]);
+  });
+
+  it("does not read local embedding coordinates past outputDimensionality", async () => {
+    mockLocalEmbeddingRuntime({
+      length: 3,
+      0: 3,
+      1: 4,
+      get 2(): number {
+        throw new Error("tail coordinate should not be read");
+      },
+    });
+    const provider = await createLocalEmbeddingProviderInProcess({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      outputDimensionality: 2,
+    });
+
+    await expect(provider.embedQuery("test query")).resolves.toEqual([0.6, 0.8]);
   });
 
   it("passes default contextSize (4096) to createEmbeddingContext when not configured", async () => {
@@ -419,7 +441,7 @@ process.on("message", (message) => {
     await expect(provider.close?.()).resolves.toBeUndefined();
   });
 
-  it("terminates the worker when close runs behind a pending request", async () => {
+  it("rejects pending and queued requests when closing a busy worker", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
     const workerScript = path.join(tempDir, "worker.cjs");
     const embedStartedPath = path.join(tempDir, "embed-started");
@@ -456,8 +478,7 @@ process.on("message", (message) => {
       { workerScriptPath: workerScript },
     );
 
-    const embedPromise = provider.embedQuery("stuck");
-    const embedError = embedPromise.then(
+    const firstEmbedError = provider.embedQuery("first").then(
       () => undefined,
       (err: unknown) => err,
     );
@@ -472,6 +493,16 @@ process.on("message", (message) => {
       })
       .toBe(true);
 
+    const queuedEmbedResult = Promise.race([
+      provider.embedQuery("queued").then(
+        () => "resolved" as const,
+        (err: unknown) => err,
+      ),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 1_000);
+      }),
+    ]);
+
     const closePromise = provider.close?.() ?? Promise.resolve();
     const closeResult = await Promise.race([
       closePromise.then(() => "closed" as const),
@@ -481,7 +512,10 @@ process.on("message", (message) => {
     ]);
 
     expect(closeResult).toBe("closed");
-    await expect(embedError).resolves.toMatchObject({
+    await expect(firstEmbedError).resolves.toMatchObject({
+      code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    });
+    await expect(queuedEmbedResult).resolves.toMatchObject({
       code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
     });
   });

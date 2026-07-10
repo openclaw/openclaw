@@ -7,6 +7,20 @@ import {
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
+const slashCommandMenuMocks = vi.hoisted(() => ({
+  resolveCommandArgMenu: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
+  return {
+    ...actual,
+    loadModelCatalog: vi.fn(async () => []),
+  };
+});
+
 vi.mock("./slash-commands.runtime.js", () => {
   const usageCommand = { key: "usage", nativeName: "usage" };
   const reportCommand = { key: "report", nativeName: "report" };
@@ -19,6 +33,19 @@ vi.mock("./slash-commands.runtime.js", () => {
   const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
   const longConfirmCommand = { key: "longconfirm", nativeName: "longconfirm" };
   const statusAliasCommand = { key: "status", nativeName: "status" };
+  const thinkCommand = {
+    key: "think",
+    nativeName: "think",
+    argsMenu: "auto",
+    args: [
+      {
+        name: "level",
+        description: "Thinking level",
+        type: "string",
+        choices: () => ["max"],
+      },
+    ],
+  };
   const periodArg = { name: "period", description: "period" };
   const baseReportPeriodChoices = [
     { value: "day", label: "day" },
@@ -99,6 +126,9 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (normalized === "agentstatus") {
         return statusAliasCommand;
       }
+      if (normalized === "think") {
+        return thinkCommand;
+      }
       return undefined;
     },
     listNativeCommandSpecsForConfig: () => [
@@ -168,12 +198,26 @@ vi.mock("./slash-commands.runtime.js", () => {
         acceptsArgs: false,
         args: [],
       },
+      {
+        name: "think",
+        description: "Thinking",
+        acceptsArgs: true,
+        args: thinkCommand.args,
+      },
     ],
     parseCommandArgs: () => ({ values: {} }),
     resolveCommandArgMenu: (params: {
       command?: { key?: string };
       args?: { values?: unknown };
+      agentRuntime?: string;
     }) => {
+      slashCommandMenuMocks.resolveCommandArgMenu(params);
+      if (params.command?.key === "think") {
+        return {
+          arg: thinkCommand.args[0]!,
+          choices: [{ value: "max", label: "max" }],
+        };
+      }
       if (params.command?.key === "report") {
         return resolvePeriodMenu(params, [
           ...fullReportPeriodChoices,
@@ -215,10 +259,15 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (params.command?.key === "reportexternal") {
         return {
           arg: { name: "period", description: "period" },
-          choices: Array.from({ length: 140 }, (_v, i) => ({
-            value: `period-${i + 1}`,
-            label: `Period ${i + 1}`,
-          })),
+          choices: [
+            ...Array.from({ length: 140 }, (_v, i) => ({
+              value: `period-${i + 1}`,
+              label: `Period ${i + 1}`,
+            })),
+            // Label whose emoji surrogate pair straddles the 75-char plain_text
+            // limit, to cover surrogate-safe truncation in served options.
+            { value: "emoji-overflow", label: `${"a".repeat(74)}😀 emojioverflow` },
+          ],
         };
       }
       if (params.command?.key === "unsafeconfirm") {
@@ -267,6 +316,7 @@ const { dispatchMock } = getSlackSlashMocks();
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
   resetSlackSlashMocks();
+  slashCommandMenuMocks.resolveCommandArgMenu.mockClear();
 });
 
 afterEach(() => {
@@ -308,7 +358,9 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
-function createArgMenusHarness() {
+function createArgMenusHarness(
+  cfg: OpenClawConfig = { commands: { native: true, nativeSkills: false } },
+) {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
   const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const options = new Map<string, (args: unknown) => Promise<void>>();
@@ -330,7 +382,7 @@ function createArgMenusHarness() {
   };
 
   const ctx = {
-    cfg: { commands: { native: true, nativeSkills: false } },
+    cfg,
     runtime: {},
     botToken: "bot-token",
     botUserId: "bot",
@@ -594,6 +646,32 @@ describe("Slack native command argument menus", () => {
     expect(testHarness.options.has("openclaw_cmdarg")).toBe(true);
     expect(testHarness.optionsReceiverContexts[0]).toBe(testHarness.app);
   });
+
+  it.each(["codex", "openclaw"] as const)(
+    "passes the configured %s runtime to dynamic /think choices",
+    async (agentRuntime) => {
+      const testHarness = createArgMenusHarness({
+        commands: { native: true, nativeSkills: false },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-luna" },
+            models: {
+              "openai/gpt-5.6-luna": { agentRuntime: { id: agentRuntime } },
+            },
+          },
+        },
+      });
+      await registerCommands(testHarness.ctx, testHarness.account);
+      const handler = requireHandler(testHarness.commands, "/think", "/think");
+
+      await runCommandHandler(handler);
+
+      const menuCall = slashCommandMenuMocks.resolveCommandArgMenu.mock.calls.find(
+        ([params]) => (params as { command?: { key?: string } }).command?.key === "think",
+      )?.[0] as { agentRuntime?: string } | undefined;
+      expect(menuCall?.agentRuntime).toBe(agentRuntime);
+    },
+  );
 
   it("falls back to static menus when app.options() throws during registration", async () => {
     const commands = new Map<string, (args: unknown) => Promise<void>>();
@@ -870,6 +948,37 @@ describe("Slack native command argument menus", () => {
     };
     const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
     expect(optionTexts.join("\n")).toContain("Period 12");
+  });
+
+  it("truncates served option labels on a surrogate boundary", async () => {
+    const { blockId } = await runCommandAndResolveActionsBlock(reportExternalHandler);
+    expect(blockId).toContain("openclaw_cmdarg_ext:");
+
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+    await argMenuOptionsHandler({
+      ack: ackOptions,
+      body: {
+        user: { id: "U1" },
+        value: "emojioverflow",
+        actions: [{ block_id: blockId }],
+      },
+    });
+
+    const optionsPayload = firstCallPayload(ackOptions, "options ack") as {
+      options?: Array<{ text?: { text?: string }; value?: string }>;
+    };
+    // The "emojioverflow" query matches only the long emoji label, so exactly one
+    // option is served.
+    const served = optionsPayload.options ?? [];
+    expect(served).toHaveLength(1);
+    const text = served[0]?.text?.text ?? "";
+    // Plain_text option labels are capped at 75 chars and must not end on a lone
+    // surrogate half, which Slack rejects. The label was long enough to truncate.
+    expect(text.length).toBeGreaterThan(0);
+    expect(text.length).toBeLessThanOrEqual(75);
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text),
+    ).toBe(false);
   });
 
   it("tracks accepted external_select option requests", async () => {

@@ -11,6 +11,7 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
+type ExecAutoReviewDecision = Awaited<ReturnType<ExecAutoReviewer>>;
 type ExecAsk = import("../infra/exec-approvals.js").ExecAsk;
 type ExecSecurity = import("../infra/exec-approvals.js").ExecSecurity;
 type MockAllowAlwaysPersistenceInput = Parameters<
@@ -190,7 +191,9 @@ const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   ),
 );
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const sendExecApprovalFollowupResultMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
+  vi.fn(async (_target: unknown, _resultText: string) => undefined),
+);
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
   vi.fn<StrictInlineEvalBoundary>((value) => ({
     approvedByAsk: value.approvedByAsk,
@@ -630,6 +633,69 @@ describe("executeNodeHostCommand", () => {
     expect(runParams.turnSourceThreadId).toBe("42");
   });
 
+  it("keeps async node approval follow-up output on a UTF-16 boundary", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    const prefix = "a".repeat(50);
+    const tailHead = "b".repeat(999);
+    const stdout = `${prefix}🎉${tailHead}`;
+    callGatewayToolMock.mockImplementation(
+      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method === "exec.approvals.node.get") {
+          return { file: { version: 1, agents: {} } };
+        }
+        if (method !== "node.invoke") {
+          throw new Error(`unexpected gateway method: ${method}`);
+        }
+        if (params?.command === "system.run.prepare") {
+          return { payload: { plan: preparedPlan } };
+        }
+        if (params?.command === "system.run") {
+          return {
+            payload: {
+              success: true,
+              stdout,
+              stderr: "",
+              exitCode: 0,
+              timedOut: false,
+            },
+          };
+        }
+        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+      },
+    );
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
+    });
+    const message = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1];
+    if (typeof message !== "string") {
+      throw new Error("expected follow-up message");
+    }
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(message).not.toMatch(loneSurrogate);
+    expect(message).not.toContain("�");
+    expect(message).toContain(`Exec finished (node=node-1 id=approval-1, code 0)\n${tailHead}`);
+  });
+
   it("does not build a human approval prompt for node auto-review allows", async () => {
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
       decision: "allow-once",
@@ -685,6 +751,51 @@ describe("executeNodeHostCommand", () => {
       { id: expect.any(String), decision: "allow-once" },
       { scopes: ["operator.approvals"] },
     );
+  });
+
+  it("does not invoke the node after cancellation wins during auto-review", async () => {
+    let resolveReview: ((decision: Awaited<ReturnType<ExecAutoReviewer>>) => void) | undefined;
+    const autoReviewer = vi.fn<ExecAutoReviewer>(
+      () =>
+        new Promise((resolve) => {
+          resolveReview = resolve;
+        }),
+    );
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+    requiresExecApprovalMock.mockImplementation(
+      (params?: { allowlistSatisfied?: boolean; durableApprovalSatisfied?: boolean }) =>
+        params?.allowlistSatisfied !== true && params?.durableApprovalSatisfied !== true,
+    );
+    const abortController = new AbortController();
+    const result = executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "on-miss",
+      autoReview: true,
+      autoReviewer,
+      signal: abortController.signal,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+    await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledTimes(1));
+    const gatewayCallsBeforeResolution = callGatewayToolMock.mock.calls.length;
+
+    abortController.abort(new Error("cancelled during review"));
+    resolveReview?.({ decision: "allow-once", risk: "low", rationale: "allowed" });
+
+    await expect(result).rejects.toThrow("cancelled during review");
+    expect(callGatewayToolMock.mock.calls).toHaveLength(gatewayCallsBeforeResolution);
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
 
   it("reviews the prepared node plan before suppressing human approval", async () => {
@@ -1980,12 +2091,20 @@ describe("executeNodeHostCommand", () => {
     ).toBe(false);
   });
 
-  it("does not use fallback-full when node auto-review asks for human approval", async () => {
-    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-      decision: "ask",
-      risk: "medium",
-      rationale: "needs a person",
-    }));
+  it.each([
+    {
+      name: "asks for human approval",
+      decision: { decision: "ask", risk: "medium", rationale: "needs a person" },
+    },
+    {
+      name: "returns a non-low allow decision",
+      decision: { decision: "allow-once", risk: "high", rationale: "risk too high" },
+    },
+  ] as const)("does not use fallback-full when node auto-review $name", async ({ decision }) => {
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => {
+      // Exercise the runtime boundary against a contradictory custom reviewer response.
+      return decision as unknown as ExecAutoReviewDecision;
+    });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: "allowlist",
@@ -2004,6 +2123,7 @@ describe("executeNodeHostCommand", () => {
         : { approvedByAsk: value.approvedByAsk, deniedReason: value.deniedReason },
     );
 
+    const warnings: string[] = [];
     const result = await executeNodeHostCommand({
       command: "bun ./script.ts",
       workdir: "/tmp/work",
@@ -2014,12 +2134,13 @@ describe("executeNodeHostCommand", () => {
       autoReviewer,
       defaultTimeoutSec: 30,
       approvalRunningNoticeMs: 0,
-      warnings: [],
+      warnings,
       agentId: "requested-agent",
       sessionKey: "requested-session",
     });
 
     expect(result.details?.status).toBe("approval-pending");
+    expect(warnings.join("\n")).toContain(decision.rationale);
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -2082,7 +2203,7 @@ describe("executeNodeHostCommand", () => {
       const call = requireGatewayCommand("system.run");
       expect(call.callOptions).toEqual({ scopes: ["operator.write", "operator.approvals"] });
       const runParams = requireRunParams(call);
-      expect(runParams.rawCommand).toBe(expectedPlan.commandText);
+      expect(runParams.rawCommand).toBe(expectedPlan.commandPreview);
       expect(runParams.systemRunPlan).toEqual(expectedPlan);
     });
   });

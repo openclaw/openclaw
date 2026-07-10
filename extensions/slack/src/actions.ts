@@ -7,11 +7,18 @@ import { z } from "zod";
 import { resolveSlackAccount } from "./accounts.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
+import {
+  appendSlackDataVisualizationFallbackText,
+  hasSlackDataVisualizationBlock,
+  isSlackInvalidBlocksError,
+} from "./data-visualization.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
+import { truncateSlackText } from "./truncate.js";
 
 export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
@@ -71,12 +78,70 @@ function resolveToken(explicit?: string, accountId?: string, cfg?: OpenClawConfi
   return token;
 }
 
-function normalizeEmoji(raw: string) {
+const SLACK_EMOJI_SKIN_TONE_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/u;
+const SLACK_EMOJI_VARIATION_SELECTOR_RE = /[\uFE0E\uFE0F]/g;
+const SLACK_EMOJI_SKIN_TONE_BY_MODIFIER = new Map([
+  ["🏻", 2],
+  ["🏼", 3],
+  ["🏽", 4],
+  ["🏾", 5],
+  ["🏿", 6],
+]);
+
+// Slack's reactions.add/remove accept only shortcode names, never a raw
+// Unicode glyph. Models keep passing the glyph because the `emoji` param
+// reads as "an emoji"; map the common ones so the reaction is not silently
+// dropped. Unknown glyphs still pass through unchanged (no regression).
+const SLACK_EMOJI_SHORTNAME_BY_GLYPH: Record<string, string> = {
+  "✅": "white_check_mark",
+  "❌": "x",
+  "👍": "thumbsup",
+  "👎": "thumbsdown",
+  "🎉": "tada",
+  "❤": "heart",
+  "😄": "smile",
+  "😂": "joy",
+  "🚀": "rocket",
+  "👀": "eyes",
+  "🙏": "pray",
+  "🔥": "fire",
+  "💯": "100",
+  "⚠": "warning",
+  "➕": "heavy_plus_sign",
+  "➖": "heavy_minus_sign",
+  "🤔": "thinking_face",
+  "👨‍💻": "male-technologist",
+  "👨💻": "male-technologist",
+  "👩‍💻": "female-technologist",
+  "⚡": "zap",
+  "🌐": "globe_with_meridians",
+  "😱": "scream",
+  "🥱": "yawning_face",
+  "😨": "fearful",
+  "⏳": "hourglass_flowing_sand",
+  "✍": "writing_hand",
+  "🗜": "compression",
+  "🧠": "brain",
+  "🛠": "hammer_and_wrench",
+  "💻": "computer",
+};
+
+function normalizeSlackEmojiName(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Emoji is required for Slack reactions");
   }
-  return trimmed.replace(/^:+|:+$/g, "");
+  const withoutColons = trimmed.replace(/^:+|:+$/g, "");
+  const modifier = withoutColons.match(SLACK_EMOJI_SKIN_TONE_MODIFIER_RE)?.[0];
+  const glyphKey = withoutColons
+    .replace(SLACK_EMOJI_SKIN_TONE_MODIFIER_RE, "")
+    .replace(SLACK_EMOJI_VARIATION_SELECTOR_RE, "");
+  const shortname = SLACK_EMOJI_SHORTNAME_BY_GLYPH[glyphKey];
+  const skinTone = modifier ? SLACK_EMOJI_SKIN_TONE_BY_MODIFIER.get(modifier) : undefined;
+  if (!shortname || !skinTone) {
+    return shortname ?? withoutColons;
+  }
+  return `${shortname}::skin-tone-${skinTone}`;
 }
 
 const SLACK_TIMESTAMP_RE = /^\d+(?:\.\d+)?$/;
@@ -153,7 +218,7 @@ export async function reactSlackMessage(
     await client.reactions.add({
       channel: channelId,
       timestamp: messageId,
-      name: normalizeEmoji(emoji),
+      name: normalizeSlackEmojiName(emoji),
     });
   } catch (err) {
     if (hasSlackPlatformError(err, "already_reacted")) {
@@ -174,7 +239,7 @@ export async function removeSlackReaction(
     await client.reactions.remove({
       channel: channelId,
       timestamp: messageId,
-      name: normalizeEmoji(emoji),
+      name: normalizeSlackEmojiName(emoji),
     });
   } catch (err) {
     if (hasSlackPlatformError(err, "no_reaction")) {
@@ -276,12 +341,35 @@ export async function editSlackMessage(
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
-  await client.chat.update({
+  const editText = buildSlackEditTextPayload(content, blocks);
+  const text = hasSlackDataVisualizationBlock(blocks)
+    ? truncateSlackText(
+        appendSlackDataVisualizationFallbackText(editText, blocks),
+        SLACK_TEXT_LIMIT,
+      )
+    : editText;
+  const update = {
     channel: channelId,
     ts: messageId,
-    text: buildSlackEditTextPayload(content, blocks),
+    text,
     ...(blocks ? { blocks } : {}),
-  });
+  };
+  try {
+    await client.chat.update(update);
+  } catch (error) {
+    if (!hasSlackDataVisualizationBlock(blocks) || !isSlackInvalidBlocksError(error)) {
+      throw error;
+    }
+    logVerbose("slack edit: data visualization rejected, retrying with text fallback");
+    await client.chat.update({
+      channel: channelId,
+      ts: messageId,
+      text: truncateSlackText(
+        appendSlackDataVisualizationFallbackText(text, blocks),
+        SLACK_TEXT_LIMIT,
+      ),
+    });
+  }
 }
 
 export async function deleteSlackMessage(
@@ -294,6 +382,15 @@ export async function deleteSlackMessage(
     channel: channelId,
     ts: messageId,
   });
+}
+
+export async function resolveSlackConversationName(
+  channelId: string,
+  opts: SlackActionClientOpts = {},
+): Promise<string | undefined> {
+  const client = await getClient(opts, "read");
+  const info = await client.conversations.info({ channel: channelId });
+  return info.channel?.name?.trim() || undefined;
 }
 
 export async function readSlackMessages(

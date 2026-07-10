@@ -6,17 +6,17 @@ counts:
 rollups:
   surface_average:
     quality:
-      score: 63
-      label: Alpha
-    completeness:
-      score: 70
-      label: Beta
-  category_average:
-    quality:
       score: 64
       label: Alpha
     completeness:
       score: 71
+      label: Beta
+  category_average:
+    quality:
+      score: 66
+      label: Alpha
+    completeness:
+      score: 72
       label: Beta
 surfaces:
   - id: gateway-runtime
@@ -2168,16 +2168,16 @@ surfaces:
     name: Android app
     family: platform-app
     level:
-      id: alpha
-      code: M2
-      label: Alpha
+      id: stable
+      code: M4
+      label: Stable
     scores:
       quality:
-        score: 59
-        label: Alpha
+        score: 80
+        label: Stable
       completeness:
-        score: 66
-        label: Alpha
+        score: 80
+        label: Stable
     lts:
       status: none
       supported_categories: 0
@@ -2191,77 +2191,77 @@ surfaces:
     categories:
       - name: Media Capture
         quality:
-          score: 59
-          label: Alpha
+          score: 80
+          label: Stable
         completeness:
-          score: 66
-          label: Alpha
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Mobile Chat
         quality:
-          score: 59
-          label: Alpha
+          score: 80
+          label: Stable
         completeness:
-          score: 66
-          label: Alpha
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Connection Setup
         quality:
-          score: 59
-          label: Alpha
+          score: 80
+          label: Stable
         completeness:
-          score: 66
-          label: Alpha
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Distribution
         quality:
-          score: 59
-          label: Alpha
+          score: 80
+          label: Stable
         completeness:
-          score: 66
-          label: Alpha
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Settings
         quality:
-          score: 59
-          label: Alpha
+          score: 80
+          label: Stable
         completeness:
-          score: 66
-          label: Alpha
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Voice
         quality:
-          score: 59
-          label: Alpha
+          score: 80
+          label: Stable
         completeness:
-          score: 66
-          label: Alpha
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Device Runtime
         quality:
-          score: 59
-          label: Alpha
+          score: 80
+          label: Stable
         completeness:
-          score: 66
-          label: Alpha
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
@@ -2270,16 +2270,16 @@ surfaces:
     name: iOS app
     family: platform-app
     level:
-      id: experimental
-      code: M1
-      label: Experimental
+      id: stable
+      code: M4
+      label: Stable
     scores:
       quality:
-        score: 41
-        label: Experimental
+        score: 80
+        label: Stable
       completeness:
-        score: 44
-        label: Experimental
+        score: 80
+        label: Stable
     lts:
       status: none
       supported_categories: 0
@@ -2293,88 +2293,88 @@ surfaces:
     categories:
       - name: Media and Sharing
         quality:
-          score: 41
-          label: Experimental
+          score: 80
+          label: Stable
         completeness:
-          score: 44
-          label: Experimental
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Canvas and Screen
         quality:
-          score: 41
-          label: Experimental
+          score: 80
+          label: Stable
         completeness:
-          score: 44
-          label: Experimental
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Chat and Sessions
         quality:
-          score: 41
-          label: Experimental
+          score: 80
+          label: Stable
         completeness:
-          score: 44
-          label: Experimental
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Gateway Setup and Diagnostics
         quality:
-          score: 41
-          label: Experimental
+          score: 80
+          label: Stable
         completeness:
-          score: 44
-          label: Experimental
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Distribution
         quality:
-          score: 41
-          label: Experimental
+          score: 80
+          label: Stable
         completeness:
-          score: 44
-          label: Experimental
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Device Commands
         quality:
-          score: 41
-          label: Experimental
+          score: 80
+          label: Stable
         completeness:
-          score: 44
-          label: Experimental
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Notifications and Background
         quality:
-          score: 41
-          label: Experimental
+          score: 80
+          label: Stable
         completeness:
-          score: 44
-          label: Experimental
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Voice
         quality:
-          score: 41
-          label: Experimental
+          score: 80
+          label: Stable
         completeness:
-          score: 44
-          label: Experimental
+          score: 80
+          label: Stable
         lts:
           supported: false
           reason: none

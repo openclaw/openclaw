@@ -15,6 +15,54 @@ type SessionLifecycleEntry = Pick<
   "sessionId" | "sessionFile" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
 >;
 
+type SessionWorkStartEntry = Pick<SessionEntry, "archivedAt" | "sessionId">;
+
+type SessionWorkStartOptions = {
+  expectedSessionId?: string;
+};
+
+/** Stable Gateway error detail for stale session lifecycle requests. */
+export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
+export const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
+
+export class SessionWorkStartInvalidatedError extends Error {
+  readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionWorkStartInvalidatedError";
+  }
+}
+
+export function isSessionWorkStartInvalidatedError(
+  error: unknown,
+): error is SessionWorkStartInvalidatedError {
+  return (
+    error instanceof SessionWorkStartInvalidatedError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE)
+  );
+}
+
+/** Archived sessions are read-only until the lifecycle owner restores them. */
+export function resolveSessionWorkStartError(
+  sessionKey: string,
+  entry: SessionWorkStartEntry | null | undefined,
+  options?: SessionWorkStartOptions,
+): string | undefined {
+  if (options?.expectedSessionId && !entry) {
+    return `Session "${sessionKey}" was deleted while starting work. Retry.`;
+  }
+  if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
+    return `Session "${sessionKey}" changed while starting work. Retry.`;
+  }
+  return entry?.archivedAt === undefined
+    ? undefined
+    : `Session "${sessionKey}" is archived. Restore it before starting new work.`;
+}
+
 // Transcript headers are read lazily to recover startedAt without parsing full files.
 
 type TerminalMainSessionTranscriptRegistryParams = {
@@ -73,7 +121,7 @@ function readFirstLine(filePath: string): string | undefined {
 }
 
 /** Reads session start time from a transcript header when store metadata is missing. */
-export function readSessionHeaderStartedAtMs(params: {
+function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
   storePath?: string;
@@ -163,6 +211,11 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
     isTerminalSessionStatus(params.entry.status) ||
     resolvePositiveTimestamp(params.entry.endedAt) !== undefined;
   if (!hasTerminalLifecycle) {
+    return undefined;
+  }
+  if (params.entry.status === "done") {
+    // Successful rows stay reusable: transcript writes can land after registry
+    // updates without making the session stale.
     return undefined;
   }
   if (params.entry.status === "failed") {

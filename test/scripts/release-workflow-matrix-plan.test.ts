@@ -14,6 +14,20 @@ const PROFILE_GATED_STATIC_MATRIX_ALLOWLIST = [
   "validate_live_media_provider_suites",
 ];
 
+// Direct dispatches build from the selected ref. Only trusted workflow callers
+// may provide the complete immutable package artifact tuple.
+const WORKFLOW_CALL_ONLY_INPUTS = new Set([
+  "package_artifact_name",
+  "package_artifact_id",
+  "package_artifact_digest",
+  "package_artifact_run_id",
+  "package_artifact_run_attempt",
+  "package_file_name",
+  "package_source_sha",
+  "package_sha256",
+  "package_version",
+]);
+
 const PROFILE_EXPECTATIONS = [
   {
     profile: "minimum",
@@ -89,6 +103,37 @@ function staticProfileMatrixJobs() {
 }
 
 describe("scripts/plan-release-workflow-matrix.mjs", () => {
+  it("declares every job input for both workflow entry points", () => {
+    const definition = workflow();
+    const referencedInputs = new Set<string>();
+    for (const match of JSON.stringify(definition.jobs).matchAll(/\binputs\.([a-zA-Z0-9_]+)/gu)) {
+      if (match[1]) {
+        referencedInputs.add(match[1]);
+      }
+    }
+
+    expect(Object.keys(definition.on.workflow_call.inputs)).toEqual(
+      expect.arrayContaining([...referencedInputs]),
+    );
+    expect(Object.keys(definition.on.workflow_dispatch.inputs)).toEqual(
+      expect.arrayContaining(
+        [...referencedInputs].filter((input) => !WORKFLOW_CALL_ONLY_INPUTS.has(input)),
+      ),
+    );
+    for (const input of WORKFLOW_CALL_ONLY_INPUTS) {
+      expect(definition.on.workflow_call.inputs).toHaveProperty(input);
+      expect(definition.on.workflow_dispatch.inputs).not.toHaveProperty(input);
+    }
+    expect(definition.on.workflow_dispatch.inputs.live_advisory).toEqual(
+      definition.on.workflow_call.inputs.live_advisory,
+    );
+    expect(definition.on.workflow_dispatch.inputs.live_advisory).toMatchObject({
+      default: false,
+      required: false,
+      type: "boolean",
+    });
+  });
+
   it.each(PROFILE_EXPECTATIONS)(
     "keeps $profile release jobs to profile-enabled Docker E2E chunks and live model providers",
     ({ profile, dockerE2eChunks, liveModelProviders }) => {
@@ -154,6 +199,40 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       max_models: "2",
       profiles: "stable full",
     });
+  });
+
+  it("keeps stable Anthropic Docker proof blocking and full proof advisory", () => {
+    const jobs = workflow().jobs;
+    const dockerLiveJob = jobs.validate_live_docker_provider_suites;
+    const anthropicEntries = dockerLiveJob.strategy.matrix.include
+      .filter((entry) => entry.suite_group === "live-gateway-anthropic-docker")
+      .map((entry) => ({
+        advisory: entry.advisory,
+        profiles: entry.profiles,
+        suiteId: entry.suite_id,
+      }));
+
+    expect(anthropicEntries).toEqual([
+      {
+        advisory: undefined,
+        profiles: "stable",
+        suiteId: "live-gateway-anthropic-docker",
+      },
+      {
+        advisory: true,
+        profiles: "full",
+        suiteId: "live-gateway-anthropic-docker-full",
+      },
+    ]);
+    expect(dockerLiveJob.strategy.matrix.include).toContainEqual(
+      expect.objectContaining({ suite_id: "live-gateway-anthropic-docker-full" }),
+    );
+
+    const conditionalSteps = dockerLiveJob.steps.filter((step) => step.if);
+    expect(conditionalSteps.length).toBeGreaterThan(0);
+    for (const step of conditionalSteps) {
+      expect(step.if).toContain("inputs.live_suite_filter == matrix.suite_group");
+    }
   });
 
   it("disables live model planning when focused recovery targets another live suite", () => {

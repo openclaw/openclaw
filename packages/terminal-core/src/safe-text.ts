@@ -1,11 +1,11 @@
 // Terminal Core module implements safe text behavior.
-import { stripAnsi } from "./ansi.js";
+import { stripAnsiForSanitization } from "./ansi.js";
 
 /**
  * Normalize untrusted text for single-line terminal/log rendering.
  */
 export function sanitizeTerminalText(input: string): string {
-  const normalized = stripAnsi(input)
+  const normalized = stripAnsiForSanitization(input)
     .replace(/\r/g, "\\r")
     .replace(/\n/g, "\\n")
     .replace(/\t/g, "\\t");

@@ -217,6 +217,38 @@ export function readySessionMeta(overrides: Partial<SessionAcpMeta> = {}): Sessi
   };
 }
 
+export function mockParentedAcpSessionEntries(params: {
+  childSessionKey: string;
+  parentSessionKey: string;
+}): void {
+  hoisted.readAcpSessionEntryMock.mockImplementation((input: unknown) => {
+    const sessionKey = (input as { sessionKey?: string }).sessionKey;
+    if (sessionKey === params.childSessionKey) {
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "child-1",
+          updatedAt: Date.now(),
+          spawnedBy: params.parentSessionKey,
+        },
+        acp: readySessionMeta(),
+      };
+    }
+    if (sessionKey === params.parentSessionKey) {
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "parent-1",
+          updatedAt: Date.now(),
+        },
+      };
+    }
+    return null;
+  });
+}
+
 export function extractStatesFromUpserts(): SessionAcpMeta["state"][] {
   const states: SessionAcpMeta["state"][] = [];
   for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {

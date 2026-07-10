@@ -525,6 +525,21 @@ describe("collectForbiddenPackPaths", () => {
     ).toEqual([...LOCAL_BUILD_METADATA_DIST_PATHS]);
   });
 
+  it("blocks Docker-selected external plugin trees from the core npm pack", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "dist/extensions/clickclack/index.js",
+        "dist/extensions/slack/setup-entry.js",
+        "dist/extensions/msteams/openclaw.plugin.json",
+      ]),
+    ).toEqual([
+      "dist/extensions/clickclack/index.js",
+      "dist/extensions/msteams/openclaw.plugin.json",
+      "dist/extensions/slack/setup-entry.js",
+    ]);
+  });
+
   it("keeps local build metadata excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
     for (const entry of LOCAL_BUILD_METADATA_DIST_PATHS) {
@@ -678,6 +693,7 @@ describe("collectMissingPackPaths", () => {
       "scripts/postinstall-bundled-plugins.mjs",
       "dist/agents/compaction-planning.worker.js",
       "dist/agents/model-provider-auth.worker.js",
+      "dist/audit/audit-event-writer.worker.js",
       "dist/task-registry-control.runtime.js",
       "dist/telegram-ingress-worker.runtime.js",
       bundledDistPluginFile("telegram", "runtime-api.js"),
@@ -712,6 +728,7 @@ describe("collectMissingPackPaths", () => {
         "dist/plugin-sdk/root-alias.cjs",
         "dist/agents/compaction-planning.worker.js",
         "dist/agents/model-provider-auth.worker.js",
+        "dist/audit/audit-event-writer.worker.js",
         "dist/task-registry-control.runtime.js",
         "dist/telegram-ingress-worker.runtime.js",
         "dist/build-info.json",
@@ -727,6 +744,18 @@ describe("collectMissingPackPaths", () => {
       const packageRoot = join(root, "openclaw");
       const distDir = join(packageRoot, "dist");
       mkdirSync(distDir, { recursive: true });
+      for (const relativePath of [
+        "facade-activation-check.runtime.js",
+        "extensions/image-generation-core/runtime-api.js",
+        "extensions/media-understanding-core/runtime-api.js",
+      ]) {
+        const filePath = join(distDir, relativePath);
+        mkdirSync(dirname(filePath), { recursive: true });
+        writeFileSync(filePath, "export {};\n");
+      }
+      for (const pluginId of ["image-generation-core", "media-understanding-core"]) {
+        writeFileSync(join(distDir, "extensions", pluginId, "package.json"), "{}\n");
+      }
       writeFileSync(
         join(packageRoot, "package.json"),
         `${JSON.stringify({ name: "openclaw", version: "2026.5.14-beta.3", dependencies: {} })}\n`,
@@ -821,6 +850,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       createPackedPluginSdkTypescriptSmokeProject({
         consumerDir,
         packageSpec: `file:${packageRoot}`,
+        aiPackageSpec: "file:/tmp/openclaw-ai.tgz",
       });
 
       const packageJson = JSON.parse(readFileSync(join(consumerDir, "package.json"), "utf8")) as {
@@ -836,6 +866,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       );
 
       expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
+      expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
       expect(source).toBe(fixtureSource);
       expect(source).toContain('"openclaw/plugin-sdk"');
@@ -883,6 +914,11 @@ describe("resolvePackedTarballPath", () => {
   it("resolves one local npm pack tarball filename inside the pack destination", () => {
     expect(
       resolvePackedTarballPath("/tmp/openclaw-pack", [{ filename: "openclaw-2026.6.17.tgz" }]),
+    ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
+    expect(
+      resolvePackedTarballPath("/tmp/openclaw-pack", [
+        { filename: "/tmp/openclaw-pack/openclaw-2026.6.17.tgz" },
+      ]),
     ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
   });
 

@@ -113,11 +113,21 @@ export function resolveRealtimeVoiceAgentConsultTools(
   // Keep the built-in consult tool first and prevent custom tools from
   // replacing its provider-facing contract by name.
   for (const tool of customTools) {
-    if (!tools.has(tool.name)) {
-      tools.set(tool.name, tool);
+    const name = readRealtimeVoiceCustomToolName(tool);
+    if (name !== undefined && !tools.has(name)) {
+      tools.set(name, tool);
     }
   }
   return [...tools.values()];
+}
+
+function readRealtimeVoiceCustomToolName(tool: RealtimeVoiceTool): string | undefined {
+  try {
+    const name = tool.name;
+    return typeof name === "string" ? name : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Resolve the OpenClaw tool allowlist paired with the consult exposure policy. */
@@ -222,12 +232,12 @@ export function buildRealtimeVoiceAgentConsultPrompt(params: {
 
 /** Collect only visible answer text from streamed delegated-agent payloads. */
 export function collectRealtimeVoiceAgentConsultVisibleText(
-  payloads: Array<{ text?: unknown; isError?: boolean; isReasoning?: boolean }>,
+  payloads: Array<{ text?: unknown; isError?: boolean; isReasoning?: boolean; isCommentary?: boolean }>,
 ): string | null {
   const chunks: string[] = [];
   for (const payload of payloads) {
     // Spoken replies must not include hidden reasoning or error-channel text.
-    if (payload.isError || payload.isReasoning) {
+    if (payload.isError || payload.isReasoning || payload.isCommentary) {
       continue;
     }
     const text = normalizeOptionalString(payload.text);

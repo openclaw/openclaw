@@ -1,4 +1,7 @@
 // Tests model selection resolution from directives, config, and session state.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MODEL_CONTEXT_TOKEN_CACHE,
@@ -10,6 +13,7 @@ import {
 } from "../../agents/model-catalog.runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
@@ -147,42 +151,45 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
-  it("prefers per-model params.thinking over global thinkingDefault", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    const cfg = {
-      agents: {
-        defaults: {
-          thinkingDefault: "low",
-          models: {
-            "openai-codex/gpt-5.4": {
-              params: { thinking: "high" },
+  it.each(["high", "ultra"] as const)(
+    "prefers per-model params.thinking=%s over global thinkingDefault",
+    async (thinking) => {
+      vi.mocked(loadModelCatalogLocal).mockClear();
+      const cfg = {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: { thinking },
+              },
             },
           },
         },
-      },
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://api.openai.com/v1",
-            models: [makeConfiguredModel()],
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://api.openai.com/v1",
+              models: [makeConfiguredModel()],
+            },
           },
         },
-      },
-    } as OpenClawConfig;
+      } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai-codex",
-      defaultModel: "gpt-5.4",
-      provider: "openai-codex",
-      model: "gpt-5.4",
-      hasModelDirective: false,
-    });
+      const state = await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.4",
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        hasModelDirective: false,
+      });
 
-    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("high");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-  });
+      await expect(state.resolveDefaultThinkingLevel()).resolves.toBe(thinking);
+      expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps per-model disabled params.thinking ahead of global thinkingDefault", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
@@ -986,7 +993,7 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.model).toBe("qwen2.5-coder:7b");
   });
 
-  it("normalizes deprecated xai beta session overrides before allowlist checks", async () => {
+  it("preserves xai beta session overrides during allowlist checks", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -1021,7 +1028,7 @@ describe("createModelSelectionState respects session model override", () => {
     });
 
     expect(state.provider).toBe("xai");
-    expect(state.model).toBe("grok-4.20-beta-latest-reasoning");
+    expect(state.model).toBe("grok-4.20-experimental-beta-0304-reasoning");
     expect(state.resetModelOverride).toBe(false);
   });
 
@@ -1143,6 +1150,124 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.resetModelOverrideRef).toBe("openai/gpt-4o-mini");
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+  });
+
+  it("adopts a concurrent valid model while repairing a stale override", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-repair-race-"));
+    const storePath = path.join(tempRoot, "sessions.json");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-4o" },
+          models: {
+            "openai/gpt-4o": {},
+            "openai/gpt-5.5": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o-mini",
+    });
+    const concurrentEntry = makeEntry({
+      updatedAt: sessionEntry.updatedAt + 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    await saveSessionStore(storePath, { [sessionKey]: concurrentEntry }, { skipMaintenance: true });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    try {
+      const state = await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+        provider: "openai",
+        model: "gpt-4o-mini",
+        hasModelDirective: false,
+      });
+
+      expect(state).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.5",
+        resetModelOverride: false,
+      });
+      expect(sessionEntry).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "user",
+      });
+      expect(sessionStore[sessionKey]).toEqual(sessionEntry);
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(sessionEntry);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects stale-model repair when the session rotates during persistence", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-repair-rotation-"));
+    const storePath = path.join(tempRoot, "sessions.json");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-4o" },
+          models: {
+            "openai/gpt-4o": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      sessionId: "s1",
+      providerOverride: "openai",
+      modelOverride: "gpt-4o-mini",
+    });
+    const rotatedEntry = makeEntry({
+      sessionId: "s2",
+      updatedAt: sessionEntry.updatedAt + 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      modelOverrideSource: "user",
+    });
+    await saveSessionStore(storePath, { [sessionKey]: rotatedEntry }, { skipMaintenance: true });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    try {
+      await expect(
+        createModelSelectionState({
+          cfg,
+          agentCfg: cfg.agents?.defaults,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          defaultProvider: "openai",
+          defaultModel: "gpt-4o",
+          provider: "openai",
+          model: "gpt-4o-mini",
+          hasModelDirective: false,
+        }),
+      ).rejects.toThrow(/changed while starting work/i);
+
+      expect(sessionEntry).toMatchObject({
+        sessionId: "s1",
+        providerOverride: "openai",
+        modelOverride: "gpt-4o-mini",
+      });
+      expect(sessionStore[sessionKey]).toBe(sessionEntry);
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(rotatedEntry);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("keeps wildcard-provider overrides when configured catalog rows are unavailable", async () => {

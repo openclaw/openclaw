@@ -1,11 +1,15 @@
 // Resolves interactive plugin entries from registry metadata.
-import { resolvePluginInteractiveNamespaceMatch } from "./interactive-registry.js";
+import {
+  resolvePluginInteractiveNamespaceMatch,
+  resolvePluginInteractiveRegistrationsMatch,
+} from "./interactive-registry.js";
 import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
   releasePluginInteractiveCallbackDedupe,
   type RegisteredInteractiveHandler,
 } from "./interactive-state.js";
+import { collectLivePluginRegistries } from "./runtime.js";
 
 type InteractiveDispatchResult<TResult = unknown> =
   | { matched: false; handled: false; duplicate: false }
@@ -30,6 +34,27 @@ export {
 } from "./interactive-registry.js";
 export type { InteractiveRegistrationResult } from "./interactive-registry.js";
 
+function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: string) {
+  const existing = resolvePluginInteractiveNamespaceMatch(channel, data);
+  if (existing && existing.registration.registryOwned !== true) {
+    return existing;
+  }
+
+  // Registry membership is lifecycle-owned. Resolve registry registrations only
+  // through live owners so a replaced or released registry cannot keep executing.
+  for (const registry of collectLivePluginRegistries()) {
+    const match = resolvePluginInteractiveRegistrationsMatch(
+      registry.interactiveHandlers,
+      channel,
+      data,
+    );
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
 /** Dispatches one interactive callback payload to a matching plugin handler. */
 export async function dispatchPluginInteractiveHandler<
   TRegistration extends PluginInteractiveDispatchRegistration,
@@ -40,8 +65,9 @@ export async function dispatchPluginInteractiveHandler<
   dedupeId?: string;
   onMatched?: () => Promise<void> | void;
   invoke: (match: PluginInteractiveMatch<TRegistration>) => Promise<TResult> | TResult;
+  afterInvoke?: (result: TResult) => Promise<void> | void;
 }): Promise<InteractiveDispatchResult<TResult>> {
-  const match = resolvePluginInteractiveNamespaceMatch(params.channel, params.data);
+  const match = resolveLivePluginInteractiveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }
@@ -54,6 +80,9 @@ export async function dispatchPluginInteractiveHandler<
   try {
     await params.onMatched?.();
     const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
+    // Channel post-processing stays inside the dedupe claim. Committing first
+    // would swallow a retry after a retryable post-handler failure.
+    await params.afterInvoke?.(resolved);
     if (dedupeKey) {
       commitPluginInteractiveCallbackDedupe(dedupeKey);
     }

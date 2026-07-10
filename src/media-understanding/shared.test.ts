@@ -40,8 +40,9 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postTranscriptionRequest,
-  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  resolveProviderHttpRequestConfigWithOriginTrust,
+  resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "./shared.js";
 
@@ -537,6 +538,30 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.headers.get("x-goog-api-key")).toBe("test-key");
   });
 
+  it("keeps configured-origin trust eligibility internal to core callers", () => {
+    const custom = resolveProviderHttpRequestConfigWithOriginTrust({
+      baseUrl: "https://models.internal/v1",
+      defaultBaseUrl: "https://api.example.com/v1",
+      provider: "example",
+    });
+    const deniedLocal = resolveProviderHttpRequestConfigWithOriginTrust({
+      baseUrl: "http://127.0.0.1:11434/v1",
+      defaultBaseUrl: "https://api.example.com/v1",
+      provider: "example",
+      request: { allowPrivateNetwork: false },
+    });
+
+    expect(custom.trustConfiguredBaseUrlOrigin).toBe(true);
+    expect(deniedLocal.trustConfiguredBaseUrlOrigin).toBe(false);
+    expect(
+      resolveProviderHttpRequestConfig({
+        baseUrl: "https://models.internal/v1",
+        defaultBaseUrl: "https://api.example.com/v1",
+        provider: "example",
+      }),
+    ).not.toHaveProperty("trustConfiguredBaseUrlOrigin");
+  });
+
   it("surfaces dispatcher policy for explicit proxy and mTLS transport overrides", () => {
     const resolved = resolveProviderHttpRequestConfig({
       baseUrl: "https://api.deepgram.com/v1",
@@ -610,6 +635,23 @@ describe("fetchWithTimeoutGuarded", () => {
     const call = getFirstGuardedFetchCall();
     expect(call.auditContext).toBe("provider-http fal image test");
     expect(call.timeoutMs).toBe(5000);
+  });
+
+  it("truncates auditContext without leaving a lone surrogate at the max boundary", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    const prefix = "a".repeat(79);
+    await fetchWithTimeoutGuarded("https://example.com", {}, 5000, fetch, {
+      auditContext: `${prefix}${String.fromCodePoint(0x1f600)}tail`,
+    });
+
+    const call = getFirstGuardedFetchCall();
+    expect(call.auditContext).toBe(prefix);
+    expect(call.auditContext).not.toContain(String.fromCharCode(0xd83d));
   });
 
   it("passes configured explicit proxy policy through the SSRF guard", async () => {

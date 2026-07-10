@@ -5,7 +5,6 @@ import {
 /**
  * Resolves model extra parameters and transport overrides for embedded agents.
  */
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
@@ -36,6 +35,7 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
+import { detectOpenAICompletionsCompat } from "../openai-completions-compat.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
@@ -43,6 +43,7 @@ import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
+import type { ProviderThinkLevel } from "./utils.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
@@ -210,7 +211,7 @@ function resolvePreparedExtraParamsCacheKey(params: {
   agentDir?: string;
   workspaceDir?: string;
   extraParamsOverride?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderThinkLevel;
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
@@ -238,7 +239,7 @@ export function resolvePreparedExtraParams(params: {
   agentDir?: string;
   workspaceDir?: string;
   extraParamsOverride?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderThinkLevel;
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
@@ -785,7 +786,7 @@ type ApplyExtraParamsContext = {
   modelId: string;
   agentDir?: string;
   workspaceDir?: string;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderThinkLevel;
   model?: ProviderRuntimeModel;
   effectiveExtraParams: Record<string, unknown>;
   resolvedExtraParams?: Record<string, unknown>;
@@ -960,14 +961,29 @@ function isMicrosoftFoundryProviderId(provider: unknown): boolean {
  * format (plus `reasoning_effort`). Honor an explicit `compat.thinkingFormat`
  * override that selects a different reasoning format: some OpenAI-compatible
  * deployments — notably Azure AI Foundry DeepSeek V4 — reject the `thinking`
- * parameter outright, even `thinking: { type: "disabled" }`. When the format is
- * unset we keep id-based auto-detection so genuine DeepSeek V4 endpoints still
- * receive the native thinking payload; an explicit `"deepseek"` also keeps it.
+ * parameter outright, even `thinking: { type: "disabled" }`. When no override
+ * exists, honor provider-level detection for non-native formats such as
+ * OpenRouter while keeping id-based fallback for unknown DeepSeek-compatible
+ * proxy routes.
  */
 function deepSeekV4NativeThinkingAllowedByCompat(model: Parameters<StreamFn>[0]): boolean {
-  const compat = (model as ProviderRuntimeModel).compat;
-  const thinkingFormat = compat && typeof compat === "object" ? compat.thinkingFormat : undefined;
+  const thinkingFormat = resolveDeepSeekV4ThinkingFormatOverride(model);
   return thinkingFormat === undefined || thinkingFormat === "deepseek";
+}
+
+function resolveDeepSeekV4ThinkingFormatOverride(
+  model: Parameters<StreamFn>[0],
+): string | undefined {
+  const compat = (model as ProviderRuntimeModel).compat;
+  const configured = compat && typeof compat === "object" ? compat.thinkingFormat : undefined;
+  if (typeof configured === "string") {
+    return configured;
+  }
+  const detected = detectOpenAICompletionsCompat(model as ProviderRuntimeModel).defaults
+    .thinkingFormat;
+  return detected === "openrouter" || detected === "together" || detected === "zai"
+    ? detected
+    : undefined;
 }
 
 function createDeepSeekV4NonNativeCompatSanitizerWrapper(
@@ -1048,7 +1064,7 @@ export function applyExtraParamsToAgent(
   provider: string,
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
-  thinkingLevel?: ThinkLevel,
+  thinkingLevel?: ProviderThinkLevel,
   agentId?: string,
   workspaceDir?: string,
   model?: ProviderRuntimeModel,

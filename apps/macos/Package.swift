@@ -59,6 +59,7 @@ let package = Package(
             ],
             exclude: [
                 "Resources/Info.plist",
+                "Resources/Localizable.xcstrings",
             ],
             resources: [
                 .copy("Resources/OpenClaw.icns"),
@@ -85,6 +86,7 @@ let package = Package(
                 "OpenClaw",
                 "OpenClawMacCLI",
                 "OpenClawDiscovery",
+                .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
             ],

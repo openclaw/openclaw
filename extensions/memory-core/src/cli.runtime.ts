@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryDreamingConfig,
@@ -538,7 +539,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   try {
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
     const totalFiles = entries.filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
+      (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
     ).length;
     return { source: "sessions", totalFiles, issues };
   } catch (err) {
@@ -1464,7 +1465,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
           colorize(
             rich,
             theme.muted,
-            `recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
+            `signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
           ),
         );
         if (candidate.conceptTags.length > 0) {
@@ -1579,7 +1580,8 @@ export async function runMemoryPromoteExplain(
           candidate,
           passes: {
             score: candidate.score >= thresholds.minScore,
-            recallCount: candidate.recallCount >= thresholds.minRecallCount,
+            // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
+            recallCount: candidate.signalCount >= thresholds.minRecallCount,
             uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
             maxAge:
               thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
@@ -1605,7 +1607,7 @@ export async function runMemoryPromoteExplain(
         colorize(
           rich,
           theme.muted,
-          `score=${candidate.score.toFixed(3)} recallCount=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
+          `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
         ),
         colorize(
           rich,
