@@ -559,7 +559,7 @@
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Open Screen",
       "surface": "android",
-      "id": "native.android.d0cf4d0358dfbe2b"
+      "id": "native.android.7b8f4a7869855aea"
     },
     {
       "kind": "conditional-branch",
@@ -599,7 +599,7 @@
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Open the current Canvas surface to inspect or interact with it.",
       "surface": "android",
-      "id": "native.android.2a16dff830477ab7"
+      "id": "native.android.cd92e0961b0bf500"
     },
     {
       "kind": "ui-named-argument",
@@ -4383,7 +4383,7 @@
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Close Canvas",
       "surface": "android",
-      "id": "native.android.4597f8605d5af4a5"
+      "id": "native.android.30d8b822fa68d6c4"
     },
     {
       "kind": "ui-named-argument",
@@ -6543,7 +6543,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Unknown",
       "surface": "android",
-      "id": "native.android.ce9a512f967ff31b"
+      "id": "native.android.f1252c0c03619337"
     },
     {
       "kind": "resource-string",
@@ -6551,7 +6551,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "VERSION",
       "surface": "android",
-      "id": "native.android.a5f7189cdf721ca4"
+      "id": "native.android.c0b5650d8639911c"
     },
     {
       "kind": "resource-string",
@@ -6559,7 +6559,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "COMMIT",
       "surface": "android",
-      "id": "native.android.6e043b7d5cf526c1"
+      "id": "native.android.d6f7fd58d1959e6f"
     },
     {
       "kind": "resource-string",
@@ -6567,7 +6567,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "BUILT",
       "surface": "android",
-      "id": "native.android.37510143af4aa75b"
+      "id": "native.android.b28b492b48e83ad3"
     },
     {
       "kind": "resource-string",
@@ -6575,7 +6575,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Version %1$s",
       "surface": "android",
-      "id": "native.android.aba33d677f46c9d2"
+      "id": "native.android.115aa71eb2a66fb6"
     },
     {
       "kind": "resource-string",
@@ -6583,7 +6583,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Git commit %1$s",
       "surface": "android",
-      "id": "native.android.04ea7703e47e9f3a"
+      "id": "native.android.eeddd6984c0eb974"
     },
     {
       "kind": "resource-string",
@@ -6591,7 +6591,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Built %1$s UTC, timestamp %2$s",
       "surface": "android",
-      "id": "native.android.63331a879e3cccc0"
+      "id": "native.android.a253a9c122cc5871"
     },
     {
       "kind": "resource-string",
@@ -6599,7 +6599,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Build date %1$s",
       "surface": "android",
-      "id": "native.android.941fcaadbe5408e0"
+      "id": "native.android.e2d234b2ea956a77"
     },
     {
       "kind": "resource-string",
@@ -6607,7 +6607,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Copy full Git commit hash",
       "surface": "android",
-      "id": "native.android.ad691cc437cb8853"
+      "id": "native.android.eaf3c88646e35cab"
     },
     {
       "kind": "resource-string",
@@ -6615,7 +6615,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Copy full build timestamp",
       "surface": "android",
-      "id": "native.android.5a1fef71971ff3b0"
+      "id": "native.android.d869a719216054b8"
     },
     {
       "kind": "resource-string",
@@ -6623,7 +6623,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "OpenClaw Git commit",
       "surface": "android",
-      "id": "native.android.f9df2e488784cea9"
+      "id": "native.android.e3661fcea979a74c"
     },
     {
       "kind": "resource-string",
@@ -6631,7 +6631,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "OpenClaw build timestamp",
       "surface": "android",
-      "id": "native.android.b8a8b10e70efee90"
+      "id": "native.android.a610564c863cdef7"
     },
     {
       "kind": "resource-string",
@@ -6639,7 +6639,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Git commit copied",
       "surface": "android",
-      "id": "native.android.9b58b180900f5f21"
+      "id": "native.android.9b9a42b4f56bea2a"
     },
     {
       "kind": "resource-string",
@@ -6647,7 +6647,7 @@
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Build timestamp copied",
       "surface": "android",
-      "id": "native.android.22b65d6917035a20"
+      "id": "native.android.6a0c0b0dc97333fe"
     },
     {
       "kind": "plist-string",
@@ -7271,7 +7271,7 @@
       "path": "apps/ios/Sources/Design/AgentProTab+Destinations.swift",
       "source": "Search agents",
       "surface": "apple",
-      "id": "native.apple.88ac71979fd62d9a"
+      "id": "native.apple.a373bf2332f0ab6a"
     },
     {
       "kind": "ui-named-argument",
@@ -11271,7 +11271,7 @@
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Copy full commit hash",
       "surface": "apple",
-      "id": "native.apple.4e4fd98ec575aa4c"
+      "id": "native.apple.2834f131e112b1b4"
     },
     {
       "kind": "ui-call",
@@ -11279,7 +11279,7 @@
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Copy build info",
       "surface": "apple",
-      "id": "native.apple.bbd5c192c15fea8d"
+      "id": "native.apple.e93e23f03719e358"
     },
     {
       "kind": "ui-call",
@@ -11287,7 +11287,7 @@
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Copy Commit",
       "surface": "apple",
-      "id": "native.apple.02e9eb37ac53cdbd"
+      "id": "native.apple.34d0503d7d5ed23d"
     },
     {
       "kind": "ui-call",
@@ -11295,7 +11295,7 @@
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Copy Build Info",
       "surface": "apple",
-      "id": "native.apple.f931dcc88c0b6518"
+      "id": "native.apple.9be4a644273089ce"
     },
     {
       "kind": "ui-call",
@@ -11303,7 +11303,7 @@
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Unavailable",
       "surface": "apple",
-      "id": "native.apple.ce28d70078afb196"
+      "id": "native.apple.50991f9fae2ab99b"
     },
     {
       "kind": "ui-call",
@@ -11311,7 +11311,7 @@
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Version \\(version), commit \\(commit), built \\(built), timestamp \\(timestamp)",
       "surface": "apple",
-      "id": "native.apple.8bc1d3e7bc3044c6"
+      "id": "native.apple.b10bfeade7e6dcc4"
     },
     {
       "kind": "ui-call",
@@ -11319,7 +11319,7 @@
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Version \\(version), commit \\(commit), build date unavailable",
       "surface": "apple",
-      "id": "native.apple.cdb2c3f7f7627077"
+      "id": "native.apple.32c68e6864c7faa5"
     },
     {
       "kind": "ui-call",
@@ -11327,7 +11327,7 @@
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Version \\(version), commit unavailable, built \\(built), timestamp \\(timestamp)",
       "surface": "apple",
-      "id": "native.apple.658e7ed79db4c451"
+      "id": "native.apple.664c866505040add"
     },
     {
       "kind": "ui-call",
@@ -11335,7 +11335,7 @@
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Version \\(version), commit unavailable, build date unavailable",
       "surface": "apple",
-      "id": "native.apple.4ce6f0ea4ce9ac7f"
+      "id": "native.apple.29192c8dd3ef0f5e"
     },
     {
       "kind": "conditional-branch",
@@ -12879,7 +12879,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Home Network",
       "surface": "apple",
-      "id": "native.apple.95bd66690e09e9aa"
+      "id": "native.apple.95e2c98254da2aba"
     },
     {
       "kind": "ui-named-argument",
@@ -12887,7 +12887,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "LAN or Tailscale host",
       "surface": "apple",
-      "id": "native.apple.04f3fe009f96fbf0"
+      "id": "native.apple.d9a6d673aa6693ee"
     },
     {
       "kind": "ui-named-argument",
@@ -12895,7 +12895,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Remote Domain",
       "surface": "apple",
-      "id": "native.apple.bcde7d8af2671671"
+      "id": "native.apple.431d02f8b68a96cf"
     },
     {
       "kind": "ui-named-argument",
@@ -12903,7 +12903,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "VPS with domain",
       "surface": "apple",
-      "id": "native.apple.c9079ed7743cbde9"
+      "id": "native.apple.7021301971f631bf"
     },
     {
       "kind": "ui-named-argument",
@@ -12911,7 +12911,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Same Machine (Dev)",
       "surface": "apple",
-      "id": "native.apple.a3b04247b1b22037"
+      "id": "native.apple.7451f8d052016642"
     },
     {
       "kind": "ui-named-argument",
@@ -12919,7 +12919,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "For local iOS app development",
       "surface": "apple",
-      "id": "native.apple.489d6506e3dbed8d"
+      "id": "native.apple.22e740296a762256"
     },
     {
       "kind": "ui-call",
@@ -12927,7 +12927,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Manual Connection",
       "surface": "apple",
-      "id": "native.apple.e28f880ddbea8a08"
+      "id": "native.apple.e1b1ccbfc9e73df8"
     },
     {
       "kind": "ui-call",
@@ -12935,7 +12935,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Continue",
       "surface": "apple",
-      "id": "native.apple.1b48769cec747f28"
+      "id": "native.apple.b7dc527c2a7e95cb"
     },
     {
       "kind": "ui-call",
@@ -12943,7 +12943,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Developer mode",
       "surface": "apple",
-      "id": "native.apple.69fd85c2a8413f2d"
+      "id": "native.apple.93d3e17fabd5e082"
     },
     {
       "kind": "ui-named-argument",
@@ -12951,7 +12951,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Connection Failed",
       "surface": "apple",
-      "id": "native.apple.0f4152d417918852"
+      "id": "native.apple.e8b90e582100294d"
     },
     {
       "kind": "ui-named-argument",
@@ -12959,7 +12959,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Needs attention",
       "surface": "apple",
-      "id": "native.apple.d1ea3dcd94907d9b"
+      "id": "native.apple.9e208d090ce2e84f"
     },
     {
       "kind": "ui-named-argument",
@@ -12967,7 +12967,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Ready to Connect",
       "surface": "apple",
-      "id": "native.apple.8bea970cd5085564"
+      "id": "native.apple.e71e20089bcc4cfb"
     },
     {
       "kind": "ui-call",
@@ -12975,7 +12975,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Host",
       "surface": "apple",
-      "id": "native.apple.18a0a0afc685c3f6"
+      "id": "native.apple.3d6cf0499c8e5980"
     },
     {
       "kind": "ui-call",
@@ -12983,7 +12983,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Port",
       "surface": "apple",
-      "id": "native.apple.b98dba4969a1e649"
+      "id": "native.apple.7cf97afea0a8ef4e"
     },
     {
       "kind": "ui-call",
@@ -12991,7 +12991,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Security",
       "surface": "apple",
-      "id": "native.apple.1e1f0819ba974ba2"
+      "id": "native.apple.cf616b515da5bc19"
     },
     {
       "kind": "conditional-branch",
@@ -12999,7 +12999,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Plaintext (local network)",
       "surface": "apple",
-      "id": "native.apple.9f3300c7e248d6cc"
+      "id": "native.apple.4014217851d06190"
     },
     {
       "kind": "ui-call",
@@ -13007,7 +13007,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Connecting…",
       "surface": "apple",
-      "id": "native.apple.6be3a153c38ea18d"
+      "id": "native.apple.8c3050f34db919c7"
     },
     {
       "kind": "ui-call",
@@ -13015,7 +13015,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Connect",
       "surface": "apple",
-      "id": "native.apple.8137d4d29d3cdf6a"
+      "id": "native.apple.3e81935f219ca978"
     },
     {
       "kind": "ui-call",
@@ -13023,7 +13023,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Use Manual Setup",
       "surface": "apple",
-      "id": "native.apple.f263874106ab9d6e"
+      "id": "native.apple.db7b52a1bbc6fac5"
     },
     {
       "kind": "ui-call",
@@ -13031,7 +13031,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Setup Link",
       "surface": "apple",
-      "id": "native.apple.327b3fab462c31ff"
+      "id": "native.apple.7dbdf9a439f64f08"
     },
     {
       "kind": "conditional-branch",
@@ -13039,7 +13039,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
       "surface": "apple",
-      "id": "native.apple.0792e5bfc5917767"
+      "id": "native.apple.6bfb611862fb1687"
     },
     {
       "kind": "conditional-branch",
@@ -13047,7 +13047,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
       "surface": "apple",
-      "id": "native.apple.f0aeb496631a06b4"
+      "id": "native.apple.3329c7f367f10c78"
     },
     {
       "kind": "ui-call",
@@ -13055,7 +13055,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "No gateways found yet.",
       "surface": "apple",
-      "id": "native.apple.0b8f879b0a927350"
+      "id": "native.apple.2f00ef4bc35ecb8d"
     },
     {
       "kind": "ui-call",
@@ -13063,7 +13063,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Restart Discovery",
       "surface": "apple",
-      "id": "native.apple.26223c0b79210f6e"
+      "id": "native.apple.94c9697fb748d05d"
     },
     {
       "kind": "ui-call",
@@ -13071,7 +13071,7 @@
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift",
       "source": "Discovered Gateways",
       "surface": "apple",
-      "id": "native.apple.df726976d165732a"
+      "id": "native.apple.07ebd3b75969629f"
     },
     {
       "kind": "ui-call",
@@ -15015,7 +15015,7 @@
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Copy full commit hash",
       "surface": "apple",
-      "id": "native.apple.2f1ed8af4e606d51"
+      "id": "native.apple.37661ff1af405580"
     },
     {
       "kind": "ui-call",
@@ -15023,7 +15023,7 @@
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Copy build info",
       "surface": "apple",
-      "id": "native.apple.be3b629054aea291"
+      "id": "native.apple.2916df231993897d"
     },
     {
       "kind": "ui-call",
@@ -15031,7 +15031,7 @@
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Copy Commit",
       "surface": "apple",
-      "id": "native.apple.d13d41e610c7ba3d"
+      "id": "native.apple.f870085ee74e9885"
     },
     {
       "kind": "ui-call",
@@ -15039,7 +15039,7 @@
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Copy Build Info",
       "surface": "apple",
-      "id": "native.apple.8a09595137a100f3"
+      "id": "native.apple.be5af46a63f9d1da"
     },
     {
       "kind": "ui-call",
@@ -15047,7 +15047,7 @@
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Unavailable",
       "surface": "apple",
-      "id": "native.apple.dfd7e13a7310c757"
+      "id": "native.apple.ddd4228d93680320"
     },
     {
       "kind": "ui-call",
@@ -15055,7 +15055,7 @@
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Version \\(version), commit \\(commit), built \\(built), timestamp \\(timestamp)",
       "surface": "apple",
-      "id": "native.apple.5c99acde65040d0a"
+      "id": "native.apple.0e7c932e0d8fb288"
     },
     {
       "kind": "ui-call",
@@ -15063,7 +15063,7 @@
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Version \\(version), commit \\(commit), build date unavailable",
       "surface": "apple",
-      "id": "native.apple.ee173a469b20fe4c"
+      "id": "native.apple.d4ef93e8ebca2d55"
     },
     {
       "kind": "ui-call",
@@ -15071,7 +15071,7 @@
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Version \\(version), commit unavailable, built \\(built), timestamp \\(timestamp)",
       "surface": "apple",
-      "id": "native.apple.9380d0a152f7a3b7"
+      "id": "native.apple.f67aac55a340fda0"
     },
     {
       "kind": "ui-call",
@@ -15079,7 +15079,7 @@
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Version \\(version), commit unavailable, build date unavailable",
       "surface": "apple",
-      "id": "native.apple.483fcc32d8f0044b"
+      "id": "native.apple.76472e074114886c"
     },
     {
       "kind": "ui-call",
@@ -22935,7 +22935,7 @@
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "delivery unconfirmed",
       "surface": "apple",
-      "id": "native.apple.6ba00167996b4263"
+      "id": "native.apple.2b45abdc56b2caed"
     },
     {
       "kind": "conditional-branch",
@@ -22943,7 +22943,7 @@
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "queued after route change",
       "surface": "apple",
-      "id": "native.apple.f2d9e7a0937f0f5c"
+      "id": "native.apple.722f1f90b97e8e45"
     },
     {
       "kind": "ui-localized-call",
@@ -23103,7 +23103,7 @@
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
       "source": "Search sessions",
       "surface": "apple",
-      "id": "native.apple.aee00276ee72ce99"
+      "id": "native.apple.0b9fc81ff2031799"
     },
     {
       "kind": "conditional-branch",
