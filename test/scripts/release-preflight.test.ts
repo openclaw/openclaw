@@ -7,26 +7,26 @@ import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const SCRIPT = resolve("scripts/release-preflight.mjs");
 const CHECK_COMMANDS = [
-  "deps:root-ownership:check",
-  "deps:shrinkwrap:check",
-  "plugins:sync:check",
-  "plugins:inventory:check",
-  "config:schema:check",
-  "config:channels:check",
-  "config:docs:check",
-  "plugin-sdk:check-exports",
-  "plugin-sdk:api:check",
-  "plugin-sdk:surface:check",
+  "pnpm deps:root-ownership:check",
+  "node scripts/generate-npm-shrinkwrap.mjs --all --check",
+  "node --import tsx scripts/sync-plugin-versions.ts --check",
+  "node scripts/generate-plugin-inventory-doc.mjs --check",
+  "pnpm config:schema:check",
+  "pnpm config:channels:check",
+  "pnpm config:docs:check",
+  "pnpm plugin-sdk:check-exports",
+  "pnpm plugin-sdk:api:check",
+  "pnpm plugin-sdk:surface:check",
 ];
 const FIX_COMMANDS = [
-  "plugins:sync",
-  "deps:shrinkwrap:changed:generate",
-  "plugins:inventory:gen",
-  "config:schema:gen",
-  "config:channels:gen",
-  "config:docs:gen",
-  "plugin-sdk:sync-exports",
-  "plugin-sdk:api:gen",
+  "node --import tsx scripts/sync-plugin-versions.ts",
+  "node scripts/generate-npm-shrinkwrap.mjs --changed",
+  "node scripts/generate-plugin-inventory-doc.mjs --write",
+  "pnpm config:schema:gen",
+  "pnpm config:channels:gen",
+  "pnpm config:docs:gen",
+  "pnpm plugin-sdk:sync-exports",
+  "pnpm plugin-sdk:api:gen",
 ];
 
 const tempDirs = new Set<string>();
@@ -41,13 +41,14 @@ function makeFakePnpm(): { binDir: string; eventsPath: string; logPath: string }
   const eventsPath = join(root, "pnpm-events.log");
   const logPath = join(root, "pnpm.log");
   mkdirSync(binDir);
-  const pnpmPath = join(binDir, "pnpm");
-  writeFileSync(
-    pnpmPath,
-    `#!/usr/bin/env node
+  for (const bin of ["node", "pnpm"]) {
+    const binPath = join(binDir, bin);
+    writeFileSync(
+      binPath,
+      `#!${process.execPath}
 import { appendFileSync } from "node:fs";
 
-const command = process.argv.slice(2).join(" ");
+const command = ${JSON.stringify(bin)} + " " + process.argv.slice(2).join(" ");
 appendFileSync(process.env.OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG, command + "\\n");
 appendFileSync(process.env.OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS, "start " + command + "\\n");
 const delayMs = Number(process.env.OPENCLAW_RELEASE_PREFLIGHT_DELAY_MS ?? "0");
@@ -58,9 +59,10 @@ appendFileSync(process.env.OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS, "end " + comm
 const failures = new Set((process.env.OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS ?? "").split(";").filter(Boolean));
 process.exit(failures.has(command) ? 7 : 0);
 `,
-    { mode: 0o755 },
-  );
-  chmodSync(pnpmPath, 0o755);
+      { mode: 0o755 },
+    );
+    chmodSync(binPath, 0o755);
+  }
   return { binDir, eventsPath, logPath };
 }
 
@@ -136,12 +138,15 @@ describe("scripts/release-preflight.mjs", () => {
   it("runs every check command and reports all failed release artifact checks", () => {
     const fakePnpm = makeFakePnpm();
     const result = runPreflight(["--check"], fakePnpm, {
-      OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS: "plugins:sync:check;config:docs:check",
+      OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS:
+        "node --import tsx scripts/sync-plugin-versions.ts --check;pnpm config:docs:check",
     });
 
     expect(result.status).toBe(1);
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(CHECK_COMMANDS.toSorted());
-    expect(result.stderr).toContain("- plugin versions: exit 7 (pnpm plugins:sync:check)");
+    expect(result.stderr).toContain(
+      "- plugin versions: exit 7 (node --import tsx scripts/sync-plugin-versions.ts --check)",
+    );
     expect(result.stderr).toContain("- config docs baseline: exit 7 (pnpm config:docs:check)");
   });
 
@@ -152,7 +157,8 @@ describe("scripts/release-preflight.mjs", () => {
       encoding: "utf8",
       env: {
         ...process.env,
-        OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS: "deps:shrinkwrap:changed:generate",
+        OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS:
+          "node scripts/generate-npm-shrinkwrap.mjs --changed",
         OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS: fakePnpm.eventsPath,
         OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG: fakePnpm.logPath,
         PATH: `${fakePnpm.binDir}${delimiter}${process.env.PATH ?? ""}`,
@@ -162,7 +168,7 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.status).toBe(1);
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(FIX_COMMANDS.toSorted());
     expect(result.stderr).toContain(
-      "- npm shrinkwraps: exit 7 (pnpm deps:shrinkwrap:changed:generate)",
+      "- npm shrinkwraps: exit 7 (node scripts/generate-npm-shrinkwrap.mjs --changed)",
     );
   });
 
@@ -180,14 +186,14 @@ describe("scripts/release-preflight.mjs", () => {
     const events = readPnpmLog(fakePnpm.eventsPath);
 
     expect(result.status).toBe(0);
-    expect(events.indexOf("end plugins:sync")).toBeLessThan(
-      events.indexOf("start plugin-sdk:sync-exports"),
+    expect(events.indexOf("end node --import tsx scripts/sync-plugin-versions.ts")).toBeLessThan(
+      events.indexOf("start pnpm plugin-sdk:sync-exports"),
     );
-    expect(events.indexOf("end plugin-sdk:sync-exports")).toBeLessThan(
-      events.indexOf("start deps:shrinkwrap:changed:generate"),
+    expect(events.indexOf("end pnpm plugin-sdk:sync-exports")).toBeLessThan(
+      events.indexOf("start node scripts/generate-npm-shrinkwrap.mjs --changed"),
     );
-    expect(events.indexOf("end plugin-sdk:sync-exports")).toBeLessThan(
-      events.indexOf("start plugins:inventory:gen"),
+    expect(events.indexOf("end pnpm plugin-sdk:sync-exports")).toBeLessThan(
+      events.indexOf("start node scripts/generate-plugin-inventory-doc.mjs --write"),
     );
   });
 
@@ -199,12 +205,12 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.status).toBe(0);
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [
-        "plugins:sync",
-        "deps:shrinkwrap:changed:generate",
-        "plugins:inventory:gen",
-        "plugins:sync:check",
-        "deps:shrinkwrap:check",
-        "plugins:inventory:check",
+        "node --import tsx scripts/sync-plugin-versions.ts",
+        "node scripts/generate-npm-shrinkwrap.mjs --changed",
+        "node scripts/generate-plugin-inventory-doc.mjs --write",
+        "node --import tsx scripts/sync-plugin-versions.ts --check",
+        "node scripts/generate-npm-shrinkwrap.mjs --all --check",
+        "node scripts/generate-plugin-inventory-doc.mjs --check",
       ].toSorted(),
     );
     expect(result.stdout).toContain("(version, jobs=4)");
@@ -217,7 +223,11 @@ describe("scripts/release-preflight.mjs", () => {
 
     expect(result.status).toBe(0);
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
-      ["config:schema:check", "config:channels:check", "config:docs:check"].toSorted(),
+      [
+        "pnpm config:schema:check",
+        "pnpm config:channels:check",
+        "pnpm config:docs:check",
+      ].toSorted(),
     );
     expect(result.stdout).not.toContain("macOS app version metadata");
   });
