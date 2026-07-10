@@ -61,7 +61,7 @@ function safeRm(dir) {
 const PID = process.pid;
 const ROOT = path.join(os.tmpdir(), `repro-103190-${PID}`);
 const SYS_SIM = path.join(ROOT, "sys-tmp");   // mimics /tmp  (mode 0o1777)
-const SUBDIR  = path.join(SYS_SIM, "openclaw"); // mimics /tmp/openclaw
+const _SUBDIR = path.join(SYS_SIM, "openclaw"); // mimics /tmp/openclaw
 
 function setup() {
   safeRm(ROOT);
