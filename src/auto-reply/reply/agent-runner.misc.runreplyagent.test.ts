@@ -3470,6 +3470,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   }
 
   async function runPrivateFinalCase(params: {
+    messagingToolSentTexts?: string[];
     messagingToolSentTargets?: unknown[];
     messagingToolSourceReplyPayloads?: Array<{ text?: string }>;
     didDeliverSourceReplyViaMessageTool?: boolean;
@@ -3515,6 +3516,9 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
           ? { finalAssistantRawText: params.finalAssistantRawText }
           : {}),
       },
+      ...(params.messagingToolSentTexts
+        ? { messagingToolSentTexts: params.messagingToolSentTexts }
+        : {}),
       ...(params.messagingToolSentTargets
         ? { messagingToolSentTargets: params.messagingToolSentTargets }
         : {}),
@@ -3704,6 +3708,37 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it("still retries when the message tool delivered different text to the source route", async () => {
+    await runPrivateFinalCase({
+      messagingToolSourceReplyPayloads: [{ text: "A different visible status update." }],
+    });
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries when the message tool delivered only a fragment of the final reply", async () => {
+    const finalAssistantText =
+      "Here is the complete substantive answer the user requested, including the important conclusion and the supporting details that follow it. This second complete sentence makes the response long enough to represent a real user-facing final rather than a short private note.";
+    await runPrivateFinalCase({
+      finalAssistantText,
+      messagingToolSourceReplyPayloads: [{ text: "the important conclusion" }],
+    });
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries when matching sent text has no source-route target evidence", async () => {
+    const finalAssistantText =
+      "Here is the substantive answer the user requested. It includes enough detail to read like a user-facing response rather than a short private note. This should have been sent with the message tool if the channel expected a visible reply.";
+    await runPrivateFinalCase({
+      finalAssistantText,
+      messagingToolSentTexts: [finalAssistantText],
+    });
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
   });
 
   it("still retries when the message tool sent only to a non-source target", async () => {

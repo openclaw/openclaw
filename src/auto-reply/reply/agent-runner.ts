@@ -10,7 +10,6 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
 import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
 import type {
   MessagingToolSend,
@@ -243,10 +242,7 @@ function hasDeliveredFinalText(params: { finalText: string; sentTexts: string[] 
   if (!finalText) {
     return false;
   }
-  return (
-    params.sentTexts.some((sentText) => sentText.trim() === finalText) ||
-    isMessagingToolDuplicate(finalText, params.sentTexts)
-  );
+  return params.sentTexts.some((sentText) => sentText.trim() === finalText);
 }
 
 function hasSourceReplyPayloadDeliveredFinalText(params: {
@@ -273,7 +269,7 @@ async function hasMessagingToolDeliveredFinalTextToCurrentSourceRoute(params: {
   const sentTargets = params.messagingToolSentTargets ?? [];
   const sentTexts = params.messagingToolSentTexts ?? [];
   if (sentTargets.length === 0) {
-    return hasDeliveredFinalText({ finalText: params.finalText, sentTexts });
+    return false;
   }
 
   const dedupeRuntime = await import("./reply-payloads-dedupe.runtime.js");
@@ -300,6 +296,7 @@ async function persistMessageToolOnlyUndeliveredFinalNotice(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionId: string;
+  expectedLifecycleRevision?: string;
   sessionKey?: string;
   storePath?: string;
   sessionAgentId?: string;
@@ -359,7 +356,14 @@ async function persistMessageToolOnlyUndeliveredFinalNotice(params: {
       publishWhen: "when-appended",
       touchSessionEntry: true,
       updateMode: "file-only",
-      ...(params.storePath ? { expectedSessionId: sessionId } : {}),
+      ...(params.storePath
+        ? {
+            expectedSessionId: sessionId,
+            ...(params.expectedLifecycleRevision
+              ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
+              : {}),
+          }
+        : {}),
     },
   );
 }
@@ -2215,6 +2219,22 @@ export async function runReplyAgent(params: {
       await opts.onObservedReplyDelivery?.();
     }
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+    const payloadDedupeSourceReplyPolicy = sessionKey
+      ? resolveSourceReplyPolicy({
+          cfg,
+          sessionCtx,
+          sessionEntry: activeSessionEntry,
+          sessionKey,
+          runtimePolicySessionKey,
+          opts,
+        })
+      : undefined;
+    const messagingToolSentTextsForPayloadDedupe =
+      payloadDedupeSourceReplyPolicy?.sourceReplyDeliveryMode === "message_tool_only" &&
+      !payloadDedupeSourceReplyPolicy.sendPolicyDenied &&
+      (runResult.messagingToolSentTargets?.length ?? 0) === 0
+        ? undefined
+        : runResult.messagingToolSentTexts;
     // A terminal fallback is built separately after normal payload filtering.
     // Share this state across deliverable lanes so replyToMode=first still threads
     // at most one visible payload without hidden reasoning/commentary consuming it.
@@ -2250,7 +2270,7 @@ export async function runReplyAgent(params: {
         replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         applyReplyToMode: applyFinalReplyToMode,
         messageProvider: followupRun.run.messageProvider,
-        messagingToolSentTexts: runResult.messagingToolSentTexts,
+        messagingToolSentTexts: messagingToolSentTextsForPayloadDedupe,
         messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
         messagingToolSentTargets: runResult.messagingToolSentTargets,
         originatingChannel: sessionCtx.OriginatingChannel,
@@ -2790,6 +2810,10 @@ export async function runReplyAgent(params: {
           ? runResult.meta.finalAssistantVisibleText
           : (rawAssistantText ?? ""),
       );
+      const hasGranularFinalTextDeliveryEvidence =
+        runResult.messagingToolSourceReplyPayloads !== undefined ||
+        runResult.messagingToolSentTexts !== undefined ||
+        runResult.messagingToolSentTargets !== undefined;
       const finalTextDeliveredToCurrentSourceRoute =
         hasSourceReplyPayloadDeliveredFinalText({
           finalText: assistantFinalText,
@@ -2807,7 +2831,9 @@ export async function runReplyAgent(params: {
           originatingThreadId: replyRouteThreadId,
           accountId: sessionCtx.AccountId,
           finalText: assistantFinalText,
-        }));
+        })) ||
+        (!hasGranularFinalTextDeliveryEvidence &&
+          runResult.didDeliverSourceReplyViaMessageTool === true);
       const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
       // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
       // recovering here would duplicate that message.
@@ -2817,7 +2843,7 @@ export async function runReplyAgent(params: {
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery: committedSourceReplyDelivery,
+          successfulSourceReplyDelivery: finalTextDeliveredToCurrentSourceRoute,
           finalText: assistantFinalText,
         });
       const retryMissingSourceDelivery =
@@ -2826,7 +2852,7 @@ export async function runReplyAgent(params: {
         !isRoomEvent &&
         sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
         !sourceReplyPolicy.sendPolicyDenied &&
-        !committedSourceReplyDelivery;
+        !finalTextDeliveredToCurrentSourceRoute;
       if (isStrandedReply) {
         warnPrivateMessageToolFinal({
           sessionKey,
@@ -2837,6 +2863,28 @@ export async function runReplyAgent(params: {
             activeSessionEntry?.channel,
           finalTextLength: assistantFinalText.trim().length,
         });
+      }
+      if (!isStrandedReplyRetryRun) {
+        try {
+          await persistMessageToolOnlyUndeliveredFinalNotice({
+            cfg,
+            sessionEntry: activeSessionEntry,
+            sessionStore: activeSessionStore,
+            sessionId: activeSessionEntry?.sessionId ?? followupRun.run.sessionId,
+            expectedLifecycleRevision: activeSessionEntry?.lifecycleRevision,
+            sessionKey,
+            storePath,
+            sessionAgentId: followupRun.run.agentId,
+            threadId: replyRouteThreadId,
+            workspaceDir: followupRun.run.workspaceDir,
+            sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+            sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+            finalTextDeliveredToCurrentSourceRoute,
+            finalText: assistantFinalText,
+          });
+        } catch (error) {
+          logVerbose(`failed to persist undelivered final notice: ${String(error)}`);
+        }
       }
       if (isStrandedReply || retryMissingSourceDelivery) {
         if (isStrandedReplyRetryRun) {
@@ -2859,21 +2907,6 @@ export async function runReplyAgent(params: {
           }
         }
       }
-      await persistMessageToolOnlyUndeliveredFinalNotice({
-        cfg,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionId: followupRun.run.sessionId,
-        sessionKey,
-        storePath,
-        sessionAgentId: followupRun.run.agentId,
-        threadId: replyRouteThreadId,
-        workspaceDir: followupRun.run.workspaceDir,
-        sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-        sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-        finalTextDeliveredToCurrentSourceRoute,
-        finalText: assistantFinalText,
-      });
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;
       const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;

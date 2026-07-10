@@ -1,4 +1,5 @@
 // E2E tests for run-reply-agent execution and generated session artifacts.
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -679,10 +680,12 @@ describe("runReplyAgent pending final delivery capture", () => {
     return requireStoredSessionEntry(storePath);
   }
 
-  it("marks message-tool-only final replies as undelivered without enabling heartbeat replay", async () => {
+  it("persists message-tool-only undelivered notices before enqueueing recovery", async () => {
     const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-undelivered-"));
     const sessionFile = join(dir, "session.jsonl");
     const storePath = join(dir, "sessions.json");
+    const privateFinal =
+      "Here is the substantive answer the user requested. It is long enough to require the protected message-tool recovery retry before delivery is considered settled.";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       sessionFile,
@@ -705,7 +708,7 @@ describe("runReplyAgent pending final delivery capture", () => {
           timestamp: new Date().toISOString(),
           message: {
             role: "assistant",
-            content: [{ type: "text", text: "private final" }],
+            content: [{ type: "text", text: privateFinal }],
             api: "anthropic-messages",
             provider: "anthropic",
             model: "claude",
@@ -719,9 +722,21 @@ describe("runReplyAgent pending final delivery capture", () => {
       "utf-8",
     );
     await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    vi.mocked(enqueueFollowupRun).mockImplementationOnce(() => {
+      const entriesAtEnqueue = readFileSync(sessionFile, "utf-8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { message?: Record<string, unknown> });
+      expect(
+        entriesAtEnqueue.some(
+          (entry) => entry.message?.customType === MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
+        ),
+      ).toBe(true);
+      return true;
+    });
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "private final" }],
-      meta: { finalAssistantRawText: "private final" },
+      payloads: [{ text: privateFinal }],
+      meta: { finalAssistantRawText: privateFinal },
     });
 
     const { run } = createMinimalRun({
@@ -734,6 +749,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     await run();
 
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBeUndefined();
     expect(stored.pendingFinalDeliveryText).toBeUndefined();
@@ -760,7 +776,7 @@ describe("runReplyAgent pending final delivery capture", () => {
           details: {
             sourceReplyDeliveryMode: "message_tool_only",
             delivered: false,
-            finalTextLength: "private final".length,
+            finalTextLength: privateFinal.length,
           },
         }),
       }),
