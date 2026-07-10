@@ -788,6 +788,10 @@ export async function injectBashExecutionTranscriptMessage(
   }
   const sessionId = entry?.sessionId;
   if (!sessionId || !storePath) {
+    // Sessions with no completed turn have no durable entry yet, and the first
+    // turn rewrites the transcript, discarding pre-turn injected rows (same
+    // limitation as chat.inject). Failing here keeps the loss visible in the
+    // TUI instead of silently dropping the row.
     return { ok: false, error: "session not found" };
   }
   const agentId = resolveSessionAgentId({
