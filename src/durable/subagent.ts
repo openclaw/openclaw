@@ -21,6 +21,11 @@ import type {
   DurableRuntimeRunStatus,
   DurableRuntimeStore,
 } from "./types.js";
+import {
+  recordDurableWakeForChildTerminalFact,
+  recordDurableWakeForDeliveryUnknownFact,
+  recordDurableWakeForSubagentParentBindingMissing,
+} from "./wake-producers.js";
 const SUBAGENT_PARENT_STEP_ID = "subagents";
 const SUBAGENT_ANNOUNCE_IDEMPOTENCY_PREFIX = "announce:v1:";
 
@@ -291,6 +296,15 @@ export function recordDurableSubagentRegistered(params: {
             candidateCount: parentBinding.candidateCount,
           },
         });
+        recordDurableWakeForSubagentParentBindingMissing({
+          store,
+          childRun: child,
+          requesterSessionKey: params.requesterSessionKey,
+          requesterRunId: params.requesterRunId,
+          reason: parentBinding.reason,
+          candidateCount: parentBinding.candidateCount,
+          now,
+        });
         return;
       }
       const fanInGroupId = buildDurableFanInGroupId({
@@ -444,6 +458,7 @@ export function recordDurableSubagentTerminal(params: {
         },
       });
       for (const link of store.listParentLinks(child.runtimeRunId)) {
+        const parent = store.getRun(link.parentRuntimeRunId);
         const linkMetadata =
           link.metadata && typeof link.metadata === "object" && !Array.isArray(link.metadata)
             ? link.metadata
@@ -504,6 +519,20 @@ export function recordDurableSubagentTerminal(params: {
               error: params.error,
               summary: params.summary,
             },
+          });
+        }
+        if (parent) {
+          recordDurableWakeForChildTerminalFact({
+            store,
+            parentRun: parent,
+            childRun: child,
+            link,
+            terminalOutcome: linkStatus,
+            childSessionKey: params.childSessionKey,
+            agentInvocationId: params.runId,
+            error: params.error,
+            summary: params.summary,
+            now,
           });
         }
         reconcileDurableFanIn({
@@ -709,6 +738,22 @@ export function recordDurableSubagentAnnounceDelivery(params: {
           now,
         });
         const parent = store.getRun(link.parentRuntimeRunId);
+        if (!params.delivered && parent) {
+          recordDurableWakeForDeliveryUnknownFact({
+            store,
+            parentRun: parent,
+            childRun: child,
+            link,
+            childSessionKey: params.childSessionKey,
+            agentInvocationId: params.runId,
+            path: params.path,
+            error: params.error,
+            deliveryReason: params.reason,
+            directRuntimeRunId: directRun?.runtimeRunId,
+            directIdempotencyKey: params.directIdempotencyKey,
+            now,
+          });
+        }
         if (!parent || isTerminalRunStatus(parent.status)) {
           continue;
         }

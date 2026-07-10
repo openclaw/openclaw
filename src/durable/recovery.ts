@@ -13,6 +13,7 @@ import {
 } from "./runtime-ids.js";
 import { openDurableRuntimeStore } from "./store-factory.js";
 import type { DurableRuntimeRun, DurableRuntimeStep, DurableRuntimeStore } from "./types.js";
+import { recordDurableWakeForChildTerminalFact } from "./wake-producers.js";
 
 const log = createSubsystemLogger("durable/recovery");
 
@@ -424,6 +425,25 @@ function markSubagentRunLost(params: {
           reason: params.reason,
           processInstanceId: params.processInstanceId,
         },
+      });
+    }
+    const parent = params.store.getRun(link.parentRuntimeRunId);
+    if (parent) {
+      recordDurableWakeForChildTerminalFact({
+        store: params.store,
+        parentRun: parent,
+        childRun: params.run,
+        link,
+        terminalOutcome: "lost",
+        childSessionKey: firstString(
+          params.run.metadata?.childSessionKey,
+          link.metadata?.childSessionKey,
+          params.run.sourceRef,
+        ),
+        agentInvocationId: params.run.idempotencyKey,
+        recoveryReason: params.reason,
+        summary: "Subagent run was marked lost during durable recovery.",
+        now: params.now,
       });
     }
     reconcileDurableFanIn({

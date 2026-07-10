@@ -264,6 +264,29 @@ describe("durable runtime executor", () => {
       expect(store.getTimeline(run.runtimeRunId).map((event) => event.eventType)).toContain(
         "runtime.step.retry_blocked_unknown_side_effect",
       );
+      const wakes = store.listDurableWakes({ status: "pending" });
+      expect(wakes.every((wake) => wake.parentRunId === undefined)).toBe(true);
+      expect(wakes.every((wake) => wake.parentSessionKey === undefined)).toBe(true);
+      expect(wakes).toEqual([
+        expect.objectContaining({
+          reason: "side_effect_uncertain",
+          sourceRunId: run.runtimeRunId,
+          targetKind: "run",
+          targetRef: run.runtimeRunId,
+          ownerKind: "run",
+          ownerRef: run.runtimeRunId,
+          targetResolutionStatus: "resolved",
+          targetResolutionReason: "direct_turn_owner",
+          dedupeKey: `wake:v1:side_effect_uncertain:${run.runtimeRunId}:${step.stepId}`,
+          metadata: expect.objectContaining({
+            evidence: expect.objectContaining({
+              kind: "side_effect_uncertain",
+              eventType: "runtime.step.retry_blocked_unknown_side_effect",
+              sideEffectPolicy: "unknown",
+            }),
+          }),
+        }),
+      ]);
     } finally {
       cleanup();
     }
@@ -311,6 +334,29 @@ describe("durable runtime executor", () => {
           status: "waiting",
           recoveryState: "unknown_after_side_effect",
         },
+      ]);
+      const wakes = store.listDurableWakes({ status: "pending" });
+      expect(wakes.every((wake) => wake.parentRunId === undefined)).toBe(true);
+      expect(wakes.every((wake) => wake.parentSessionKey === undefined)).toBe(true);
+      expect(wakes).toEqual([
+        expect.objectContaining({
+          reason: "no_handler",
+          sourceRunId: run.runtimeRunId,
+          targetKind: "run",
+          targetRef: run.runtimeRunId,
+          ownerKind: "run",
+          ownerRef: run.runtimeRunId,
+          targetResolutionStatus: "resolved",
+          targetResolutionReason: "direct_turn_owner",
+          dedupeKey: `wake:v1:no_handler:${run.runtimeRunId}:${step.stepId}`,
+          metadata: expect.objectContaining({
+            evidence: expect.objectContaining({
+              kind: "no_handler",
+              eventType: "runtime.step.no_handler",
+              stepType: "agent",
+            }),
+          }),
+        }),
       ]);
     } finally {
       cleanup();

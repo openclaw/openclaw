@@ -11,6 +11,7 @@ import type {
   DurableRuntimeStore,
   UpdateDurableRuntimeStepInput,
 } from "./types.js";
+import { recordDurableWakeForRuntimeAttentionFact } from "./wake-producers.js";
 
 export type DurableExecutorRunOnceOptions = {
   store: DurableRuntimeStore;
@@ -169,6 +170,19 @@ function markNoHandler(params: {
       stepType: params.step.stepType,
       workerId: params.workerId,
     },
+  });
+  recordDurableWakeForRuntimeAttentionFact({
+    store: params.store,
+    run: params.run,
+    reason: "no_handler",
+    factKind: "no_handler",
+    stepId: params.step.stepId,
+    workerId: params.workerId,
+    eventType: "runtime.step.no_handler",
+    detail: {
+      stepType: params.step.stepType,
+    },
+    now: params.now,
   });
   return {
     claimed: true,
@@ -374,6 +388,21 @@ function applyStepResult(params: {
           sideEffectPolicy,
           workerId,
         },
+      });
+      recordDurableWakeForRuntimeAttentionFact({
+        store,
+        run,
+        reason: "side_effect_uncertain",
+        factKind: "side_effect_uncertain",
+        stepId: step.stepId,
+        workerId,
+        eventType: "runtime.step.retry_blocked_unknown_side_effect",
+        detail: {
+          stepType: step.stepType,
+          errorRef: errorRef.refId,
+          sideEffectPolicy,
+        },
+        now,
       });
       return {
         claimed: true,
@@ -588,6 +617,20 @@ function applyStepResult(params: {
     eventTime: now,
     stepId: step.stepId,
     payload: { reason: result.reason, workerId },
+  });
+  recordDurableWakeForRuntimeAttentionFact({
+    store,
+    run,
+    reason: "side_effect_uncertain",
+    factKind: "side_effect_uncertain",
+    stepId: step.stepId,
+    workerId,
+    eventType: "runtime.step.side_effect_uncertain",
+    detail: {
+      stepType: step.stepType,
+      reason: result.reason,
+    },
+    now,
   });
   return {
     claimed: true,
