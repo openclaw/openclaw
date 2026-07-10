@@ -7,6 +7,13 @@ describe("audit command parsing", () => {
       Date.parse("2026-07-01T00:00:00Z"),
     );
     expect(testApi.parseAuditTimestamp("1234", "--after")).toBe(1234);
+    expect(testApi.parseAuditTimestamp("2024-02-29T00:00:00Z", "--after")).toBe(
+      Date.parse("2024-02-29T00:00:00Z"),
+    );
+    expect(testApi.parseAuditTimestamp("2026-07-01T00:00:00", "--after")).toBe(
+      Date.parse("2026-07-01T00:00:00"),
+    );
+    expect(() => testApi.parseAuditTimestamp("2026-02-30T00:00:00Z", "--after")).toThrow("--after");
     expect(() => testApi.parseAuditTimestamp("not-a-date", "--after")).toThrow("--after");
   });
 
