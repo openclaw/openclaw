@@ -96,6 +96,8 @@ describe("OpenClaw performance workflow", () => {
     expect(
       installRun.indexOf('npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund'),
     ).toBeLessThan(installRun.indexOf('cat > "$HOME/.local/bin/kova"'));
+    expect(workflow).toContain("PERFORMANCE_MODEL_ID: gpt-5.6");
+    expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
   });
 
   it("resolves each target once before benchmark and publication fan out", () => {
@@ -317,6 +319,33 @@ describe("OpenClaw performance workflow", () => {
     expect(publish.run).toContain('git_local cherry-pick -X theirs "$report_commit"');
     expect(publish.run).toContain('report_commit="$(git_local rev-parse HEAD)"');
     expect(publish.run).not.toContain("rebase FETCH_HEAD");
+  });
+
+  it("publishes bounded bundle metadata while retaining full diagnostics as an artifact", () => {
+    const workflow = readWorkflow();
+    const publisher = workflow.jobs?.publish;
+    const helper = findStep("Checkout performance publisher helper", "publish");
+    const prepare = findStep("Prepare clawgrit report commit", "publish");
+    const upload = findStep("Upload Kova artifacts");
+
+    expect(publisher?.env?.PUBLISHED_REPORT_MAX_FILE_BYTES).toBe("50000000");
+    expect(publisher?.env?.PERFORMANCE_PUBLISHER_HELPER).toContain(
+      "scripts/lib/kova-report-publish-files.mjs",
+    );
+    expect(helper.with).toMatchObject({
+      ref: "${{ github.sha }}",
+      path: ".artifacts/performance-publisher",
+      "sparse-checkout": "scripts/lib/kova-report-publish-files.mjs",
+      "sparse-checkout-cone-mode": false,
+      "persist-credentials": false,
+    });
+    expect(upload.with?.path).toContain(".artifacts/kova/bundles/${{ matrix.lane }}");
+    expect(prepare.env?.ARTIFACT_ID).toBe("${{ steps.artifact.outputs.id }}");
+    expect(prepare.run).toContain('node "$PERFORMANCE_PUBLISHER_HELPER"');
+    expect(prepare.run).toContain('--bundle-destination "$dest/bundles"');
+    expect(prepare.run).toContain('--max-file-bytes "$PUBLISHED_REPORT_MAX_FILE_BYTES"');
+    expect(prepare.run).toContain("The complete Kova bundle remains in [Actions artifact");
+    expect(prepare.run).not.toContain('cp -R "$bundle"/. "$dest/bundles/"');
   });
 
   it("reuses the producing artifact when only publisher jobs rerun", () => {
@@ -653,6 +682,7 @@ esac
     expect(run).toContain('--repeat "$repeat"');
     expect(run).toContain('--include "$INCLUDE_FILTERS"');
     expect(run).toContain('--auth "$AUTH_MODE"');
+    expect(run).toContain('--model "$PERFORMANCE_MODEL_ID"');
   });
 
   it("installs local workspace packages beside the OCM root tarball", () => {

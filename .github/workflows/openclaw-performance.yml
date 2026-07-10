@@ -33,7 +33,7 @@ on:
         default: false
         type: boolean
       live_openai_candidate:
-        description: Run the live OpenAI GPT 5.5 agent-turn lane
+        description: Run the live OpenAI GPT 5.6 agent-turn lane
         required: false
         default: false
         type: boolean
@@ -70,7 +70,7 @@ env:
   OCM_VERSION: v0.2.15
   OCM_LINUX_X64_SHA256: b849b8de5d77e97e0df9319703254ae95e29d7f26a7552ea79bf173ff110ea0a
   KOVA_REPOSITORY: openclaw/Kova
-  PERFORMANCE_MODEL_ID: gpt-5.5
+  PERFORMANCE_MODEL_ID: gpt-5.6
   KOVA_SCENARIO_TIMEOUT_MS: "300000"
 
 jobs:
@@ -144,7 +144,7 @@ jobs:
             include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message"
             expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
           - lane: live-openai-candidate
-            title: Kova live OpenAI GPT 5.5 agent turn
+            title: Kova live OpenAI GPT 5.6 agent turn
             auth: live
             repeat: "1"
             deep_profile: "false"
@@ -352,7 +352,7 @@ jobs:
             echo "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS=$workspace_dependency_dirs"
           } >> "$GITHUB_ENV"
 
-      - name: Pin Kova OpenAI model to GPT 5.5
+      - name: Pin Kova OpenAI model to GPT 5.6
         if: steps.lane.outputs.run == 'true'
         shell: bash
         run: |
@@ -443,7 +443,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-            echo "OPENAI_API_KEY is not configured; live GPT 5.5 lane cannot run without live evidence." >> "$GITHUB_STEP_SUMMARY"
+            echo "OPENAI_API_KEY is not configured; live GPT 5.6 lane cannot run without live evidence." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           kova setup --ci --json
@@ -502,7 +502,8 @@ jobs:
             --target "local-build:${GITHUB_WORKSPACE}" \
             --repeat "$repeat" \
             --include "$INCLUDE_FILTERS" \
-            --auth "$AUTH_MODE"
+            --auth "$AUTH_MODE" \
+            --model "$PERFORMANCE_MODEL_ID"
 
           effective_status="$status"
           if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
@@ -770,6 +771,8 @@ jobs:
             title: live OpenAI candidate
     env:
       LANE_ID: ${{ matrix.lane }}
+      PERFORMANCE_PUBLISHER_HELPER: ${{ github.workspace }}/.artifacts/performance-publisher/scripts/lib/kova-report-publish-files.mjs
+      PUBLISHED_REPORT_MAX_FILE_BYTES: "50000000"
       REPORT_PUBLISH_REQUIRED: ${{ github.event_name == 'schedule' || inputs.profile == 'release' }}
     steps:
       - name: Decide report publication lane
@@ -785,6 +788,17 @@ jobs:
             run_lane=false
           fi
           echo "run=$run_lane" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout performance publisher helper
+        if: steps.lane.outputs.run == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: .artifacts/performance-publisher
+          sparse-checkout: scripts/lib/kova-report-publish-files.mjs
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Resolve Kova artifact
         id: artifact
@@ -847,6 +861,7 @@ jobs:
         if: steps.download.outcome == 'success'
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
         env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.id }}
           INPUT_ROOT: ${{ steps.paths.outputs.input_root }}
           REPORTS_ROOT: ${{ steps.paths.outputs.reports_root }}
           TESTED_REF: ${{ needs.resolve_target.outputs.tested_ref }}
@@ -863,7 +878,7 @@ jobs:
             echo "::${annotation}::Publisher paths escaped RUNNER_TEMP."
             exit 1
           fi
-          if [[ ! "$PRODUCER_ATTEMPT" =~ ^[0-9]+$ || "$PRODUCER_ATTEMPT" -gt "$GITHUB_RUN_ATTEMPT" ]]; then
+          if [[ ! "$ARTIFACT_ID" =~ ^[0-9]+$ || ! "$PRODUCER_ATTEMPT" =~ ^[0-9]+$ || "$PRODUCER_ATTEMPT" -gt "$GITHUB_RUN_ATTEMPT" ]]; then
             echo "::${annotation}::Kova artifact attempt metadata is invalid."
             exit 1
           fi
@@ -958,8 +973,6 @@ jobs:
             install -m 0644 "$report_md" "$dest/report.md"
           fi
           install -m 0644 "$summary" "$dest/index.md"
-          mkdir -p "$dest/bundles"
-          cp -R "$bundle"/. "$dest/bundles/"
           if [[ -n "$source_dir" ]]; then
             mkdir -p "$dest/source"
             cp -R "$source_dir"/. "$dest/source/"
@@ -972,6 +985,14 @@ jobs:
           EOF
             fi
           fi
+
+          artifact_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts/${ARTIFACT_ID}"
+          {
+            echo
+            echo "## Full diagnostic artifact"
+            echo
+            echo "The complete Kova bundle remains in [Actions artifact ${ARTIFACT_ID}](${artifact_url}); its checksum is published under the bundles directory."
+          } >> "$dest/index.md"
 
           jq -n \
             --arg repository "$GITHUB_REPOSITORY" \
@@ -986,6 +1007,12 @@ jobs:
             --arg path "$dest_rel" \
             '{repository:$repository,ref:$ref,sha:$sha,tested_ref:$ref,tested_sha:$sha,workflow_ref:$workflow_ref,workflow_sha:$workflow_sha,workflow:$workflow,run_id:$run_id,run_attempt:$run_attempt,lane:$lane,path:$path}' \
             > "${reports_root}/openclaw-performance/${ref_slug}/latest-${LANE_ID}.json"
+
+          node "$PERFORMANCE_PUBLISHER_HELPER" \
+            --bundle-dir "$bundle" \
+            --bundle-destination "$dest/bundles" \
+            --publish-root "$dest" \
+            --max-file-bytes "$PUBLISHED_REPORT_MAX_FILE_BYTES"
 
           git -C "$reports_root" config user.name "openclaw-performance[bot]"
           git -C "$reports_root" config user.email "openclaw-performance[bot]@users.noreply.github.com"
