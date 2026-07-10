@@ -7,6 +7,16 @@ import {
 } from "./config.js";
 import { runFirecrawlScrape, runFirecrawlSearch } from "./firecrawl-client.js";
 
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
+  return input.url;
+}
+
 describe("firecrawl legacy config own entries", () => {
   const priorFetch = global.fetch;
 
@@ -50,7 +60,7 @@ describe("firecrawl legacy config own entries", () => {
     let capturedUrl = "";
     let capturedAuth: string | null = null;
     global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      capturedUrl = String(input);
+      capturedUrl = requestUrl(input);
       capturedAuth = new Headers(init?.headers).get("Authorization");
       return new Response(
         JSON.stringify({
@@ -86,7 +96,7 @@ describe("firecrawl legacy config own entries", () => {
     let capturedUrl = "";
     let capturedAuth: string | null = null;
     global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      capturedUrl = String(input);
+      capturedUrl = requestUrl(input);
       capturedAuth = new Headers(init?.headers).get("Authorization");
       return new Response(
         JSON.stringify({
