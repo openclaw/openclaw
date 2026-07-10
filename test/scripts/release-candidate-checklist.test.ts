@@ -1,6 +1,7 @@
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import {
   buildPublishCommand,
   candidateCumulativeShippedPullRequests,
@@ -507,6 +508,19 @@ describe("release candidate checklist", () => {
     ).toThrow("blocking product performance");
   });
 
+  it("binds SHA-pinned full validation evidence through its manifest", () => {
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+
+    expect(source).toContain("allowShaPinnedWorkflowRef: true");
+    expect(source).toContain(
+      "const fullValidationEvidence = validateFullReleaseValidationEvidence({",
+    );
+    expect(source).toContain("refs/heads/main:refs/remotes/origin/main");
+    expect(source).toContain(
+      'fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha',
+    );
+  });
+
   it("stops parsing options after the argument terminator", () => {
     const options = parseArgs([
       "--tag",
@@ -555,13 +569,26 @@ describe("release candidate checklist", () => {
         "--skip-dispatch",
       ]),
       workflowRef: "release/2026.5.14",
+      fullReleaseRunAttempt: 2,
     };
 
-    expect(buildPublishCommand(options)).toContain("'full_release_validation_run_id=111'");
-    expect(buildPublishCommand(options)).toContain("'preflight_run_id=222'");
-    expect(buildPublishCommand(options)).toContain("'tag=v2026.5.14-beta.3'");
-    expect(buildPublishCommand(options)).toContain("'plugin_publish_scope=all-publishable'");
-    expect(buildPublishCommand(options)).not.toContain("windows_node_tag=");
+    const command = buildPublishCommand(options);
+    expect(command).toContain("'full_release_validation_run_id=111'");
+    expect(command).toContain("'full_release_validation_run_attempt=2'");
+    expect(command).toContain("'preflight_run_id=222'");
+    expect(command).toContain("'tag=v2026.5.14-beta.3'");
+    expect(command).toContain("'plugin_publish_scope=all-publishable'");
+    expect(command).not.toContain("windows_node_tag=");
+
+    const workflow = parse(
+      readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
+    ) as {
+      on: { workflow_dispatch: { inputs: Record<string, unknown> } };
+    };
+    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].map((match) => match[1]);
+    for (const input of emittedInputs) {
+      expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
+    }
   });
 
   it("requires and carries an exact Windows Node tag for stable release candidates", () => {

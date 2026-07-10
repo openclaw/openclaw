@@ -53,6 +53,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type WorkflowStep = {
   "continue-on-error"?: boolean | string;
   env?: Record<string, string>;
+  id?: string;
   if?: string;
   name?: string;
   run?: string;
@@ -79,6 +80,7 @@ type WorkflowJob = {
   if?: string;
   name?: string;
   needs?: string | string[];
+  outputs?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on"?: string;
   strategy?: {
@@ -272,6 +274,10 @@ function runReleaseChecksSummary(params: {
 describe("package acceptance workflow", () => {
   it("verifies immutable postpublish evidence before stable closeout reads it", () => {
     const workflow = readFileSync(STABLE_MAIN_CLOSEOUT_WORKFLOW, "utf8");
+    const evidenceStep = workflowStep(
+      workflowJob(STABLE_MAIN_CLOSEOUT_WORKFLOW, "verify"),
+      "Verify release workflow evidence",
+    );
     const checksumIndex = workflow.indexOf(
       'sha256sum --strict --status -c "$evidence_checksum_asset"',
     );
@@ -351,6 +357,35 @@ describe("package acceptance workflow", () => {
       'awk -v asset="openclaw-${release_version}-stable-main-closeout.json"',
     );
     expect(workflow).toContain("attach_or_verify \\");
+    expect(workflow).toContain(
+      "full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}",
+    );
+    expect(workflow).toContain("(.[0].runAttempt == null) or");
+    expect(workflow).toContain(
+      'release_manifest_asset="openclaw-${evidence_version}-release-manifest.json"',
+    );
+    expect(workflow).toContain('sha256sum --strict --status -c "$release_manifest_checksum_asset"');
+    expect(workflow).toContain(
+      '"$existing_closeout_full_release_validation_run_attempt" != "$full_release_validation_run_attempt"',
+    );
+    expect(evidenceStep.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ needs.resolve.outputs.full_release_validation_run_attempt }}",
+    );
+    expect(evidenceStep.run).toContain(
+      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
+    );
+    expect(evidenceStep.run).toContain(
+      'String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT',
+    );
+    expect(evidenceStep.run).toContain(
+      'manifest_asset="openclaw-${evidence_version}-release-manifest.json"',
+    );
+    expect(evidenceStep.run).toContain('gh_with_retry release download "$EVIDENCE_TAG"');
+    expect(evidenceStep.run).toContain(".runId == $run_id");
+    expect(evidenceStep.run).toContain(".runAttempt == $run_attempt");
+    expect(workflow).toContain(
+      '--full-release-validation-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
+    );
     expect(checksumIndex).toBeGreaterThan(-1);
     expect(evidenceReadIndex).toBeGreaterThan(checksumIndex);
     expect(existingCloseoutEvidenceMatchIndex).toBeGreaterThan(evidenceReadIndex);
@@ -2673,7 +2708,26 @@ describe("package artifact reuse", () => {
   it("keeps release publish creation compatible with gh api and prerelease notes", () => {
     const workflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+    const maintainerSkill = readFileSync(
+      ".agents/skills/release-openclaw-maintainer/SKILL.md",
+      "utf8",
+    );
     const fullReleaseWorkflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const resolveFullRun = workflowStep(resolveJob, "Resolve full release validation run");
+    const resolveDownload = workflowStep(resolveJob, "Download full release validation manifest");
+    const trustedTooling = workflowStep(resolveJob, "Download trusted release validation tooling");
+    const validateManifest = workflowStep(resolveJob, "Validate full release validation manifest");
+    const publishDownload = workflowStep(publishJob, "Download full release validation manifest");
+    const publishOrchestration = workflowStep(publishJob, "Dispatch publish workflows");
+    const npmPublishJob = workflowJob(
+      ".github/workflows/openclaw-npm-release.yml",
+      "publish_openclaw_npm",
+    );
+    const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation run metadata");
+    const npmDownload = workflowStep(npmPublishJob, "Download full release validation manifest");
+    const npmTarget = workflowStep(npmPublishJob, "Verify full release validation target");
 
     expect(workflow).toContain("timeout-minutes: 120");
     expect(workflow).toContain("environment: npm-release");
@@ -2681,7 +2735,65 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("Validate OpenClaw npm preflight manifest");
     expect(workflow).toContain("Download full release validation manifest");
     expect(workflow).toContain("Validate full release validation manifest");
+    expect(workflow).toContain("scripts/validate-full-release-validation-evidence.mjs");
+    expect(workflow).toContain("+refs/heads/main:refs/remotes/origin/main");
+    expect(workflow).toContain("full_release_validation_run_attempt");
     expect(workflow).toContain("full_release_validation_run_id");
+    expect(resolveFullRun.id).toBe("full_run");
+    expect(resolveFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ inputs.full_release_validation_run_attempt }}",
+    );
+    expect(resolveFullRun.run).toContain(
+      'run_endpoint+="/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"',
+    );
+    expect(resolveFullRun.run).toContain('gh api "$run_endpoint"');
+    expect(resolveJob.outputs?.full_release_validation_run_attempt).toBe(
+      "${{ steps.full_run.outputs.attempt }}",
+    );
+    expect(resolveDownload.with?.name).toBe(
+      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+    );
+    expect(trustedTooling.env?.WORKFLOW_SHA).toBe("${{ github.sha }}");
+    expect(trustedTooling.run).toContain("validate-full-release-validation-evidence.mjs");
+    expect(validateManifest.env).toMatchObject({
+      RUN_JSON_FILE: "${{ runner.temp }}/full-release-validation-run.json",
+      TRUSTED_MAIN_REF: "refs/remotes/origin/main",
+      VALIDATOR_FILE:
+        "${{ runner.temp }}/release-validation-tooling/validate-full-release-validation-evidence.mjs",
+    });
+    expect(validateManifest.run).toContain(
+      'MANIFEST_FILE="$manifest" node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"',
+    );
+    expect(publishDownload.with?.name).toBe(
+      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
+    );
+    expect(publishOrchestration.run).not.toContain("--full-release-validation-workflow-ref");
+    expect(publishOrchestration.run).not.toContain("--full-release-validation-run");
+    expect(publishOrchestration.run).toContain('pnpm "${verify_args[@]}"');
+    expect(publishOrchestration.run).toContain(".workflowRuns += [");
+    expect(publishOrchestration.run).toContain('label: "Full Release Validation"');
+    expect(publishOrchestration.run).toContain('"${validation_target_sha}" != "${TARGET_SHA}"');
+    expect(publishOrchestration.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
+    );
+    expect(publishOrchestration.run).toContain(
+      '-f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"',
+    );
+    expect(npmFullRun.id).toBe("full_run");
+    expect(npmFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ inputs.full_release_validation_run_attempt }}",
+    );
+    expect(npmFullRun.run).toContain(
+      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
+    );
+    expect(npmFullRun.run).toContain('"$run_attempt" != "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"');
+    expect(npmDownload.with?.name).toBe(
+      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+    );
+    expect(npmTarget.env).toMatchObject({
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ steps.full_run.outputs.attempt }}",
+    });
     expect(workflow).toContain(
       "Full release validation must run rerun_group=all before npm publish",
     );
@@ -2708,6 +2820,7 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain("full_release_validation_run_id");
     expect(npmWorkflow).toContain("release_publish_run_id");
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
+    expect(maintainerSkill).toContain("full_release_validation_run_attempt=<saved-attempt>");
     expect(npmWorkflow).toContain(
       "Workflow-dispatched real publish requires release_publish_run_id",
     );
