@@ -677,7 +677,7 @@ async function openMeetWithBrowserRequest(params: {
     );
     tab = tabs.find((entry) => isSameMeetUrlForReuse(entry.url, params.url));
     targetId = tab?.targetId;
-    if (targetId) {
+    if (tab && targetId) {
       await params.callBrowser({
         method: "POST",
         path: "/tabs/focus",
