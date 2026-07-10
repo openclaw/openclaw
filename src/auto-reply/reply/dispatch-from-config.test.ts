@@ -771,7 +771,7 @@ function setNoAbort() {
 
 async function dispatchFailedCommandProgressBeforeBlock(params: {
   dispatcher: ReplyDispatcher;
-  ctx?: MsgContext;
+  ctx?: DispatchReplyArgs["ctx"];
 }) {
   setNoAbort();
   const previousSessionEntry = sessionStoreMocks.currentEntry;
