@@ -2686,6 +2686,9 @@ async function agentCommandInternal(
 
           if (combinedPayload) {
             const entry = sessionStore[sessionKey] ?? sessionEntry;
+            if (!entry) {
+              throw new Error("Cannot persist pending delivery without a session entry");
+            }
             const next: SessionEntry = {
               ...entry,
               pendingFinalDelivery: true,
@@ -2754,6 +2757,9 @@ async function agentCommandInternal(
           !sessionReboundDuringRun
         ) {
           const entry = sessionStore[sessionKey] ?? sessionEntry;
+          if (!entry) {
+            throw new Error("Cannot clear pending delivery without a session entry");
+          }
           const noPendingTextForThisRun =
             opts.deliver === true &&
             pendingFinalDeliveryTextForThisRun === undefined &&
