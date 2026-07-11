@@ -1,10 +1,10 @@
 // Codex tests cover Computer Use shared plugin cache reconciliation.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
+import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 describe("Codex Computer Use shared plugin cache", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -281,6 +281,34 @@ describe("Codex Computer Use shared plugin cache", () => {
     await expect(fs.access(path.join(cacheRoot, "1.0.101"))).resolves.toBe(undefined);
     await expect(fs.access(path.join(cacheRoot, "1.0.102"))).resolves.toBe(undefined);
   });
+
+  it("preserves the active cache when replacement copying fails", async () => {
+    const root = tempDirs.make("openclaw-computer-use-cache-");
+    const codexHome = path.join(root, "agent", "codex-home");
+    const bundledMarketplacePath = path.join(root, "bundled-marketplace");
+    const cachePath = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "computer-use",
+      "2.0.0",
+    );
+    const manifestPath = path.join(cachePath, ".codex-plugin", "plugin.json");
+    await writeBundledComputerUsePlugin(bundledMarketplacePath, "2.0.0");
+    await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+    await fs.writeFile(manifestPath, JSON.stringify({ name: "computer-use", version: "old" }));
+    vi.spyOn(fs, "cp").mockRejectedValueOnce(new Error("copy failed"));
+
+    await expect(
+      ensureCodexComputerUseSharedPluginCache({
+        codexHome,
+        bundledMarketplacePath,
+        config: computerUseConfig(),
+      }),
+    ).rejects.toThrow("copy failed");
+    await expect(fs.readFile(manifestPath, "utf8")).resolves.toContain('"version":"old"');
+  });
 });
 
 async function writeBundledComputerUsePlugin(
@@ -304,7 +332,6 @@ function computerUseConfig(
     marketplaceDiscoveryTimeoutMs: 60_000,
     liveTestTimeoutMs: 60_000,
     toolCallTimeoutMs: 60_000,
-    leaseTimeoutMs: 300_000,
     healthCheckEnabled: false,
     healthCheckIntervalMinutes: 60,
     pluginCacheMode: "shared",

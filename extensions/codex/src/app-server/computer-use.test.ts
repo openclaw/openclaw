@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   ensureCodexComputerUse,
   installCodexComputerUse,
@@ -11,6 +10,7 @@ import {
   type CodexComputerUseStatus,
   type CodexComputerUseRequest,
 } from "./computer-use.js";
+import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 function expectStatusFields(
   status: CodexComputerUseStatus,
@@ -43,17 +43,9 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requestCalls(request: CodexComputerUseRequest): ReadonlyArray<
-  readonly [
-    method: string,
-    params?: unknown,
-    options?: {
-      timeoutMs?: number;
-      allowComputerUseMcpProbe?: boolean;
-      computerUseMcpServerName?: string;
-    },
-  ]
-> {
+function requestCalls(
+  request: CodexComputerUseRequest,
+): ReadonlyArray<readonly [method: string, params?: unknown, options?: { timeoutMs?: number }]> {
   return vi.mocked(request).mock.calls;
 }
 
@@ -135,8 +127,6 @@ describe("Codex Computer Use setup", () => {
       },
       {
         timeoutMs: 60_000,
-        allowComputerUseMcpProbe: true,
-        computerUseMcpServerName: "computer-use",
       },
     );
     expect(request).toHaveBeenCalledWith(

@@ -155,7 +155,6 @@ function computerUseConfig(
     marketplaceDiscoveryTimeoutMs: 60_000,
     liveTestTimeoutMs: 60_000,
     toolCallTimeoutMs: 60_000,
-    leaseTimeoutMs: 300_000,
     healthCheckEnabled: false,
     healthCheckIntervalMinutes: 60,
     pluginCacheMode: "shared",

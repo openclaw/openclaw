@@ -82,7 +82,6 @@ export type CodexComputerUseConfig = {
   marketplaceDiscoveryTimeoutMs?: number;
   liveTestTimeoutMs?: number;
   toolCallTimeoutMs?: number;
-  leaseTimeoutMs?: number;
   healthCheckEnabled?: boolean;
   healthCheckIntervalMinutes?: number;
   pluginCacheMode?: "shared" | "independent";
@@ -101,7 +100,6 @@ export type ResolvedCodexComputerUseConfig = {
   marketplaceDiscoveryTimeoutMs: number;
   liveTestTimeoutMs: number;
   toolCallTimeoutMs: number;
-  leaseTimeoutMs: number;
   healthCheckEnabled: boolean;
   healthCheckIntervalMinutes: 30 | 60 | 120 | 240;
   pluginCacheMode: "shared" | "independent";
@@ -322,7 +320,6 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "marketplaceDiscoveryTimeoutMs",
   "liveTestTimeoutMs",
   "toolCallTimeoutMs",
-  "leaseTimeoutMs",
   "healthCheckEnabled",
   "healthCheckIntervalMinutes",
   "pluginCacheMode",
@@ -378,7 +375,6 @@ const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
 const DEFAULT_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS = 60_000;
 const DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS = 60_000;
-const DEFAULT_CODEX_COMPUTER_USE_LEASE_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES = 60;
 const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
@@ -509,7 +505,6 @@ const codexPluginConfigSchema = z
         marketplaceDiscoveryTimeoutMs: z.number().positive().optional(),
         liveTestTimeoutMs: z.number().positive().optional(),
         toolCallTimeoutMs: z.number().positive().optional(),
-        leaseTimeoutMs: z.number().positive().optional(),
         healthCheckEnabled: z.boolean().optional(),
         healthCheckIntervalMinutes: codexComputerUseHealthIntervalSchema.optional(),
         pluginCacheMode: codexComputerUsePluginCacheModeSchema.optional(),
@@ -1010,12 +1005,6 @@ export function resolveCodexComputerUseConfig(
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS,
   );
-  const leaseTimeoutMs = normalizePositiveNumber(
-    params.overrides?.leaseTimeoutMs ??
-      config.leaseTimeoutMs ??
-      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_LEASE_TIMEOUT_MS),
-    DEFAULT_CODEX_COMPUTER_USE_LEASE_TIMEOUT_MS,
-  );
   const healthCheckIntervalMinutes = normalizeComputerUseHealthCheckIntervalMinutes(
     params.overrides?.healthCheckIntervalMinutes ??
       config.healthCheckIntervalMinutes ??
@@ -1053,7 +1042,6 @@ export function resolveCodexComputerUseConfig(
     marketplaceDiscoveryTimeoutMs,
     liveTestTimeoutMs,
     toolCallTimeoutMs,
-    leaseTimeoutMs,
     healthCheckEnabled,
     healthCheckIntervalMinutes,
     pluginCacheMode,

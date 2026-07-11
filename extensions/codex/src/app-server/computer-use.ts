@@ -7,7 +7,6 @@ import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 import { describeControlFailure } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
-import { CodexComputerUseWindowLeaseManager } from "./computer-use-leases.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -27,22 +26,11 @@ import type {
 } from "./protocol.js";
 import { requestCodexAppServerJson } from "./request.js";
 
-export { CodexComputerUseWindowLeaseManager } from "./computer-use-leases.js";
-export type {
-  CodexComputerUseAcquireLeaseParams,
-  CodexComputerUseLeaseAcquireResult,
-  CodexComputerUseWindowLease,
-} from "./computer-use-leases.js";
-
 /** Minimal app-server request function needed by Computer Use setup. */
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
   params?: unknown,
-  options?: {
-    timeoutMs?: number;
-    allowComputerUseMcpProbe?: boolean;
-    computerUseMcpServerName?: string;
-  },
+  options?: { timeoutMs?: number },
 ) => Promise<T>;
 
 type CodexComputerUseStatusReason =
@@ -176,23 +164,6 @@ const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
 const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
 const execFileAsync = promisify(execFile);
 
-type ComputerUseWindowLeaseManagerState = {
-  manager?: CodexComputerUseWindowLeaseManager;
-  leaseTimeoutMs?: number;
-};
-
-const COMPUTER_USE_WINDOW_LEASE_MANAGER_STATE = Symbol.for(
-  "openclaw.codexComputerUseWindowLeaseManager",
-);
-
-function getComputerUseWindowLeaseManagerState(): ComputerUseWindowLeaseManagerState {
-  const globalState = globalThis as typeof globalThis & {
-    [COMPUTER_USE_WINDOW_LEASE_MANAGER_STATE]?: ComputerUseWindowLeaseManagerState;
-  };
-  globalState[COMPUTER_USE_WINDOW_LEASE_MANAGER_STATE] ??= {};
-  return globalState[COMPUTER_USE_WINDOW_LEASE_MANAGER_STATE];
-}
-
 /** Reads Computer Use readiness without installing or mutating app-server state. */
 export async function readCodexComputerUseStatus(
   params: CodexComputerUseSetupParams = {},
@@ -227,7 +198,6 @@ export async function ensureCodexComputerUse(
   if (!config.enabled) {
     return disabledStatus(config);
   }
-  getCodexComputerUseWindowLeaseManager(config);
   const status = await inspectCodexComputerUse({
     ...params,
     config,
@@ -513,8 +483,6 @@ export async function runCodexComputerUseLiveTest(params: {
         },
         {
           timeoutMs: params.config.toolCallTimeoutMs,
-          allowComputerUseMcpProbe: true,
-          computerUseMcpServerName: params.config.mcpServerName,
         },
       );
       return {
@@ -585,20 +553,6 @@ function scopedRepairUnavailableStatus(): CodexComputerUseRepairStatus {
     ],
     message: "Computer Use stale child repair requires a scoped local app-server PID.",
   };
-}
-
-/** Returns the shared window-scope lease manager configured from computerUse.leaseTimeoutMs. */
-export function getCodexComputerUseWindowLeaseManager(
-  config: Pick<ResolvedCodexComputerUseConfig, "leaseTimeoutMs">,
-): CodexComputerUseWindowLeaseManager {
-  const state = getComputerUseWindowLeaseManagerState();
-  if (!state.manager || state.leaseTimeoutMs !== config.leaseTimeoutMs) {
-    state.manager = new CodexComputerUseWindowLeaseManager({
-      defaultTimeoutMs: config.leaseTimeoutMs,
-    });
-    state.leaseTimeoutMs = config.leaseTimeoutMs;
-  }
-  return state.manager;
 }
 
 async function resolveMarketplaceRef(params: {
@@ -1180,28 +1134,18 @@ function createComputerUseRequest(params: {
   return async <T = JsonValue | undefined>(
     method: string,
     requestParams?: unknown,
-    options?: {
-      timeoutMs?: number;
-      allowComputerUseMcpProbe?: boolean;
-      computerUseMcpServerName?: string;
-    },
+    options?: { timeoutMs?: number },
   ) =>
     await requestCodexAppServerJson<T>({
       method,
       requestParams,
       timeoutMs: options?.timeoutMs ?? params.timeoutMs ?? runtime.requestTimeoutMs,
-      allowComputerUseMcpProbe: options?.allowComputerUseMcpProbe,
-      computerUseMcpServerName: options?.computerUseMcpServerName,
       pluginConfig: params.pluginConfig,
       startOptions: runtime.start,
     });
 }
 
-export const testing = {
-  getComputerUseWindowLeaseManagerState,
-  isDescendantOfPid,
-  parsePsOutput,
-};
+export const testing = { isDescendantOfPid, parsePsOutput };
 
 function resolveComputerUseConfig(
   params: Pick<CodexComputerUseSetupParams, "pluginConfig" | "overrides" | "forceEnable">,

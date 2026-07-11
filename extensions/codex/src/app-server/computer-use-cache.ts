@@ -150,9 +150,41 @@ async function ensureRealDirectoryCopy(
       return false;
     }
   }
-  await fs.rm(cachePath, { recursive: true, force: true });
-  await fs.cp(sourcePluginRoot, cachePath, { recursive: true });
-  return true;
+  const cacheRoot = path.dirname(cachePath);
+  const cacheName = path.basename(cachePath);
+  const stagingRoot = await fs.mkdtemp(path.join(cacheRoot, `.${cacheName}.staging-`));
+  const stagedPath = path.join(stagingRoot, cacheName);
+  const backupPath = path.join(cacheRoot, `.${cacheName}.backup-${process.pid}-${Date.now()}`);
+  let backupCreated = false;
+  try {
+    await fs.cp(sourcePluginRoot, stagedPath, { recursive: true });
+    if (stat) {
+      await fs.rename(cachePath, backupPath);
+      backupCreated = true;
+    }
+    try {
+      await fs.rename(stagedPath, cachePath);
+    } catch (error) {
+      if (backupCreated) {
+        try {
+          await fs.rename(backupPath, cachePath);
+          backupCreated = false;
+        } catch (restoreError) {
+          throw new Error(
+            `Failed to install Computer Use cache ${cachePath} and restore its prior copy: ${String(error)}`,
+            { cause: restoreError },
+          );
+        }
+      }
+      throw error;
+    }
+    if (backupCreated) {
+      await fs.rm(backupPath, { recursive: true, force: true });
+    }
+    return true;
+  } finally {
+    await fs.rm(stagingRoot, { recursive: true, force: true });
+  }
 }
 
 function skippedCacheResult(
