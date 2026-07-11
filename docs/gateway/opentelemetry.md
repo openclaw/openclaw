@@ -90,7 +90,7 @@ stdout, or `both` for both.
       logsEndpoint: "http://otel-collector:4318/v1/logs",
       protocol: "http/protobuf", // grpc disables OTLP export
       serviceName: "openclaw-gateway", // unset falls back to OTEL_SERVICE_NAME, then "openclaw"
-      serviceInstanceId: "pod-abc-123", // opt-in service.instance.id; omitted entirely when unset
+      serviceInstanceId: "pod-abc-123", // opt-in service.instance.id; omitted when unset (plugin-managed SDK path only)
       headers: { "x-collector-token": "..." },
       traces: true,
       metrics: true,
@@ -114,33 +114,36 @@ stdout, or `both` for both.
 
 ### Environment variables
 
-| Variable                                                                                                          | Purpose                                                                                                                                                                                                                                                                                                                        |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                     | Fallback for `diagnostics.otel.endpoint` when the config key is unset.                                                                                                                                                                                                                                                         |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Signal-specific endpoint fallbacks used when the matching `diagnostics.otel.*Endpoint` config key is unset. Signal-specific config wins over signal-specific env, which wins over the shared endpoint.                                                                                                                         |
-| `OTEL_SERVICE_NAME`                                                                                               | Fallback for `diagnostics.otel.serviceName` when the config key is unset. Default service name is `openclaw`.                                                                                                                                                                                                                  |
-| `OTEL_SERVICE_INSTANCE_ID`                                                                                        | Fallback for `diagnostics.otel.serviceInstanceId` when the config key is unset. Sets the OTel `service.instance.id` resource attribute. **Omitted entirely when neither is set** — the plugin never derives an instance id from the hostname. Supply a stable, opaque per-instance id (e.g. a provisioned pod/deployment UID). |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Fallback for the wire protocol when `diagnostics.otel.protocol` is unset. Only `http/protobuf` enables export.                                                                                                                                                                                                                 |
-| `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                   | Set to `gen_ai_latest_experimental` to emit the latest GenAI inference span shape: `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality attributes regardless.                 |
-| `OPENCLAW_OTEL_PRELOADED`                                                                                         | Set to `1` when another preload or host process already registered the global OpenTelemetry SDK. The plugin then skips its own NodeSDK lifecycle but still wires diagnostic listeners and honors `traces`/`metrics`/`logs`.                                                                                                    |
+| Variable                                                                                                          | Purpose                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                     | Fallback for `diagnostics.otel.endpoint` when the config key is unset.                                                                                                                                                                                                                                         |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Signal-specific endpoint fallbacks used when the matching `diagnostics.otel.*Endpoint` config key is unset. Signal-specific config wins over signal-specific env, which wins over the shared endpoint.                                                                                                         |
+| `OTEL_SERVICE_NAME`                                                                                               | Fallback for `diagnostics.otel.serviceName` when the config key is unset. Default service name is `openclaw`.                                                                                                                                                                                                  |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Fallback for the wire protocol when `diagnostics.otel.protocol` is unset. Only `http/protobuf` enables export.                                                                                                                                                                                                 |
+| `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                   | Set to `gen_ai_latest_experimental` to emit the latest GenAI inference span shape: `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality attributes regardless. |
+| `OPENCLAW_OTEL_PRELOADED`                                                                                         | Set to `1` when another preload or host process already registered the global OpenTelemetry SDK. The plugin then skips its own NodeSDK lifecycle but still wires diagnostic listeners and honors `traces`/`metrics`/`logs`.                                                                                    |
 
 ### Instance identity (`service.instance.id`)
 
-In a multi-pod / multi-replica deployment, set `service.instance.id` so a
-collector or backend can tell instances apart. It is resolved with this
-precedence:
+In a multi-pod / multi-replica deployment, set `diagnostics.otel.serviceInstanceId`
+so a collector or backend can tell instances apart. When unset the attribute is
+**omitted** from the exported resource — the plugin never falls back to the
+hostname, so no host or pod identity is exported by default. Supply a **stable,
+opaque** id you control (for example a provisioned pod or deployment UID); it
+should stay constant across restarts so backends can track the same instance
+over time.
 
-1. `diagnostics.otel.serviceInstanceId` config field
-2. `OTEL_SERVICE_INSTANCE_ID` environment variable
-3. otherwise **absent** — the attribute is omitted from the exported resource
+Scope and preloaded mode:
 
-The plugin never falls back to the hostname, so no host or pod identity is
-exported by default. Supply a **stable, opaque** id you control (for example a
-provisioned pod or deployment UID); it should stay constant across restarts so
-backends can track the same instance over time. Operators who prefer the
-standard OpenTelemetry path can instead set
-`OTEL_RESOURCE_ATTRIBUTES=service.instance.id=...` wherever a resource detector
-merge is available.
+- This applies to the **plugin-managed SDK path** only (the same scope as
+  `serviceName`). When a preloaded SDK owns the resource
+  (`OPENCLAW_OTEL_PRELOADED`), the plugin does not construct the resource, so
+  `serviceInstanceId` is not applied; set the instance id on the preloader
+  instead. The plugin logs a warning if `serviceInstanceId` is set in this mode.
+- The plugin builds its resource via `resourceFromAttributes` and does not
+  currently merge `OTEL_RESOURCE_ATTRIBUTES`. Operators who prefer that standard
+  path can set `OTEL_RESOURCE_ATTRIBUTES=service.instance.id=...` on the
+  preloader / host SDK that owns the exported resource.
 
 ## Privacy and content capture
 

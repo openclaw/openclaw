@@ -308,8 +308,9 @@ export type DiagnosticsOtelConfig = {
   serviceName?: string;
   /**
    * Opaque, stable per-instance identity exported as the OTel
-   * `service.instance.id` resource attribute. Omitted entirely when unset — the
-   * plugin never derives it from the hostname.
+   * `service.instance.id` resource attribute on the plugin-managed SDK path.
+   * Omitted entirely when unset — the plugin never derives it from the hostname.
+   * Not applied when a preloaded SDK owns the resource (`OPENCLAW_OTEL_PRELOADED`).
    */
   serviceInstanceId?: string;
   traces?: boolean;

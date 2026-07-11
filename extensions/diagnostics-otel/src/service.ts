@@ -1662,8 +1662,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const headers = otel.headers ?? undefined;
       const serviceName =
         otel.serviceName?.trim() || process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
-      const serviceInstanceId =
-        otel.serviceInstanceId?.trim() || process.env.OTEL_SERVICE_INSTANCE_ID?.trim() || undefined;
+      const serviceInstanceId = otel.serviceInstanceId?.trim() || undefined;
       const sampleRate = resolveSampleRate(otel.sampleRate);
       const contentCapturePolicy = resolveContentCapturePolicy(otel.captureContent);
       const sdkPreloaded = hasPreloadedOtelSdk();
@@ -1772,6 +1771,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
       } else if (sdkPreloaded && (tracesEnabled || metricsEnabled)) {
         ctx.logger.info("diagnostics-otel: using preloaded OpenTelemetry SDK");
+        if (serviceInstanceId) {
+          ctx.logger.warn(
+            "diagnostics-otel: diagnostics.otel.serviceInstanceId is set but a preloaded " +
+              "OpenTelemetry SDK owns the exported resource, so service.instance.id will not be " +
+              "applied. Set the instance id on the preloader instead (e.g. via " +
+              "OTEL_RESOURCE_ATTRIBUTES=service.instance.id=...).",
+          );
+        }
       }
 
       const logSeverityMap: Record<string, SeverityNumber> = {

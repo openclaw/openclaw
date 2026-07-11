@@ -755,6 +755,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Additional HTTP/gRPC metadata headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
   "diagnostics.otel.serviceName":
     "Service name reported in telemetry resource attributes to identify this gateway instance in observability backends. Use stable names so dashboards and alerts remain consistent over deployments.",
+  "diagnostics.otel.serviceInstanceId":
+    "Opt-in service.instance.id resource attribute used to distinguish individual instances in multi-pod/multi-replica deployments. Omitted entirely when unset (never derived from the hostname). Applies to the plugin-managed SDK path only; when a preloaded SDK owns the resource (OPENCLAW_OTEL_PRELOADED) set the instance id on the preloader instead. Use a stable, opaque per-instance id (for example a provisioned pod UID) so backends can track the same instance across restarts.",
   "diagnostics.otel.traces":
     "Enable trace signal export to the configured OpenTelemetry collector endpoint. Keep enabled when latency/debug tracing is needed, and disable if you only want metrics/logs.",
   "diagnostics.otel.metrics":
