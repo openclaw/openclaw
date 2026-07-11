@@ -47,7 +47,7 @@ function makeStore(entries: Array<[string, SessionEntry]>): Record<string, Sessi
 function createMaintenanceArtifacts() {
   return {
     archiveRemovedSessionTranscripts: async () => new Set<string>(),
-    removeRemovedSessionTrajectoryArtifacts: async () => {},
+    removeRemovedSessionTrajectoryArtifacts: async () => new Set<string>(),
     cleanupArchivedSessionTranscripts: async () => {},
   };
 }
@@ -225,6 +225,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         },
         removeRemovedSessionTrajectoryArtifacts: async (params) => {
           trajectoryCleanupReferencedIds = new Set(params.referencedSessionIds);
+          return new Set<string>();
         },
         cleanupArchivedSessionTranscripts: async () => {},
       },
@@ -281,7 +282,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       log: { warn: () => {}, info: () => {} },
       artifacts: {
         archiveRemovedSessionTranscripts: async () => new Set(),
-        removeRemovedSessionTrajectoryArtifacts: async () => {},
+        removeRemovedSessionTrajectoryArtifacts: async () => new Set(),
         cleanupArchivedSessionTranscripts: async () => {},
       },
     });

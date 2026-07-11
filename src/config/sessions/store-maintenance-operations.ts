@@ -41,13 +41,15 @@ type RemovedSessionArtifactCleanup = {
     restrictToStoreDir: true;
     nowMs: number;
   }) => Promise<Set<string>>;
+  // Returns the directories tombstones actually landed in, so the retention
+  // sweep below reaches an OPENCLAW_TRAJECTORY_DIR override too.
   removeRemovedSessionTrajectoryArtifacts: (params: {
     removedSessionFiles: RemovedSessionFiles;
     referencedSessionIds: ReadonlySet<string>;
     storePath: string;
     restrictToStoreDir: true;
     disposal: { mode: "tombstone"; reason: "deleted"; nowMs: number };
-  }) => Promise<void>;
+  }) => Promise<Set<string>>;
   cleanupArchivedSessionTranscripts: (params: {
     directories: string[];
     rules: Array<{ reason: "deleted" | "reset"; olderThanMs: number }>;
@@ -167,21 +169,27 @@ async function cleanupRemovedSessionArtifacts(params: {
     restrictToStoreDir: true,
     nowMs,
   });
+  let trajectoryTombstoneDirs: Set<string> = new Set();
   if (params.removedSessionFiles.size > 0) {
-    await params.operation.artifacts.removeRemovedSessionTrajectoryArtifacts({
-      removedSessionFiles: params.removedSessionFiles,
-      referencedSessionIds: params.referencedSessionIds,
-      storePath: params.operation.storePath,
-      restrictToStoreDir: true,
-      disposal: { mode: "tombstone", reason: "deleted", nowMs },
-    });
+    trajectoryTombstoneDirs =
+      await params.operation.artifacts.removeRemovedSessionTrajectoryArtifacts({
+        removedSessionFiles: params.removedSessionFiles,
+        referencedSessionIds: params.referencedSessionIds,
+        storePath: params.operation.storePath,
+        restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted", nowMs },
+      });
   }
-  if (archivedDirs.size === 0 && params.maintenance.resetArchiveRetentionMs == null) {
+  if (
+    archivedDirs.size === 0 &&
+    trajectoryTombstoneDirs.size === 0 &&
+    params.maintenance.resetArchiveRetentionMs == null
+  ) {
     return;
   }
   const targetDirs =
-    archivedDirs.size > 0
-      ? [...archivedDirs]
+    archivedDirs.size > 0 || trajectoryTombstoneDirs.size > 0
+      ? [...new Set([...archivedDirs, ...trajectoryTombstoneDirs])]
       : [path.dirname(path.resolve(params.operation.storePath))];
   // Both retention reasons ride one cleanup call so each save enumerates the
   // sessions dir at most once; reset retention defaults on, so a listing per

@@ -259,15 +259,61 @@ export async function removeSessionTrajectoryArtifacts(params: {
   if (registryOwnedPath) {
     runtimeCandidates.add(registryOwnedPath);
   }
-  const canRemovePointer = !restrictToStoreDir || isPathWithinDir(storeDir, pointerPath);
   // The runtime file and its pointer are one incarnation-owned artifact pair:
   // whichever canonical path this session actually owns is where BOTH must
   // retire/archive in the SAME locked turn, so a racing acquisition on that
   // exact path can never observe a half-tombstoned pair — a fresh pointer
   // published after this turn releases, or this turn's archive clobbering a
   // pointer a racing claim just published (round 4 P1).
-  const primaryCanonicalPath =
-    registryOwnedPath ?? canonicalizePathForComparison(defaultRuntimePath);
+  //
+  // Preference order for which canonical path is "primary" (couples the
+  // pointer's disposal to its turn): registry ownership (strongest,
+  // in-process-trusted) > a pointer-declared target OUTSIDE the store dir
+  // (an OPENCLAW_TRAJECTORY_DIR override) whose ownership independently
+  // validates via mayRemoveRuntimeTarget > the co-located default candidate,
+  // which is what most sessions (no override configured) actually use.
+  // Blindly defaulting to the co-located candidate when the pointer names a
+  // *different*, unvalidated external target would dispose the pointer on
+  // an unrelated (often nonexistent) file's turn, orphaning the real
+  // external runtime with no discovery pointer left to find it by (round 5
+  // P1) — so an unvalidated external target instead leaves the pointer
+  // alone entirely: an orphaned runtime WITH a pointer beats one with none.
+  // A pointer-declared target that merely differs from the default but is
+  // STILL inside the store dir (a stale/forged pointer, not an
+  // OPENCLAW_TRAJECTORY_DIR override) is not "external" — it keeps the
+  // existing fallback behavior below, where the pointer itself is still
+  // reachable and safe to dispose regardless of the runtime target's proof.
+  const canonicalDefaultPath = canonicalizePathForComparison(defaultRuntimePath);
+  const externalPointerTarget =
+    pointer?.runtimeFile &&
+    canonicalizePathForComparison(pointer.runtimeFile) !== canonicalDefaultPath &&
+    !isPathWithinDir(storeDir, pointer.runtimeFile)
+      ? pointer.runtimeFile
+      : undefined;
+  let primaryCanonicalPath: string;
+  let canRemovePointer: boolean;
+  if (registryOwnedPath) {
+    primaryCanonicalPath = registryOwnedPath;
+    canRemovePointer = !restrictToStoreDir || isPathWithinDir(storeDir, pointerPath);
+  } else if (
+    externalPointerTarget &&
+    mayRemoveRuntimeTarget({
+      defaultRuntimePath,
+      filePath: externalPointerTarget,
+      sessionId: params.sessionId,
+      storeDir,
+      restrictToStoreDir,
+    })
+  ) {
+    primaryCanonicalPath = canonicalizePathForComparison(externalPointerTarget);
+    canRemovePointer = true;
+  } else if (externalPointerTarget) {
+    primaryCanonicalPath = canonicalDefaultPath;
+    canRemovePointer = false;
+  } else {
+    primaryCanonicalPath = canonicalDefaultPath;
+    canRemovePointer = !restrictToStoreDir || isPathWithinDir(storeDir, pointerPath);
+  }
   let pointerHandledInPrimaryTurn = false;
 
   for (const runtimePath of runtimeCandidates) {

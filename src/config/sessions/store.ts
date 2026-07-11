@@ -997,7 +997,11 @@ async function saveSessionStoreUnlocked(
         archiveRemovedSessionTranscripts,
         removeRemovedSessionTrajectoryArtifacts: async (params) => {
           const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
-          await removeRemovedSessionTrajectoryArtifacts(params);
+          const removed = await removeRemovedSessionTrajectoryArtifacts(params);
+          // Surface the directories tombstones actually landed in (an
+          // OPENCLAW_TRAJECTORY_DIR override lands outside the sessions dir)
+          // so the retention sweep below can reach them too.
+          return new Set(removed.map((artifact) => path.dirname(artifact.path)));
         },
         cleanupArchivedSessionTranscripts: async (params) => {
           const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
