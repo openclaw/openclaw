@@ -169,6 +169,9 @@ export type ChatProps = {
   /** True when a split pane header hosts the workspace toggle; suppresses the
    * single-pane floating opener so only one affordance renders. */
   paneHeaderActive?: boolean;
+  /** Split-view opener shown in the floating toggle cluster. Only set for the
+   * single wide pane — split mode owns its controls in pane headers. */
+  onOpenSplitView?: () => void;
   taskSuggestions?: TaskSuggestion[];
   taskSuggestionBusyIds?: ReadonlySet<string>;
   canAcceptTaskSuggestions?: boolean;
@@ -236,9 +239,12 @@ export function renderChat(props: ChatProps) {
     onScrollToBottom: props.onScrollToBottom,
     onChatScroll: props.onChatScroll,
     onDraftChange: props.onDraftChange,
+    getDraft: props.getDraft,
     onSend: props.onSend,
     onSetReply: props.onSetReply,
-    onSideQuestion: props.onSideQuestion,
+    // Archived/non-composable sessions must not offer selection actions:
+    // withholding the callback keeps the popup from rendering at all.
+    onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
     onFocusComposer: () =>
       chatSection
         ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
@@ -419,9 +425,25 @@ export function renderChat(props: ChatProps) {
                panel's header controls; hide them while the sidebar is open. -->
           ${!props.paneHeaderActive &&
           !sidebarOpen &&
-          (props.sessionWorkspace?.collapsed || props.backgroundTasks?.collapsed)
+          (props.onOpenSplitView ||
+            props.sessionWorkspace?.collapsed ||
+            props.backgroundTasks?.collapsed)
             ? html`
                 <div class="chat-floating-toggles">
+                  ${props.onOpenSplitView
+                    ? html`
+                        <openclaw-tooltip .content=${t("chat.splitView.open")}>
+                          <button
+                            class="btn btn--sm btn--icon chat-open-split-view"
+                            type="button"
+                            aria-label=${t("chat.splitView.open")}
+                            @click=${props.onOpenSplitView}
+                          >
+                            ${icons.columns2}
+                          </button>
+                        </openclaw-tooltip>
+                      `
+                    : nothing}
                   ${props.sessionWorkspace?.collapsed
                     ? renderSessionDiffToggle(props.sessionWorkspace, "floating")
                     : nothing}

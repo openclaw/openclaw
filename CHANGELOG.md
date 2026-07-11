@@ -28,7 +28,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Discord progress finalization:** consume each progress draft once so repeated final payloads cannot append a second activity receipt or clear an already-finished draft, while queued assistant turns still start fresh. (#102341) Thanks @xialonglee.
 - **Outbound channel bootstrap:** suppress repeated failed plugin activation for the same channel, config, and registry generation while retrying after config or registry reloads. (#100377) Thanks @xialonglee.
 - **OpenAI Realtime client-secret deadlines:** bound voice and transcription secret acquisition to 30 seconds through the guarded fetch boundary while preserving authentication and bounded response parsing. (#102860) Thanks @Alix-007.
 - **Gateway client watchdog:** keep transport-stall detection active for unbounded and mixed pending requests so dead sockets reject pending requests, reconnect, and never replay rejected requests. (#103407) Thanks @NianJiuZst.
