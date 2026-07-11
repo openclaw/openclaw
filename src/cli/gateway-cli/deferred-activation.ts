@@ -318,6 +318,9 @@ async function waitForDeferredGatewayActivationOnce(
         };
 
         state = "accepted";
+        // This accepted-state handoff is synchronous: restore default SIGTERM/SIGINT
+        // semantics before any 202 write/end so bootstrap cannot swallow them.
+        cleanupSignalHandlers();
         // A valid authenticated activation must still commit after the body is read
         // even if the client disappears before it can receive the best-effort 202.
         response.on("finish", commitAcceptedActivation);

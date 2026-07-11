@@ -1,3 +1,4 @@
+import { ServerResponse } from "node:http";
 import { createConnection, createServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -425,6 +426,54 @@ describe("waitForDeferredGatewayActivation", () => {
       });
     } finally {
       await resetDeferredGatewayActivationForTest();
+    }
+  });
+
+  it("removes temporary SIGTERM/SIGINT listeners synchronously before writing the accepted 202", async () => {
+    const signalListeners = captureSignalListeners();
+    const originalWriteHead = Object.getOwnPropertyDescriptor(
+      ServerResponse.prototype,
+      "writeHead",
+    )?.value;
+    if (originalWriteHead === undefined) {
+      throw new Error("expected ServerResponse.writeHead");
+    }
+    const writeHeadSpy = vi
+      .spyOn(ServerResponse.prototype, "writeHead")
+      .mockImplementation(function (
+        ...args: Parameters<typeof ServerResponse.prototype.writeHead>
+      ) {
+        if (args[0] === 202) {
+          expect(countAddedSignalListeners(signalListeners)).toEqual({
+            SIGTERM: 0,
+            SIGINT: 0,
+          });
+        }
+        return Reflect.apply(originalWriteHead, this, args);
+      });
+    const port = await reserveLoopbackPort();
+    const { waiting } = await waitForParkedGateway(port);
+
+    try {
+      expect(countAddedSignalListeners(signalListeners)).toEqual({
+        SIGTERM: 1,
+        SIGINT: 1,
+      });
+
+      const accepted = await postActivate(port, TOKEN, {
+        activationId: "cleanup-before-accepted-response",
+      });
+      expect(accepted.status).toBe(202);
+      expect(countAddedSignalListeners(signalListeners)).toEqual({
+        SIGTERM: 0,
+        SIGINT: 0,
+      });
+      await expect(waiting).resolves.toEqual({
+        mode: "activated",
+        activationId: "cleanup-before-accepted-response",
+      });
+    } finally {
+      writeHeadSpy.mockRestore();
     }
   });
 
