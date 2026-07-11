@@ -1,10 +1,9 @@
 // Discord tests cover client.proxy plugin behavior.
 import http from "node:http";
+import net from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { fetch as undiciFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiscordRestClient } from "./client.js";
-import { createDiscordRequestClient } from "./proxy-request-client.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
@@ -208,69 +207,133 @@ describe("createDiscordRestClient proxy support", () => {
     expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
   });
 
-  it("serializes multipart media with undici-compatible FormData for proxy fetches", async () => {
-    const received = await new Promise<{
-      contentType: string | undefined;
-      body: string;
-    }>((resolve, reject) => {
-      const server = http.createServer((req, res) => {
-        const chunks: Buffer[] = [];
-        req.on("data", (chunk: Buffer) => chunks.push(chunk));
-        req.on("error", reject);
-        req.on("end", () => {
-          resolve({
-            contentType: req.headers["content-type"],
-            body: Buffer.concat(chunks).toString("utf8"),
-          });
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ id: "message-id", channel_id: "channel-id" }));
-          server.close();
-        });
-      });
-      server.on("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          reject(new Error("failed to bind test server"));
-          server.close();
-          return;
+  it("serializes multipart media through the configured proxy", async () => {
+    let received:
+      | {
+          contentType: string | undefined;
+          body: string;
         }
-        const rest = createDiscordRequestClient("test-token", {
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          fetch: undiciFetch as unknown as typeof fetch,
-          queueRequests: false,
-        });
-        void rest
-          .post("/channels/123/messages", {
-            body: {
-              content: "with image",
-              files: [{ data: Buffer.from("png-data"), name: "image.png" }],
-            },
-          })
-          .catch((err: unknown) => {
-            reject(toLintErrorObject(err, "Non-Error rejection"));
-            server.close();
-          });
+      | undefined;
+    const targetServer = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("error", (error) => res.destroy(error));
+      req.on("end", () => {
+        received = {
+          contentType: req.headers["content-type"],
+          body: Buffer.concat(chunks).toString("utf8"),
+        };
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ id: "message-id", channel_id: "channel-id" }));
       });
     });
+    const targetPort = await listen(targetServer);
+    const proxy = await startConnectProxy(targetPort);
 
-    expect(received.contentType).toMatch(/^multipart\/form-data; boundary=/);
-    expect(received.body).toContain('name="files[0]"; filename="image.png"');
-    expect(received.body).toContain('name="payload_json"');
-    expect(received.body).toContain('"attachments":[{"id":0,"filename":"image.png"}]');
+    try {
+      const cfg = {
+        channels: {
+          discord: {
+            token: "Bot test-token",
+            proxy: proxy.url,
+          },
+        },
+      } as OpenClawConfig;
+      const { rest } = createDiscordRestClient({ cfg });
+      rest.options.baseUrl = `http://127.0.0.1:${targetPort}`;
+      rest.options.queueRequests = false;
+
+      await rest.post("/channels/123/messages", {
+        body: {
+          content: "with image",
+          files: [{ data: Buffer.from("png-data"), name: "image.png" }],
+        },
+      });
+
+      if (!received) {
+        throw new Error("target server did not receive request");
+      }
+
+      expect(proxy.connectTargets).toEqual([`127.0.0.1:${targetPort}`]);
+      expect(received.contentType).toMatch(/^multipart\/form-data; boundary=/);
+      expect(received.body).toContain('name="files[0]"; filename="image.png"');
+      expect(received.body).toContain('name="payload_json"');
+      expect(received.body).toContain('"attachments":[{"id":0,"filename":"image.png"}]');
+    } finally {
+      await proxy.stop();
+      await closeServer(targetServer);
+    }
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
+function listen(server: http.Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("server address unavailable"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+async function closeServer(server: http.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error?: Error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function startConnectProxy(targetPort: number): Promise<{
+  url: string;
+  connectTargets: string[];
+  stop: () => Promise<void>;
+}> {
+  const connectTargets: string[] = [];
+  const sockets = new Set<{ destroy: () => void }>();
+  const server = http.createServer((_req, res) => {
+    res.writeHead(502);
+    res.end("CONNECT required");
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  server.on("connect", (req, clientSocket, head) => {
+    connectTargets.push(req.url ?? "");
+    const upstreamSocket = net.connect(targetPort, "127.0.0.1", () => {
+      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length > 0) {
+        upstreamSocket.write(head);
+      }
+      clientSocket.pipe(upstreamSocket);
+      upstreamSocket.pipe(clientSocket);
+    });
+    sockets.add(clientSocket);
+    sockets.add(upstreamSocket);
+    clientSocket.on("close", () => sockets.delete(clientSocket));
+    upstreamSocket.on("close", () => sockets.delete(upstreamSocket));
+    clientSocket.on("error", () => upstreamSocket.destroy());
+    upstreamSocket.on("error", () => clientSocket.destroy());
+  });
+  const port = await listen(server);
+  return {
+    url: `http://127.0.0.1:${port}`,
+    connectTargets,
+    stop: async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await closeServer(server);
+    },
+  };
 }
