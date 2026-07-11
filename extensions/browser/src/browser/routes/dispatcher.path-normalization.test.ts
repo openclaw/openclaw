@@ -18,7 +18,7 @@ describe("browser route dispatcher path normalization", () => {
     ({ createBrowserRouteDispatcher } = await import("./dispatcher.js"));
   });
 
-  it.each(["snapshot", "/snapshot/", "  snapshot/  "])(
+  it.each(["snapshot", "/snapshot/", "/snapshot///", "  snapshot///  "])(
     "normalizes dispatch path %j like browser proxy requests",
     async (path) => {
       const dispatcher = createBrowserRouteDispatcher({} as BrowserRouteContext);

@@ -59,10 +59,6 @@ function createRegistry() {
   return { routes, router };
 }
 
-function normalizePath(path: string) {
-  return normalizeBrowserRequestPath(path) || "/";
-}
-
 /** Create an in-process dispatcher for registered browser routes. */
 export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
   const registry = createRegistry();
@@ -71,7 +67,7 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
   return {
     dispatch: async (req: BrowserDispatchRequest): Promise<BrowserDispatchResponse> => {
       const method = req.method;
-      const path = normalizePath(req.path);
+      const path = normalizeBrowserRequestPath(req.path) || "/";
       const query = req.query ?? {};
       const body = req.body;
       const signal = req.signal;
