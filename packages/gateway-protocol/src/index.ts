@@ -308,6 +308,14 @@ import {
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
+  type EnvironmentsCreateParams,
+  EnvironmentsCreateParamsSchema,
+  type EnvironmentsCreateResult,
+  EnvironmentsCreateResultSchema,
+  type EnvironmentsDestroyParams,
+  EnvironmentsDestroyParamsSchema,
+  type EnvironmentsDestroyResult,
+  EnvironmentsDestroyResultSchema,
   type EnvironmentsListParams,
   EnvironmentsListParamsSchema,
   type EnvironmentsListResult,
@@ -318,6 +326,10 @@ import {
   EnvironmentsStatusResultSchema,
   type EnvironmentStatus,
   EnvironmentStatusSchema,
+  type WorkerEnvironmentMetadata,
+  WorkerEnvironmentMetadataSchema,
+  type WorkerEnvironmentState,
+  WorkerEnvironmentStateSchema,
   type SystemInfoParams,
   SystemInfoParamsSchema,
   type SystemInfoResult,
@@ -838,6 +850,12 @@ export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
 );
 export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
+export const validateEnvironmentsCreateParams = lazyCompile<EnvironmentsCreateParams>(
+  EnvironmentsCreateParamsSchema,
+);
+export const validateEnvironmentsDestroyParams = lazyCompile<EnvironmentsDestroyParams>(
+  EnvironmentsDestroyParamsSchema,
+);
 export const validateEnvironmentsListParams = lazyCompile<EnvironmentsListParams>(
   EnvironmentsListParamsSchema,
 );
@@ -1274,7 +1292,13 @@ export {
   SnapshotSchema,
   ErrorShapeSchema,
   EnvironmentStatusSchema,
+  WorkerEnvironmentStateSchema,
+  WorkerEnvironmentMetadataSchema,
   EnvironmentSummarySchema,
+  EnvironmentsCreateParamsSchema,
+  EnvironmentsCreateResultSchema,
+  EnvironmentsDestroyParamsSchema,
+  EnvironmentsDestroyResultSchema,
   EnvironmentsListParamsSchema,
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
@@ -1767,7 +1791,13 @@ export type {
   SkillsInstallParams,
   SkillsUpdateParams,
   EnvironmentStatus,
+  WorkerEnvironmentState,
+  WorkerEnvironmentMetadata,
   EnvironmentSummary,
+  EnvironmentsCreateParams,
+  EnvironmentsCreateResult,
+  EnvironmentsDestroyParams,
+  EnvironmentsDestroyResult,
   EnvironmentsListParams,
   EnvironmentsListResult,
   EnvironmentsStatusParams,

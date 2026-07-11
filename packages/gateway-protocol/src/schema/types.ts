@@ -28,7 +28,13 @@ export type GatewaySuspendResumeResult = SchemaType<"GatewaySuspendResumeResult"
 
 /** Environment status RPC payloads used by CLI and Control UI surfaces. */
 export type EnvironmentStatus = SchemaType<"EnvironmentStatus">;
+export type WorkerEnvironmentState = SchemaType<"WorkerEnvironmentState">;
+export type WorkerEnvironmentMetadata = SchemaType<"WorkerEnvironmentMetadata">;
 export type EnvironmentSummary = SchemaType<"EnvironmentSummary">;
+export type EnvironmentsCreateParams = SchemaType<"EnvironmentsCreateParams">;
+export type EnvironmentsCreateResult = SchemaType<"EnvironmentsCreateResult">;
+export type EnvironmentsDestroyParams = SchemaType<"EnvironmentsDestroyParams">;
+export type EnvironmentsDestroyResult = SchemaType<"EnvironmentsDestroyResult">;
 export type EnvironmentsListParams = SchemaType<"EnvironmentsListParams">;
 export type EnvironmentsListResult = SchemaType<"EnvironmentsListResult">;
 export type EnvironmentsStatusParams = SchemaType<"EnvironmentsStatusParams">;
