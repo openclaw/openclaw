@@ -14,6 +14,7 @@ type AppLifecycleState = {
   loginPassword: string;
   loginShowGatewayToken: boolean;
   loginShowGatewayPassword: boolean;
+  initialConnectSplashGuard: boolean;
   disconnectedCallback: () => void;
   synchronizeGateway: (gateway: ApplicationGateway) => void;
 };
@@ -95,6 +96,64 @@ describe("OpenClaw app lifecycle", () => {
     expect(app.loginShowGatewayPassword).toBe(false);
     expect(app.loginToken).toBe("second");
     expect(app.loginPassword).toBe("second-password");
+  });
+
+  it("keeps the initial connect splash guard until a connect attempt is observable", () => {
+    const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
+    app.initialConnectSplashGuard = true;
+    const gateway = {
+      snapshot: {
+        client: null,
+        connected: false,
+        reconnecting: false,
+        lastError: null,
+        lastErrorCode: null,
+      } as ApplicationGatewaySnapshot,
+      connection: { gatewayUrl: "ws://first.test", token: "first", password: "" },
+    } as ApplicationGateway;
+
+    app.synchronizeGateway(gateway);
+
+    expect(app.initialConnectSplashGuard).toBe(true);
+  });
+
+  it("clears the initial connect splash guard when the gateway creates a client", () => {
+    const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
+    app.initialConnectSplashGuard = true;
+    const client = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: {
+        client,
+        connected: false,
+        reconnecting: false,
+        lastError: null,
+        lastErrorCode: null,
+      } as ApplicationGatewaySnapshot,
+      connection: { gatewayUrl: "ws://first.test", token: "first", password: "" },
+    } as ApplicationGateway;
+
+    app.synchronizeGateway(gateway);
+
+    expect(app.initialConnectSplashGuard).toBe(false);
+  });
+
+  it("clears the initial connect splash guard when the first connect attempt fails", () => {
+    const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
+    app.initialConnectSplashGuard = true;
+    const gateway = {
+      snapshot: {
+        client: null,
+        connected: false,
+        reconnecting: false,
+        lastError: "gateway closed (1006): no reason",
+        lastErrorCode: null,
+      } as ApplicationGatewaySnapshot,
+      connection: { gatewayUrl: "ws://first.test", token: "first", password: "" },
+    } as ApplicationGateway;
+
+    app.synchronizeGateway(gateway);
+
+    expect(app.initialConnectSplashGuard).toBe(false);
   });
 });
 

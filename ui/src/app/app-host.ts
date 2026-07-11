@@ -143,6 +143,10 @@ class OpenClawApp extends OpenClawLightDomElement {
   // password, or stored device token) before the first connect attempt.
   // Later manual gate submissions are covered by loginGatePinned instead.
   private initialAuthPresent = false;
+  // True while the first paint after mount should suppress the login gate
+  // because stored credentials exist but the gateway has not yet started its
+  // first connect attempt. Cleared once a connect attempt is observable.
+  private initialConnectSplashGuard = false;
   private runtime: ApplicationRuntime | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
@@ -175,6 +179,7 @@ class OpenClawApp extends OpenClawLightDomElement {
     this.runtime = bootstrapApplication();
     const context = this.runtime.context;
     this.initialAuthPresent = hasStoredGatewayAuth(context.gateway.connection);
+    this.initialConnectSplashGuard = this.initialAuthPresent;
     this.pendingGatewayUrl = this.runtime.pendingGatewayConnection?.gatewayUrl ?? null;
     // Context identity changes only across a full app-tree connection epoch;
     // descendants reconnect and rebuild their controller-owned state afterward.
@@ -196,6 +201,7 @@ class OpenClawApp extends OpenClawLightDomElement {
     this.loginGatewaySource = null;
     this.loginConnectionClient = null;
     this.pendingGatewayUrl = null;
+    this.initialConnectSplashGuard = false;
     this.resetLoginSensitivePresentation();
     super.disconnectedCallback();
   }
@@ -218,6 +224,14 @@ class OpenClawApp extends OpenClawLightDomElement {
     }
     if (snapshot.connected) {
       this.loginGatePinned = false;
+    }
+    // Once the gateway has created a client, connected, or produced an error,
+    // the first connect attempt is observable and the splash guard is done.
+    if (
+      this.initialConnectSplashGuard &&
+      (snapshot.client !== null || snapshot.connected || snapshot.lastError !== null)
+    ) {
+      this.initialConnectSplashGuard = false;
     }
   }
 
@@ -291,7 +305,7 @@ class OpenClawApp extends OpenClawLightDomElement {
       !gatewaySnapshot.reconnecting &&
       !this.loginGatePinned &&
       gatewaySnapshot.lastError === null &&
-      gatewaySnapshot.client !== null;
+      (gatewaySnapshot.client !== null || this.initialConnectSplashGuard);
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>

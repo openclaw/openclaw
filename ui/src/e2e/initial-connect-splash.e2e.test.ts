@@ -110,4 +110,21 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await gateway.resolveDeferred("connect");
     await page.locator("openclaw-app-shell").waitFor();
   });
+
+  it("paints the splash on first paint before the connect request starts", async () => {
+    const page = await createPage();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    await page.goto(`${server.baseUrl}#token=e2e-shared-token`);
+    // The splash must be present immediately on first paint, before the gateway
+    // mock has even observed the connect request. This regresses a flash of the
+    // login gate that could occur while stored credentials were waiting for the
+    // first WebSocket connect to be created (#103342).
+    await page.locator(".connect-splash").waitFor({ timeout: 1_000 });
+    expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+
+    await gateway.waitForRequest("connect");
+    await gateway.resolveDeferred("connect");
+    await page.locator("openclaw-app-shell").waitFor();
+  });
 });
