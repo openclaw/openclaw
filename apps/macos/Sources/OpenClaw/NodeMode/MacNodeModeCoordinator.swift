@@ -701,7 +701,9 @@ final class MacNodeModeCoordinator: NSObject {
             caps.append(OpenClawCapability.computer.rawValue)
         }
         if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
-        if codexThreadCatalogEnabled {
+        // A local Gateway already catalogs this user's Codex home. Advertise the
+        // node-owned catalog only when this Mac supplies it to a remote Gateway.
+        if codexThreadCatalogEnabled, connectionMode == .remote {
             caps.append(MacNodeCodexThreadCatalogContract.capability)
         }
         return caps

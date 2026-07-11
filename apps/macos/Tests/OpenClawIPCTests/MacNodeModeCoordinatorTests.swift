@@ -330,7 +330,7 @@ struct MacNodeModeCoordinatorTests {
                 onDisconnected: { _ in },
                 onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
         }
-        try await self.waitUntil("successor captured first invalidation") {
+        try await waitUntil("successor captured first invalidation") {
             await drainSnapshot.hasCaptured()
         }
         coordinator.enqueueRouteInvalidationForTesting()
@@ -448,7 +448,21 @@ struct MacNodeModeCoordinatorTests {
         #expect(commands.contains(OpenClawBrowserCommand.proxy.rawValue))
     }
 
-    @Test func `Codex supervision config advertises native thread catalog`() {
+    @Test func `local mode omits native Codex thread catalog`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            computerControlEnabled: false,
+            locationMode: .off,
+            connectionMode: .local,
+            codexThreadCatalogEnabled: true)
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+
+        #expect(!caps.contains(MacNodeCodexThreadCatalogContract.capability))
+        #expect(!commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+    }
+
+    @Test func `remote mode advertises native Codex thread catalog`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: false,
             cameraEnabled: false,
@@ -644,6 +658,44 @@ struct MacNodeModeCoordinatorTests {
             "codex",
             path: ["supervision", "enabled"],
             root: paddedDeny))
+
+        let mixedCaseDeny: [String: Any] = [
+            "plugins": [
+                "deny": [" CoDeX "],
+                "entries": [
+                    "CODEX": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
+            root: mixedCaseDeny))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: mixedCaseDeny))
+
+        let ambiguousEntryAliases: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "CODEX": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                    "codex": [
+                        "enabled": false,
+                        "config": ["supervision": ["enabled": false]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(OpenClawConfigFile.pluginEntry("codex", root: ambiguousEntryAliases) == nil)
+        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
+            root: ambiguousEntryAliases))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: ambiguousEntryAliases))
     }
 
     @Test func `computer control cap gates the computer.act command`() {
