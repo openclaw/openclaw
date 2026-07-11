@@ -1195,6 +1195,12 @@ async function sweepSubagentRuns() {
         continue;
       }
       const deliveryHealth = classifyHealthForSweep({ run: entry, now });
+      // Subagent health actions consumed by the sweeper are intentionally narrow:
+      // - retry failed or stale terminal delivery through the existing resume path;
+      // - resume stale keep-mode cleanup that has no archive/delete owner.
+      // Higher-risk actions remain observational here: timeouts can race with
+      // persisted session completion, orphan recovery has its own scheduler, and
+      // cancellation reconciliation owns a bounded provider/task evidence window.
       if (
         deliveryHealth.status === "delivery_failed" &&
         deliveryHealth.nextAction === "retry_delivery"
