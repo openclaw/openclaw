@@ -558,6 +558,88 @@ describe("parallel web search provider", () => {
     });
   });
 
+  it("dispatches plugin-configured env SecretRef api keys as Parallel request headers", async () => {
+    vi.stubEnv("PARALLEL_API_KEY", "parallel-env-fallback");
+    vi.stubEnv("CUSTOM_PARALLEL_API_KEY_REF", "parallel-custom-ref-key");
+    endpointMockState.responses.push(
+      new Response(JSON.stringify({ search_id: "secretref", results: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const provider = createParallelWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            parallel: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "CUSTOM_PARALLEL_API_KEY_REF",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const result = await tool.execute({
+      objective: `parallel-secretref-dispatch-${Date.now()}-${Math.random()}`,
+      search_queries: ["openclaw github"],
+    });
+
+    expect(endpointMockState.calls).toHaveLength(1);
+    const [call] = endpointMockState.calls;
+    const headers = (call.init.headers ?? {}) as Record<string, string>;
+    expect(headers["x-api-key"]).toBe("parallel-custom-ref-key");
+    expect(headers["x-api-key"]).not.toBe("parallel-env-fallback");
+    expect(result).toMatchObject({ provider: "parallel", searchId: "secretref" });
+  });
+
+  it("does not dispatch when a plugin-configured env SecretRef is unavailable", async () => {
+    vi.stubEnv("PARALLEL_API_KEY", "parallel-env-fallback");
+    vi.stubEnv("MISSING_PARALLEL_API_KEY_REF", "");
+    const provider = createParallelWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            parallel: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_PARALLEL_API_KEY_REF",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const result = await tool.execute({
+      objective: "Find the OpenClaw repository on GitHub",
+      search_queries: ["openclaw github"],
+    });
+
+    expect(result).toMatchObject({ error: "missing_parallel_api_key" });
+    expect(endpointMockState.calls).toHaveLength(0);
+  });
+
   it("threads caller-supplied session_id and client_model through to Parallel", async () => {
     endpointMockState.responses.push(
       new Response(
