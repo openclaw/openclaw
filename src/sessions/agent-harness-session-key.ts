@@ -86,7 +86,7 @@ export function resolveAgentHarnessSessionStoreError(
     if (entryError) {
       return entryError;
     }
-    if (entry.modelSelectionLocked !== true) {
+    if (!isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       continue;
     }
     const sessionId = normalizeOptionalString(entry.sessionId);
@@ -110,7 +110,11 @@ export function resolveAgentHarnessSessionIdMismatchError(
   entry: AgentHarnessSessionStoreEntry | undefined,
   requestedSessionId: unknown,
 ): string | undefined {
-  if (!entry || entry.modelSelectionLocked !== true) {
+  if (
+    !entry ||
+    entry.modelSelectionLocked !== true ||
+    !normalizeOptionalAgentRuntimeId(entry.agentHarnessId)
+  ) {
     return undefined;
   }
   const requested = normalizeOptionalString(requestedSessionId);
@@ -130,17 +134,26 @@ export function resolveAgentHarnessSessionStoreEntryError(
   if (entry.modelSelectionLocked !== true) {
     return undefined;
   }
-  if (!normalizeOptionalString(entry.sessionId)) {
-    return AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE;
-  }
   const rawHarnessId = normalizeOptionalString(entry.agentHarnessId)?.toLowerCase();
   const hasCanonicalHarnessOwner =
     Boolean(rawHarnessId) && rawHarnessId === normalizeOptionalAgentRuntimeId(rawHarnessId);
+  if (
+    !normalizeOptionalString(entry.sessionId) &&
+    (isAgentHarnessSessionKey(sessionKey) || entry.agentHarnessId !== undefined)
+  ) {
+    return AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE;
+  }
   if (isAgentHarnessSessionKey(sessionKey)) {
     return hasCanonicalHarnessOwner &&
       isAgentHarnessSessionKeyOwnedBy(sessionKey, entry.agentHarnessId)
       ? undefined
       : AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE;
+  }
+  // modelSelectionLocked predates harness-owned sessions and still protects
+  // ordinary UI sessions. Only rows with an explicit harness owner opt into
+  // the stronger transcript identity invariant.
+  if (entry.agentHarnessId === undefined) {
+    return undefined;
   }
   if (!hasCanonicalHarnessOwner) {
     return AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE;
@@ -155,6 +168,8 @@ export function isValidAgentHarnessSessionStoreEntry(
 ): boolean {
   return (
     entry.modelSelectionLocked === true &&
+    (isAgentHarnessSessionKey(sessionKey) ||
+      normalizeOptionalAgentRuntimeId(entry.agentHarnessId) !== undefined) &&
     resolveAgentHarnessSessionStoreEntryError(sessionKey, entry) === undefined
   );
 }

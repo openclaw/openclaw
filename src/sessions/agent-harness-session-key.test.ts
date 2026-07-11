@@ -84,7 +84,13 @@ describe("agent harness session keys", () => {
         modelSelectionLocked: true,
         sessionId: "native-session",
       }),
-    ).toBe(AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE);
+    ).toBeUndefined();
+    expect(
+      isValidAgentHarnessSessionStoreEntry("agent:main:ordinary", {
+        modelSelectionLocked: true,
+        sessionId: "native-session",
+      }),
+    ).toBe(false);
   });
 
   it("requires a valid durable row for protected reserved runtime contexts", () => {
@@ -139,5 +145,14 @@ describe("agent harness session keys", () => {
     expect(resolveAgentHarnessSessionIdMismatchError(entry, "replacement-session")).toBe(
       AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
     );
+  });
+
+  it("does not turn a legacy model-selection lock into harness ownership", () => {
+    const entry = {
+      modelSelectionLocked: true,
+      sessionId: "ordinary-session",
+    };
+
+    expect(resolveAgentHarnessSessionIdMismatchError(entry, "replacement-session")).toBeUndefined();
   });
 });
