@@ -2090,7 +2090,7 @@ export function createExecApprovalPolicySnapshot(params: {
       const rule = {
         pattern: entry.pattern,
         ...(entry.argPattern !== undefined ? { argPattern: entry.argPattern } : {}),
-        ...(entry.source !== undefined ? { source: entry.source } : {}),
+        ...(entry.source === "allow-always" ? { source: entry.source } : {}),
       };
       return [buildExecApprovalPolicyRuleKey(rule), rule] as const;
     }),

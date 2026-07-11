@@ -1030,19 +1030,24 @@ async function executeSystemRunPhase(
 
   const useMacAppExec = opts.preferMacAppExecHost;
   if (useMacAppExec) {
+    const macApprovalSource =
+      phase.approvalSource ??
+      (phase.approvalGrantSource === "auto-review" ? "auto-review" : undefined);
+    const macApprovalDecisionBase = macApprovalSource
+      ? null
+      : phase.approvalGrantSource === "explicit-approval" && phase.approvalDecision === null
+        ? "allow-once"
+        : phase.approvalDecision;
     // Deny-over-allow one-shot contract must cross the companion boundary too. The
     // macOS exec host persists `.allowAlways` decisions in allowlist mode, so a
     // denylist-approved command forwarded as `allow-always` would create durable
     // allowlist trust on the companion despite the local `!phase.denylisted`
     // persistence guard below. Downgrade a denylisted allow-always approval to a
     // one-shot `allow-once` before it reaches runViaMacAppExecHost.
-    const companionApprovalDecision =
-      phase.denylisted && phase.approvalDecision === "allow-always"
+    const macApprovalDecision =
+      phase.denylisted && macApprovalDecisionBase === "allow-always"
         ? "allow-once"
-        : phase.approvalDecision;
-    const macApprovalSource =
-      phase.approvalSource ??
-      (phase.approvalGrantSource === "auto-review" ? "auto-review" : undefined);
+        : macApprovalDecisionBase;
     const execRequest: ExecHostRequest = {
       command: execArgv,
       // Forward canonical display text so companion approval/prompt surfaces bind to
@@ -1054,7 +1059,7 @@ async function executeSystemRunPhase(
       needsScreenRecording: phase.needsScreenRecording,
       agentId: phase.agentId ?? null,
       sessionKey: phase.sessionKey ?? null,
-      approvalDecision: macApprovalSource ? null : companionApprovalDecision,
+      approvalDecision: macApprovalDecision,
       approvalSource: macApprovalSource,
       ...(phase.approvalGrantSource ? { policySnapshot: phase.evaluationPolicySnapshot } : {}),
     };

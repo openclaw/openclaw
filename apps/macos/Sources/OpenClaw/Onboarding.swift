@@ -114,6 +114,7 @@ struct OnboardingView: View {
     @State var copied = false
     @State var monitoringPermissions = false
     @State var monitoringDiscovery = false
+    @State var cliExecutableReady = false
     @State var cliInstalled = false
     @State var cliStatusKnown = false
     @State var onboardingVisible = false

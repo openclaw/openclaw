@@ -43,8 +43,8 @@
 }
 
 .chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
-    .chat-workbench--dock-bottom
-  ) {
+  .chat-workbench--dock-bottom
+) {
   grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(230px, 280px);
 }
 
@@ -76,11 +76,13 @@
   -webkit-backdrop-filter: blur(10px);
 }
 
-/* The rail (and with it every toggle) only exists on wide viewports. */
+/* The workspace rail adapts to the pane width (side column on wide panes,
+   bottom strip on narrow ones — chat-pane measures and flips the dock), so
+   its toggles stay available at every width. The background-tasks rail is
+   side-dock only, so its toggles still hide on narrow viewports until it
+   grows a narrow presentation. */
 @media (max-width: 1120px) {
-  .chat-workspace-open,
   .chat-tasks-open,
-  .chat-pane__actions .chat-workspace-toggle,
   .chat-pane__actions .chat-tasks-toggle {
     display: none;
   }
@@ -162,8 +164,8 @@
 
 /* The workspace rail docks flush to the window edge like the terminal panel:
    drop the chat content's right gutter and square the card's right corners in
-   both rail states. Guarded to viewports where the rail actually renders
-   (it is display:none <=1120px, where the gutter should stay). */
+   both rail states. Guarded to wide viewports; narrow ones keep the gutter
+   because the rail presents as a bottom strip there. */
 @media (min-width: 1121px) {
   .content--chat:has(.chat-workbench) {
     padding-left: 0;
@@ -323,6 +325,8 @@
 }
 
 .chat-workspace-rail__path {
+  /* Fixed rows: only the scroll area gives way when the bottom dock is short. */
+  flex-shrink: 0;
   padding: 9px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
   color: var(--muted);
@@ -409,6 +413,7 @@
 
 .chat-workspace-rail__summary {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   gap: 4px;
   padding: 0 12px 8px;
@@ -1600,14 +1605,43 @@
   }
 }
 
-@media (max-width: 1120px) {
-  .chat-workbench {
-    display: flex;
-  }
+/* Narrow pane: the detail panel stacks under the thread instead of fighting
+   it for horizontal space (chat-pane measures the pane and sets the class;
+   the divider flips to a horizontal handle so the split stays resizable). */
+.chat-split-container--stacked {
+  flex-direction: column;
+}
 
-  .chat-workspace-rail,
+.chat-split-container--stacked .chat-main {
+  min-width: 0;
+  min-height: 200px;
+}
+
+.chat-split-container--stacked .chat-sidebar {
+  min-width: 0;
+  min-height: 160px;
+}
+
+/* The background-tasks rail has no narrow presentation yet; hide it with its
+   toggles on narrow viewports (the workspace rail adapts instead). The hidden
+   rail must also release its reserved grid track, so the tasks-open templates
+   collapse back to the workspace-only shapes here. */
+@media (max-width: 1120px) {
   .chat-tasks-rail {
     display: none;
+  }
+
+  .chat-workbench--tasks-open.chat-workbench--workspace-collapsed,
+  .chat-workbench--tasks-open.chat-workbench--dock-bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Mirrors the three-column selector's specificity so the two-column shape
+     wins while the tasks rail is hidden. */
+  .chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
+    .chat-workbench--dock-bottom
+  ) {
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
   }
 }
 
@@ -1624,6 +1658,11 @@
 
   .chat-split-container--open .chat-main {
     display: none; /* Hide chat on mobile when sidebar open */
+  }
+
+  /* No split to resize while the chat column is hidden. */
+  .chat-split-container--open resizable-divider {
+    display: none;
   }
 
   .chat-split-container--open .chat-sidebar {

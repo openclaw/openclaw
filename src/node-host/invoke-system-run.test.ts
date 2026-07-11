@@ -946,6 +946,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           expect(macHostCall.request?.command).toEqual(["env", "sh", "-c", "echo SAFE"]);
           expect(macHostCall.request?.rawCommand).toBe('env sh -c "echo SAFE"');
           expect(macHostCall.request?.cwd).toBe(canonicalCwd);
+          expect(macHostCall.request?.approvalDecision).toBe("allow-once");
+          expect(macHostCall.request?.approvalSource).toBeUndefined();
           expect(macHostCall.request?.policySnapshot).toEqual(
             createExecApprovalPolicySnapshot({ file: loadExecApprovals(), agentId: undefined }),
           );
