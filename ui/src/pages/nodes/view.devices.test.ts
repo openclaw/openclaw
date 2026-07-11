@@ -363,7 +363,11 @@ describe("nodes inventory rendering", () => {
     );
 
     expect(driftChips).toHaveLength(3);
-    expect(driftChips.map((chip) => chip.getAttribute("title")).toSorted()).toEqual([
+    expect(
+      driftChips
+        .map((chip) => chip.getAttribute("title"))
+        .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+    ).toEqual([
       "Node 2026.6.10; Gateway 2026.7.2. Update the older component to align the fleet.",
       "Node 2026.6.11; Gateway 2026.7.2. Update the older component to align the fleet.",
       "Node 2026.8.1; Gateway 2026.7.2. Update the older component to align the fleet.",
