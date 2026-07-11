@@ -35,6 +35,7 @@ final class AppState {
     @ObservationIgnored private var execApprovalsReadGeneration = 0
     private var isInitializing = true
     private var isApplyingRemoteTokenConfig = false
+    private var isApplyingRemotePasswordConfig = false
     private var configWatcher: ConfigFileWatcher?
     private var lastConfigFingerprint: Data?
     private var suppressVoiceWakeGlobalSync = false
@@ -64,6 +65,30 @@ final class AppState {
         var remoteIdentity: String
         var remoteToken: String
         var remoteTokenDirty: Bool
+        var remotePassword: String
+        var remotePasswordDirty: Bool
+
+        init(
+            transport: RemoteTransport,
+            remoteUrl: String,
+            remoteHost: String?,
+            remoteTarget: String,
+            remoteIdentity: String,
+            remoteToken: String,
+            remoteTokenDirty: Bool,
+            remotePassword: String = "",
+            remotePasswordDirty: Bool = false)
+        {
+            self.transport = transport
+            self.remoteUrl = remoteUrl
+            self.remoteHost = remoteHost
+            self.remoteTarget = remoteTarget
+            self.remoteIdentity = remoteIdentity
+            self.remoteToken = remoteToken
+            self.remoteTokenDirty = remoteTokenDirty
+            self.remotePassword = remotePassword
+            self.remotePasswordDirty = remotePasswordDirty
+        }
     }
 
     struct GatewayConfigSyncDraft {
@@ -74,6 +99,30 @@ final class AppState {
         var remoteUrl: String
         var remoteToken: String
         var remoteTokenDirty: Bool
+        var remotePassword: String
+        var remotePasswordDirty: Bool
+
+        init(
+            connectionMode: ConnectionMode,
+            remoteTransport: RemoteTransport,
+            remoteTarget: String,
+            remoteIdentity: String,
+            remoteUrl: String,
+            remoteToken: String,
+            remoteTokenDirty: Bool,
+            remotePassword: String = "",
+            remotePasswordDirty: Bool = false)
+        {
+            self.connectionMode = connectionMode
+            self.remoteTransport = remoteTransport
+            self.remoteTarget = remoteTarget
+            self.remoteIdentity = remoteIdentity
+            self.remoteUrl = remoteUrl
+            self.remoteToken = remoteToken
+            self.remoteTokenDirty = remoteTokenDirty
+            self.remotePassword = remotePassword
+            self.remotePasswordDirty = remotePasswordDirty
+        }
     }
 
     var isPaused: Bool {
@@ -295,6 +344,16 @@ final class AppState {
     private(set) var remoteTokenDirty = false
     private(set) var remoteTokenUnsupported = false
 
+    var remotePassword: String {
+        didSet {
+            guard !self.isApplyingRemotePasswordConfig else { return }
+            self.remotePasswordDirty = true
+            self.syncGatewayConfigIfNeeded()
+        }
+    }
+
+    private(set) var remotePasswordDirty = false
+
     var remoteIdentity: String {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteIdentity, forKey: remoteIdentityKey) } }
     }
@@ -394,6 +453,7 @@ final class AppState {
         let configRoot = OpenClawConfigFile.loadDict()
         self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
+        let configRemotePassword = GatewayRemoteConfig.resolvePasswordString(root: configRoot)
         let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
         let configRemoteTransport = configRemoteResolution.transport
         let configRemoteUrl = configRemoteResolution.directURL?.absoluteString
@@ -425,6 +485,8 @@ final class AppState {
         self.remoteToken = configRemoteToken.textFieldValue
         self.remoteTokenDirty = false
         self.remoteTokenUnsupported = configRemoteToken.isUnsupportedNonString
+        self.remotePassword = configRemotePassword ?? ""
+        self.remotePasswordDirty = false
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey)?.nonEmpty
             ?? configRemote?["sshIdentity"] as? String
             ?? ""
@@ -546,6 +608,17 @@ final class AppState {
         self.remoteTokenUnsupported = unsupported
     }
 
+    private func applyRemotePasswordState(_ password: String?) {
+        let nextPassword = password ?? ""
+        guard self.remotePassword != nextPassword || self.remotePasswordDirty else {
+            return
+        }
+        self.isApplyingRemotePasswordConfig = true
+        self.remotePassword = nextPassword
+        self.isApplyingRemotePasswordConfig = false
+        self.remotePasswordDirty = false
+    }
+
     private static func updatedRemoteGatewayConfig(
         current: [String: Any],
         draft: RemoteGatewayConfigDraft) -> (remote: [String: Any], changed: Bool)
@@ -595,6 +668,9 @@ final class AppState {
         if draft.remoteTokenDirty {
             changed = Self.updateGatewayString(&remote, key: "token", value: draft.remoteToken) || changed
         }
+        if draft.remotePasswordDirty {
+            changed = Self.updateGatewayString(&remote, key: "password", value: draft.remotePassword) || changed
+        }
 
         return (remote, changed)
     }
@@ -630,6 +706,7 @@ final class AppState {
         let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let remoteUrl = GatewayRemoteConfig.resolveUrlString(root: root)
         let remoteToken = GatewayRemoteConfig.resolveTokenValue(root: root)
+        let remotePassword = GatewayRemoteConfig.resolvePasswordString(root: root)
         let hasRemoteUrl = !(remoteUrl?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty ?? true)
@@ -663,6 +740,7 @@ final class AppState {
             self.remoteUrl = remoteUrlText
         }
         self.applyRemoteTokenState(remoteToken)
+        self.applyRemotePasswordState(remotePassword)
 
         let targetMode = desiredMode ?? self.connectionMode
         if targetMode == .remote,
@@ -730,7 +808,9 @@ final class AppState {
                     remoteTarget: draft.remoteTarget,
                     remoteIdentity: draft.remoteIdentity,
                     remoteToken: draft.remoteToken,
-                    remoteTokenDirty: draft.remoteTokenDirty))
+                    remoteTokenDirty: draft.remoteTokenDirty,
+                    remotePassword: draft.remotePassword,
+                    remotePasswordDirty: draft.remotePasswordDirty))
             if updated.changed {
                 gateway["remote"] = updated.remote
                 changed = true
@@ -769,7 +849,9 @@ final class AppState {
                 remoteIdentity: self.remoteIdentity,
                 remoteUrl: self.remoteUrl,
                 remoteToken: self.remoteToken,
-                remoteTokenDirty: self.remoteTokenDirty))
+                remoteTokenDirty: self.remoteTokenDirty,
+                remotePassword: self.remotePassword,
+                remotePasswordDirty: self.remotePasswordDirty))
         guard synced.changed else { return }
         guard OpenClawConfigFile.saveDict(synced.root) else {
             Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
@@ -1027,6 +1109,7 @@ extension AppState {
         state.remoteTarget = "user@example.com"
         state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteToken = "example-token"
+        state.remotePassword = "example-password"
         state.remoteIdentity = "~/.ssh/id_ed25519"
         state.remoteProjectRoot = "~/Projects/openclaw"
         state.remoteCliPath = ""
