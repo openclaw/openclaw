@@ -9,6 +9,9 @@ const log = createSubsystemLogger("plugins/memory-state");
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
 }) => string[];
 
 export type MemoryCorpusSearchResult = {
@@ -48,13 +51,17 @@ export type MemoryCorpusSupplement = {
   search(params: {
     query: string;
     maxResults?: number;
+    agentId?: string;
     agentSessionKey?: string;
+    sandboxed?: boolean;
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;
     fromLine?: number;
     lineCount?: number;
+    agentId?: string;
     agentSessionKey?: string;
+    sandboxed?: boolean;
   }): Promise<MemoryCorpusGetResult | null>;
 };
 
@@ -165,10 +172,25 @@ type MemoryPluginState = {
   promptSupplements: MemoryPromptSupplementRegistration[];
 };
 
-const memoryPluginState: MemoryPluginState = {
-  corpusSupplements: [],
-  promptSupplements: [],
-};
+const MEMORY_PLUGIN_STATE_KEY = Symbol.for("openclaw.memoryPluginState");
+
+function resolveMemoryPluginState(): MemoryPluginState {
+  const host = globalThis as typeof globalThis & {
+    [MEMORY_PLUGIN_STATE_KEY]?: MemoryPluginState;
+  };
+  const existing = host[MEMORY_PLUGIN_STATE_KEY];
+  if (existing) {
+    return existing;
+  }
+  const created: MemoryPluginState = {
+    corpusSupplements: [],
+    promptSupplements: [],
+  };
+  host[MEMORY_PLUGIN_STATE_KEY] = created;
+  return created;
+}
+
+const memoryPluginState = resolveMemoryPluginState();
 
 export function registerMemoryCorpusSupplement(
   pluginId: string,
@@ -249,6 +271,9 @@ export function registerMemoryPromptSupplement(
 export function buildMemoryPromptSection(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
 }): string[] {
   const primary = normalizeMemoryPromptLines(
     memoryPluginState.capability?.capability.promptBuilder?.(params) ?? [],
