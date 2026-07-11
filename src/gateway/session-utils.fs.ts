@@ -17,6 +17,7 @@ import {
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   scanSessionTranscriptTree,
+  selectSessionTranscriptActiveEntries,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
 import { readFileWindowFully, readFileWindowFullySync } from "../infra/file-read.js";
@@ -376,29 +377,12 @@ function selectBoundedActiveTailRecords(
   entries: TailTranscriptRecord[],
   opts?: { failClosedOnInvalidLeafControl?: boolean },
 ): TailTranscriptRecord[] {
-  const tree = scanSessionTranscriptTree(entries.map((entry) => entry.record));
-  if (opts?.failClosedOnInvalidLeafControl === true && tree.hasInvalidLeafControl) {
-    return [];
-  }
-  if (!tree.hasExplicitLeafUpdate) {
-    return entries;
-  }
-  const recordsByValue = new Map(entries.map((entry) => [entry.record, entry]));
-  const activeBranch = selectSessionTranscriptTreePathNodes(tree, tree.leafId).flatMap((node) => {
-    const entry = recordsByValue.get(node.entry);
-    return entry ? [entry] : [];
+  const records = entries.map((entry) => entry.record);
+  return selectSessionTranscriptActiveEntries({
+    entries,
+    records,
+    failClosedOnInvalidLeafControl: opts?.failClosedOnInvalidLeafControl,
   });
-  const firstActiveRecord = activeBranch[0];
-  const firstActiveIndex = firstActiveRecord ? entries.indexOf(firstActiveRecord) : -1;
-  if (firstActiveIndex > 0) {
-    for (let index = firstActiveIndex - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (entry?.record.type === "compaction") {
-        return [entry, ...activeBranch];
-      }
-    }
-  }
-  return activeBranch;
 }
 
 function readTranscriptRecords(filePath: string): TailTranscriptRecord[] {

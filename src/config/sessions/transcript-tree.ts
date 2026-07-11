@@ -261,6 +261,40 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
   };
 }
 
+export function selectSessionTranscriptActiveEntries<T, R>(params: {
+  entries: readonly T[];
+  records: readonly R[];
+  tree?: SessionTranscriptTree<R>;
+  failClosedOnInvalidLeafControl?: boolean;
+}): T[] {
+  const tree = params.tree ?? scanSessionTranscriptTree(params.records);
+  if (params.failClosedOnInvalidLeafControl === true && tree.hasInvalidLeafControl) {
+    return [];
+  }
+  if (!tree.hasExplicitLeafUpdate) {
+    return [...params.entries];
+  }
+  const activePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
+  const activeEntries = activePath.flatMap((node) => {
+    const entry = params.entries[node.index];
+    return entry === undefined ? [] : [entry];
+  });
+  const firstActiveNode = activePath[0];
+  for (let index = (firstActiveNode?.index ?? 0) - 1; index >= 0; index -= 1) {
+    const record = params.records[index];
+    if (
+      typeof record === "object" &&
+      record !== null &&
+      !Array.isArray(record) &&
+      (record as TranscriptRecord).type === "compaction"
+    ) {
+      const entry = params.entries[index];
+      return entry === undefined ? activeEntries : [entry, ...activeEntries];
+    }
+  }
+  return activeEntries;
+}
+
 /** Select one normalized path, retaining a reachable suffix after missing ancestors. */
 export function selectSessionTranscriptTreePathNodes<T>(
   tree: SessionTranscriptTree<T>,
