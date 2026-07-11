@@ -358,6 +358,21 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
         )
 
+    def test_codex_access_fallback_accepts_account_model_list_error(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["codex"],
+            1,
+            "",
+            (
+                "The model gpt-5.6-sol does not appear in the list of models "
+                "available to your account"
+            ),
+        )
+
+        self.assertTrue(
+            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
+        )
+
     def test_codex_access_fallback_ignores_plain_stdout(self) -> None:
         message = "gpt-5.6-sol does not exist or you do not have access"
         stdout_result = subprocess.CompletedProcess(["codex"], 1, message, "")
