@@ -248,7 +248,7 @@ type DispatchTelegramMessageParams = {
   suppressFailureFallback?: boolean;
   /** Fires after recovery-relevant session/run state is durably persisted. */
   onTurnAdopted?: () => void | Promise<void>;
-  /** Marks a queued follow-up whose adoption will happen at reply-lane admission. */
+  /** Marks a queued follow-up that is waiting for reply-lane admission. */
   onTurnDeferred?: () => void;
   /** Releases a deferred turn that completed without ever owning the reply lane. */
   onTurnAbandoned?: () => void;
@@ -885,7 +885,7 @@ export const dispatchTelegramMessage = async ({
     ? AbortSignal.any([replyAbortController.signal, turnAbortSignal])
     : replyAbortController.signal;
   let replyAbortControllerQueued = false;
-  let queuedTurnAdmitted = false;
+  let queuedTurnAdopted = false;
   let dispatchWasSuperseded;
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
@@ -907,6 +907,7 @@ export const dispatchTelegramMessage = async ({
     // Fence abort authority ends at adoption. Core (queue interrupt mode /
     // reply-run registry abort) is the sole owner of killing adopted runs.
     await onTurnAdopted?.();
+    queuedTurnAdopted = true;
     releaseTelegramReplyFenceAbortController(activeReplyFenceKey, replyAbortController);
   };
   // Block mode sizes preview rotation steps from streaming.preview.chunk (same
@@ -2649,9 +2650,13 @@ export const dispatchTelegramMessage = async ({
                             replyAbortControllerQueued = true;
                             onTurnDeferred?.();
                           },
-                          onAdmitted: async () => {
-                            await adoptReplyTurn();
-                            queuedTurnAdmitted = true;
+                          onAdmitted: () => {
+                            // Reply-lane ownership retires Telegram's pre-run abort authority,
+                            // but ingress stays replayable until recovery state is durable.
+                            releaseTelegramReplyFenceAbortController(
+                              activeReplyFenceKey,
+                              replyAbortController,
+                            );
                           },
                           onComplete: () => {
                             replyAbortControllerQueued = false;
@@ -2659,7 +2664,7 @@ export const dispatchTelegramMessage = async ({
                               activeReplyFenceKey,
                               replyAbortController,
                             );
-                            if (!queuedTurnAdmitted) {
+                            if (!queuedTurnAdopted) {
                               onTurnAbandoned?.();
                             }
                           },

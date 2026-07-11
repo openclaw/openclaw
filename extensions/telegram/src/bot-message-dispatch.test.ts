@@ -6289,11 +6289,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
       onAdmitted?: () => Promise<void> | void;
       onComplete?: () => void;
     };
-    const captures: Array<{ abortSignal?: AbortSignal; lifecycle?: QueuedLifecycle }> = [];
+    const captures: Array<{
+      abortSignal?: AbortSignal;
+      lifecycle?: QueuedLifecycle;
+      onTurnAdopted?: () => void | Promise<void>;
+    }> = [];
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       const capture = {
         abortSignal: replyOptions?.abortSignal,
         lifecycle: replyOptions?.queuedFollowupLifecycle,
+        onTurnAdopted: replyOptions?.onTurnAdopted,
       };
       captures.push(capture);
       capture.lifecycle?.onEnqueued?.();
@@ -6344,9 +6349,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
       onTurnAbandoned: vi.fn(),
     });
     await captures[1]?.lifecycle?.onAdmitted?.();
-    expect(onTurnAdopted).toHaveBeenCalledTimes(1);
+    expect(onTurnAdopted).not.toHaveBeenCalled();
     expect(supersedeTelegramReplyFence("agent:main:telegram:direct:adopted")).toBe(false);
     expect(captures[1]?.abortSignal?.aborted).toBe(false);
+    await captures[1]?.onTurnAdopted?.();
+    expect(onTurnAdopted).toHaveBeenCalledTimes(1);
     captures[1]?.lifecycle?.onComplete?.();
 
     const failedAdoption = new Error("adoption failed");
@@ -6358,10 +6365,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       onTurnDeferred: vi.fn(),
       onTurnAbandoned,
     });
-    await expect(captures[2]?.lifecycle?.onAdmitted?.()).rejects.toThrow("adoption failed");
+    await captures[2]?.lifecycle?.onAdmitted?.();
     expect(captures[2]?.abortSignal?.aborted).toBe(false);
-    expect(supersedeTelegramReplyFence("agent:main:telegram:direct:failed-adopt")).toBe(true);
-    expect(captures[2]?.abortSignal?.aborted).toBe(true);
+    expect(supersedeTelegramReplyFence("agent:main:telegram:direct:failed-adopt")).toBe(false);
+    await expect(captures[2]?.onTurnAdopted?.()).rejects.toThrow("adoption failed");
     captures[2]?.lifecycle?.onComplete?.();
     expect(onTurnAbandoned).toHaveBeenCalledTimes(1);
   });
