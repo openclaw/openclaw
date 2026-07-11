@@ -6,6 +6,10 @@ import {
   uploadToConsentUrl,
   validateConsentUploadUrl,
 } from "./file-consent.js";
+import {
+  MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS,
+  resolveMSTeamsSharePointUploadTimeoutMs,
+} from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
 
 // Helper: a resolveFn that returns a public IP by default
@@ -365,6 +369,48 @@ describe("uploadToConsentUrl", () => {
       expect(observedSignal?.aborted).toBe(false);
 
       await vi.advanceTimersByTimeAsync(25);
+      expect(observedSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows size-budgeted consent uploads that complete after the base upload deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const buffer = Buffer.alloc(512 * 1024);
+      const resolvedTimeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
+      const completionMs = MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + 1_000;
+      let observedSignal: AbortSignal | undefined;
+      const fetchFn = vi.fn<typeof fetch>(
+        async (_url, init) =>
+          await new Promise<Response>((resolve, reject) => {
+            observedSignal = init?.signal ?? undefined;
+            observedSignal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("consent upload timed out", "AbortError")),
+              { once: true },
+            );
+            setTimeout(() => resolve(new Response(null, { status: 200 })), completionMs);
+          }),
+      );
+
+      expect(completionMs).toBeGreaterThan(MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS);
+      expect(completionMs).toBeLessThan(resolvedTimeoutMs);
+
+      const uploadPromise = uploadToConsentUrl({
+        url: "https://contoso.sharepoint.com/upload",
+        buffer,
+        fetchFn,
+        validationOpts: { resolveFn: publicResolve },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchFn).toHaveBeenCalledOnce();
+      expect(observedSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(completionMs);
+      await expect(uploadPromise).resolves.toBeUndefined();
       expect(observedSignal?.aborted).toBe(false);
     } finally {
       vi.useRealTimers();

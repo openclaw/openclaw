@@ -12,7 +12,7 @@ import { lookup } from "node:dns/promises";
 import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS as MSTEAMS_FILE_CONSENT_UPLOAD_TIMEOUT_MS,
+  resolveMSTeamsSharePointUploadTimeoutMs,
   withMSTeamsAbortableRequestTimeout,
 } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
@@ -218,7 +218,7 @@ export async function uploadToConsentUrl(params: {
   const fetchFn = params.fetchFn ?? fetch;
   await withMSTeamsAbortableRequestTimeout({
     label: MSTEAMS_FILE_CONSENT_UPLOAD_TIMEOUT_LABEL,
-    timeoutMs: params.timeoutMs ?? MSTEAMS_FILE_CONSENT_UPLOAD_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
     work: async (signal) => {
       const res = await fetchFn(params.url, {
         method: "PUT",
