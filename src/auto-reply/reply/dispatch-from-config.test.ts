@@ -62,9 +62,10 @@ type AbortResult = {
 type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
+type RouteReply = (typeof import("./route-reply.js"))["routeReply"];
 
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn<RouteReply>(async () => ({ ok: true, messageId: "mock" })),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
@@ -769,9 +770,10 @@ function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
-async function dispatchFailedCommandProgressBeforeBlock(params: {
+async function dispatchFailedCommandProgressBeforeReply(params: {
   dispatcher: ReplyDispatcher;
   ctx?: DispatchReplyArgs["ctx"];
+  replyKind?: "block" | "final";
 }) {
   setNoAbort();
   const previousSessionEntry = sessionStoreMocks.currentEntry;
@@ -790,13 +792,16 @@ async function dispatchFailedCommandProgressBeforeBlock(params: {
   const onCommandOutput = vi.fn();
   const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
     await opts?.onCommandOutput?.(failedCommand);
+    if (params.replyKind === "final") {
+      return { text: "visible answer" } satisfies ReplyPayload;
+    }
     await opts?.onBlockReply?.({ text: "visible answer" });
     return undefined;
   };
 
   try {
     try {
-      await dispatchReplyFromConfig({
+      const result = await dispatchReplyFromConfig({
         ctx:
           params.ctx ??
           buildTestCtx({
@@ -809,14 +814,13 @@ async function dispatchFailedCommandProgressBeforeBlock(params: {
         replyResolver,
         replyOptions: { onCommandOutput },
       });
+      return { failedCommand, onCommandOutput, result };
     } finally {
       await settleReplyDispatcher({ dispatcher: params.dispatcher });
     }
   } finally {
     sessionStoreMocks.currentEntry = previousSessionEntry;
   }
-
-  return { failedCommand, onCommandOutput };
 }
 
 type MockAcpRuntime = AcpRuntime & {
@@ -5439,11 +5443,11 @@ describe("dispatchReplyFromConfig", () => {
       result: { ok: false, messageId: "mock", error: "delivery failed" },
       shouldFlush: true,
     },
-  ])(
+  ] as const)(
     "handles buffered failed progress when routed block delivery is $outcome",
     async ({ result, shouldFlush }) => {
       mocks.routeReply.mockResolvedValue(result);
-      const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeBlock({
+      const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
         dispatcher: createDispatcher(),
         ctx: buildTestCtx({
           Provider: "discord",
@@ -5476,7 +5480,7 @@ describe("dispatchReplyFromConfig", () => {
       beforeDeliver: (payload, info) => (info.kind === "block" ? null : payload),
     });
 
-    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeBlock({
+    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
       dispatcher,
     });
 
@@ -5489,7 +5493,7 @@ describe("dispatchReplyFromConfig", () => {
     const dispatcher = createDispatcher();
     vi.mocked(dispatcher.sendBlockReply).mockReturnValue(false);
 
-    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeBlock({
+    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
       dispatcher,
     });
 
@@ -5501,10 +5505,73 @@ describe("dispatchReplyFromConfig", () => {
     const deliver = vi.fn(async () => undefined);
     const dispatcher = createReplyDispatcher({ deliver });
 
-    const { onCommandOutput } = await dispatchFailedCommandProgressBeforeBlock({ dispatcher });
+    const { onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({ dispatcher });
 
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(deliver).toHaveBeenCalledWith({ text: "visible answer" }, { kind: "block" });
+  });
+
+  it("flushes buffered failed progress when a routed final is suppressed", async () => {
+    mocks.routeReply.mockResolvedValue({
+      ok: true,
+      suppressed: true,
+      reason: "cancelled_by_reply_payload_sending_hook",
+    });
+    const { failedCommand, onCommandOutput, result } =
+      await dispatchFailedCommandProgressBeforeReply({
+        dispatcher: createDispatcher(),
+        replyKind: "final",
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          OriginatingChannel: "slack",
+          OriginatingTo: "channel:C123",
+          ChatType: "direct",
+          SessionKey: "agent:main:slack:direct:U1",
+        }),
+      });
+
+    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    expect(result.queuedFinal).toBe(false);
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "visible answer" },
+        replyKind: "final",
+      }),
+    );
+  });
+
+  it("flushes buffered failed progress when routed block and TTS delivery are suppressed", async () => {
+    ttsMocks.state.synthesizeFinalAudio = true;
+    mocks.routeReply.mockResolvedValue({
+      ok: true,
+      suppressed: true,
+      reason: "empty_after_reply_payload_sending_hook",
+    });
+    const { failedCommand, onCommandOutput, result } =
+      await dispatchFailedCommandProgressBeforeReply({
+        dispatcher: createDispatcher(),
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          OriginatingChannel: "slack",
+          OriginatingTo: "channel:C123",
+          ChatType: "direct",
+          SessionKey: "agent:main:slack:direct:U1",
+        }),
+      });
+
+    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    expect(result.queuedFinal).toBe(false);
+    expect(mocks.routeReply.mock.calls.map(([call]) => call.replyKind)).toEqual(["block", "final"]);
+    expect(mocks.routeReply.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/tts-synth.opus",
+          spokenText: "visible answer",
+        }),
+      }),
+    );
   });
 
   it("flushes buffered regular-verbose failed tool payloads when no final reply is visible", async () => {

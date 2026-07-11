@@ -2721,15 +2721,16 @@ export async function dispatchReplyFromConfig(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
-        if (isRoutedReplyDelivered(result)) {
+        const delivered = isRoutedReplyDelivered(result);
+        if (delivered) {
           await mirrorDeliveredReplyToTranscript({
             metadata: sourceReplyTranscriptMirror,
             cfg,
           });
         }
         return {
-          queuedFinal: result.ok,
-          routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
+          queuedFinal: delivered,
+          routedFinalCount: delivered ? 1 : 0,
         };
       }
       throwIfFinalDeliveryAborted();
@@ -4094,16 +4095,16 @@ export async function dispatchReplyFromConfig(
               kind: "final",
             });
             if (result) {
-              queuedFinal = result.ok || queuedFinal;
-              if (isRoutedReplyDelivered(result)) {
+              const delivered = isRoutedReplyDelivered(result);
+              queuedFinal = delivered || queuedFinal;
+              if (delivered) {
                 routedFinalCount += 1;
+                cleanFinalDeliverySucceeded = true;
               }
               if (!result.ok) {
                 logVerbose(
                   `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
                 );
-              } else {
-                cleanFinalDeliverySucceeded = true;
               }
             } else {
               throwIfDispatchOperationAborted();
