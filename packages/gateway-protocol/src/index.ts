@@ -405,6 +405,20 @@ import {
   type WorkerHelloOk,
   type WorkerProtocolCloseReason,
   WorkerProtocolCloseReasonSchema,
+  type WorkerTranscriptCommitErrorReason,
+  WorkerTranscriptCommitErrorReasonSchema,
+  type WorkerTranscriptCommitErrorShape,
+  WorkerTranscriptCommitErrorShapeSchema,
+  type WorkerTranscriptCommitParams,
+  WorkerTranscriptCommitParamsSchema,
+  type WorkerTranscriptCommitRequestFrame,
+  WorkerTranscriptCommitRequestFrameSchema,
+  type WorkerTranscriptCommitResponseFrame,
+  WorkerTranscriptCommitResponseFrameSchema,
+  type WorkerTranscriptCommitResult,
+  WorkerTranscriptCommitResultSchema,
+  type WorkerTranscriptMessage,
+  WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -415,6 +429,9 @@ import {
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_PROTOCOL_METHODS,
   WORKER_RPC_SET_VERSION,
+  WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
   type SystemInfoParams,
   SystemInfoParamsSchema,
   type SystemInfoResult,
@@ -827,7 +844,10 @@ export type ProtocolValidator<T = unknown> = ((data: unknown) => data is T) & {
 
 // Defer TypeBox compilation until the first validation call. Importing this
 // module is common in CLIs/tests, so eager compilation would add startup cost.
-function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
+function lazyCompile<T = unknown>(
+  schema: unknown,
+  precheck?: (data: unknown) => ValidationError | undefined,
+): ProtocolValidator<T> {
   let compiled: TypeBoxValidator | undefined;
   let errors: ValidationError[] | null = null;
 
@@ -837,6 +857,11 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
   };
 
   const validate = ((data: unknown): data is T => {
+    const precheckError = precheck?.(data);
+    if (precheckError) {
+      errors = [precheckError];
+      return false;
+    }
     const current = getCompiled();
     const valid = current.Check(data);
     errors = valid ? null : ([...current.Errors(data)] as ValidationError[]);
@@ -875,6 +900,43 @@ export const validateWorkerConnectRequestFrame = lazyCompile<WorkerConnectReques
 );
 export const validateWorkerHeartbeatParams = lazyCompile<WorkerHeartbeatParams>(
   WorkerHeartbeatParamsSchema,
+);
+
+function checkWorkerTranscriptCommitJsonDepth(data: unknown): ValidationError | undefined {
+  const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
+  const seen = new WeakSet<object>();
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      break;
+    }
+    if (current.depth > WORKER_TRANSCRIPT_MAX_JSON_DEPTH) {
+      return {
+        keyword: "maxDepth",
+        params: { limit: WORKER_TRANSCRIPT_MAX_JSON_DEPTH },
+        message: `must not exceed JSON nesting depth ${WORKER_TRANSCRIPT_MAX_JSON_DEPTH}`,
+      };
+    }
+    if (!current.value || typeof current.value !== "object") {
+      continue;
+    }
+    if (seen.has(current.value)) {
+      return { keyword: "acyclic", message: "must be an acyclic JSON value" };
+    }
+    seen.add(current.value);
+    const values = Array.isArray(current.value)
+      ? current.value
+      : Object.values(current.value as Record<string, unknown>);
+    for (const value of values) {
+      stack.push({ depth: current.depth + 1, value });
+    }
+  }
+  return undefined;
+}
+
+export const validateWorkerTranscriptCommitParams = lazyCompile<WorkerTranscriptCommitParams>(
+  WorkerTranscriptCommitParamsSchema,
+  checkWorkerTranscriptCommitJsonDepth,
 );
 export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
   GatewaySuspendPrepareParamsSchema,
@@ -1471,6 +1533,13 @@ export {
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
   WorkerProtocolCloseReasonSchema,
+  WorkerTranscriptCommitErrorReasonSchema,
+  WorkerTranscriptCommitErrorShapeSchema,
+  WorkerTranscriptCommitParamsSchema,
+  WorkerTranscriptCommitRequestFrameSchema,
+  WorkerTranscriptCommitResponseFrameSchema,
+  WorkerTranscriptCommitResultSchema,
+  WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -1481,6 +1550,9 @@ export {
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_PROTOCOL_METHODS,
   WORKER_RPC_SET_VERSION,
+  WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
   EnvironmentStatusSchema,
   WorkerEnvironmentStateSchema,
   WorkerTunnelStatusSchema,
@@ -1842,6 +1914,13 @@ export type {
   WorkerHeartbeatResponseFrame,
   WorkerHelloOk,
   WorkerProtocolCloseReason,
+  WorkerTranscriptCommitErrorReason,
+  WorkerTranscriptCommitErrorShape,
+  WorkerTranscriptCommitParams,
+  WorkerTranscriptCommitRequestFrame,
+  WorkerTranscriptCommitResponseFrame,
+  WorkerTranscriptCommitResult,
+  WorkerTranscriptMessage,
   GatewaySuspendTaskBlocker,
   GatewaySuspendBlocker,
   GatewaySuspendPrepareParams,
