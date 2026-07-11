@@ -68,6 +68,7 @@ const CloudWorkerSettingsSchema = z.record(z.string(), z.unknown()).superRefine(
 
 const CloudWorkerProfileShape = {
   provider: z.string().trim().min(1),
+  install: z.enum(["bundle", "npm"]).optional().default("bundle"),
   settings: CloudWorkerSettingsSchema.optional(),
   lifetime: CloudWorkerLifetimePolicySchema.optional(),
 } satisfies ConfigSchemaShape<CloudWorkerProfileConfig>;

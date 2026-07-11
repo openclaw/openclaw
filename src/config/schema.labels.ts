@@ -124,6 +124,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "cloudWorkers.profiles": "Cloud Worker Profiles",
   "cloudWorkers.profiles.*": "Cloud Worker Profile",
   "cloudWorkers.profiles.*.provider": "Cloud Worker Provider",
+  "cloudWorkers.profiles.*.install": "Cloud Worker Install Method",
   "cloudWorkers.profiles.*.settings": "Cloud Worker Provider Settings",
   "cloudWorkers.profiles.*.lifetime": "Cloud Worker Lifetime Policy",
   "cloudWorkers.profiles.*.lifetime.idleTimeoutMinutes": "Cloud Worker Idle Timeout (minutes)",

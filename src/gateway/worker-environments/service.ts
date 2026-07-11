@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -16,6 +17,8 @@ import {
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { verifyWorkerAdmissionHandshake } from "./admission.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import {
   normalizeWorkerSshEndpoint,
@@ -30,7 +33,8 @@ export type WorkerEnvironmentServiceErrorCode =
   | "environment_not_found"
   | "invalid_profile"
   | "invalid_state"
-  | "provider_failure";
+  | "provider_failure"
+  | "bootstrap_failure";
 
 export class WorkerEnvironmentServiceError extends Error {
   constructor(
@@ -48,8 +52,17 @@ export type WorkerEnvironmentServiceOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
   resolveProvider: (providerId: string) => WorkerProvider | undefined;
+  prepareInstallation: (
+    install: WorkerInstallationArtifact["install"],
+  ) => Promise<WorkerInstallationArtifact>;
+  bootstrapWorker: (params: {
+    sshEndpoint: WorkerSshEndpoint;
+    installation: WorkerInstallationArtifact;
+    signal: AbortSignal;
+  }) => Promise<WorkerAdmissionHandshake>;
   reconcileIntervalMs?: number;
   providerCallTimeoutMs?: number;
+  bootstrapCallTimeoutMs?: number;
   logger?: { warn: (message: string) => void };
 };
 
@@ -105,16 +118,23 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const activeOperations = new Set<Promise<unknown>>();
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
+  let stopping = false;
 
   const move = (r: WorkerEnvironmentRecord, to: WorkerEnvironmentState, patch?: TransitionPatch) =>
     store.transition({ environmentId: r.environmentId, from: r.state, to, patch });
 
-  const saveError = (r: WorkerEnvironmentRecord, error: unknown) =>
-    store.recordError({
+  const saveError = (r: WorkerEnvironmentRecord, error: unknown) => {
+    // Once bootstrap failure owns the terminal outcome, preserve that causal error across
+    // transient provider/inspection failures so the final failed row stays actionable.
+    if (r.teardownTerminalState === "failed" && r.lastError) {
+      return r;
+    }
+    return store.recordError({
       environmentId: r.environmentId,
       state: r.state,
       error: boundedError(error),
     });
+  };
 
   const inState = (r: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
     states.includes(r.state);
@@ -133,6 +153,24 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       "Worker provider operation",
     );
 
+  const callBootstrap = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const controller = new AbortController();
+    const operation = Promise.resolve().then(() => run(controller.signal));
+    try {
+      return await withTimeout(
+        operation,
+        options.bootstrapCallTimeoutMs ?? 35 * 60_000,
+        "Worker bootstrap operation",
+      );
+    } catch (error) {
+      // The production runner force-kills SSH on abort and settles after child close. Await that
+      // contract: provider teardown must never race a child still mutating the lease.
+      controller.abort();
+      await operation.catch(() => undefined);
+      throw error;
+    }
+  };
+
   // Durable profile settings keep lifecycle routing stable across config edits and restarts.
   const lifecycleLease = (record: WorkerEnvironmentRecord, leaseId: string) => ({
     leaseId,
@@ -147,7 +185,95 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     throw serviceError("provider_not_found", `Worker provider is unavailable: ${providerId}`);
   };
 
-  const finishProvision = async (record: WorkerEnvironmentRecord, provider: WorkerProvider) => {
+  const installFor = (record: WorkerEnvironmentRecord): WorkerInstallationArtifact["install"] => {
+    const install = record.profileSnapshot.install;
+    if (install === undefined || install === "bundle") {
+      return "bundle";
+    }
+    if (install === "npm") {
+      return "npm";
+    }
+    throw serviceError("invalid_profile", "Worker profile has an invalid install method");
+  };
+
+  const prepareInstallation = (record: WorkerEnvironmentRecord) =>
+    options.prepareInstallation(installFor(record));
+
+  const finishProvenDestroy = (record: WorkerEnvironmentRecord) => {
+    const destroying = beginDestroy(record);
+    if (destroying.teardownTerminalState !== "failed") {
+      return move(destroying, "destroyed");
+    }
+    return move(destroying, "failed", {
+      leaseId: null,
+      sshEndpoint: null,
+      lastError: destroying.lastError ?? "Worker bootstrap failed after provider teardown",
+    });
+  };
+
+  const failBootstrap = async (
+    record: WorkerEnvironmentRecord,
+    leaseId: string,
+    provider: WorkerProvider,
+    error: unknown,
+  ): Promise<never> => {
+    const detail = boundedError(error);
+    const requested = store.requestDestroy({
+      environmentId: record.environmentId,
+      state: record.state,
+      terminalState: "failed",
+      lastError: detail,
+    });
+    const draining = move(requested, "draining", { lastError: detail });
+    const destroying = move(draining, "destroying", { lastError: detail });
+    try {
+      await callProvider(() => provider.destroy(lifecycleLease(record, leaseId)));
+    } catch (cleanupError) {
+      // An indeterminate destroy must remain retryable; never hide a possibly-live paid lease
+      // behind terminal failed state.
+      saveError(
+        destroying,
+        new Error(`${detail}; provider teardown pending: ${boundedError(cleanupError)}`),
+      );
+      throw serviceError("bootstrap_failure", "Worker bootstrap failed; teardown is pending");
+    }
+    finishProvenDestroy(destroying);
+    throw serviceError("bootstrap_failure", "Worker bootstrap failed");
+  };
+
+  const finishBootstrap = async (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    installation: WorkerInstallationArtifact,
+  ) => {
+    if (record.state !== "bootstrapping" || !record.leaseId || !record.sshEndpoint) {
+      throw serviceError("invalid_state", "Worker bootstrap requires a provisioned SSH lease");
+    }
+    let receipt: WorkerAdmissionHandshake;
+    try {
+      receipt = await callBootstrap((signal) =>
+        options.bootstrapWorker({
+          sshEndpoint: record.sshEndpoint,
+          installation,
+          signal,
+        }),
+      );
+      if (!verifyWorkerAdmissionHandshake(receipt, installation.bundleHash)) {
+        throw new Error("Worker bootstrap receipt does not match the expected bundle hash");
+      }
+    } catch (error) {
+      return await failBootstrap(record, record.leaseId, provider, error);
+    }
+    // Persistence failure leaves the remote receipt and durable bootstrapping lease intact;
+    // reconcile retries and takes the runner's idempotent receipt-match path.
+    return move(record, "ready", { bootstrapReceipt: receipt });
+  };
+
+  const finishProvision = async (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    preparedInstallation?: WorkerInstallationArtifact,
+  ) => {
     let lease: WorkerLease;
     try {
       const profile = requireWorkerProfile(record.profileSnapshot.settings);
@@ -168,22 +294,52 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     // A timeout can happen after allocation; retain the same operation id for safe replay.
     const patch = { leaseId: lease.leaseId, sshEndpoint: lease.ssh };
     const bootstrapping = move(record, "bootstrapping", patch);
-    // No bootstrap payload yet; this edge owns future bootstrap work.
-    return record.destroyRequestedAtMs === null ? move(bootstrapping, "ready") : bootstrapping;
+    if (record.destroyRequestedAtMs !== null) {
+      return bootstrapping;
+    }
+    let installation = preparedInstallation;
+    if (!installation) {
+      try {
+        // A persisted provisioning row can represent an allocation whose response was lost.
+        // Replay the idempotent provider operation before packaging can terminalize that lease.
+        installation = await prepareInstallation(bootstrapping);
+      } catch (error) {
+        return await failBootstrap(bootstrapping, lease.leaseId, provider, error);
+      }
+    }
+    return finishBootstrap(bootstrapping, provider, installation);
   };
 
-  const resumeProvision = (r: WorkerEnvironmentRecord, provider = providerFor(r.providerId)) =>
-    finishProvision(r.state === "requested" ? move(r, "provisioning") : r, provider);
+  const resumeProvision = async (
+    record: WorkerEnvironmentRecord,
+    provider = providerFor(record.providerId),
+  ) => {
+    let installation: WorkerInstallationArtifact | undefined;
+    if (record.state === "requested" && record.destroyRequestedAtMs === null) {
+      try {
+        // Fresh requests package before allocation. Once provisioning is durable, provider replay
+        // must happen first because the previous response may have been lost after allocation.
+        installation = await prepareInstallation(record);
+      } catch (error) {
+        move(record, "failed", { lastError: boundedError(error) });
+        throw serviceError("bootstrap_failure", "Worker installation preparation failed");
+      }
+    }
+    const provisioning = record.state === "requested" ? move(record, "provisioning") : record;
+    return finishProvision(provisioning, provider, installation);
+  };
 
   const cancelRequested = (record: WorkerEnvironmentRecord) =>
     move(record, "failed", { lastError: "Provisioning canceled before provider allocation" });
 
   const beginDestroy = (record: WorkerEnvironmentRecord) => {
+    const failurePatch =
+      record.teardownTerminalState === "failed" ? { lastError: record.lastError } : undefined;
     const draining = inState(record, "bootstrapping", "ready", "attached", "idle")
-      ? move(record, "draining")
+      ? move(record, "draining", failurePatch)
       : record;
     if (draining.state === "draining") {
-      return move(draining, "destroying");
+      return move(draining, "destroying", failurePatch);
     }
     if (draining.state === "destroying") {
       return draining;
@@ -203,7 +359,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       saveError(destroying, error);
       throw serviceError("provider_failure", "Worker provider operation failed");
     }
-    return move(destroying, "destroyed");
+    return finishProvenDestroy(destroying);
   };
 
   const reconcileRecord = async (record: WorkerEnvironmentRecord): Promise<void> => {
@@ -237,7 +393,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const teardownExpected =
       record.destroyRequestedAtMs !== null || inState(record, "draining", "destroying");
     if (status === "destroyed" || (status === "unknown" && teardownExpected)) {
-      move(beginDestroy(record), "destroyed");
+      finishProvenDestroy(record);
       return;
     }
     if (status === "unknown") {
@@ -248,8 +404,43 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       await finishDestroy(record, provider).catch(() => undefined);
       return;
     }
-    if (record.state === "bootstrapping") {
-      return void move(record, "ready");
+    if (record.state === "attached") {
+      // Milestone 2 owns session draining; never replace a build beneath a live worker.
+      // Its attached-to-idle edge makes the existing rebootstrap path eligible.
+      return;
+    }
+    if (inState(record, "bootstrapping", "ready", "idle")) {
+      let installation: WorkerInstallationArtifact;
+      try {
+        // Bundle identity is local and canonical for both install channels. A matching admitted
+        // receipt must not depend on npm registry availability during routine reconciliation.
+        installation = await options.prepareInstallation("bundle");
+      } catch (error) {
+        if (record.bootstrapReceipt && inState(record, "ready", "idle")) {
+          saveError(record, error);
+          return;
+        }
+        await failBootstrap(record, leaseId, provider, error).catch(() => undefined);
+        return;
+      }
+      if (
+        record.bootstrapReceipt &&
+        verifyWorkerAdmissionHandshake(record.bootstrapReceipt, installation.bundleHash)
+      ) {
+        return;
+      }
+      if (installFor(record) === "npm") {
+        try {
+          installation = await options.prepareInstallation("npm");
+        } catch (error) {
+          await failBootstrap(record, leaseId, provider, error).catch(() => undefined);
+          return;
+        }
+      }
+      const bootstrapping =
+        record.state === "bootstrapping" ? record : move(record, "bootstrapping");
+      await finishBootstrap(bootstrapping, provider, installation).catch(() => undefined);
+      return;
     }
     if (inState(record, "draining", "destroying")) {
       await finishDestroy(record, provider).catch(() => undefined);
@@ -257,6 +448,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const create = async (profileId: string, idempotencyKey: string) => {
+    if (stopping) {
+      throw serviceError("invalid_state", "Worker environment service is stopping");
+    }
     const normalizedProfileId = profileId.trim();
     if (!normalizedProfileId || normalizedProfileId !== profileId) {
       throw serviceError("invalid_profile", "Worker profile id must be non-empty and trimmed");
@@ -264,6 +458,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const digest = createHash("sha256").update(idempotencyKey).digest("hex");
     const environmentId = `worker:${digest.slice(0, 32)}`;
     return withLock(environmentId, async () => {
+      if (stopping) {
+        throw serviceError("invalid_state", "Worker environment service is stopping");
+      }
       const existing = store.get(environmentId);
       if (existing) {
         if (existing.profileId !== normalizedProfileId) {
@@ -289,6 +486,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         providerId: normalizeCapabilityProviderId(provider.id) ?? provider.id,
         profileId: normalizedProfileId,
         profileSnapshot: requireWorkerProfile({
+          install: profile.install ?? "bundle",
           settings,
           ...(profile.lifetime ? { lifetime: profile.lifetime } : {}),
         }),
@@ -298,8 +496,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     });
   };
 
-  const destroy = async (environmentId: string) =>
-    withLock(environmentId, async () => {
+  const destroy = async (environmentId: string) => {
+    if (stopping) {
+      throw serviceError("invalid_state", "Worker environment service is stopping");
+    }
+    return withLock(environmentId, async () => {
       let record = store.get(environmentId);
       if (!record) {
         throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
@@ -320,6 +521,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       return finishDestroy(record, provider);
     });
+  };
 
   const reconcilePass = async () => {
     const tasks = store.listForReconcile().map(
@@ -339,13 +541,17 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     await runTasksWithConcurrency({ tasks, limit: 8 });
   };
 
-  const reconcileOnce = () =>
-    (reconcileInFlight ??= reconcilePass().finally(() => {
+  const reconcileOnce = () => {
+    if (stopping) {
+      return Promise.resolve();
+    }
+    return (reconcileInFlight ??= reconcilePass().finally(() => {
       reconcileInFlight = undefined;
     }));
+  };
 
   const start = () => {
-    if (interval) {
+    if (interval || stopping) {
       return;
     }
     interval = setInterval(
@@ -357,10 +563,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const stop = async () => {
+    stopping = true;
     clearInterval(interval);
     interval = undefined;
-    await reconcileInFlight;
-    await Promise.allSettled(activeOperations);
+    const reconciliation = reconcileInFlight;
+    if (reconciliation) {
+      await Promise.allSettled([reconciliation]);
+    }
+    while (activeOperations.size > 0) {
+      await Promise.allSettled(activeOperations);
+    }
   };
 
   return {
