@@ -131,19 +131,22 @@ export async function acquireTrajectoryWriterLease(params: {
           }),
         );
       }
-      if (existing.ownerSessionId === params.sessionId) {
-        if (!existing.retired) {
-          return claimed(existing.incarnation);
-        }
-        return claimed(
-          claimTrajectoryPathIncarnation(canonicalPath, {
-            ownerSessionId: params.sessionId,
-            retired: false,
-          }),
-        );
+      if (existing.ownerSessionId === params.sessionId && !existing.retired) {
+        // Same live owner reconnecting (process restart, or a fresh writer
+        // object requested after writers-Map eviction while the session is
+        // still active) — reuse the existing incarnation unchanged.
+        return claimed(existing.incarnation);
       }
-      // Different owner already holds this canonical path: disambiguate rather
-      // than share a file between two unrelated sessions (F4/F6).
+      // Either a different owner already holds this canonical path (F4/F6),
+      // or this owner's own path was already retired by an explicit
+      // reset/delete disposal. retired is set exclusively by that disposal
+      // (cleanup.ts), so a same-owner claim reaching here is never a
+      // legitimate new session reusing an old id (session ids are random
+      // UUIDs) — it is a late straggler write racing the disposal (e.g. an
+      // async post-turn hook still finishing against the session that was
+      // just reset/deleted). Disambiguating it to a fresh sibling path,
+      // exactly like a cross-owner collision, keeps the tombstoned canonical
+      // path permanently dead instead of letting the straggler resurrect it.
       return { collision: true as const };
     });
     if (!claim.collision) {

@@ -463,6 +463,10 @@ const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../../gateway/session-archive.runtime.js"),
 );
 
+const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
+  () => import("../../trajectory/cleanup.js"),
+);
+
 // Fork-source reading parses legacy transcript versions through the agents
 // session-manager; load it lazily so accessor consumers do not pull that
 // runtime (and its module-init package metadata reads) at import time.
@@ -2230,14 +2234,50 @@ export async function persistSessionResetLifecycle(params: {
   });
 
   if (params.cleanupPreviousTranscript && params.previousSessionId) {
+    const previousSessionId = params.previousSessionId;
+    const previousEntryForArchive =
+      params.previousEntry.sessionId === previousSessionId
+        ? params.previousEntry
+        : { ...params.previousEntry, sessionId: previousSessionId };
+    // One instant for both the transcript's own reset-archive rename here and
+    // the trajectory tombstone below, so the pair carries the exact same
+    // ".reset.<timestamp>" suffix and stays visibly coupled — this runner-
+    // driven reset (typed in-conversation /reset) previously persisted its
+    // own store swap and transcript archive without ever routing through
+    // resetSessionEntryLifecycle in store.ts, so it never tombstoned the
+    // trajectory pair at all.
+    const nowMs = Date.now();
     await archivePreviousSessionTranscript({
       agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-      previousEntry:
-        params.previousEntry.sessionId === params.previousSessionId
-          ? params.previousEntry
-          : { ...params.previousEntry, sessionId: params.previousSessionId },
+      previousEntry: previousEntryForArchive,
       storePath: params.storePath,
+      nowMs,
     });
+    const previousSessionFile = previousEntryForArchive.sessionFile;
+    if (!previousSessionFile || previousSessionFile !== params.nextSessionFile) {
+      // A fresh reset always mints a brand-new sessionId, so nextSessionFile
+      // is never the previous session's own transcript path here — this is
+      // always the "genuinely abandoned" case, never a reused-path handoff.
+      // Tombstone the previous session's trajectory pair unless another
+      // store row still references it (same referenced-sessions guard shape
+      // resetSessionEntryLifecycle and deleteSessionEntryLifecycle use).
+      const store = loadSessionStore(params.storePath, { skipCache: true, clone: false });
+      const referencedSessionIds = new Set(
+        Object.values(store)
+          .map((entry) => entry?.sessionId)
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      );
+      if (!referencedSessionIds.has(previousSessionId)) {
+        const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
+        await removeRemovedSessionTrajectoryArtifacts({
+          removedSessionFiles: [[previousSessionId, previousSessionFile]],
+          referencedSessionIds,
+          storePath: params.storePath,
+          restrictToStoreDir: true,
+          disposal: { mode: "tombstone", reason: "reset", nowMs },
+        });
+      }
+    }
   }
 
   if (persistError) {
@@ -3335,6 +3375,8 @@ async function archivePreviousSessionTranscript(params: {
   onArchiveError?: (error: unknown, sourcePath: string) => void;
   previousEntry?: SessionEntry;
   storePath: string;
+  /** Shared with a paired trajectory tombstone rename — see persistSessionResetLifecycle. */
+  nowMs?: number;
 }): Promise<SessionLifecycleTranscriptInfo> {
   if (!params.previousEntry?.sessionId) {
     return {};
@@ -3348,6 +3390,7 @@ async function archivePreviousSessionTranscript(params: {
     agentId: params.agentId,
     reason: "reset",
     onArchiveError: params.onArchiveError,
+    nowMs: params.nowMs,
   });
   return resolveStableSessionEndTranscript({
     sessionId: params.previousEntry.sessionId,
