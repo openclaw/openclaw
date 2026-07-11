@@ -57,6 +57,7 @@ import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
+  HOST_FS_BUILTIN_CODING_DENY_NAMES,
 } from "../security/dangerous-tools.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
@@ -237,6 +238,25 @@ export function resolveGatewayScopedTools(params: {
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
+  const hostFsBuiltinCodingDeny = new Set<string>(HOST_FS_BUILTIN_CODING_DENY_NAMES);
+  // The host-FS `read` name gates the BUILT-IN coding tool at the final gateway deny
+  // filter, which preserves a same-named PLUGIN tool. It must NOT be passed to the
+  // plugin loader's denylist, or the production plugin resolver drops a same-named
+  // plugin tool by name before it can reach that filter (clawsweeper #85664 [P2]).
+  // `read` denied for any OTHER reason (explicit `gateway.tools.deny`, owner-only,
+  // or excluded) stays in the plugin denylist.
+  const gatewayConfiguredDeny = Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [];
+  const pluginToolDenylist = explicitDenylist.filter((name) => {
+    if (!hostFsBuiltinCodingDeny.has(name)) {
+      return true;
+    }
+    const deniedOnlyByHostFsDefault =
+      (defaultGatewayDeny as readonly string[]).includes(name) &&
+      !(ownerOnlyGatewayDeny as readonly string[]).includes(name) &&
+      !gatewayConfiguredDeny.includes(name) &&
+      !excludedToolNames.includes(name);
+    return !deniedOnlyByHostFsDefault;
+  });
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
@@ -301,7 +321,7 @@ export function resolveGatewayScopedTools(params: {
       inheritedToolPolicy,
       gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
     ]),
-    pluginToolDenylist: explicitDenylist,
+    pluginToolDenylist,
     cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
       ? cronCreatorToolAllowlist
       : undefined,
@@ -494,13 +514,32 @@ export function resolveGatewayScopedTools(params: {
     }),
   });
 
+  const explicitGatewayDeny = Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [];
   const gatewayDenySet = new Set([
     ...defaultGatewayDeny,
     ...ownerOnlyGatewayDeny,
-    ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
+    ...explicitGatewayDeny,
     ...excludedToolNames,
   ]);
-  const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+  const tools = policyFiltered.filter((tool) => {
+    if (!gatewayDenySet.has(tool.name)) {
+      return true;
+    }
+    // Preserve a same-named PLUGIN tool when the ONLY reason it is denied is the
+    // host-FS built-in `read` default-deny. That default exists to gate the
+    // BUILT-IN coding tool (which has no plugin meta) behind the directInvoke
+    // opt-in — not to break a plugin tool the operator allowlisted. The built-in
+    // stays denied; any OTHER deny reason (owner-only, explicit
+    // `gateway.tools.deny`, excluded, or inherently dangerous names like
+    // `exec`/`fs_write`) still drops the tool.
+    const deniedOnlyByHostFsBuiltinDefault =
+      hostFsBuiltinCodingDeny.has(tool.name) &&
+      (defaultGatewayDeny as readonly string[]).includes(tool.name) &&
+      !(ownerOnlyGatewayDeny as readonly string[]).includes(tool.name) &&
+      !explicitGatewayDeny.includes(tool.name) &&
+      !excludedToolNames.includes(tool.name);
+    return deniedOnlyByHostFsBuiltinDefault && getPluginToolMeta(tool) !== undefined;
+  });
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
   const inheritableTools = includeNodeExecTool

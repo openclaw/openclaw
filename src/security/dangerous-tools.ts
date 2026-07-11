@@ -42,6 +42,18 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
 ] as const;
 
 /**
+ * Subset of {@link DEFAULT_GATEWAY_HTTP_TOOL_DENY} whose default-deny exists to
+ * gate the BUILT-IN host-FS `read` coding tool (materialized behind
+ * `gateway.tools.directInvoke.hostFsRead`) — NOT to block a same-named tool from
+ * another source. `read` commonly collides with plugin tool names, so a plugin
+ * tool an operator has allowlisted must stay reachable on `/tools/invoke` + SDK
+ * `tools.invoke`; only the built-in is gated. The resolver (`tool-resolution.ts`,
+ * final gateway deny filter) preserves a same-named plugin tool when its sole deny
+ * reason is this default — the built-in stays denied.
+ */
+export const HOST_FS_BUILTIN_CODING_DENY_NAMES = ["read"] as const;
+
+/**
  * Core tools that require sender owner identity on Gateway-scoped surfaces.
  * `gateway.tools.allow` can remove the default HTTP deny only for owner/trusted-operator
  * callers; non-owner identity-bearing callers must not receive server-credential wrappers.
