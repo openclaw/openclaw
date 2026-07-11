@@ -1,17 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentSession } from "./agent-session.js";
 
+// Mock sleep so tests don't actually wait
+vi.mock("../utils/sleep.js", () => ({
+  sleep: vi.fn().mockResolvedValue(undefined),
+}));
+
 describe("AgentSession auto-retry", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("honors Retry-After headers and emits auto_retry_start with the requested delay", async () => {
     let emittedEvent: any;
     const session = {
       retryCount: 0,
       settingsManager: {
-        getRetrySettings: () => ({
-          enabled: true,
-          maxRetries: 3,
-          baseDelayMs: 1_000,
-        }),
+        getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 }),
       },
       agent: { state: { messages: [] } },
       emit: vi.fn((event) => {
@@ -48,11 +53,7 @@ describe("AgentSession auto-retry", () => {
     const session = {
       retryCount: 0,
       settingsManager: {
-        getRetrySettings: () => ({
-          enabled: true,
-          maxRetries: 3,
-          baseDelayMs: 1_000,
-        }),
+        getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 }),
       },
       agent: { state: { messages: [] } },
       emit: vi.fn((event) => {
