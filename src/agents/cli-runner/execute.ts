@@ -32,6 +32,7 @@ import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
@@ -481,6 +482,33 @@ export async function executePreparedCliRun(
         })
       : undefined;
 
+  // Wire the runtime trajectory recorder so pure CLI runs (notably the
+  // claude-cli live-session path) emit the same lifecycle events as the
+  // embedded provider dispatch. Without this, sessions that stay on the CLI
+  // executor for their entire lifetime never produce a trajectory sidecar even
+  // though the pointer file is written (#80667). The recorder is null when
+  // capture is disabled or no session file exists, so every call is guarded.
+  const trajectoryRecorder = createTrajectoryRuntimeRecorder({
+    cfg: params.config,
+    runId: params.runId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
+    provider: params.provider,
+    modelId: context.modelId,
+    workspaceDir: context.workspaceDir,
+  });
+  trajectoryRecorder?.recordEvent("session.started", {
+    trigger: params.trigger,
+    sessionFile: params.sessionFile,
+    workspaceDir: context.workspaceDir,
+    agentId: params.agentId,
+    messageProvider: params.messageProvider,
+    messageChannel: params.messageChannel,
+    backend: context.backendResolved.id,
+    cliSessionId: cliSessionIdToUse,
+  });
+
   const basePrompt = cliSessionIdToUse
     ? params.prompt
     : (context.openClawHistoryPrompt ?? params.prompt);
@@ -503,6 +531,14 @@ export async function executePreparedCliRun(
     imageOrder: params.imageOrder,
   });
   prompt = promptWithImages;
+
+  trajectoryRecorder?.recordEvent("prompt.submitted", {
+    prompt,
+    systemPrompt: context.systemPrompt,
+    useResume,
+    cliSessionId: cliSessionIdToUse,
+    imagesCount: params.images?.length ?? 0,
+  });
 
   const { argsPrompt, stdin } = resolvePromptInput({
     backend,
@@ -569,6 +605,9 @@ export async function executePreparedCliRun(
 
   let completedOutput: CliOutput | undefined;
   let executionError: unknown;
+  // Guards against emitting more than one terminal `session.ended`: the success
+  // path, the catch handler, and the finally safety net all share this flag.
+  let trajectoryTerminalRecorded = false;
   const cleanupOuterResource = async (cleanup: (() => Promise<void>) | undefined) => {
     try {
       await cleanup?.();
@@ -1944,9 +1983,26 @@ export async function executePreparedCliRun(
       }
       return withExecutionEvidence(runOutput);
     });
+    if (trajectoryRecorder && !trajectoryTerminalRecorded) {
+      trajectoryRecorder.recordEvent("model.completed", {
+        usage: completedOutput.usage,
+        cliSessionId: completedOutput.sessionId,
+        assistantTexts: completedOutput.text ? [completedOutput.text] : [],
+        finalPromptText: completedOutput.finalPromptText,
+      });
+      trajectoryRecorder.recordEvent("session.ended", { status: "success" });
+      trajectoryTerminalRecorded = true;
+    }
     return completedOutput;
   } catch (error) {
     executionError = error;
+    if (trajectoryRecorder && !trajectoryTerminalRecorded) {
+      trajectoryRecorder.recordEvent("session.ended", {
+        status: "error",
+        error: formatErrorMessage(error),
+      });
+      trajectoryTerminalRecorded = true;
+    }
     throw error;
   } finally {
     if (!fallbackClaudeSkillsPluginCleanupOwned) {
@@ -1957,6 +2013,25 @@ export async function executePreparedCliRun(
     }
     if (cleanupImages) {
       await cleanupOuterResource(cleanupImages);
+    }
+    // Flush trajectory last so queued session.ended events survive even when a
+    // cleanup above rejected; a skipped flush silently drops this run's
+    // trajectory sidecar. The safety-net session.ended covers any path that
+    // exits without the success or catch branch recording a terminal event.
+    if (trajectoryRecorder) {
+      if (!trajectoryTerminalRecorded) {
+        trajectoryRecorder.recordEvent("session.ended", {
+          status: "error",
+          error: executionError === undefined ? undefined : formatErrorMessage(executionError),
+        });
+      }
+      try {
+        await trajectoryRecorder.flush();
+      } catch (flushError) {
+        cliBackendLog.warn(
+          `trajectoryRecorder.flush() rejected: ${formatErrorMessage(flushError)}`,
+        );
+      }
     }
   }
 }
