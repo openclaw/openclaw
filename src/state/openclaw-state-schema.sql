@@ -413,7 +413,6 @@ CREATE TABLE IF NOT EXISTS authorization_grants (
   resource_id TEXT NOT NULL,
   permission TEXT NOT NULL CHECK (length(trim(permission)) > 0),
   granted_by_principal_id TEXT NOT NULL,
-  granted_by_role TEXT NOT NULL CHECK (granted_by_role = 'owner'),
   created_at INTEGER NOT NULL,
   PRIMARY KEY (
     domain_id,
@@ -425,8 +424,8 @@ CREATE TABLE IF NOT EXISTS authorization_grants (
   ),
   FOREIGN KEY (domain_id, principal_id)
     REFERENCES authorization_domain_memberships(domain_id, principal_id),
-  FOREIGN KEY (domain_id, granted_by_principal_id, granted_by_role)
-    REFERENCES authorization_domain_memberships(domain_id, principal_id, role),
+  FOREIGN KEY (domain_id, granted_by_principal_id)
+    REFERENCES authorization_domain_memberships(domain_id, principal_id),
   FOREIGN KEY (domain_id, namespace, resource_type, resource_id)
     REFERENCES authorization_resources(domain_id, namespace, resource_type, resource_id)
 );
@@ -440,6 +439,45 @@ CREATE INDEX IF NOT EXISTS idx_authorization_grants_lookup
     resource_id,
     domain_id
   );
+
+CREATE TRIGGER IF NOT EXISTS authorization_grants_owner_guard
+BEFORE INSERT ON authorization_grants
+FOR EACH ROW
+WHEN
+  NOT EXISTS (
+    SELECT 1
+    FROM authorization_principals AS principal
+    WHERE principal.principal_id = NEW.granted_by_principal_id
+      AND principal.kind = 'human'
+  )
+  OR (
+    NOT EXISTS (
+      SELECT 1
+      FROM authorization_domain_memberships AS membership
+      WHERE membership.domain_id = NEW.domain_id
+        AND membership.principal_id = NEW.granted_by_principal_id
+        AND membership.role = 'owner'
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM authorization_resources AS resource
+      WHERE resource.domain_id = NEW.domain_id
+        AND resource.namespace = NEW.namespace
+        AND resource.resource_type = NEW.resource_type
+        AND resource.resource_id = NEW.resource_id
+        AND resource.owner_principal_id = NEW.granted_by_principal_id
+    )
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'authorization grantor must own the domain or resource');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_grants_immutable
+BEFORE UPDATE ON authorization_grants
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization grants are immutable; revoke and recreate instead');
+END;
 
 CREATE TABLE IF NOT EXISTS device_pairing_pending (
   request_id TEXT NOT NULL PRIMARY KEY,

@@ -64,6 +64,50 @@ function requireDomainOwner(db: DatabaseSync, domainId: string, principalId: str
   }
 }
 
+function requireHumanDomainMember(db: DatabaseSync, domainId: string, principalId: string): void {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getAuthorizationKysely(db)
+      .selectFrom("authorization_principals as principal")
+      .innerJoin("authorization_domain_memberships as membership", (join) =>
+        join
+          .onRef("membership.principal_id", "=", "principal.principal_id")
+          .on("membership.domain_id", "=", domainId),
+      )
+      .select("principal.kind")
+      .where("principal.principal_id", "=", principalId),
+  );
+  if (row?.kind !== "human") {
+    throw new Error("authorization resource owner must be a human principal in the domain");
+  }
+}
+
+function requireDomainOrResourceOwner(params: {
+  db: DatabaseSync;
+  domainId: string;
+  principalId: string;
+  resource: GatewayResourceRef;
+}): void {
+  const ownership = executeSqliteQueryTakeFirstSync(
+    params.db,
+    getAuthorizationKysely(params.db)
+      .selectFrom("authorization_domain_memberships as membership")
+      .leftJoin("authorization_resources as resource", (join) =>
+        join
+          .onRef("resource.domain_id", "=", "membership.domain_id")
+          .on("resource.namespace", "=", params.resource.namespace)
+          .on("resource.resource_type", "=", params.resource.type)
+          .on("resource.resource_id", "=", params.resource.id),
+      )
+      .select(["membership.role", "resource.owner_principal_id"])
+      .where("membership.domain_id", "=", params.domainId)
+      .where("membership.principal_id", "=", params.principalId),
+  );
+  if (ownership?.role !== "owner" && ownership?.owner_principal_id !== params.principalId) {
+    throw new Error(`principal ${params.principalId} is not the owner of the domain or resource`);
+  }
+}
+
 export function putAuthorizationPrincipal(
   input: AuthorizationDatabaseInput & {
     id: string;
@@ -235,6 +279,7 @@ export function bindAuthorizationResource(
       }
       return;
     }
+    requireHumanDomainMember(db, domainId, ownerPrincipalId);
     executeSqliteQuerySync(
       db,
       kysely.insertInto("authorization_resources").values({
@@ -267,7 +312,12 @@ export function grantAuthorizationPermission(
     "grantor principal id",
   );
   runOpenClawStateWriteTransaction(({ db }) => {
-    requireDomainOwner(db, domainId, grantedByPrincipalId);
+    requireDomainOrResourceOwner({
+      db,
+      domainId,
+      principalId: grantedByPrincipalId,
+      resource,
+    });
     executeSqliteQuerySync(
       db,
       getAuthorizationKysely(db)
@@ -280,7 +330,6 @@ export function grantAuthorizationPermission(
           resource_id: resource.id,
           permission,
           granted_by_principal_id: grantedByPrincipalId,
-          granted_by_role: "owner",
           created_at: Date.now(),
         })
         .onConflict((conflict) =>

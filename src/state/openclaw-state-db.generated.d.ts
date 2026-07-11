@@ -154,7 +154,6 @@ export interface AuthorizationGrants {
   created_at: number;
   domain_id: string;
   granted_by_principal_id: string;
-  granted_by_role: string;
   namespace: string;
   permission: string;
   principal_id: string;
