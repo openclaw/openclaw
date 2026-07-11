@@ -2728,7 +2728,7 @@ This audited record covers the complete v2026.5.31-beta.4..v2026.6.1 history: 11
 - **PR #88820** fix(diagnostics): clear embedded-run activity when recovery declares lane idle. Related #88660. Thanks @openperf and @Iman-Sharif.
 - **PR #88288** fix(config): skip state-dir dotenv values that are unresolved shell references. Related #88274. Thanks @Alix-007 and @mathias15010.
 - **PR #88305** fix(browser): isolate Chrome MCP pending attach aborts. Related #88304. Thanks @rohitjavvadi.
-- **PR #74089** fix(openai/tts): handle [[tts]] directive in OpenAI speech provider (#12163). Thanks @stainlu and @useramuser.
+- **PR #74089** fix(openai/tts): handle [[tts:speed]] directive in OpenAI speech provider (#12163). Thanks @stainlu and @useramuser.
 
 ## 2026.5.31
 
@@ -3060,7 +3060,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - **PR #79173** fix: skip disabled skill snapshot env overrides. Related #79072. Thanks @zeus1959 and @maverikva.
 - **PR #88752** refactor: split ACP manager session flows.
 - **PR #79149** fix(ci): guard workflow template injection. Related #68428. Thanks @WT-WSL and @visionik.
-- **PR #74089** fix(openai/tts): handle [[tts]] directive in OpenAI speech provider (#12163). Thanks @stainlu and @useramuser.
+- **PR #74089** fix(openai/tts): handle [[tts:speed]] directive in OpenAI speech provider (#12163). Thanks @stainlu and @useramuser.
 - **PR #88763** feat: add code-mode MCP API files.
 - **PR #87896** fix(feishu): fallback when accepted turns send no visible reply. Thanks @ArthurNie.
 - **PR #88761** [codex] Surface disabled Codex plugin routes in doctor lint. Related #88751. Thanks @brokemac79 and @jalehman.
