@@ -404,7 +404,13 @@ export function scanPlainTextToolCall(
   const xmlish = scanXmlishToolCall(text, start, options?.structuralLineBreaks);
   const json = scanPlainTextJsonToolCall(text, start, options?.structuralLineBreaks);
   const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
-  const allowed = (scan: PlainTextToolCallScanBranch) => {
+  const allowed = (
+    scan: PlainTextToolCallScanBranch,
+  ): {
+    accepted: boolean;
+    payload?: PlainTextJsonToolCallSpan;
+    value?: PlainTextToolCallScanCandidate;
+  } => {
     const value = scan.kind === "complete" ? scan : scan.candidate;
     if (!value) {
       return { accepted: scan.kind === "prefix" };
@@ -722,6 +728,9 @@ export function stripPlainTextToolCallBlocks(text: string): string {
       continue;
     }
     let blockEnd = scan.kind === "complete" ? scan.end : scan.completeEnd;
+    if (blockEnd === undefined) {
+      return result + text.slice(cursor);
+    }
     result += text.slice(cursor, index);
     while (true) {
       const adjacentStart = skipLineIndentation(text, blockEnd);

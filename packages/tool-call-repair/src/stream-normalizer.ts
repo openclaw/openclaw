@@ -1158,7 +1158,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
               yield* forceProjectPendingAux(pending, projection);
               const projectedText = projection && projectedTextForEvent(record, projection);
               const novelText = projectedText?.slice(emittedTextUnits.get(key) ?? 0);
-              if (novelText) {
+              if (novelText && projection) {
                 yield createSyntheticTextDelta(record, novelText, projection.message);
               }
               pending = undefined;
