@@ -24,6 +24,7 @@ import {
   asBrowserTabs,
   callBrowserProxyOnNode,
   forceMeetEnglishUi,
+  isEnglishMeetTab,
   isSameMeetUrlForReuse,
   normalizeMeetUrlForReuse,
   readBrowserTab,
@@ -58,6 +59,17 @@ export const testing = {
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
   return mode === "agent" || mode === "bidi";
+}
+
+function readMeetAuthUser(url: string | undefined): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+  try {
+    return new URL(url).searchParams.get("authuser") ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function assertBlackHole2chAvailable(params: {
@@ -433,8 +445,9 @@ function meetStatusScript(params: {
     mic.click();
     notes.push("Muted Meet microphone for observe-only mode.");
   }
+  const joinElsewhere = findButton(/join here too/i);
   const join = !readOnly && ${JSON.stringify(params.autoJoin)}
-    ? findButton(/join now|ask to join|join here too/i)
+    ? findButton(/join now|ask to join/i)
     : null;
   if (join) join.click();
   const microphoneChoice = findButton(/\\buse microphone\\b/i);
@@ -590,6 +603,9 @@ function meetStatusScript(params: {
   if (!inCall && (host === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText))) {
     manualActionReason = "google-login-required";
     manualActionMessage = "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.";
+  } else if (!inCall && joinElsewhere) {
+    manualActionReason = "meet-session-conflict";
+    manualActionMessage = "Meet is already active in another tab or device. Leave that session or reuse an English-pinned tab before retrying.";
   } else if (!inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText)) {
     manualActionReason = "meet-admission-required";
     manualActionMessage = "Admit the OpenClaw browser participant in Google Meet, then retry speech.";
@@ -667,6 +683,7 @@ async function openMeetWithBrowserRequest(params: {
   const timeoutMs = Math.max(1_000, params.config.chrome.joinTimeoutMs);
   let targetId: string | undefined;
   let tab: BrowserTab | undefined;
+  let openUrl = params.url;
   if (params.config.chrome.reuseExistingTab) {
     const tabs = asBrowserTabs(
       await params.callBrowser({
@@ -675,7 +692,19 @@ async function openMeetWithBrowserRequest(params: {
         timeoutMs: Math.min(timeoutMs, 5_000),
       }),
     );
-    tab = tabs.find((entry) => isSameMeetUrlForReuse(entry.url, params.url));
+    const matchingTabs = tabs.filter((entry) => isSameMeetUrlForReuse(entry.url, params.url));
+    const requestedAuthUser = readMeetAuthUser(params.url);
+    tab = matchingTabs.find(
+      (entry) =>
+        isEnglishMeetTab(entry.url) &&
+        (!requestedAuthUser || readMeetAuthUser(entry.url) === requestedAuthUser),
+    );
+    if (!tab) {
+      const requestedUrl = new URL(params.url);
+      if (!requestedUrl.searchParams.has("authuser")) {
+        openUrl = matchingTabs.find((entry) => entry.url)?.url ?? params.url;
+      }
+    }
     targetId = tab?.targetId;
     if (tab && targetId) {
       await params.callBrowser({
@@ -684,48 +713,6 @@ async function openMeetWithBrowserRequest(params: {
         body: { targetId },
         timeoutMs: Math.min(timeoutMs, 5_000),
       });
-      // Meet automation scripts match English UI labels; a reused tab may have
-      // been opened by the browser/profile in a non-English locale. Before
-      // forcing English, verify the tab is not already in an active call:
-      // reloading a live meeting interrupts the call and replaces its target.
-      const preflight = await params.callBrowser({
-        method: "POST",
-        path: "/act",
-        body: {
-          kind: "evaluate",
-          targetId,
-          fn: meetStatusScript({
-            allowMicrophone: false,
-            autoJoin: false,
-            captureCaptions: false,
-            guestName: "",
-            readOnly: true,
-          }),
-        },
-        timeoutMs: Math.min(timeoutMs, 10_000),
-      });
-      const preflightBrowser = parseMeetBrowserStatus(preflight);
-      if (preflightBrowser?.inCall === true) {
-        return { launched: true, browser: preflightBrowser };
-      }
-      // Not in-call (or status could not be determined), so normalize to English
-      // so the full inspection/join scripts can read the UI reliably.
-      const englishUrl = tab.url ? forceMeetEnglishUi(tab.url) : undefined;
-      if (englishUrl && englishUrl !== tab.url) {
-        const navigated = await params.callBrowser({
-          method: "POST",
-          path: "/navigate",
-          body: { targetId, url: englishUrl },
-          timeoutMs: Math.min(timeoutMs, 5_000),
-        });
-        const navigatedTab = readBrowserTab(navigated);
-        if (navigatedTab?.url) {
-          tab = navigatedTab;
-          if (navigatedTab.targetId) {
-            targetId = navigatedTab.targetId;
-          }
-        }
-      }
     }
   }
   if (!targetId) {
@@ -733,7 +720,7 @@ async function openMeetWithBrowserRequest(params: {
       await params.callBrowser({
         method: "POST",
         path: "/tabs/open",
-        body: { url: forceMeetEnglishUi(params.url) },
+        body: { url: forceMeetEnglishUi(openUrl) },
         timeoutMs,
       }),
     );
@@ -832,6 +819,18 @@ function isRecoverableMeetTab(tab: BrowserTab, url?: string): boolean {
   );
 }
 
+function findRecoverableMeetTab(tabs: BrowserTab[], url?: string): BrowserTab | undefined {
+  const candidates = tabs.filter((tab) => isRecoverableMeetTab(tab, url));
+  if (!url) {
+    return candidates[0];
+  }
+  const requestedAuthUser = readMeetAuthUser(url);
+  const accountCandidates = requestedAuthUser
+    ? candidates.filter((tab) => readMeetAuthUser(tab.url) === requestedAuthUser)
+    : candidates;
+  return accountCandidates.find((tab) => isEnglishMeetTab(tab.url)) ?? accountCandidates[0];
+}
+
 async function inspectRecoverableMeetTab(params: {
   callBrowser: BrowserRequestCaller;
   config: GoogleMeetConfig;
@@ -848,34 +847,32 @@ async function inspectRecoverableMeetTab(params: {
     body: { targetId: params.targetId },
     timeoutMs: Math.min(params.timeoutMs, 5_000),
   });
-  // Recovery inspects a tab that automation lost track of. The status script
-  // matches English UI labels, so normalize the locale before inspection; adopt
-  // the target returned by navigation so subsequent calls stay attached to the
-  // correct renderer.
-  let targetId = params.targetId;
-  let tab = params.tab;
-  const englishUrl = tab.url ? forceMeetEnglishUi(tab.url) : undefined;
-  if (englishUrl && englishUrl !== tab.url) {
-    const navigated = await params.callBrowser({
-      method: "POST",
-      path: "/navigate",
-      body: { targetId, url: englishUrl },
-      timeoutMs: Math.min(params.timeoutMs, 5_000),
-    });
-    const navigatedTab = readBrowserTab(navigated);
-    if (navigatedTab?.url) {
-      tab = navigatedTab;
-      if (navigatedTab.targetId) {
-        targetId = navigatedTab.targetId;
-      }
-    }
+  // Recovery must never reload an unknown meeting-code tab: it may be an active
+  // call. English-only automation can safely inspect only tabs pinned by us.
+  if (normalizeMeetUrlForReuse(params.tab.url) && !isEnglishMeetTab(params.tab.url)) {
+    const manualActionMessage =
+      "The existing Meet tab is not pinned to English. Open the meeting with ?hl=en, then retry recovery.";
+    return {
+      found: true,
+      targetId: params.targetId,
+      tab: params.tab,
+      browser: {
+        status: "browser-control" as const,
+        browserUrl: params.tab.url,
+        browserTitle: params.tab.title,
+        manualActionRequired: true,
+        manualActionReason: "meet-locale-required" as const,
+        manualActionMessage,
+      },
+      message: manualActionMessage,
+    };
   }
   const permissionNotes = params.readOnly
     ? []
     : await grantMeetMediaPermissions({
         allowMicrophone,
         callBrowser: params.callBrowser,
-        targetId,
+        targetId: params.targetId,
         timeoutMs: params.timeoutMs,
       });
   const evaluated = await params.callBrowser({
@@ -883,7 +880,7 @@ async function inspectRecoverableMeetTab(params: {
     path: "/act",
     body: {
       kind: "evaluate",
-      targetId,
+      targetId: params.targetId,
       fn: meetStatusScript({
         allowMicrophone,
         captureCaptions: params.mode === "transcribe",
@@ -897,8 +894,8 @@ async function inspectRecoverableMeetTab(params: {
   const browser = mergeBrowserNotes(
     parseMeetBrowserStatus(evaluated) ?? {
       status: "browser-control",
-      browserUrl: tab.url,
-      browserTitle: tab.title,
+      browserUrl: params.tab.url,
+      browserTitle: params.tab.title,
     },
     permissionNotes,
   );
@@ -907,8 +904,8 @@ async function inspectRecoverableMeetTab(params: {
     : undefined;
   return {
     found: true,
-    targetId,
-    tab,
+    targetId: params.targetId,
+    tab: params.tab,
     browser,
     message:
       manual ?? (browser?.inCall ? "Existing Meet tab is in-call." : "Existing Meet tab focused."),
@@ -937,7 +934,7 @@ export async function recoverCurrentMeetTab(params: {
       timeoutMs: Math.min(timeoutMs, 5_000),
     }),
   );
-  const tab = tabs.find((entry) => isRecoverableMeetTab(entry, params.url));
+  const tab = findRecoverableMeetTab(tabs, params.url);
   const targetId = tab?.targetId;
   if (!tab || !targetId) {
     return {
@@ -992,7 +989,7 @@ export async function recoverCurrentMeetTabOnNode(params: {
       timeoutMs: Math.min(timeoutMs, 5_000),
     }),
   );
-  const tab = tabs.find((entry) => isRecoverableMeetTab(entry, params.url));
+  const tab = findRecoverableMeetTab(tabs, params.url);
   const targetId = tab?.targetId;
   if (!tab || !targetId) {
     return {
