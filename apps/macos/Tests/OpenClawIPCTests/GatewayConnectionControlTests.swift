@@ -685,20 +685,12 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
-            let identity = DeviceIdentityStore.loadOrCreate()
             let unscopedToken = "legacy-unscoped-token"
             let routeAToken = "route-a-device-token"
-            #expect(DeviceAuthStore.storeTokenPersisted(
-                deviceId: identity.deviceId,
-                role: "operator",
-                token: unscopedToken))
-            #expect(DeviceAuthStore.storeTokenPersisted(
-                deviceId: identity.deviceId,
-                role: "operator",
-                token: routeAToken,
-                gatewayID: routeA.owner))
-
-            let routeAAuth = try await self.connectAuth(route: routeA)
+            let routeAAuth = try await self.connectAuth(
+                route: routeA,
+                storedDeviceToken: routeAToken,
+                unscopedToken: unscopedToken)
             #expect(routeAAuth?["token"] as? String == routeAToken)
             #expect(routeAAuth?["token"] as? String != unscopedToken)
 
@@ -708,7 +700,11 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         }
     }
 
-    private func connectAuth(route: (url: URL, owner: String)) async throws -> [String: Any]? {
+    private func connectAuth(
+        route: (url: URL, owner: String),
+        storedDeviceToken: String? = nil,
+        unscopedToken: String? = nil) async throws -> [String: Any]?
+    {
         let recorder = WebSocketMessageRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
@@ -721,7 +717,25 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         })
         let connection = GatewayConnection(
             endpointProvider: {
-                GatewayConnection.EndpointSnapshot(
+                if let storedDeviceToken, let unscopedToken {
+                    let identity = DeviceIdentityStore.loadOrCreate()
+                    guard DeviceAuthStore.storeTokenPersisted(
+                        deviceId: identity.deviceId,
+                        role: "operator",
+                        token: unscopedToken),
+                        DeviceAuthStore.storeTokenPersisted(
+                            deviceId: identity.deviceId,
+                            role: "operator",
+                            token: storedDeviceToken,
+                            gatewayID: route.owner)
+                    else {
+                        throw NSError(
+                            domain: "GatewayConnectionControlTests",
+                            code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "failed to persist device auth fixture"])
+                    }
+                }
+                return GatewayConnection.EndpointSnapshot(
                     config: (url: route.url, token: nil, password: nil),
                     routeAuthority: nil,
                     deviceAuthGatewayID: route.owner)

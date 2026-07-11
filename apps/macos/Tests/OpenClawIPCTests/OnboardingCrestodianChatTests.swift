@@ -187,10 +187,10 @@ struct OnboardingCrestodianChatTests {
                       let id = GatewayWebSocketTestSupport.requestID(from: message)
                 else { return }
                 let method = crestodianRequestMethod(from: message)
-                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 if let method {
                     await methods.record(method)
                 }
+                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 switch method {
                 case "crestodian.setup.verify":
                     task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id)))
@@ -227,7 +227,11 @@ struct OnboardingCrestodianChatTests {
         await repeatedResume.value
 
         #expect(view.aiSetup.connectedModelRef == "openai/gpt-5.5")
-        #expect(await methods.snapshot() == ["crestodian.setup.verify", "crestodian.chat"])
+        #expect(await methods.snapshot() == [
+            "health",
+            "crestodian.setup.verify",
+            "crestodian.chat",
+        ])
     }
 
     @Test func `pending verification retry schedules deadline and stays read only`() async throws {
@@ -241,8 +245,8 @@ struct OnboardingCrestodianChatTests {
                       let id = GatewayWebSocketTestSupport.requestID(from: message),
                       let method = crestodianRequestMethod(from: message)
                 else { return }
-                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 await methods.record(method)
+                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 switch method {
                 case "crestodian.setup.verify":
                     let priorVerifications = await methods.snapshot().filter {
@@ -310,7 +314,9 @@ struct OnboardingCrestodianChatTests {
         view.aiSetup.retryFromScratch()
         #expect(scheduledDeadlines.count == 1)
         #expect(await methods.snapshot() == [
+            "health",
             "crestodian.setup.verify",
+            "health",
             "crestodian.setup.verify",
         ])
     }
@@ -327,8 +333,8 @@ struct OnboardingCrestodianChatTests {
                       let id = GatewayWebSocketTestSupport.requestID(from: message),
                       let method = crestodianRequestMethod(from: message)
                 else { return }
-                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 await methods.record(method)
+                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 guard method == "crestodian.setup.verify" else { return }
                 _ = await gate.waitIfFirst()
                 task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id)))
@@ -351,7 +357,7 @@ struct OnboardingCrestodianChatTests {
 
         let staleResume = view.resumePendingCrestodian(modelRef: "openai/gpt-5.5")
         for _ in 0..<200 {
-            if await methods.snapshot() == ["crestodian.setup.verify"] {
+            if await methods.snapshot() == ["health", "crestodian.setup.verify"] {
                 break
             }
             try? await Task.sleep(nanoseconds: 5_000_000)
@@ -381,8 +387,8 @@ struct OnboardingCrestodianChatTests {
                       let id = GatewayWebSocketTestSupport.requestID(from: message),
                       let method = crestodianRequestMethod(from: message)
                 else { return }
-                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 await methods.record(method)
+                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 switch method {
                 case "agents.list":
                     task.emitReceiveSuccess(.data(configuredAgentsResponse(id: id)))
@@ -440,6 +446,7 @@ struct OnboardingCrestodianChatTests {
             defaults: defaults) == .completed)
         #expect(await methods.snapshot() == [
             "agents.list",
+            "health",
             "crestodian.setup.verify",
             "crestodian.chat",
         ])
