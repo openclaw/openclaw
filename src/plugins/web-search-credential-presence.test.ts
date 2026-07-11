@@ -17,9 +17,15 @@ type ManifestSnapshot = {
 
 type PublicWebSearchProvider = Pick<
   PluginWebSearchProviderEntry,
-  "id" | "pluginId" | "requiresCredential"
+  "id" | "pluginId" | "authProviderId" | "requiresCredential"
 > & { envVars?: string[] };
 
+const agentScopeMocks = vi.hoisted(() => ({
+  resolveDefaultAgentDir: vi.fn<() => string>(() => "/agent/default"),
+}));
+const authProfileMocks = vi.hoisted(() => ({
+  hasAuthProfileForProvider: vi.fn<() => boolean>(() => false),
+}));
 const manifestMocks = vi.hoisted(() => ({
   loadManifestMetadataSnapshot: vi.fn<() => ManifestSnapshot>(() => ({ plugins: [] })),
 }));
@@ -29,6 +35,12 @@ const publicArtifactMocks = vi.hoisted(() => ({
   >(() => []),
 }));
 
+vi.mock("../agents/agent-scope-config.js", () => ({
+  resolveDefaultAgentDir: agentScopeMocks.resolveDefaultAgentDir,
+}));
+vi.mock("../agents/tools/model-config.helpers.js", () => ({
+  hasAuthProfileForProvider: authProfileMocks.hasAuthProfileForProvider,
+}));
 vi.mock("./manifest-contract-eligibility.js", () => ({
   loadManifestMetadataSnapshot: manifestMocks.loadManifestMetadataSnapshot,
 }));
@@ -45,6 +57,8 @@ beforeAll(async () => {
 
 describe("hasConfiguredWebSearchCredential", () => {
   beforeEach(() => {
+    agentScopeMocks.resolveDefaultAgentDir.mockReturnValue("/agent/default");
+    authProfileMocks.hasAuthProfileForProvider.mockReturnValue(false);
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({ plugins: [] });
     publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
       [],
@@ -667,6 +681,84 @@ describe("hasConfiguredWebSearchCredential", () => {
         origin: "bundled",
       }),
     ).toBe(false);
+  });
+
+  it("treats selected auth-backed web search providers as configured", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "xai",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["grok"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "grok",
+          pluginId: "xai",
+          authProviderId: "xai",
+          requiresCredential: true,
+        },
+      ],
+    );
+    const config = {
+      tools: { web: { search: { provider: "grok" } } },
+    } as OpenClawConfig;
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+
+    authProfileMocks.hasAuthProfileForProvider.mockReturnValue(true);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+    expect(authProfileMocks.hasAuthProfileForProvider).toHaveBeenLastCalledWith({
+      provider: "xai",
+      agentDir: "/agent/default",
+    });
+  });
+
+  it("treats auth-backed provider profiles as auto-detect credentials", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "xai",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["grok"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "grok",
+          pluginId: "xai",
+          authProviderId: "xai",
+          requiresCredential: true,
+        },
+      ],
+    );
+    authProfileMocks.hasAuthProfileForProvider.mockReturnValue(true);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {} as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
   });
 
   it("does not treat unknown explicit provider selection or credentials as configured", () => {

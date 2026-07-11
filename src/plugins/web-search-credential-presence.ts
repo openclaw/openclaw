@@ -1,5 +1,7 @@
 // Checks web-search credential presence from config and plugin metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../config/types.secrets.js";
 import { normalizePluginId } from "./config-state.js";
@@ -332,6 +334,58 @@ function hasExplicitKeylessProviderCandidate(params: {
   }
 }
 
+function providerCanUseAuthProfileForCredential(params: {
+  config: OpenClawConfig;
+  provider: { authProviderId?: string; requiresCredential?: boolean };
+  explicitProviderId: string | undefined;
+}): boolean {
+  if (!params.provider.authProviderId) {
+    return false;
+  }
+  if (!params.explicitProviderId && params.provider.requiresCredential === false) {
+    return false;
+  }
+  return hasAuthProfileForProvider({
+    provider: params.provider.authProviderId,
+    agentDir: resolveDefaultAgentDir(params.config),
+  });
+}
+
+function hasAuthProfileProviderCandidate(params: {
+  config: OpenClawConfig;
+  manifestRecords: readonly PluginManifestRecord[];
+  searchConfig: unknown;
+}): boolean {
+  const providerId = getConfiguredProviderId(params.searchConfig);
+  const manifestRecords = providerId
+    ? params.manifestRecords.filter((plugin) =>
+        (plugin.contracts?.webSearchProviders ?? []).includes(providerId),
+      )
+    : params.manifestRecords;
+  if (manifestRecords.length === 0) {
+    return false;
+  }
+  try {
+    const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds: manifestRecords.map((plugin) => plugin.id),
+    });
+    return (
+      providers?.some((provider) => {
+        if (providerId && provider.id !== providerId) {
+          return false;
+        }
+        return providerCanUseAuthProfileForCredential({
+          config: params.config,
+          provider,
+          explicitProviderId: providerId,
+        });
+      }) ?? false
+    );
+  } catch {
+    return false;
+  }
+}
+
 function resolveBundledProviderContractEnvVars(params: {
   manifestRecords: readonly PluginManifestRecord[];
   providerId: string | undefined;
@@ -439,6 +493,11 @@ export function hasConfiguredWebSearchCredential(params: {
       policyScope.policy,
     ) ||
     hasExplicitKeylessProviderCandidate({
+      manifestRecords: policyScope.manifestRecords,
+      searchConfig,
+    }) ||
+    hasAuthProfileProviderCandidate({
+      config: params.config,
       manifestRecords: policyScope.manifestRecords,
       searchConfig,
     }) ||
