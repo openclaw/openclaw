@@ -356,7 +356,9 @@ describe("cron view editor", () => {
       form: { ...DEFAULT_CRON_FORM, scheduleKind: "on-exit" },
     });
     expect(onExitContainer.querySelector("#cron-schedule-kind")).toBeNull();
-    expect(onExitContainer.textContent).toContain("On exit");
+    // The read-only kind is a property-bound input value, not text content.
+    const onExitInputs = Array.from(onExitContainer.querySelectorAll("input"));
+    expect(onExitInputs.some((input) => input.value === "On exit")).toBe(true);
   });
 
   it("renders supported delivery options and normalizes stale announce selection", () => {
