@@ -554,10 +554,18 @@ describe("package dist inventory", () => {
       const omittedRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-AbC123.js");
       const omittedTopLevelMap = path.join(packageRoot, "dist", "runtime.js.map");
       const omittedMap = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js.map");
+      const packageExcludedRuntime = path.join(packageRoot, "dist", "local-runtime.js");
+      const packageExcludedAsset = path.join(
+        packageRoot,
+        "dist",
+        "local-assets",
+        "theme.css",
+      );
       const omittedAppBundle = path.join(packageRoot, "dist", "OpenClaw.app");
 
       await fs.mkdir(path.dirname(packagedRuntime), { recursive: true });
       await fs.mkdir(path.dirname(omittedNestedHelper), { recursive: true });
+      await fs.mkdir(path.dirname(packageExcludedAsset), { recursive: true });
       await fs.mkdir(omittedAppBundle, { recursive: true });
       await fs.writeFile(
         path.join(packageRoot, "package.json"),
@@ -571,6 +579,8 @@ describe("package dist inventory", () => {
             "!dist/plugin-sdk/qa-channel.*",
             "!dist/qa-runtime-*.js",
             "!dist/**/*.map",
+            "!dist/local-runtime.js",
+            "!dist/local-assets/**",
           ],
         }),
         "utf8",
@@ -583,14 +593,18 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedRuntimeChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedTopLevelMap, "{}", "utf8");
       await fs.writeFile(omittedMap, "{}", "utf8");
+      await fs.writeFile(packageExcludedRuntime, "export const local = true;\n", "utf8");
+      await fs.writeFile(packageExcludedAsset, "body {}\n", "utf8");
       await fs.symlink(packageRoot, path.join(omittedAppBundle, "Autoupdate"));
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/plugin-sdk/runtime.js",
       ]);
       await expect(
-        collectPackageDistInventory(packageRoot, { includeSourceMaps: true }),
+        collectPackageDistInventory(packageRoot, { includePackageExcludedFiles: true }),
       ).resolves.toEqual([
+        "dist/local-assets/theme.css",
+        "dist/local-runtime.js",
         "dist/plugin-sdk/runtime.js",
         "dist/plugin-sdk/runtime.js.map",
         "dist/runtime.js.map",

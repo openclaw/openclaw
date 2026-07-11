@@ -99,7 +99,7 @@ type PackageDistInventoryRules = {
   exclusions: PackageDistExclusionRules;
 };
 type CollectPackageDistInventoryOptions = {
-  includeSourceMaps?: boolean;
+  includePackageExcludedFiles?: boolean;
 };
 type PackageDistInventoryScanContext = {
   activeFsOps: number;
@@ -362,8 +362,10 @@ function isPackagedDistPath(
   if (isExternalizedBundledExtensionDistPath(relativePath, rules.externalizedExtensionIds)) {
     return false;
   }
-  const includeSourceMap = options.includeSourceMaps === true && relativePath.endsWith(".map");
-  if (isPackageFilesExcludedDistPath(relativePath, rules.exclusions) && !includeSourceMap) {
+  if (
+    options.includePackageExcludedFiles !== true &&
+    isPackageFilesExcludedDistPath(relativePath, rules.exclusions)
+  ) {
     return false;
   }
   if (isLegacyPluginDependencyDirPath(relativePath)) {
@@ -408,10 +410,15 @@ function isPackageFilesExcludedDistSubtree(
   return isPackageFilesExcludedDistPath(`${relativePath}/`, exclusions);
 }
 
-function isOmittedDistSubtree(relativePath: string, rules: PackageDistInventoryRules): boolean {
+function isOmittedDistSubtree(
+  relativePath: string,
+  rules: PackageDistInventoryRules,
+  options: CollectPackageDistInventoryOptions,
+): boolean {
   return (
     isExternalizedBundledExtensionDistPath(relativePath, rules.externalizedExtensionIds) ||
-    isPackageFilesExcludedDistSubtree(relativePath, rules.exclusions) ||
+    (options.includePackageExcludedFiles !== true &&
+      isPackageFilesExcludedDistSubtree(relativePath, rules.exclusions)) ||
     isLegacyPluginDependencyDirPath(relativePath) ||
     isOmittedPluginSdkTestPath(relativePath) ||
     OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
@@ -426,7 +433,7 @@ async function collectRelativeFiles(
   context: PackageDistInventoryScanContext,
 ): Promise<string[]> {
   const rootRelativePath = normalizeRelativePath(path.relative(baseDir, rootDir));
-  if (rootRelativePath && isOmittedDistSubtree(rootRelativePath, rules)) {
+  if (rootRelativePath && isOmittedDistSubtree(rootRelativePath, rules, options)) {
     return [];
   }
   try {
@@ -444,6 +451,12 @@ async function collectRelativeFiles(
         const entryPath = path.join(rootDir, entry.name);
         const relativePath = normalizeRelativePath(path.relative(baseDir, entryPath));
         if (entry.isSymbolicLink()) {
+          if (
+            options.includePackageExcludedFiles === true &&
+            isPackageFilesExcludedDistPath(relativePath, rules.exclusions)
+          ) {
+            return [];
+          }
           throw new Error(`Unsafe package dist path: ${relativePath}`);
         }
         if (entry.isDirectory()) {

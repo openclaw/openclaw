@@ -839,7 +839,7 @@ export async function captureLocalPackageOverrides(params: {
   });
 
   const actualFiles = await collectPackageDistInventory(params.packageRoot, {
-    includeSourceMaps: true,
+    includePackageExcludedFiles: true,
   });
   const actualSet = new Set(actualFiles);
   const actualCaseFoldedSet = new Set(
