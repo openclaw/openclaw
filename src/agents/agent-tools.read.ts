@@ -946,13 +946,20 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
       // without a lossy UTF-8 round-trip.
       //
       // Stat-then-read is a TOCTOU window between checking existence
-      // and reading; a delete-after-stat can make readFile throw.
-      // Catch that edge so the append creates the file instead of
-      // failing the entire tool call.
+      // and reading. Only recover when the file was deleted between
+      // stat and readFile (ENOENT / file-not-found). Any other read
+      // failure (permission, I/O, cancellation, bridge error) must
+      // propagate — silently replacing the existing content with only
+      // the appended bytes would destroy data.
       const existing = (await params.bridge.stat({ filePath: absolutePath, cwd: params.root }))
         ? await params.bridge
             .readFile({ filePath: absolutePath, cwd: params.root })
-            .catch(() => Buffer.alloc(0))
+            .catch((err: unknown) => {
+              if (isNotFoundError(err)) {
+                return Buffer.alloc(0);
+              }
+              throw err;
+            })
         : Buffer.alloc(0);
       await params.bridge.mkdirp({ filePath: path.dirname(absolutePath), cwd: params.root });
       await params.bridge.writeFile({
