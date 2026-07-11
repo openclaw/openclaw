@@ -236,6 +236,43 @@ describe("hasConfiguredWebSearchCredential", () => {
     ).toBe(true);
   });
 
+  it("keeps non-bundled plugin entry credentials when bundled manifest records exist", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+        },
+        {
+          id: "custom-search",
+          origin: "global",
+          contracts: { webSearchProviders: ["custom-search"] },
+        },
+      ],
+    });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          plugins: {
+            entries: {
+              "custom-search": {
+                config: {
+                  webSearch: {
+                    apiKey: "custom-search-key",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+  });
+
   it("limits explicit provider checks to the selected provider", () => {
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
       plugins: [
@@ -369,6 +406,7 @@ describe("hasConfiguredWebSearchCredential", () => {
         },
       ],
     );
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockClear();
 
     expect(
       hasConfiguredWebSearchCredential({
@@ -382,6 +420,127 @@ describe("hasConfiguredWebSearchCredential", () => {
     expect(
       publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
     ).toHaveBeenCalledWith({ onlyPluginIds: ["duckduckgo"] });
+  });
+
+  it("does not treat explicit keyless providers blocked by plugins.allow as configured", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+        },
+        {
+          id: "duckduckgo",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["duckduckgo"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "duckduckgo",
+          pluginId: "duckduckgo",
+          requiresCredential: false,
+        },
+      ],
+    );
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockClear();
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          plugins: { allow: ["brave"] },
+          tools: { web: { search: { provider: "duckduckgo" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+    expect(
+      publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("does not count ambient search apiKey when every known provider is blocked", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+        },
+      ],
+    });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          plugins: { allow: ["telegram"] },
+          tools: { web: { search: { apiKey: "search-key" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not count manifest env credentials for denied web-search plugins", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+          setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
+          providerAuthEnvVars: {},
+        },
+      ],
+    });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: { plugins: { deny: ["brave"] } } as OpenClawConfig,
+        env: { BRAVE_API_KEY: "brave-key" },
+        origin: "bundled",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps provider credentials when an allowed plugin still serves a shared provider", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "primary-search",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["shared-search"] },
+        },
+        {
+          id: "fallback-search",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["shared-search"] },
+        },
+      ],
+    });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          plugins: { deny: ["primary-search"] },
+          tools: {
+            web: {
+              search: {
+                provider: "shared-search",
+                apiKey: "shared-key",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
   });
 
   it("does not treat explicit credentialed provider selection as configured without a key", () => {
@@ -446,6 +605,72 @@ describe("hasConfiguredWebSearchCredential", () => {
     ).toBe(false);
   });
 
+  it("does not count credentials on explicitly disabled web-search plugins", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "searxng",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["searxng"] },
+        },
+      ],
+    });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          plugins: {
+            entries: {
+              searxng: {
+                enabled: false,
+                config: {
+                  webSearch: {
+                    baseUrl: "https://searxng.example.test",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+  });
+
+  it("applies disabled plugin entries through canonical plugin ids", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["google"] },
+        },
+      ],
+    });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          plugins: {
+            entries: {
+              "google-gemini-cli": {
+                enabled: false,
+                config: {
+                  webSearch: {
+                    apiKey: "google-key",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+  });
+
   it("does not throw when explicit provider public artifact loading fails", () => {
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
       plugins: [
@@ -491,6 +716,60 @@ describe("hasConfiguredWebSearchCredential", () => {
         config: {} as OpenClawConfig,
         env: { BRAVE_API_KEY: "$BRAVE_API_KEY" },
         origin: "bundled",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not count manifest env credentials when plugins are globally disabled", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+          setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
+          providerAuthEnvVars: {},
+        },
+      ],
+    });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: { plugins: { enabled: false } } as OpenClawConfig,
+        env: { BRAVE_API_KEY: "brave-key" },
+        origin: "bundled",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not count non-bundled manifest env credentials when plugins are globally disabled", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "custom-search",
+          origin: "global",
+          contracts: { webSearchProviders: ["custom-search"] },
+          setup: { providers: [{ id: "custom-search", envVars: ["CUSTOM_SEARCH_API_KEY"] }] },
+          providerAuthEnvVars: {},
+        },
+      ],
+    });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: { plugins: { enabled: false } } as OpenClawConfig,
+        env: { CUSTOM_SEARCH_API_KEY: "custom-key" },
+        origin: "global",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps literal search credentials when non-bundled manifest scope is empty", () => {
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: { tools: { web: { search: { apiKey: "search-key" } } } } as OpenClawConfig,
+        env: {},
+        origin: "global",
       }),
     ).toBe(true);
   });

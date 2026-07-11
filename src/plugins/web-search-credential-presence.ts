@@ -2,6 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../config/types.secrets.js";
+import { normalizePluginId } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.explicit.js";
@@ -25,21 +26,46 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+type WebSearchCredentialPolicy = {
+  allowPluginIds: ReadonlySet<string> | undefined;
+  denyPluginIds: ReadonlySet<string> | undefined;
+  disabledPluginIds: ReadonlySet<string>;
+  disabledProviderIds: ReadonlySet<string>;
+  enabledProviderIds: ReadonlySet<string>;
+  pluginsDisabled: boolean;
+};
+
+function normalizeProviderId(id: string): string {
+  return normalizeOptionalLowercaseString(id) ?? id;
+}
+
 function hasConfiguredSearchCredentialCandidate(
   searchConfig: unknown,
   env?: NodeJS.ProcessEnv,
   providerId?: string,
+  policy?: WebSearchCredentialPolicy,
 ): boolean {
-  if (!isRecord(searchConfig)) {
+  if (!isRecord(searchConfig) || policy?.pluginsDisabled) {
     return false;
   }
+  const allKnownProvidersDisabled =
+    policy !== undefined &&
+    policy.enabledProviderIds.size === 0 &&
+    policy.disabledProviderIds.size > 0;
+  const isProviderDisabled = (id: string | undefined) =>
+    id !== undefined && policy?.disabledProviderIds.has(normalizeProviderId(id));
   if (
     Object.hasOwn(searchConfig, "apiKey") &&
+    (providerId !== undefined || !allKnownProvidersDisabled) &&
+    !isProviderDisabled(providerId) &&
     hasConfiguredCredentialValue(searchConfig.apiKey, env)
   ) {
     return true;
   }
   if (providerId) {
+    if (isProviderDisabled(providerId)) {
+      return false;
+    }
     const selectedProviderConfig = searchConfig[providerId];
     return (
       isRecord(selectedProviderConfig) &&
@@ -47,7 +73,10 @@ function hasConfiguredSearchCredentialCandidate(
       hasConfiguredCredentialValue(selectedProviderConfig.apiKey, env)
     );
   }
-  return Object.values(searchConfig).some((value) => {
+  return Object.entries(searchConfig).some(([candidateProviderId, value]) => {
+    if (isProviderDisabled(candidateProviderId)) {
+      return false;
+    }
     if (!isRecord(value) || !Object.hasOwn(value, "apiKey")) {
       return false;
     }
@@ -75,13 +104,27 @@ function hasConfiguredPluginWebSearchCandidate(
   config: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
   onlyPluginIds?: ReadonlySet<string>,
+  policy?: WebSearchCredentialPolicy,
 ): boolean {
+  if (policy?.pluginsDisabled) {
+    return false;
+  }
   const entries = isRecord(config.plugins?.entries) ? config.plugins.entries : undefined;
   if (!entries) {
     return false;
   }
   return Object.entries(entries).some(([pluginId, entry]) => {
-    if (onlyPluginIds && !onlyPluginIds.has(pluginId)) {
+    const normalizedPluginId = normalizePluginId(pluginId);
+    if (onlyPluginIds && !onlyPluginIds.has(normalizedPluginId)) {
+      return false;
+    }
+    if (policy?.allowPluginIds && !policy.allowPluginIds.has(normalizedPluginId)) {
+      return false;
+    }
+    if (
+      policy?.denyPluginIds?.has(normalizedPluginId) ||
+      policy?.disabledPluginIds.has(normalizedPluginId)
+    ) {
       return false;
     }
     const pluginConfig = isRecord(entry) ? entry.config : undefined;
@@ -99,46 +142,148 @@ function getConfiguredProviderId(searchConfig: unknown): string | undefined {
   return normalizeOptionalLowercaseString(searchConfig.provider);
 }
 
-function resolveExplicitProviderPluginIds(params: {
+type WebSearchCredentialPolicyScope = {
+  manifestRecords: readonly PluginManifestRecord[];
+  policy: WebSearchCredentialPolicy;
+};
+
+function createWebSearchProviderIdSet(records: readonly Pick<PluginManifestRecord, "contracts">[]) {
+  return new Set(
+    records
+      .flatMap((plugin) => plugin.contracts?.webSearchProviders ?? [])
+      .map((providerId) => normalizeProviderId(providerId)),
+  );
+}
+
+function subtractProviderIds(
+  allProviderIds: ReadonlySet<string>,
+  enabledProviderIds: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const disabledProviderIds = new Set<string>();
+  for (const providerId of allProviderIds) {
+    if (!enabledProviderIds.has(providerId)) {
+      disabledProviderIds.add(providerId);
+    }
+  }
+  return disabledProviderIds;
+}
+
+function createNormalizedPluginIdSet(ids: unknown): ReadonlySet<string> | undefined {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return undefined;
+  }
+  const normalized = new Set(
+    ids.map((pluginId) => (typeof pluginId === "string" ? normalizePluginId(pluginId) : "")),
+  );
+  normalized.delete("");
+  return normalized.size > 0 ? normalized : undefined;
+}
+
+function createDisabledPluginIdSet(entries: unknown): ReadonlySet<string> {
+  if (!isRecord(entries)) {
+    return new Set();
+  }
+  const disabled = new Set<string>();
+  for (const [pluginId, entry] of Object.entries(entries)) {
+    if (isRecord(entry) && entry.enabled === false) {
+      const normalizedPluginId = normalizePluginId(pluginId);
+      if (normalizedPluginId) {
+        disabled.add(normalizedPluginId);
+      }
+    }
+  }
+  return disabled;
+}
+
+function isPluginBlockedByPolicy(policy: WebSearchCredentialPolicy, pluginId: string): boolean {
+  if (policy.pluginsDisabled) {
+    return true;
+  }
+  if (policy.allowPluginIds && !policy.allowPluginIds.has(pluginId)) {
+    return true;
+  }
+  return policy.denyPluginIds?.has(pluginId) === true || policy.disabledPluginIds.has(pluginId);
+}
+
+function createWebSearchCredentialPolicy(
+  config: OpenClawConfig,
+  records: readonly PluginManifestRecord[],
+): WebSearchCredentialPolicy {
+  const policy = {
+    allowPluginIds: createNormalizedPluginIdSet(config.plugins?.allow),
+    denyPluginIds: createNormalizedPluginIdSet(config.plugins?.deny),
+    disabledPluginIds: createDisabledPluginIdSet(config.plugins?.entries),
+    disabledProviderIds: new Set<string>(),
+    enabledProviderIds: new Set<string>(),
+    pluginsDisabled: config.plugins?.enabled === false,
+  } satisfies WebSearchCredentialPolicy;
+  const allProviderIds = createWebSearchProviderIdSet(records);
+  if (policy.pluginsDisabled) {
+    return {
+      ...policy,
+      disabledProviderIds: allProviderIds,
+    };
+  }
+  const enabledRecords = records.filter((plugin) => !isPluginBlockedByPolicy(policy, plugin.id));
+  const enabledProviderIds = createWebSearchProviderIdSet(enabledRecords);
+  return {
+    ...policy,
+    disabledProviderIds: subtractProviderIds(allProviderIds, enabledProviderIds),
+    enabledProviderIds,
+  };
+}
+
+function resolvePolicyFilteredWebSearchScope(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  providerId: string | undefined;
   origin?: PluginManifestRecord["origin"];
+}): WebSearchCredentialPolicyScope {
+  const allManifestRecords = loadManifestMetadataSnapshot({
+    config: params.config,
+    env: params.env ?? {},
+  }).plugins.filter((plugin) => (plugin.contracts?.webSearchProviders?.length ?? 0) > 0);
+  const policy = createWebSearchCredentialPolicy(params.config, allManifestRecords);
+  if (policy.pluginsDisabled) {
+    return {
+      manifestRecords: [],
+      policy,
+    };
+  }
+  const manifestRecords = allManifestRecords.filter(
+    (plugin) =>
+      (!params.origin || plugin.origin === params.origin) &&
+      !isPluginBlockedByPolicy(policy, plugin.id),
+  );
+  return {
+    manifestRecords,
+    policy,
+  };
+}
+
+function resolveExplicitProviderPluginIds(params: {
+  manifestRecords: readonly PluginManifestRecord[];
+  providerId: string | undefined;
 }): ReadonlySet<string> | undefined {
   const providerId = params.providerId;
   if (!providerId) {
     return undefined;
   }
-  const pluginIds = loadManifestMetadataSnapshot({
-    config: params.config,
-    env: params.env ?? {},
-  })
-    .plugins.filter(
-      (plugin) =>
-        (!params.origin || plugin.origin === params.origin) &&
-        (plugin.contracts?.webSearchProviders ?? []).includes(providerId),
-    )
+  const pluginIds = params.manifestRecords
+    .filter((plugin) => (plugin.contracts?.webSearchProviders ?? []).includes(providerId))
     .map((plugin) => plugin.id);
   return new Set(pluginIds);
 }
 
 function hasExplicitKeylessProviderCandidate(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
+  manifestRecords: readonly PluginManifestRecord[];
   searchConfig: unknown;
-  origin?: PluginManifestRecord["origin"];
 }): boolean {
   const providerId = getConfiguredProviderId(params.searchConfig);
   if (!providerId) {
     return false;
   }
-  const manifestRecords = loadManifestMetadataSnapshot({
-    config: params.config,
-    env: params.env ?? {},
-  }).plugins.filter(
-    (plugin) =>
-      (!params.origin || plugin.origin === params.origin) &&
-      (plugin.contracts?.webSearchProviders ?? []).includes(providerId),
+  const manifestRecords = params.manifestRecords.filter((plugin) =>
+    (plugin.contracts?.webSearchProviders ?? []).includes(providerId),
   );
   if (manifestRecords.length === 0) {
     return false;
@@ -158,22 +303,15 @@ function hasExplicitKeylessProviderCandidate(params: {
 }
 
 function hasManifestWebSearchEnvCredentialCandidate(params: {
-  config: OpenClawConfig;
+  manifestRecords: readonly PluginManifestRecord[];
   env?: NodeJS.ProcessEnv;
   providerId?: string;
-  origin?: PluginManifestRecord["origin"];
 }): boolean {
   const env = params.env;
   if (!env) {
     return false;
   }
-  return loadManifestMetadataSnapshot({
-    config: params.config,
-    env,
-  }).plugins.some((plugin) => {
-    if (params.origin && plugin.origin !== params.origin) {
-      return false;
-    }
+  return params.manifestRecords.some((plugin) => {
     if (
       params.providerId &&
       !(plugin.contracts?.webSearchProviders ?? []).includes(params.providerId)
@@ -201,26 +339,36 @@ export function hasConfiguredWebSearchCredential(params: {
     params.searchConfig ??
     (params.config.tools?.web?.search as Record<string, unknown> | undefined);
   const providerId = getConfiguredProviderId(searchConfig);
-  const explicitProviderPluginIds = resolveExplicitProviderPluginIds({
+  const policyScope = resolvePolicyFilteredWebSearchScope({
     config: params.config,
     env: params.env,
-    providerId,
     origin: params.origin,
   });
+  const explicitProviderPluginIds = resolveExplicitProviderPluginIds({
+    manifestRecords: policyScope.manifestRecords,
+    providerId,
+  });
   return (
-    hasConfiguredSearchCredentialCandidate(searchConfig, params.env, providerId) ||
-    hasConfiguredPluginWebSearchCandidate(params.config, params.env, explicitProviderPluginIds) ||
-    hasExplicitKeylessProviderCandidate({
-      config: params.config,
-      env: params.env,
+    hasConfiguredSearchCredentialCandidate(
       searchConfig,
-      origin: params.origin,
+      params.env,
+      providerId,
+      policyScope.policy,
+    ) ||
+    hasConfiguredPluginWebSearchCandidate(
+      params.config,
+      params.env,
+      explicitProviderPluginIds,
+      policyScope.policy,
+    ) ||
+    hasExplicitKeylessProviderCandidate({
+      manifestRecords: policyScope.manifestRecords,
+      searchConfig,
     }) ||
     hasManifestWebSearchEnvCredentialCandidate({
-      config: params.config,
+      manifestRecords: policyScope.manifestRecords,
       env: params.env,
       providerId,
-      origin: params.origin,
     })
   );
 }
