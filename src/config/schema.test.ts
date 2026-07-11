@@ -187,6 +187,32 @@ describe("config schema", () => {
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
   });
 
+  it("rejects unsupported MCP disabled aliases with an actionable enabled hint", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          docs: {
+            disabled: true,
+            command: "node",
+            args: ["docs.mjs"],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["mcp", "servers", "docs", "disabled"],
+            message: expect.stringContaining("use enabled: false"),
+          }),
+        ]),
+      );
+    }
+  });
+
   it("rejects empty Codex MCP agent scopes", () => {
     expect(() =>
       OpenClawSchema.parse({

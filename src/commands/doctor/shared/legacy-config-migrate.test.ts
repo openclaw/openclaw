@@ -2,7 +2,9 @@
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
+import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
 function repairBindingsForTest(config: OpenClawConfig) {
@@ -1854,6 +1856,68 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
+  });
+});
+
+describe("legacy migrate MCP server disabled aliases", () => {
+  it("moves disabled to enabled before raw schema validation rejects the alias", () => {
+    const raw = {
+      mcp: {
+        servers: {
+          docs: {
+            disabled: true,
+            command: "node",
+            args: ["docs.mjs"],
+          },
+        },
+      },
+    };
+
+    const rawValidation = validateConfigObjectRaw(raw);
+    expect(rawValidation.ok).toBe(false);
+    if (!rawValidation.ok) {
+      expect(rawValidation.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: "mcp.servers.docs.disabled",
+            message: expect.stringContaining("use enabled: false"),
+          }),
+        ]),
+      );
+    }
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("mcp.servers");
+
+    const res = migrateLegacyConfig(raw);
+
+    expect(res.changes).toStrictEqual(["Moved mcp.servers.docs.disabled true → enabled false."]);
+    expect(res.partiallyValid).toBeUndefined();
+    expect(res.config?.mcp?.servers?.docs).toEqual({
+      command: "node",
+      args: ["docs.mjs"],
+      enabled: false,
+    });
+  });
+
+  it("removes disabled when canonical enabled is already set", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          docs: {
+            disabled: true,
+            enabled: true,
+            command: "node",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed mcp.servers.docs.disabled (enabled true already set).",
+    ]);
+    expect(res.config?.mcp?.servers?.docs).toEqual({
+      command: "node",
+      enabled: true,
+    });
   });
 });
 

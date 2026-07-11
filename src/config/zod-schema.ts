@@ -466,6 +466,13 @@ const McpServerSchema = z
         path: ["transport"],
       });
     }
+    if (Object.hasOwn(data, "disabled")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'mcp.servers entries do not support "disabled"; use enabled: false instead',
+        path: ["disabled"],
+      });
+    }
   })
   .catchall(z.unknown());
 

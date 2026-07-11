@@ -363,4 +363,55 @@ describe("config mcp config", () => {
       });
     });
   });
+
+  it("canonicalizes disabled MCP config aliases to enabled false when saving config", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "docs",
+        server: {
+          disabled: true,
+          command: "node",
+          args: ["docs.mjs"],
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.docs).toEqual({
+        enabled: false,
+        command: "node",
+        args: ["docs.mjs"],
+      });
+    });
+  });
+
+  it("keeps canonical enabled values ahead of disabled aliases", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "docs",
+        server: {
+          enabled: true,
+          disabled: true,
+          command: "node",
+          args: ["docs.mjs"],
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.docs).toEqual({
+        enabled: true,
+        command: "node",
+        args: ["docs.mjs"],
+      });
+    });
+  });
 });

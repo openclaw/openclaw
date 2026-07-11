@@ -46,6 +46,12 @@ export function canonicalizeConfiguredMcpServer(
   if (isKnownCliMcpTypeAlias(next.type)) {
     delete next.type;
   }
+  if (typeof next.disabled === "boolean") {
+    if (typeof next.enabled !== "boolean") {
+      next.enabled = !next.disabled;
+    }
+    delete next.disabled;
+  }
   if (typeof next.connect_timeout === "number" && typeof next.connectTimeout !== "number") {
     next.connectTimeout = next.connect_timeout;
     delete next.connect_timeout;
@@ -80,6 +86,9 @@ export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers 
   return Object.fromEntries(
     Object.entries(value)
       .filter(([, server]) => isRecord(server))
-      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
+      .map(([name, server]) => [
+        name,
+        canonicalizeConfiguredMcpServer(server as Record<string, unknown>),
+      ]),
   );
 }

@@ -81,6 +81,25 @@ describe("loadMergedBundleMcpConfig", () => {
     expect(merged.config.mcpServers).not.toHaveProperty("disabledDocs");
   });
 
+  it("treats disabled MCP aliases as disabled after normalization", () => {
+    const merged = loadMergedBundleMcpConfig({
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            disabledDocs: {
+              disabled: true,
+              command: "node",
+              args: ["docs.mjs"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(merged.config.mcpServers).not.toHaveProperty("disabledDocs");
+  });
+
   it("lets disabled OpenClaw MCP servers tombstone bundle defaults with the same name", () => {
     const merged = loadMergedBundleMcpConfig({
       workspaceDir: "/workspace",
