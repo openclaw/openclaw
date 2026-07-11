@@ -804,13 +804,14 @@ describe("loginGeminiCliOAuth", () => {
     isRemote: boolean;
     openUrl: () => Promise<void>;
     log: (msg: string) => void;
-    note: () => Promise<void>;
+    note: (message?: string, title?: string) => Promise<void>;
     prompt: () => Promise<string>;
     progress: { update: () => void; stop: () => void };
   }) => Promise<{ projectId?: string }>;
 
   async function runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth: LoginGeminiCliOAuthFn) {
     let authUrl = "";
+    const notes: string[] = [];
     const result = await loginGeminiCliOAuth({
       isRemote: true,
       openUrl: async () => {},
@@ -820,14 +821,18 @@ describe("loginGeminiCliOAuth", () => {
           authUrl = found[0];
         }
       },
-      note: async () => {},
+      note: async (message?: string) => {
+        if (message) {
+          notes.push(message);
+        }
+      },
       prompt: async () => {
         const state = new URL(authUrl).searchParams.get("state");
         return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
       },
       progress: { update: () => {}, stop: () => {} },
     });
-    return { result, authUrl };
+    return { result, authUrl, notes };
   }
 
   async function runProjectDiscoveryExpectingProjectId(projectId: string) {
@@ -928,7 +933,9 @@ describe("loginGeminiCliOAuth", () => {
     });
 
     const { loginGeminiCliOAuth } = await import("./oauth.js");
-    const { authUrl } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+    const { authUrl, notes } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(notes).toContainEqual(expect.stringContaining(authUrl));
 
     const authState = requireString(new URL(authUrl).searchParams.get("state"), "OAuth state");
 

@@ -73,10 +73,15 @@ Where does the **Gateway** run?
   the next option and shows why the previous one failed. If several options
   are found you can switch between them before continuing.
 
-If nothing is found (or nothing works), the manual key/token picker loads the
-Gateway's active text-inference provider plugins instead of using a fixed app
-list. The selected provider supplies its starter model and config; OpenClaw
-verifies the credential with the same live test before storing its auth profile. Next
+You can also sign in through the provider's own OAuth or device-pairing flow.
+The built-in choices include OpenAI/ChatGPT, OpenRouter, GitHub Copilot, Google
+Gemini CLI, xAI, MiniMax Global and CN, and Chutes. The list comes from the
+Gateway's active text-inference provider plugins rather than a fixed app list,
+so another provider can opt in without adding provider-specific macOS code.
+
+The manual key/token picker uses the same provider registry. In every route,
+the provider supplies its starter model and configuration; OpenClaw verifies
+the credential with the same live test before storing its auth profile. Next
 remains locked until one backend has passed, so the first agent chat cannot
 start without working inference. The Crestodian chat stays available from this
 page (and later under Settings → Crestodian) for help in plain language.

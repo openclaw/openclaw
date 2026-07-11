@@ -4,12 +4,14 @@ import {
   errorShape,
   validateCrestodianChatParams,
   validateCrestodianSetupActivateParams,
+  validateCrestodianSetupAuthStartParams,
   validateCrestodianSetupDetectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
 import { buildOnboardingWelcome } from "../../crestodian/onboarding-welcome.js";
 import { formatCrestodianStartupMessage } from "../../crestodian/overview.js";
 import { defaultRuntime } from "../../runtime.js";
+import { WizardSession } from "../../wizard/session.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -83,6 +85,51 @@ export const crestodianHandlers: GatewayRequestHandlers = {
     }
     const { detectSetupInference } = await import("../../crestodian/setup-inference.js");
     respond(true, await detectSetupInference(), undefined);
+  },
+  /** Start one provider-owned OAuth/device-code login over the shared wizard transport. */
+  "crestodian.setup.auth.start": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateCrestodianSetupAuthStartParams,
+        "crestodian.setup.auth.start",
+        respond,
+      )
+    ) {
+      return;
+    }
+    if (context.findRunningWizard()) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
+      return;
+    }
+    const sessionId = params.sessionId;
+    const session = new WizardSession(async (prompter, signal) => {
+      const result = await runExclusiveCrestodianSetupActivation(async () => {
+        const { activateSetupInference } = await import("../../crestodian/setup-inference.js");
+        return await activateSetupInference({
+          kind: "provider-auth",
+          authChoice: params.authChoice,
+          ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
+          surface: "gateway",
+          runtime: {
+            ...defaultRuntime,
+            exit: (code: number | undefined): never => {
+              throw new Error(`setup step exited with code ${String(code)}`);
+            },
+          },
+          prompter,
+          signal,
+          isCancelled: () => signal.aborted,
+        });
+      });
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+    });
+    context.wizardSessions.set(sessionId, session);
+    // Return ownership immediately. The client polls wizard.next for the first step,
+    // so it can cancel even while a provider is opening a browser or waiting on OAuth.
+    respond(true, { sessionId, done: false, status: "running" }, undefined);
   },
   /**
    * Structured onboarding: live-test one candidate and persist it on success.

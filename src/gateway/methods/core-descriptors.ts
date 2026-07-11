@@ -69,6 +69,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "crestodian.chat", scope: "operator.admin" },
   { name: "crestodian.setup.detect", scope: "operator.admin" },
   { name: "crestodian.setup.activate", scope: "operator.admin" },
+  { name: "crestodian.setup.auth.start", scope: "operator.admin" },
   { name: "wizard.start", scope: "operator.admin" },
   { name: "wizard.next", scope: "operator.admin" },
   { name: "wizard.cancel", scope: "operator.admin" },

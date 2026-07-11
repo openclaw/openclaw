@@ -16,7 +16,10 @@ import { REDIRECT_URI, TOKEN_URL, type GeminiCliOAuthCredentials } from "./oauth
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 const GOOGLE_OAUTH_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
-async function requestTokenGrant(body: URLSearchParams): Promise<{
+async function requestTokenGrant(
+  body: URLSearchParams,
+  signal?: AbortSignal,
+): Promise<{
   access_token?: string;
   refresh_token?: string;
   expires_in?: unknown;
@@ -29,6 +32,7 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
       "User-Agent": "google-api-nodejs-client/9.15.1",
     },
     body,
+    ...(signal ? { signal } : {}),
   });
 
   if (!response.ok) {
@@ -115,6 +119,7 @@ async function resolveGeminiCliIdentity(
 export async function exchangeCodeForTokens(
   code: string,
   verifier: string,
+  signal?: AbortSignal,
 ): Promise<GeminiCliOAuthCredentials> {
   const { clientId, clientSecret } = resolveOAuthClientConfig();
   const body = new URLSearchParams({
@@ -129,7 +134,7 @@ export async function exchangeCodeForTokens(
   }
 
   const refreshed = await buildGeminiCliCredentials({
-    tokenResponse: await requestTokenGrant(body),
+    tokenResponse: await requestTokenGrant(body, signal),
   });
   if (!refreshed.refresh) {
     throw new Error("No refresh token received. Please try again.");

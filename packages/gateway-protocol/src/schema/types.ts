@@ -157,6 +157,8 @@ export type CrestodianSetupDetectParams = SchemaType<"CrestodianSetupDetectParam
 export type CrestodianSetupDetectResult = SchemaType<"CrestodianSetupDetectResult">;
 export type CrestodianSetupActivateParams = SchemaType<"CrestodianSetupActivateParams">;
 export type CrestodianSetupActivateResult = SchemaType<"CrestodianSetupActivateResult">;
+export type CrestodianSetupAuthStartParams = SchemaType<"CrestodianSetupAuthStartParams">;
+export type CrestodianSetupAuthStartResult = SchemaType<"CrestodianSetupAuthStartResult">;
 
 /** Wizard setup flow payloads exchanged by CLI, UI, and gateway. */
 export type WizardStartParams = SchemaType<"WizardStartParams">;

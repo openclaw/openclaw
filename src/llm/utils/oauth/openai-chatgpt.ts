@@ -98,7 +98,7 @@ export async function loginOpenAICodex(callbacks: OAuthLoginCallbacks): Promise<
       onManualCodeInput,
       openUrl: async (url) => {
         throwIfOAuthLoginAborted(callbacks.signal);
-        callbacks.onAuth({ url });
+        await callbacks.onAuth({ url });
       },
     }),
     callbacks.signal,

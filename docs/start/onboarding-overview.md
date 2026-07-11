@@ -70,9 +70,9 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 
 Open the OpenClaw app. For local setup, the first-run flow starts the Gateway,
 detects existing AI access (Claude Code, Codex, Gemini CLI, or API keys),
-live-tests the best option, and saves it only after a real reply — falling
-back automatically and offering a verified manual API-key step when nothing is
-found. Sensitive credentials use masked input. Remote setup connects to an
+live-tests the best option, and saves it only after a real reply. It also
+offers provider-owned OAuth and device-pairing flows plus a verified manual
+API-key step. Sensitive credentials use masked input. Remote setup connects to an
 already-configured Gateway instead, and the same AI check runs against that
 Gateway.
 

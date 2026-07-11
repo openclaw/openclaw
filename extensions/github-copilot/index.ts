@@ -543,6 +543,7 @@ export default definePluginEntry({
           openUrl: async (url) => {
             await ctx.openUrl(url);
           },
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
         },
         normalizedDomain,
       );

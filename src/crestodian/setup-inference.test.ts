@@ -12,11 +12,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
-import type { ProviderPlugin } from "../plugins/types.js";
+import type { ProviderAuthContext, ProviderPlugin } from "../plugins/types.js";
 import { applyCrestodianModelSelection } from "./setup-apply.js";
 import {
   activateSetupInference,
   detectSetupInference,
+  listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
   verifySetupInference,
 } from "./setup-inference.js";
@@ -268,6 +269,120 @@ describe("detectSetupInference", () => {
       },
     ]);
   });
+
+  it("lists provider-owned OAuth and device-code methods without compatibility aliases", () => {
+    const choices: ProviderAuthChoiceMetadata[] = [
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "oauth",
+        choiceId: "openai",
+        choiceLabel: "ChatGPT Login",
+        choiceHint: "Browser sign-in",
+        groupLabel: "OpenAI",
+        onboardingFeatured: true,
+        appGuidedAuth: "oauth",
+      },
+      {
+        pluginId: "github-copilot",
+        providerId: "github-copilot",
+        methodId: "device",
+        choiceId: "github-copilot",
+        choiceLabel: "GitHub Copilot",
+        appGuidedAuth: "device-code",
+      },
+      ...[
+        ["openrouter", "openrouter", "oauth", "openrouter-oauth", "OpenRouter OAuth", "oauth"],
+        ["google", "google-gemini-cli", "oauth", "google-gemini-cli", "Gemini CLI OAuth", "oauth"],
+        ["xai", "xai", "oauth", "xai-oauth", "xAI OAuth", "device-code"],
+        [
+          "minimax",
+          "minimax-portal",
+          "oauth",
+          "minimax-global-oauth",
+          "MiniMax OAuth (Global)",
+          "device-code",
+        ],
+        [
+          "minimax",
+          "minimax-portal",
+          "oauth-cn",
+          "minimax-cn-oauth",
+          "MiniMax OAuth (CN)",
+          "device-code",
+        ],
+        ["chutes", "chutes", "oauth", "chutes", "Chutes (OAuth)", "oauth"],
+      ].map(([pluginId, providerId, methodId, choiceId, choiceLabel, appGuidedAuth]) => ({
+        pluginId,
+        providerId,
+        methodId,
+        choiceId,
+        choiceLabel,
+        appGuidedAuth: appGuidedAuth as "oauth" | "device-code",
+      })),
+      {
+        pluginId: "xai",
+        providerId: "xai",
+        methodId: "device-code",
+        choiceId: "xai-device-code",
+        choiceLabel: "xAI device code",
+        assistantVisibility: "manual-only",
+        appGuidedAuth: "device-code",
+      },
+    ];
+    expect(listSetupInferenceAuthOptions(choices)).toEqual([
+      {
+        id: "openai",
+        label: "ChatGPT Login",
+        hint: "Browser sign-in",
+        groupLabel: "OpenAI",
+        kind: "oauth",
+        featured: true,
+      },
+      {
+        id: "chutes",
+        label: "Chutes (OAuth)",
+        kind: "oauth",
+        featured: false,
+      },
+      {
+        id: "google-gemini-cli",
+        label: "Gemini CLI OAuth",
+        kind: "oauth",
+        featured: false,
+      },
+      {
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        kind: "device-code",
+        featured: false,
+      },
+      {
+        id: "minimax-cn-oauth",
+        label: "MiniMax OAuth (CN)",
+        kind: "device-code",
+        featured: false,
+      },
+      {
+        id: "minimax-global-oauth",
+        label: "MiniMax OAuth (Global)",
+        kind: "device-code",
+        featured: false,
+      },
+      {
+        id: "openrouter-oauth",
+        label: "OpenRouter OAuth",
+        kind: "oauth",
+        featured: false,
+      },
+      {
+        id: "xai-oauth",
+        label: "xAI OAuth",
+        kind: "device-code",
+        featured: false,
+      },
+    ]);
+  });
 });
 
 describe("activateSetupInference", () => {
@@ -279,6 +394,347 @@ describe("activateSetupInference", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("runs provider OAuth interactively and persists it only after the live probe", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      lines: ["ready"],
+    }));
+    const run = vi.fn(async (ctx: ProviderAuthContext) => {
+      expect(ctx.isRemote).toBe(true);
+      await ctx.prompter.note("Complete sign-in", "OpenAI");
+      return {
+        profiles: [
+          {
+            profileId: "openai:default",
+            credential: {
+              type: "oauth" as const,
+              provider: "openai",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+        ],
+        defaultModel: "openai/gpt-5.4",
+      };
+    });
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      pluginId: "openai",
+      auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run }],
+    };
+
+    try {
+      const result = await activateSetupInference({
+        kind: "provider-auth",
+        authChoice: "openai",
+        workspace: "/tmp/openclaw-workspace",
+        surface: "gateway",
+        runtime,
+        prompter: {
+          note: vi.fn(async () => {}),
+        } as never,
+        deps: {
+          resolvePluginProviders: () => [provider],
+          resolveManifestProviderAuthChoice: () => ({
+            pluginId: "openai",
+            providerId: "openai",
+            methodId: "oauth",
+            choiceId: "openai",
+            choiceLabel: "ChatGPT Login",
+            appGuidedAuth: "oauth",
+          }),
+          resolveAgentDir: () => agentDir,
+          runEmbeddedAgent: vi.fn(async () => ({
+            meta: { finalAssistantVisibleText: "OK" },
+          })) as never,
+          applySetup: applySetup as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.4" });
+      expect(run).toHaveBeenCalledOnce();
+      expect(applySetup).toHaveBeenCalledOnce();
+      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toMatchObject({
+        type: "oauth",
+        provider: "openai",
+        access: "access-token",
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("does not probe or persist an interactive login after session cancellation", async () => {
+    const applySetup = vi.fn();
+    const runEmbeddedAgent = vi.fn();
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      pluginId: "openai",
+      auth: [
+        {
+          id: "oauth",
+          label: "OAuth",
+          kind: "oauth",
+          run: vi.fn(async () => ({
+            profiles: [
+              {
+                profileId: "openai:default",
+                credential: {
+                  type: "oauth" as const,
+                  provider: "openai",
+                  access: "access-token",
+                  refresh: "refresh-token",
+                  expires: Date.now() + 60_000,
+                },
+              },
+            ],
+            defaultModel: "openai/gpt-5.4",
+          })),
+        },
+      ],
+    };
+
+    const result = await activateSetupInference({
+      kind: "provider-auth",
+      authChoice: "openai",
+      surface: "gateway",
+      runtime,
+      prompter: {} as never,
+      isCancelled: () => true,
+      deps: {
+        resolvePluginProviders: () => [provider],
+        resolveManifestProviderAuthChoice: () => ({
+          pluginId: "openai",
+          providerId: "openai",
+          methodId: "oauth",
+          choiceId: "openai",
+          choiceLabel: "ChatGPT Login",
+          appGuidedAuth: "oauth",
+        }),
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        applySetup: applySetup as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, error: "Provider login was cancelled." });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(applySetup).not.toHaveBeenCalled();
+  });
+
+  it("aborts a provider login immediately and releases setup before polling completes", async () => {
+    const controller = new AbortController();
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const run = vi.fn(async (ctx) => {
+      expect(ctx.signal).toBe(controller.signal);
+      markStarted?.();
+      return await new Promise<never>(() => {});
+    });
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      pluginId: "openai",
+      auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run }],
+    };
+    const activation = activateSetupInference({
+      kind: "provider-auth",
+      authChoice: "openai",
+      surface: "gateway",
+      runtime,
+      prompter: {} as never,
+      signal: controller.signal,
+      deps: {
+        resolvePluginProviders: () => [provider],
+        resolveManifestProviderAuthChoice: () => ({
+          pluginId: "openai",
+          providerId: "openai",
+          methodId: "oauth",
+          choiceId: "openai",
+          choiceLabel: "ChatGPT Login",
+          appGuidedAuth: "oauth",
+        }),
+        createTempDir: makeTempDir,
+      },
+    });
+
+    const earlyResult = await Promise.race([started.then(() => undefined), activation]);
+    expect(earlyResult).toBeUndefined();
+    controller.abort();
+
+    await expect(activation).resolves.toMatchObject({
+      ok: false,
+      error: "Provider login was cancelled.",
+    });
+  });
+
+  it("aborts the live provider probe and rolls back its staged credentials", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const controller = new AbortController();
+    let markProbeStarted: (() => void) | undefined;
+    const probeStarted = new Promise<void>((resolve) => {
+      markProbeStarted = resolve;
+    });
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      pluginId: "openai",
+      auth: [
+        {
+          id: "oauth",
+          label: "OAuth",
+          kind: "oauth",
+          run: async () => ({
+            profiles: [
+              {
+                profileId: "openai:default",
+                credential: {
+                  type: "oauth" as const,
+                  provider: "openai",
+                  access: "access-token",
+                  refresh: "refresh-token",
+                  expires: Date.now() + 60_000,
+                },
+              },
+            ],
+            defaultModel: "openai/gpt-5.4",
+          }),
+        },
+      ],
+    };
+    const runEmbeddedAgent = vi.fn(
+      async (runParams: { abortSignal?: AbortSignal }): Promise<never> => {
+        expect(runParams.abortSignal).toBe(controller.signal);
+        markProbeStarted?.();
+        return await new Promise<never>((_resolve, reject) => {
+          runParams.abortSignal?.addEventListener(
+            "abort",
+            () => reject(new Error("probe cancelled")),
+            { once: true },
+          );
+        });
+      },
+    );
+
+    try {
+      const activation = activateSetupInference({
+        kind: "provider-auth",
+        authChoice: "openai",
+        surface: "gateway",
+        runtime,
+        prompter: {} as never,
+        signal: controller.signal,
+        deps: {
+          resolvePluginProviders: () => [provider],
+          resolveManifestProviderAuthChoice: () => ({
+            pluginId: "openai",
+            providerId: "openai",
+            methodId: "oauth",
+            choiceId: "openai",
+            choiceLabel: "ChatGPT Login",
+            appGuidedAuth: "oauth",
+          }),
+          resolveAgentDir: () => agentDir,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      await probeStarted;
+      controller.abort();
+
+      await expect(activation).resolves.toMatchObject({
+        ok: false,
+        error: "Provider login was cancelled.",
+      });
+      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toBeUndefined();
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("rolls back provider credentials when cancellation wins at the config commit", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const controller = new AbortController();
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      pluginId: "openai",
+      auth: [
+        {
+          id: "oauth",
+          label: "OAuth",
+          kind: "oauth",
+          run: async () => ({
+            profiles: [
+              {
+                profileId: "openai:default",
+                credential: {
+                  type: "oauth" as const,
+                  provider: "openai",
+                  access: "access-token",
+                  refresh: "refresh-token",
+                  expires: Date.now() + 60_000,
+                },
+              },
+            ],
+            defaultModel: "openai/gpt-5.4",
+          }),
+        },
+      ],
+    };
+
+    try {
+      const result = await activateSetupInference({
+        kind: "provider-auth",
+        authChoice: "openai",
+        surface: "gateway",
+        runtime,
+        prompter: {} as never,
+        signal: controller.signal,
+        deps: {
+          resolvePluginProviders: () => [provider],
+          resolveManifestProviderAuthChoice: () => ({
+            pluginId: "openai",
+            providerId: "openai",
+            methodId: "oauth",
+            choiceId: "openai",
+            choiceLabel: "ChatGPT Login",
+            appGuidedAuth: "oauth",
+          }),
+          resolveAgentDir: () => agentDir,
+          runEmbeddedAgent: vi.fn(async () => ({
+            meta: { finalAssistantVisibleText: "OK" },
+          })) as never,
+          applySetup: vi.fn(async (params: { assertCommitPreconditions?: () => void }) => {
+            controller.abort();
+            params.assertCommitPreconditions?.();
+            return { configPath: "/tmp/openclaw.json", lines: [] };
+          }) as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: false, error: "Provider login was cancelled." });
+      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toBeUndefined();
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
   });
 
   async function runCodexSetupWithFinalConfig(params: {

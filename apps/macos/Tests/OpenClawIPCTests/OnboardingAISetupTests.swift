@@ -68,9 +68,14 @@ struct OnboardingAISetupTests {
         #expect(OnboardingAISetupModel.activationRequestTimeoutMs(for: "claude-cli") == 150_000)
         #expect(OnboardingAISetupModel.activationRequestTimeoutMs(
             for: "api-key",
-            provisionsCodexSupervision: true) == 480_000)
+            provisionsCodexSupervision: true
+        ) == 480_000)
         #expect(OnboardingAISetupModel.activationRequestTimeoutMs(for: "codex-cli") >= (305 + 90) * 1000)
         #expect(OnboardingAISetupModel.activationOutcomeDeadlineMs(for: "codex-cli") == 510_000)
+    }
+
+    @Test func `provider auth transport outlives device code windows`() {
+        #expect(OnboardingAISetupModel.providerAuthRequestTimeoutMs > 15 * 60 * 1000)
     }
 
     @Test func `activation sends exact model only to capable gateways`() {
@@ -158,6 +163,24 @@ struct OnboardingAISetupTests {
             expectedModel: "openai/gpt-5.5",
             before: nil,
             after: persisted
+        ))
+    }
+
+    @Test func `provider auth reconciliation only trusts its own completed flow`() {
+        #expect(!OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
+            pending: false,
+            setupComplete: true,
+            configuredModel: "openai/gpt-5.5"
+        ))
+        #expect(!OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
+            pending: true,
+            setupComplete: false,
+            configuredModel: "openai/gpt-5.5"
+        ))
+        #expect(OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
+            pending: true,
+            setupComplete: true,
+            configuredModel: "openai/gpt-5.5"
         ))
     }
 

@@ -4541,20 +4541,26 @@ public struct CrestodianSetupDetectParams: Codable, Sendable {}
 public struct CrestodianSetupDetectResult: Codable, Sendable {
     public let candidates: [[String: AnyCodable]]
     public let manualproviders: [[String: AnyCodable]]
+    public let authoptions: [[String: AnyCodable]]
     public let workspace: String
+    public let codexappserverdetected: Bool?
     public let configuredmodel: String?
     public let setupcomplete: Bool
 
     public init(
         candidates: [[String: AnyCodable]],
         manualproviders: [[String: AnyCodable]],
+        authoptions: [[String: AnyCodable]],
         workspace: String,
+        codexappserverdetected: Bool? = nil,
         configuredmodel: String? = nil,
         setupcomplete: Bool)
     {
         self.candidates = candidates
         self.manualproviders = manualproviders
+        self.authoptions = authoptions
         self.workspace = workspace
+        self.codexappserverdetected = codexappserverdetected
         self.configuredmodel = configuredmodel
         self.setupcomplete = setupcomplete
     }
@@ -4562,7 +4568,9 @@ public struct CrestodianSetupDetectResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case candidates
         case manualproviders = "manualProviders"
+        case authoptions = "authOptions"
         case workspace
+        case codexappserverdetected = "codexAppServerDetected"
         case configuredmodel = "configuredModel"
         case setupcomplete = "setupComplete"
     }
@@ -4627,6 +4635,58 @@ public struct CrestodianSetupActivateResult: Codable, Sendable {
         case modelref = "modelRef"
         case latencyms = "latencyMs"
         case lines
+        case status
+        case error
+    }
+}
+
+public struct CrestodianSetupAuthStartParams: Codable, Sendable {
+    public let sessionid: String
+    public let authchoice: String
+    public let workspace: String?
+
+    public init(
+        sessionid: String,
+        authchoice: String,
+        workspace: String? = nil)
+    {
+        self.sessionid = sessionid
+        self.authchoice = authchoice
+        self.workspace = workspace
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case authchoice = "authChoice"
+        case workspace
+    }
+}
+
+public struct CrestodianSetupAuthStartResult: Codable, Sendable {
+    public let sessionid: String
+    public let done: Bool
+    public let step: WizardStep?
+    public let status: AnyCodable?
+    public let error: String?
+
+    public init(
+        sessionid: String,
+        done: Bool,
+        step: WizardStep? = nil,
+        status: AnyCodable? = nil,
+        error: String? = nil)
+    {
+        self.sessionid = sessionid
+        self.done = done
+        self.step = step
+        self.status = status
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case done
+        case step
         case status
         case error
     }

@@ -11,6 +11,9 @@ export function createWizardSessionTracker() {
       if (session.getStatus() === "running") {
         return id;
       }
+      // Immediate-return clients may disconnect before collecting a terminal
+      // result. Reap it on the next start so abandoned sessions stay bounded.
+      wizardSessions.delete(id);
     }
     return null;
   };

@@ -161,6 +161,8 @@ import {
   CrestodianChatResultSchema,
   CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResultSchema,
+  CrestodianSetupAuthStartParamsSchema,
+  CrestodianSetupAuthStartResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
 } from "./crestodian.js";
@@ -616,6 +618,8 @@ export const ProtocolSchemas = {
   CrestodianSetupDetectResult: CrestodianSetupDetectResultSchema,
   CrestodianSetupActivateParams: CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResult: CrestodianSetupActivateResultSchema,
+  CrestodianSetupAuthStartParams: CrestodianSetupAuthStartParamsSchema,
+  CrestodianSetupAuthStartResult: CrestodianSetupAuthStartResultSchema,
   WizardStartParams: WizardStartParamsSchema,
   WizardNextParams: WizardNextParamsSchema,
   WizardCancelParams: WizardCancelParamsSchema,

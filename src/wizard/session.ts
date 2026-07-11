@@ -171,6 +171,7 @@ class WizardSessionPrompter implements WizardPrompter {
 }
 
 export class WizardSession {
+  private readonly abortController = new AbortController();
   private currentStep: WizardStep | null = null;
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
@@ -185,7 +186,7 @@ export class WizardSession {
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
 
-  constructor(private runner: (prompter: WizardPrompter) => Promise<void>) {
+  constructor(private runner: (prompter: WizardPrompter, signal: AbortSignal) => Promise<void>) {
     const prompter = new WizardSessionPrompter(this);
     void this.run(prompter);
   }
@@ -236,6 +237,7 @@ export class WizardSession {
     }
     this.status = "cancelled";
     this.error = "cancelled";
+    this.abortController.abort(new WizardCancelledError());
     this.currentStep = null;
     for (const [, pending] of this.answerDeferred) {
       // Reject all pending prompt promises so the runner can unwind through its
@@ -246,6 +248,10 @@ export class WizardSession {
     this.resolveStep(null);
   }
 
+  get signal(): AbortSignal {
+    return this.abortController.signal;
+  }
+
   pushStep(step: WizardStep) {
     this.currentStep = step;
     this.resolveStep(step);
@@ -253,9 +259,14 @@ export class WizardSession {
 
   private async run(prompter: WizardPrompter) {
     try {
-      await this.runner(prompter);
-      this.status = "done";
+      await this.runner(prompter, this.signal);
+      if (this.status === "running") {
+        this.status = "done";
+      }
     } catch (err) {
+      if (this.status !== "running") {
+        return;
+      }
       if (err instanceof WizardCancelledError) {
         this.status = "cancelled";
         this.error = err.message;

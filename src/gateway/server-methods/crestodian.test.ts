@@ -9,6 +9,15 @@ import {
 } from "./crestodian.js";
 import type { GatewayRequestContext } from "./types.js";
 
+const mocks = vi.hoisted(() => ({
+  activateSetupInference: vi.fn(),
+}));
+
+vi.mock("../../crestodian/setup-inference.js", () => ({
+  activateSetupInference: mocks.activateSetupInference,
+  detectSetupInference: vi.fn(),
+}));
+
 type RespondCall = {
   ok: boolean;
   payload?: unknown;
@@ -129,6 +138,50 @@ describe("crestodian.setup.activate", () => {
     const nextTask = vi.fn(async () => "ok");
     await expect(runExclusiveCrestodianSetupActivation(nextTask)).resolves.toBe("ok");
     expect(nextTask).toHaveBeenCalledOnce();
+  });
+});
+
+describe("crestodian.setup.auth.start", () => {
+  it("starts provider auth as an interactive wizard session", async () => {
+    const wizardSessions = new Map();
+    const context = {
+      wizardSessions,
+      findRunningWizard: () => undefined,
+      purgeWizardSession: (id: string) => wizardSessions.delete(id),
+    } as unknown as GatewayRequestContext;
+    mocks.activateSetupInference.mockImplementationOnce(async (params) => {
+      await params.prompter.note("Open the browser and enter ABCD", "Pair GitHub");
+      return { ok: true, modelRef: "github-copilot/test", latencyMs: 10, lines: ["ready"] };
+    });
+    const { calls, respond } = makeRespond();
+
+    await crestodianHandlers["crestodian.setup.auth.start"]({
+      params: { sessionId: "auth-session-1", authChoice: "github-copilot" },
+      respond,
+      context,
+    } as never);
+
+    expect(calls[0]).toMatchObject({
+      ok: true,
+      payload: {
+        sessionId: "auth-session-1",
+        done: false,
+        status: "running",
+      },
+    });
+    const session = wizardSessions.get("auth-session-1");
+    const first = await session.next();
+    expect(mocks.activateSetupInference).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "provider-auth", authChoice: "github-copilot" }),
+    );
+    expect(mocks.activateSetupInference.mock.calls[0]?.[0].signal).toBe(session.signal);
+    expect(first).toMatchObject({
+      done: false,
+      status: "running",
+      step: { type: "note", title: "Pair GitHub", message: "Open the browser and enter ABCD" },
+    });
+    await session.answer(first.step.id, null);
+    await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
   });
 });
 

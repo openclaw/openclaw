@@ -62,6 +62,9 @@ extension OnboardingView {
         }
         .onDisappear {
             self.onboardingVisible = false
+            // Provider auth belongs to this view and its captured Gateway route.
+            // Closing setup must not leave a wizard able to persist config later.
+            self.aiSetup.resetForGatewayChange()
             self.stopPermissionMonitoring()
             self.stopDiscovery()
         }

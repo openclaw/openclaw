@@ -4,6 +4,7 @@ import Observation
 import OpenClawChatUI
 import OpenClawIPC
 import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 /// Structured "Connect your AI" onboarding step.
@@ -17,6 +18,10 @@ import SwiftUI
 @MainActor
 @Observable
 final class OnboardingAISetupModel {
+    // Device-code providers advertise windows up to 15 minutes. Keep transport
+    // alive long enough for approval plus the post-login inference probe.
+    static let providerAuthRequestTimeoutMs: Double = 1_200_000
+
     struct Candidate: Identifiable, Equatable {
         let kind: String
         let label: String
@@ -59,6 +64,15 @@ final class OnboardingAISetupModel {
         let hint: String?
     }
 
+    struct AuthOption: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let hint: String?
+        let groupLabel: String?
+        let kind: String
+        let featured: Bool
+    }
+
     private(set) var phase: Phase = .idle {
         didSet {
             // Close-guard: quitting mid-test is confirmable, not silent.
@@ -70,6 +84,7 @@ final class OnboardingAISetupModel {
 
     private(set) var candidates: [Candidate] = []
     private(set) var manualProviders: [ManualProvider] = []
+    private(set) var authOptions: [AuthOption] = []
     private(set) var providerCatalogLoaded = false
     private(set) var providerCatalogError: String?
     private(set) var statuses: [String: CandidateStatus] = [:]
@@ -92,6 +107,26 @@ final class OnboardingAISetupModel {
     private(set) var manualTesting = false
     private(set) var manualError: Failure?
     var showManualEntry = false
+    private(set) var activeAuthOption: AuthOption?
+    private(set) var authStep: WizardStep?
+    private(set) var authError: Failure?
+    private(set) var authBusy = false {
+        didSet {
+            if self.activeAuthOption != nil {
+                OnboardingController.shared.busyReason = "OpenClaw is completing provider sign-in."
+            } else if self.phase != .testing {
+                OnboardingController.shared.busyReason = nil
+            }
+        }
+    }
+
+    var authText = ""
+    var authSelection = 0
+    var authConfirmation = true
+    private var authSessionID: String?
+    private var authAttemptID = UUID()
+    /// Only a just-completed provider flow may trust setupComplete without re-probing.
+    private var providerAuthReconciliationPending = false
 
     var selectedManualProvider: ManualProvider? {
         self.manualProviders.first { $0.id == self.manualProviderID }
@@ -102,7 +137,7 @@ final class OnboardingAISetupModel {
     }
 
     var isBusy: Bool {
-        self.phase == .detecting || self.phase == .testing || self.manualTesting
+        self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy
     }
 
     /// Called when a candidate connects so the page can advance.
@@ -127,6 +162,7 @@ final class OnboardingAISetupModel {
         let candidates: [DetectedCandidate]
         let codexAppServerDetected: Bool?
         let manualProviders: [ManualProvider]?
+        let authOptions: [AuthOption]?
         let workspace: String
         let configuredModel: String?
         let setupComplete: Bool
@@ -134,7 +170,8 @@ final class OnboardingAISetupModel {
         var persistedActivationState: PersistedActivationState {
             PersistedActivationState(
                 setupComplete: self.setupComplete,
-                configuredModel: self.configuredModel)
+                configuredModel: self.configuredModel
+            )
         }
     }
 
@@ -161,11 +198,14 @@ final class OnboardingAISetupModel {
 
     /// Cancel route-bound work and discard results that belong to the previous Gateway.
     func resetForGatewayChange() {
+        let authSessionToCancel = self.authSessionID
+        let authServerLease = self.serverLease
         self.attemptToken = UUID()
         self.started = false
         self.phase = .idle
         self.candidates = []
         self.manualProviders = []
+        self.authOptions = []
         self.providerCatalogLoaded = false
         self.providerCatalogError = nil
         self.statuses = [:]
@@ -183,6 +223,21 @@ final class OnboardingAISetupModel {
         self.manualError = nil
         self.manualTesting = false
         self.showManualEntry = false
+        self.activeAuthOption = nil
+        self.authStep = nil
+        self.authError = nil
+        self.authBusy = false
+        self.authText = ""
+        self.authSessionID = nil
+        self.authAttemptID = UUID()
+        self.providerAuthReconciliationPending = false
+        if let authSessionToCancel, let authServerLease {
+            Task {
+                await GatewayConnection.shared.cancelWizardSession(
+                    authSessionToCancel,
+                    on: authServerLease)
+            }
+        }
     }
 
     func detectAndAutoConnect() async {
@@ -199,11 +254,13 @@ final class OnboardingAISetupModel {
                 method: "crestodian.setup.detect",
                 params: [:],
                 timeoutMs: 20000,
-                ifCurrentServerLease: lease)
+                ifCurrentServerLease: lease
+            )
             guard token == self.attemptToken else { return }
             let result = try JSONDecoder().decode(DetectResult.self, from: data)
             self.lastDetectedActivationState = result.persistedActivationState
             let manualProviders = result.manualProviders ?? []
+            let authOptions = result.authOptions ?? []
             self.codexAppServerDetected = result.codexAppServerDetected ?? false
             self.candidates = result.candidates.map { detected in
                 Candidate(
@@ -211,9 +268,11 @@ final class OnboardingAISetupModel {
                     label: detected.label,
                     detail: detected.detail,
                     modelRef: detected.modelRef,
-                    credentials: detected.credentials)
+                    credentials: detected.credentials
+                )
             }
             self.manualProviders = manualProviders
+            self.authOptions = authOptions
             self.providerCatalogLoaded = result.manualProviders != nil
             if result.manualProviders == nil {
                 self.providerCatalogError = OnboardingAISetupError.providerCatalogUnavailable.localizedDescription
@@ -225,6 +284,28 @@ final class OnboardingAISetupModel {
                 self.statuses[candidate.kind] = .untried
             }
             self.phase = .ready
+            let providerAuthReconciliationPending = self.providerAuthReconciliationPending
+            self.providerAuthReconciliationPending = false
+            if Self.canAcceptProviderAuthReconciliation(
+                pending: providerAuthReconciliationPending,
+                setupComplete: result.setupComplete,
+                configuredModel: result.configuredModel
+            ),
+                let configuredModel = result.configuredModel
+            {
+                self.finishConnected(
+                    kind: "provider-auth",
+                    result: ActivateResult(
+                        ok: true,
+                        modelRef: configuredModel,
+                        latencyMs: nil,
+                        lines: nil,
+                        status: nil,
+                        error: nil
+                    )
+                )
+                return
+            }
             if let first = autoCandidateAfter(kind: nil) {
                 // Candidate found: connect without asking. Switching later
                 // stays one click away while the test runs server-side.
@@ -240,6 +321,14 @@ final class OnboardingAISetupModel {
         }
     }
 
+    static func canAcceptProviderAuthReconciliation(
+        pending: Bool,
+        setupComplete: Bool,
+        configuredModel: String?
+    ) -> Bool {
+        pending && setupComplete && configuredModel?.isEmpty == false
+    }
+
     /// Transport/protocol failures deserve plain language, not RPC codes.
     static func friendlyTransportError(_ raw: String) -> String {
         if raw.localizedCaseInsensitiveContains("unknown method") {
@@ -253,8 +342,8 @@ final class OnboardingAISetupModel {
 
     static func activationRequestTimeoutMs(
         for kind: String,
-        provisionsCodexSupervision: Bool = false) -> Double
-    {
+        provisionsCodexSupervision: Bool = false
+    ) -> Double {
         // Codex can spend 305s installing its runtime plugin before the 90s live probe.
         // Keep a bounded client deadline with room for registry refresh and finalization.
         kind == "codex-cli" || provisionsCodexSupervision ? 480_000 : 150_000
@@ -262,20 +351,21 @@ final class OnboardingAISetupModel {
 
     static func activationOutcomeDeadlineMs(
         for kind: String,
-        provisionsCodexSupervision: Bool = false) -> Double
-    {
+        provisionsCodexSupervision: Bool = false
+    ) -> Double {
         // A request timeout removes only the client waiter. Keep a short final window
         // to observe config that the still-running Gateway operation just persisted.
         self.activationRequestTimeoutMs(
             for: kind,
-            provisionsCodexSupervision: provisionsCodexSupervision) + 30000
+            provisionsCodexSupervision: provisionsCodexSupervision
+        ) + 30000
     }
 
     static func activationTransitionWasPersisted(
         expectedModel: String,
         before: PersistedActivationState?,
-        after: PersistedActivationState) -> Bool
-    {
+        after: PersistedActivationState
+    ) -> Bool {
         guard let before else { return false }
         let wasAlreadyPersisted = before.setupComplete && before.configuredModel == expectedModel
         return !wasAlreadyPersisted && after.setupComplete && after.configuredModel == expectedModel
@@ -290,7 +380,9 @@ final class OnboardingAISetupModel {
     static func activationReconciliationMode(after error: Error) -> ActivationReconciliationMode {
         // Decode failures happen after the side-effectful RPC returned bytes, so check persisted
         // state once. Only transport-unknown outcomes need the bounded polling window.
-        if error is DecodingError { return .immediate }
+        if error is DecodingError {
+            return .immediate
+        }
         if error is GatewayResponseError ||
             error is GatewayConnectAuthError ||
             error is GatewayTLSValidationError ||
@@ -324,8 +416,8 @@ final class OnboardingAISetupModel {
     static func activationParams(
         kind: String,
         modelRef: String,
-        supportsExactModel: Bool) -> [String: AnyCodable]
-    {
+        supportsExactModel: Bool
+    ) -> [String: AnyCodable] {
         var params = ["kind": AnyCodable(kind)]
         if supportsExactModel {
             params["modelRef"] = AnyCodable(modelRef)
@@ -340,17 +432,20 @@ final class OnboardingAISetupModel {
         let clock = ContinuousClock()
         let requestTimeoutMs = Self.activationRequestTimeoutMs(
             for: kind,
-            provisionsCodexSupervision: self.codexAppServerDetected)
+            provisionsCodexSupervision: self.codexAppServerDetected
+        )
         let outcomeDeadlineMs = Self.activationOutcomeDeadlineMs(
             for: kind,
-            provisionsCodexSupervision: self.codexAppServerDetected)
+            provisionsCodexSupervision: self.codexAppServerDetected
+        )
         let reconciliationDeadline = clock.now.advanced(by: .milliseconds(Int64(outcomeDeadlineMs)))
         self.selectedKind = kind
         self.phase = .testing
         self.statuses[kind] = .testing
         guard let serverLease else {
             self.statuses[kind] = .failed(Self.transportFailure(
-                OpenClawChatTransportSendError.notDispatched.localizedDescription))
+                OpenClawChatTransportSendError.notDispatched.localizedDescription
+            ))
             self.phase = .ready
             return
         }
@@ -361,17 +456,20 @@ final class OnboardingAISetupModel {
             // Older gateways keep the legacy kind-only request shape.
             guard let supportsExactModel = await connection.supportsServerCapability(
                 .crestodianSetupModelRef,
-                ifCurrentServerLease: serverLease)
+                ifCurrentServerLease: serverLease
+            )
             else { throw OpenClawChatTransportSendError.notDispatched }
             let params = Self.activationParams(
                 kind: kind,
                 modelRef: candidate.modelRef,
-                supportsExactModel: supportsExactModel)
+                supportsExactModel: supportsExactModel
+            )
             let data = try await connection.request(
                 method: "crestodian.setup.activate",
                 params: params,
                 timeoutMs: requestTimeoutMs,
-                ifCurrentServerLease: serverLease)
+                ifCurrentServerLease: serverLease
+            )
             guard token == self.attemptToken else { return }
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             if result.ok {
@@ -380,7 +478,8 @@ final class OnboardingAISetupModel {
                 self.statuses[kind] = .failed(Self.failure(
                     label: self.candidates.first { $0.kind == kind }?.label ?? kind,
                     status: result.status,
-                    error: result.error))
+                    error: result.error
+                ))
                 await self.tryNextAfterFailure(of: kind)
             }
         } catch {
@@ -396,8 +495,8 @@ final class OnboardingAISetupModel {
                     kind: kind,
                     token: token,
                     before: persistedStateBeforeActivation,
-                    serverLease: serverLease)
-                {
+                    serverLease: serverLease
+                ) {
                     return
                 }
             case .polling:
@@ -406,8 +505,8 @@ final class OnboardingAISetupModel {
                     token: token,
                     before: persistedStateBeforeActivation,
                     deadline: reconciliationDeadline,
-                    serverLease: serverLease)
-                {
+                    serverLease: serverLease
+                ) {
                     return
                 }
             }
@@ -421,8 +520,8 @@ final class OnboardingAISetupModel {
                         kind: kind,
                         token: token,
                         before: persistedStateBeforeActivation,
-                        originalServerLease: serverLease)
-                    {
+                        originalServerLease: serverLease
+                    ) {
                         return
                     }
                 }
@@ -445,8 +544,8 @@ final class OnboardingAISetupModel {
         token: UUID,
         before: PersistedActivationState?,
         deadline: ContinuousClock.Instant,
-        serverLease: GatewayConnection.ServerLease) async -> Bool
-    {
+        serverLease: GatewayConnection.ServerLease
+    ) async -> Bool {
         let clock = ContinuousClock()
         var delayMs: UInt64 = 2000
         while clock.now < deadline {
@@ -462,8 +561,8 @@ final class OnboardingAISetupModel {
                 kind: kind,
                 token: token,
                 before: before,
-                serverLease: serverLease)
-            {
+                serverLease: serverLease
+            ) {
                 return true
             }
             // A healthy detect can race the still-running activation; keep polling
@@ -476,8 +575,8 @@ final class OnboardingAISetupModel {
         kind: String,
         token: UUID,
         before: PersistedActivationState?,
-        originalServerLease: GatewayConnection.ServerLease) async -> Bool
-    {
+        originalServerLease: GatewayConnection.ServerLease
+    ) async -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(30))
         var delayMs: UInt64 = 250
@@ -486,12 +585,14 @@ final class OnboardingAISetupModel {
             let leaseTimeoutMs = Self.remainingMilliseconds(
                 until: deadline,
                 clock: clock,
-                cappedAt: 3000)
+                cappedAt: 3000
+            )
             guard leaseTimeoutMs > 0 else { return false }
             if let replacementLease = try? await GatewayConnection.shared.acquireServerLease(
                 ifSameRouteAs: originalServerLease,
-                timeoutMs: Double(leaseTimeoutMs)),
-                await self.reconcilePersistedActivation(
+                timeoutMs: Double(leaseTimeoutMs)
+            ),
+                await reconcilePersistedActivation(
                     kind: kind,
                     token: token,
                     before: before,
@@ -499,7 +600,9 @@ final class OnboardingAISetupModel {
                     timeoutMs: Self.remainingMilliseconds(
                         until: deadline,
                         clock: clock,
-                        cappedAt: 10000))
+                        cappedAt: 10000
+                    )
+                )
             {
                 self.serverLease = replacementLease
                 return true
@@ -507,7 +610,8 @@ final class OnboardingAISetupModel {
             let remainingSleepMs = Self.remainingMilliseconds(
                 until: deadline,
                 clock: clock,
-                cappedAt: Int(delayMs))
+                cappedAt: Int(delayMs)
+            )
             guard remainingSleepMs > 0 else { return false }
             do {
                 try await Task.sleep(nanoseconds: UInt64(remainingSleepMs) * 1_000_000)
@@ -524,21 +628,23 @@ final class OnboardingAISetupModel {
         token: UUID,
         before: PersistedActivationState?,
         serverLease: GatewayConnection.ServerLease,
-        timeoutMs: Int = 10000) async -> Bool
-    {
+        timeoutMs: Int = 10000
+    ) async -> Bool {
         guard timeoutMs > 0 else { return false }
         guard let expected = candidates.first(where: { $0.kind == kind })?.modelRef,
               let data = try? await GatewayConnection.shared.request(
                   method: "crestodian.setup.detect",
                   params: [:],
                   timeoutMs: Double(timeoutMs),
-                  ifCurrentServerLease: serverLease),
+                  ifCurrentServerLease: serverLease
+              ),
               token == attemptToken,
               let result = try? JSONDecoder().decode(DetectResult.self, from: data),
               Self.activationTransitionWasPersisted(
                   expectedModel: expected,
                   before: before,
-                  after: result.persistedActivationState)
+                  after: result.persistedActivationState
+              )
         else {
             return false
         }
@@ -550,18 +656,214 @@ final class OnboardingAISetupModel {
                 latencyMs: nil,
                 lines: nil,
                 status: nil,
-                error: nil))
+                error: nil
+            )
+        )
         return true
     }
 
     private static func remainingMilliseconds(
         until deadline: ContinuousClock.Instant,
         clock: ContinuousClock,
-        cappedAt capMs: Int) -> Int
-    {
+        cappedAt capMs: Int
+    ) -> Int {
         let components = clock.now.duration(to: deadline).components
         let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
         return max(0, min(capMs, Int(milliseconds)))
+    }
+
+    func startProviderAuth(_ option: AuthOption) {
+        guard !self.isBusy, self.activeAuthOption == nil, let serverLease else { return }
+        self.activeAuthOption = option
+        self.authStep = nil
+        self.authError = nil
+        self.authText = ""
+        self.authBusy = true
+        self.providerAuthReconciliationPending = false
+        let token = self.attemptToken
+        let authAttemptID = UUID()
+        let authSessionID = UUID().uuidString
+        self.authAttemptID = authAttemptID
+        self.authSessionID = authSessionID
+        Task {
+            do {
+                let data = try await GatewayConnection.shared.request(
+                    method: "crestodian.setup.auth.start",
+                    params: [
+                        "sessionId": AnyCodable(authSessionID),
+                        "authChoice": AnyCodable(option.id),
+                    ],
+                    timeoutMs: 600_000,
+                    ifCurrentServerLease: serverLease
+                )
+                guard token == self.attemptToken else { return }
+                let result = try JSONDecoder().decode(WizardStartResult.self, from: data)
+                guard authAttemptID == self.authAttemptID else {
+                    await GatewayConnection.shared.cancelWizardSession(
+                        result.sessionid,
+                        on: serverLease
+                    )
+                    return
+                }
+                guard result.sessionid == authSessionID else {
+                    self.cancelProviderAuth()
+                    return
+                }
+                if !result.done, result.step == nil, wizardStatusString(result.status) == "running" {
+                    self.advanceProviderAuth(stepID: nil, value: nil)
+                    return
+                }
+                self.applyAuthWizardResult(
+                    done: result.done,
+                    step: result.step,
+                    status: wizardStatusString(result.status),
+                    error: result.error
+                )
+            } catch {
+                // The Gateway session survives socket loss; cancel by its known
+                // id before reporting failure so it cannot persist config later.
+                await GatewayConnection.shared.cancelWizardSession(
+                    authSessionID,
+                    on: serverLease
+                )
+                guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                self.authBusy = false
+                self.authError = Self.transportFailure(error.localizedDescription)
+            }
+        }
+    }
+
+    func continueProviderAuth() {
+        guard let step = authStep else { return }
+        let value: AnyCodable? = switch wizardStepType(step) {
+        case "text": AnyCodable(self.authText)
+        case "select": self.selectedAuthWizardOption?.value
+        case "confirm": AnyCodable(self.authConfirmation)
+        default: nil
+        }
+        self.advanceProviderAuth(stepID: step.id, value: value)
+    }
+
+    func cancelProviderAuth() {
+        let sessionID = self.authSessionID
+        let authServerLease = self.serverLease
+        self.authAttemptID = UUID()
+        self.providerAuthReconciliationPending = false
+        self.clearProviderAuth()
+        guard let sessionID, let authServerLease else { return }
+        Task {
+            await GatewayConnection.shared.cancelWizardSession(
+                sessionID,
+                on: authServerLease
+            )
+        }
+    }
+
+    var authWizardOptions: [WizardOption] {
+        parseWizardOptions(self.authStep?.options)
+    }
+
+    var selectedAuthWizardOption: WizardOption? {
+        let options = self.authWizardOptions
+        guard options.indices.contains(self.authSelection) else { return options.first }
+        return options[self.authSelection]
+    }
+
+    private func advanceProviderAuth(stepID: String?, value: AnyCodable?) {
+        guard let sessionID = authSessionID, let serverLease else { return }
+        self.authBusy = true
+        self.authError = nil
+        var params: [String: AnyCodable] = ["sessionId": AnyCodable(sessionID)]
+        if let stepID {
+            var answer: [String: AnyCodable] = ["stepId": AnyCodable(stepID)]
+            if let value {
+                answer["value"] = value
+            }
+            params["answer"] = AnyCodable(answer)
+        }
+        let token = self.attemptToken
+        let authAttemptID = self.authAttemptID
+        Task {
+            do {
+                let data = try await GatewayConnection.shared.request(
+                    method: "wizard.next",
+                    params: params,
+                    timeoutMs: Self.providerAuthRequestTimeoutMs,
+                    ifCurrentServerLease: serverLease
+                )
+                guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                let result = try JSONDecoder().decode(WizardNextResult.self, from: data)
+                self.applyAuthWizardResult(
+                    done: result.done,
+                    step: result.step,
+                    status: wizardStatusString(result.status),
+                    error: result.error
+                )
+            } catch {
+                await GatewayConnection.shared.cancelWizardSession(
+                    sessionID,
+                    on: serverLease
+                )
+                guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                self.authBusy = false
+                self.authError = Self.transportFailure(error.localizedDescription)
+            }
+        }
+    }
+
+    private func applyAuthWizardResult(
+        done: Bool,
+        step: WizardStep?,
+        status: String?,
+        error: String?
+    ) {
+        self.authBusy = false
+        let validationError = !done && status == "running" && error?.isEmpty == false
+        let preserveEnteredValue = validationError && self.authStep?.id == step?.id
+        if status == "error" || (done && error != nil) {
+            self.authStep = nil
+            self.authError = Self.failure(
+                label: self.activeAuthOption?.label ?? "Provider login",
+                status: "unavailable",
+                error: error
+            )
+            return
+        }
+        if status == "cancelled" {
+            self.clearProviderAuth()
+            return
+        }
+        if done || status == "done" {
+            self.providerAuthReconciliationPending = true
+            self.clearProviderAuth()
+            Task { await self.detectAndAutoConnect() }
+            return
+        }
+        self.authStep = step
+        if validationError {
+            self.authError = Self.failure(
+                label: self.activeAuthOption?.label ?? "Provider login",
+                status: "format",
+                error: error
+            )
+        }
+        if !preserveEnteredValue {
+            self.authText = anyCodableString(step?.initialvalue)
+        }
+        self.authConfirmation = anyCodableBool(step?.initialvalue)
+        let options = parseWizardOptions(step?.options)
+        self.authSelection = max(0, options.firstIndex {
+            anyCodableEqual($0.value, step?.initialvalue)
+        } ?? 0)
+    }
+
+    private func clearProviderAuth() {
+        self.activeAuthOption = nil
+        self.authSessionID = nil
+        self.authStep = nil
+        self.authError = nil
+        self.authBusy = false
+        self.authText = ""
     }
 
     func submitManualKey() {
@@ -590,8 +892,10 @@ final class OnboardingAISetupModel {
                     ],
                     timeoutMs: Self.activationRequestTimeoutMs(
                         for: "api-key",
-                        provisionsCodexSupervision: self.codexAppServerDetected),
-                    ifCurrentServerLease: serverLease)
+                        provisionsCodexSupervision: self.codexAppServerDetected
+                    ),
+                    ifCurrentServerLease: serverLease
+                )
                 guard token == self.attemptToken else { return }
                 let result = try JSONDecoder().decode(ActivateResult.self, from: data)
                 if result.ok {
@@ -601,7 +905,8 @@ final class OnboardingAISetupModel {
                     self.manualError = Self.failure(
                         label: provider.label,
                         status: result.status,
-                        error: result.error)
+                        error: result.error
+                    )
                 }
             } catch {
                 guard token == self.attemptToken else { return }
@@ -660,14 +965,16 @@ final class OnboardingAISetupModel {
         let detail = error?.trimmingCharacters(in: .whitespacesAndNewlines)
         return Failure(
             summary: self.friendlyFailure(label: label, status: status, error: detail),
-            detail: detail?.isEmpty == false ? detail : nil)
+            detail: detail?.isEmpty == false ? detail : nil
+        )
     }
 
     static func transportFailure(_ raw: String) -> Failure {
         let detail = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return Failure(
             summary: self.friendlyTransportError(detail),
-            detail: detail.isEmpty ? nil : detail)
+            detail: detail.isEmpty ? nil : detail
+        )
     }
 
     /// One friendly sentence per failure bucket.
@@ -710,9 +1017,9 @@ final class OnboardingAISetupModel {
     }
 
     #if DEBUG
-    func _test_setConnectedSetupLines(_ lines: [String]?) {
-        self.connectedSetupLines = Self.normalizedSetupLines(lines)
-    }
+        func _test_setConnectedSetupLines(_ lines: [String]?) {
+            self.connectedSetupLines = Self.normalizedSetupLines(lines)
+        }
     #endif
 }
 
@@ -736,7 +1043,8 @@ enum OnboardingProviderIcon {
         return self.resourceBundle?.url(
             forResource: name,
             withExtension: "svg",
-            subdirectory: "ProviderIcons")
+            subdirectory: "ProviderIcons"
+        )
     }
 
     static func image(for kind: String) -> NSImage? {
@@ -774,7 +1082,8 @@ enum OnboardingProviderIcon {
         bundle.url(
             forResource: "ProviderIcon-claude",
             withExtension: "svg",
-            subdirectory: "ProviderIcons") != nil
+            subdirectory: "ProviderIcons"
+        ) != nil
     }
 }
 
@@ -795,6 +1104,16 @@ struct OnboardingAISetupView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .sheet(isPresented: self.$showCrestodianChat) {
             self.crestodianSheet
+        }
+        .sheet(isPresented: Binding(
+            get: { self.model.activeAuthOption != nil },
+            set: {
+                if !$0 {
+                    self.model.cancelProviderAuth()
+                }
+            }
+        )) {
+            self.providerAuthSheet
         }
     }
 
@@ -839,8 +1158,8 @@ struct OnboardingAISetupView: View {
                 message: detectError.summary,
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
-                retryTitle: "Try again")
-            {
+                retryTitle: "Try again"
+            ) {
                 self.model.retryFromScratch()
             }
         }
@@ -850,8 +1169,8 @@ struct OnboardingAISetupView: View {
                 title: "Couldn’t load the full provider list",
                 message: providerCatalogError,
                 docsSlug: "start/onboarding",
-                retryTitle: "Try again")
-            {
+                retryTitle: "Try again"
+            ) {
                 self.model.retryFromScratch()
             }
         }
@@ -864,13 +1183,14 @@ struct OnboardingAISetupView: View {
                 You can fix the login and retry, or connect with an API key or token below.
                 """,
                 docsSlug: "concepts/model-providers",
-                retryTitle: "Check again")
-            {
+                retryTitle: "Check again"
+            ) {
                 self.model.retryFromScratch()
             }
         }
 
         if !self.model.connected, self.model.providerCatalogLoaded {
+            self.providerAuthSection
             self.manualSection
         }
 
@@ -930,7 +1250,8 @@ struct OnboardingAISetupView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.green.opacity(0.12)))
+                .fill(Color.green.opacity(0.12))
+        )
     }
 
     private var noCandidatesIntro: some View {
@@ -940,10 +1261,11 @@ struct OnboardingAISetupView: View {
             Text(
                 "That’s fine — you can connect one with an API key or token. " +
                     "If you use Claude Code, Codex, or the Gemini CLI on this Mac, " +
-                    "sign in there first and hit “Check again”.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                    "sign in there first and hit “Check again”."
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
             Button("Check again") {
                 self.model.retryFromScratch()
             }
@@ -1008,8 +1330,8 @@ struct OnboardingAISetupView: View {
 
     private func subtitle(
         for candidate: OnboardingAISetupModel.Candidate,
-        status: OnboardingAISetupModel.CandidateStatus) -> String
-    {
+        status: OnboardingAISetupModel.CandidateStatus
+    ) -> String {
         switch status {
         case .testing:
             "Testing — asking \(candidate.modelRef) for a quick reply…"
@@ -1023,8 +1345,8 @@ struct OnboardingAISetupView: View {
     }
 
     private func subtitleStyle(
-        for status: OnboardingAISetupModel.CandidateStatus) -> Color
-    {
+        for status: OnboardingAISetupModel.CandidateStatus
+    ) -> Color {
         if case .failed = status {
             return .orange
         }
@@ -1034,8 +1356,8 @@ struct OnboardingAISetupView: View {
     @ViewBuilder
     private func trailingIndicator(
         status: OnboardingAISetupModel.CandidateStatus,
-        selected: Bool) -> some View
-    {
+        selected: Bool
+    ) -> some View {
         switch status {
         case .testing:
             ProgressView()
@@ -1068,32 +1390,194 @@ struct OnboardingAISetupView: View {
         return false
     }
 
+    @ViewBuilder
     private var manualSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if self.model.manualProviders.isEmpty {
+        if self.model.manualProviders.isEmpty {
+            if self.model.authOptions.isEmpty {
                 OnboardingErrorCard(
                     title: "No key-based providers are available",
                     message: "Enable or install a text-inference provider plugin on this Gateway, then check again.",
                     docsSlug: "concepts/model-providers",
-                    retryTitle: "Check again")
-                {
+                    retryTitle: "Check again"
+                ) {
                     self.model.retryFromScratch()
                 }
-            } else if self.model.candidates.isEmpty || self.model.showManualEntry {
-                self.manualForm
-            } else {
-                Button {
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                        self.model.showManualEntry = true
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                if self.model.candidates.isEmpty || self.model.showManualEntry {
+                    self.manualForm
+                } else {
+                    Button {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                            self.model.showManualEntry = true
+                        }
+                    } label: {
+                        Label("Connect with an API key or token instead…", systemImage: "key")
+                            .font(.callout)
                     }
-                } label: {
-                    Label("Connect with an API key or token instead…", systemImage: "key")
-                        .font(.callout)
+                    .buttonStyle(.link)
+                    .disabled(self.model.isBusy)
                 }
-                .buttonStyle(.link)
-                .disabled(self.model.isBusy)
             }
         }
+    }
+
+    @ViewBuilder
+    private var providerAuthSection: some View {
+        if !self.model.authOptions.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Sign in with a provider")
+                    .font(.headline)
+                Text(
+                    "Use an existing subscription or provider account. OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                let featured = self.model.authOptions.filter(\.featured)
+                let more = self.model.authOptions.filter { !$0.featured }
+                ForEach(featured) { option in
+                    self.providerAuthRow(option)
+                }
+                if !more.isEmpty {
+                    DisclosureGroup("More sign-in options") {
+                        VStack(spacing: 8) {
+                            ForEach(more) { option in
+                                self.providerAuthRow(option)
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
+                    .font(.callout)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
+        }
+    }
+
+    private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
+        Button {
+            self.model.startProviderAuth(option)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: option
+                    .kind == "device-code" ? "link.badge.plus" : "person.crop.circle.badge.checkmark")
+                    .font(.title3)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option.label)
+                        .font(.callout.weight(.semibold))
+                    if let hint = option.hint, !hint.isEmpty {
+                        Text(hint)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+                Spacer(minLength: 0)
+                Text(option.kind == "device-code" ? "Pair" : "Sign in")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(self.model.isBusy)
+        .openClawSelectableRowChrome(selected: false)
+    }
+
+    private var providerAuthSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(self.model.activeAuthOption?.label ?? "Provider sign-in")
+                        .font(.title3.weight(.semibold))
+                    Text("Credentials stay on this Gateway and are saved only after the live test succeeds.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if let step = self.model.authStep {
+                if let title = step.title, !title.isEmpty {
+                    Text(title).font(.headline)
+                }
+                if let message = step.message, !message.isEmpty {
+                    ScrollView {
+                        Text(message)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 190)
+                }
+                self.authStepInput(step)
+            } else if self.model.authBusy {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Starting secure sign-in…")
+                }
+            }
+
+            if let error = self.model.authError {
+                OnboardingErrorCard(
+                    title: "Sign-in didn’t complete",
+                    message: error.summary,
+                    details: error.detail,
+                    docsSlug: "concepts/model-providers",
+                    retryTitle: nil,
+                    retry: nil
+                )
+            }
+
+            Spacer(minLength: 0)
+            HStack {
+                Button("Cancel") { self.model.cancelProviderAuth() }
+                Spacer(minLength: 0)
+                if self.model.authStep != nil {
+                    Button(self.authContinueTitle) { self.model.continueProviderAuth() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(self.model.authBusy)
+                }
+            }
+        }
+        .padding(22)
+        .frame(width: 560)
+        .frame(minHeight: 330)
+    }
+
+    @ViewBuilder
+    private func authStepInput(_ step: WizardStep) -> some View {
+        switch wizardStepType(step) {
+        case "text":
+            if step.sensitive == true {
+                SecureField(step.placeholder ?? "Value", text: self.$model.authText)
+                    .textFieldStyle(.roundedBorder)
+            } else {
+                TextField(step.placeholder ?? "Value", text: self.$model.authText)
+                    .textFieldStyle(.roundedBorder)
+            }
+        case "select":
+            Picker("Option", selection: self.$model.authSelection) {
+                ForEach(Array(self.model.authWizardOptions.enumerated()), id: \.offset) { index, option in
+                    Text(option.label).tag(index)
+                }
+            }
+        case "confirm":
+            Toggle("Confirm", isOn: self.$model.authConfirmation)
+        default:
+            EmptyView()
+        }
+    }
+
+    private var authContinueTitle: String {
+        guard let step = model.authStep else { return "Continue" }
+        return wizardStepType(step) == "note" ? "Continue" : "Submit"
     }
 
     private var manualForm: some View {
@@ -1139,14 +1623,16 @@ struct OnboardingAISetupView: View {
                     details: manualError.detail,
                     docsSlug: "concepts/model-providers",
                     retryTitle: nil,
-                    retry: nil)
+                    retry: nil
+                )
             }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor)))
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
     }
 
     private var manualProviderHelp: String {
@@ -1192,8 +1678,8 @@ struct OnboardingErrorCard: View {
         details: String? = nil,
         docsSlug: String,
         retryTitle: String? = nil,
-        retry: (() -> Void)? = nil)
-    {
+        retry: (() -> Void)? = nil
+    ) {
         self.title = title
         self.message = message
         self.details = details
@@ -1247,7 +1733,8 @@ struct OnboardingErrorCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.orange.opacity(0.10)))
+                .fill(Color.orange.opacity(0.10))
+        )
     }
 }
 
@@ -1264,7 +1751,8 @@ private struct OnboardingErrorDetails: View {
             } label: {
                 Label(
                     self.expanded ? "Hide details" : "Show details",
-                    systemImage: self.expanded ? "chevron.down" : "chevron.right")
+                    systemImage: self.expanded ? "chevron.down" : "chevron.right"
+                )
             }
             .buttonStyle(.link)
             .font(.caption)
@@ -1282,7 +1770,8 @@ private struct OnboardingErrorDetails: View {
                 .frame(maxHeight: 180)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.05)))
+                        .fill(Color.primary.opacity(0.05))
+                )
                 Button {
                     Self.copy(self.text)
                 } label: {

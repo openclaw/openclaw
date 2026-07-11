@@ -74,6 +74,7 @@ function detection(
     candidates: [candidate("claude-cli", "Claude Code")],
     codexAppServerDetected: false,
     manualProviders: [],
+    authOptions: [],
     workspace: "/tmp/openclaw-workspace",
     setupComplete: false,
     ...overrides,

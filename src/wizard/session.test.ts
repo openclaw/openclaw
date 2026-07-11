@@ -131,6 +131,23 @@ describe("WizardSession", () => {
     const done = await session.next();
     expect(done.done).toBe(true);
     expect(done.status).toBe("cancelled");
+    expect(session.signal.aborted).toBe(true);
+  });
+
+  test("a runner finishing after cancellation cannot overwrite cancelled state", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const session = new WizardSession(async () => {
+      await gate;
+    });
+
+    session.cancel();
+    finish();
+    await Promise.resolve();
+
+    expect((await session.next()).status).toBe("cancelled");
   });
 
   test("does not lose terminal completion when the last answer finishes the runner immediately", async () => {

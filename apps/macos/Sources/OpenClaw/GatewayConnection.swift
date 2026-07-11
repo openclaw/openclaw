@@ -358,6 +358,32 @@ actor GatewayConnection {
         }
     }
 
+    /// Cancel on the socket that created the wizard, or a replacement socket on
+    /// the same route. Never cross an endpoint or credential change.
+    func cancelWizardSession(_ sessionID: String, on lease: ServerLease) async {
+        if await self.sendWizardCancellation(sessionID, on: lease) {
+            return
+        }
+        guard let replacement = try? await self.acquireServerLease(
+            ifSameRouteAs: lease,
+            timeoutMs: 5000)
+        else { return }
+        _ = await self.sendWizardCancellation(sessionID, on: replacement)
+    }
+
+    private func sendWizardCancellation(_ sessionID: String, on lease: ServerLease) async -> Bool {
+        do {
+            _ = try await lease.client.request(
+                method: "wizard.cancel",
+                params: ["sessionId": AnyCodable(sessionID)],
+                timeoutMs: 10000,
+                ifCurrentConnectionGeneration: lease.socketGeneration)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     func requestRaw(
         method: Method,
         params: [String: AnyCodable]? = nil,
