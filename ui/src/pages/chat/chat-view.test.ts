@@ -3329,8 +3329,7 @@ describe("chat attachment picker", () => {
     Object.defineProperty(event, "clipboardData", {
       value: {
         items: { length: 0 },
-        getData: (type: string) =>
-          type === "text/plain" ? `data:image/png;base64,${base64}` : "",
+        getData: (type: string) => (type === "text/plain" ? `data:image/png;base64,${base64}` : ""),
       },
     });
 
@@ -3340,9 +3339,7 @@ describe("chat attachment picker", () => {
     const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
     expect(attachments).toHaveLength(1);
     expect(attachments[0]?.sizeBytes).toBe(3 * 64 * 1024);
-    expect(getChatAttachmentDataUrl(attachments[0])).toBe(
-      `data:image/png;base64,${base64}`,
-    );
+    expect(getChatAttachmentDataUrl(attachments[0])).toBe(`data:image/png;base64,${base64}`);
   });
 
   it("ignores pasted data URLs with non-base64 payload characters", () => {
