@@ -130,4 +130,27 @@ describe("check-no-conflict-markers", () => {
       },
     ]);
   });
+
+  it("reports conflict markers in a large tracked file without reading it whole", () => {
+    const rootDir = createTempDir("openclaw-conflict-markers-");
+    git(rootDir, "init", "-q");
+    git(rootDir, "config", "user.email", "test@example.com");
+    git(rootDir, "config", "user.name", "Test User");
+
+    const largeFile = path.join(rootDir, "big-file.txt");
+    const fillerLine = "x".repeat(1024);
+    const fillerLines = Array.from({ length: 1024 }, () => fillerLine);
+    const markerLines = ["<<<<<<< HEAD", "left", "=======", "right", ">>>>>>> branch"];
+    fs.writeFileSync(largeFile, [...fillerLines, ...markerLines].join("\n"));
+    git(rootDir, "add", "big-file.txt");
+
+    const violations = findConflictMarkersInTrackedFiles(rootDir);
+
+    expect(violations).toEqual([
+      {
+        filePath: largeFile,
+        lines: [1025, 1027, 1029],
+      },
+    ]);
+  });
 });
