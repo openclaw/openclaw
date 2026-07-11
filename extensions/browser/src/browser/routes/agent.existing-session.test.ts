@@ -373,6 +373,7 @@ describe("existing-session browser routes", () => {
         id: "root",
         role: "document",
         name: "Private",
+        children: [],
       };
     });
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(

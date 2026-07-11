@@ -17,13 +17,17 @@ const getPageForTargetId = vi.fn(async () => {
 const ensurePageState = vi.fn(() => {});
 const assertPageNavigationCompletedSafely = vi.fn(async () => {});
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
-const finalizePendingBrowserInteractionAction = vi.fn((error: unknown) => ({
+const finalizePendingBrowserInteractionAction = vi.fn<
+  typeof import("./pw-session.js").finalizePendingBrowserInteractionAction
+>((error) => ({
   error: error instanceof Error ? error : new Error("pending interaction failed"),
   deferred: false,
 }));
 const isBrowserObservedDialogBlockedError = vi.fn(() => false);
 const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
-const isPolicyDenyNavigationError = vi.fn(() => false);
+const isPolicyDenyNavigationError = vi.fn<
+  typeof import("./pw-session.js").isPolicyDenyNavigationError
+>(() => false);
 const quarantineBlockedNavigationTargetForError = vi.fn(async () => {});
 const refLocator = vi.fn(() => {
   throw new Error("test: refLocator should not be called");

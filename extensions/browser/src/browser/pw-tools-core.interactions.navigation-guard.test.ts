@@ -11,6 +11,19 @@ import {
 installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.js");
 
+type RunObservedDialogResponse = NonNullable<
+  Parameters<typeof import("./pw-session.js").respondOrArmObservedDialogOnPage>[0]["runResponse"]
+>;
+
+function createObservedDialogRecord(): Awaited<ReturnType<RunObservedDialogResponse>> {
+  return {
+    id: "dialog-1",
+    type: "alert",
+    message: "test dialog",
+    openedAt: "2026-07-10T00:00:00.000Z",
+  };
+}
+
 function createMutableFrame(initialUrl: string) {
   let currentUrl = initialUrl;
   return {
@@ -212,17 +225,18 @@ describe("pw-tools-core interaction navigation guard", () => {
       const page = { url: vi.fn(() => currentUrl) };
       setPwToolsCoreCurrentPage(page);
       getPwToolsCoreSessionMocks().respondOrArmObservedDialogOnPage.mockImplementationOnce(
-        ({
-          runResponse,
-        }: {
-          runResponse: (respond: () => Promise<unknown>, mode: string) => Promise<unknown>;
-        }) => ({
-          kind: "responding",
-          response: runResponse(async () => {
-            currentUrl = "http://169.254.169.254/latest/meta-data/";
-            return {};
-          }, "pending"),
-        }),
+        ({ runResponse }) => {
+          if (!runResponse) {
+            throw new Error("expected dialog response owner");
+          }
+          return {
+            kind: "responding",
+            response: runResponse(async () => {
+              currentUrl = "http://169.254.169.254/latest/meta-data/";
+              return createObservedDialogRecord();
+            }, "pending"),
+          };
+        },
       );
       getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
         blocked,
@@ -255,16 +269,14 @@ describe("pw-tools-core interaction navigation guard", () => {
   it("installs a fresh guard when an armed dialog responds later", async () => {
     vi.useFakeTimers();
     try {
-      let runResponse:
-        | ((respond: () => Promise<unknown>, mode: "pending" | "armed") => Promise<unknown>)
-        | undefined;
+      let runResponse: RunObservedDialogResponse | undefined;
       let currentUrl = "https://safe.example/start";
       const blocked = new Error("blocked armed dialog navigation");
       blocked.name = "SsrFBlockedError";
       const page = { url: vi.fn(() => currentUrl) };
       setPwToolsCoreCurrentPage(page);
       getPwToolsCoreSessionMocks().respondOrArmObservedDialogOnPage.mockImplementationOnce(
-        (opts: { runResponse: typeof runResponse }) => {
+        (opts) => {
           runResponse = opts.runResponse;
           return { kind: "armed" };
         },
@@ -284,7 +296,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       );
       const task = runResponse(async () => {
         currentUrl = "http://169.254.169.254/latest/meta-data/";
-        return {};
+        return createObservedDialogRecord();
       }, "armed");
       const rejection = expect(task).rejects.toBe(blocked);
       await vi.advanceTimersByTimeAsync(250);
@@ -302,14 +314,15 @@ describe("pw-tools-core interaction navigation guard", () => {
       const page = { url: vi.fn(() => "https://safe.example/start") };
       setPwToolsCoreCurrentPage(page);
       getPwToolsCoreSessionMocks().respondOrArmObservedDialogOnPage.mockImplementationOnce(
-        ({
-          runResponse,
-        }: {
-          runResponse: (respond: () => Promise<unknown>, mode: string) => Promise<unknown>;
-        }) => ({
-          kind: "responding",
-          response: runResponse(async () => await new Promise<never>(() => {}), "pending"),
-        }),
+        ({ runResponse }) => {
+          if (!runResponse) {
+            throw new Error("expected dialog response owner");
+          }
+          return {
+            kind: "responding",
+            response: runResponse(async () => await new Promise<never>(() => {}), "pending"),
+          };
+        },
       );
 
       const task = mod.armDialogViaPlaywright({
@@ -341,13 +354,11 @@ describe("pw-tools-core interaction navigation guard", () => {
   it("retires a stuck armed dialog response at a fresh bounded deadline", async () => {
     vi.useFakeTimers();
     try {
-      let runResponse:
-        | ((respond: () => Promise<unknown>, mode: "pending" | "armed") => Promise<unknown>)
-        | undefined;
+      let runResponse: RunObservedDialogResponse | undefined;
       const page = { url: vi.fn(() => "https://safe.example/start") };
       setPwToolsCoreCurrentPage(page);
       getPwToolsCoreSessionMocks().respondOrArmObservedDialogOnPage.mockImplementationOnce(
-        (opts: { runResponse: typeof runResponse }) => {
+        (opts) => {
           runResponse = opts.runResponse;
           return { kind: "armed" };
         },
@@ -2079,8 +2090,8 @@ describe("pw-tools-core interaction navigation guard", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
     });
 
-    const captureOptions = getPwToolsCoreSessionMocks().beginActionDownloadCaptureOnPage.mock
-      .calls[0]?.[1] as { beforeSave?: (download: { url: string }) => Promise<void> } | undefined;
+    const captureOptions =
+      getPwToolsCoreSessionMocks().beginActionDownloadCaptureOnPage.mock.calls[0]?.[1];
     const beforeSave = captureOptions?.beforeSave;
     if (!beforeSave) {
       throw new Error("expected action download policy callback");
@@ -2095,7 +2106,9 @@ describe("pw-tools-core interaction navigation guard", () => {
       },
     );
 
-    await expect(beforeSave({ url: "data:text/plain,private" })).rejects.toBe(blocked);
+    await expect(
+      beforeSave({ url: "data:text/plain,private", suggestedFilename: "private.txt" }),
+    ).rejects.toBe(blocked);
   });
 
   it.each([

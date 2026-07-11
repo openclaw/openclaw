@@ -11,7 +11,9 @@ const sessionMocks = vi.hoisted(() => ({
   closeBlockedNavigationTarget: vi.fn(async () => {}),
   ensurePageState: vi.fn(() => ({})),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
-  finalizePendingBrowserInteractionAction: vi.fn((error: unknown) => ({
+  finalizePendingBrowserInteractionAction: vi.fn<
+    typeof import("./pw-session.js").finalizePendingBrowserInteractionAction
+  >((error) => ({
     error: error instanceof Error ? error : new Error("pending interaction failed"),
     deferred: false,
   })),
@@ -23,7 +25,9 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   gotoPageWithNavigationGuard: vi.fn(async () => null),
   isBrowserObservedDialogBlockedError: vi.fn(() => false),
-  isPolicyDenyNavigationError: vi.fn(() => false),
+  isPolicyDenyNavigationError: vi.fn<typeof import("./pw-session.js").isPolicyDenyNavigationError>(
+    () => false,
+  ),
   markObservedDialogsHandledRemotelyForPage: vi.fn(() => ({})),
   quarantineBlockedNavigationTarget: vi.fn(async () => {}),
   quarantineBlockedNavigationTargetForError: vi.fn(async () => {}),

@@ -10,7 +10,9 @@ const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
-  evaluateChromeMcpScript: vi.fn(async (_params: unknown) => "https://example.com"),
+  evaluateChromeMcpScript: vi.fn(
+    async (_params: unknown): Promise<unknown> => "https://example.com",
+  ),
   fillChromeMcpElement: vi.fn(async () => {}),
   fillChromeMcpForm: vi.fn(async () => {}),
   handleChromeMcpDialog: vi.fn(async () => false),

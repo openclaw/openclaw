@@ -34,7 +34,9 @@ let pageState: {
 
 const sessionMocks = vi.hoisted(() => ({
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
-  beginActionDownloadCaptureOnPage: vi.fn(() => ({
+  beginActionDownloadCaptureOnPage: vi.fn<
+    typeof import("./pw-session.js").beginActionDownloadCaptureOnPage
+  >(() => ({
     drain: vi.fn(async (): Promise<HarnessManagedDownload[] | undefined> => undefined),
     dispose: vi.fn(() => {}),
   })),
@@ -47,7 +49,9 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   ensurePageState: vi.fn(() => pageState),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
-  finalizePendingBrowserInteractionAction: vi.fn((error: unknown) => ({
+  finalizePendingBrowserInteractionAction: vi.fn<
+    typeof import("./pw-session.js").finalizePendingBrowserInteractionAction
+  >((error) => ({
     error: error instanceof Error ? error : new Error("pending interaction failed"),
     deferred: false,
   })),
@@ -72,12 +76,14 @@ const sessionMocks = vi.hoisted(() => ({
       normalizedUrl && message.includes("net::err_aborted") && message.includes(normalizedUrl),
     );
   }),
-  isPolicyDenyNavigationError: vi.fn((err: unknown) => {
-    if (!(err instanceof Error)) {
-      return false;
-    }
-    return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
-  }),
+  isPolicyDenyNavigationError: vi.fn<typeof import("./pw-session.js").isPolicyDenyNavigationError>(
+    (err) => {
+      if (!(err instanceof Error)) {
+        return false;
+      }
+      return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
+    },
+  ),
   quarantineBlockedNavigationTargetForError: vi.fn(async () => {}),
   withPageNavigationRequestGuard: vi.fn(
     async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
@@ -88,7 +94,9 @@ const sessionMocks = vi.hoisted(() => ({
   respondToObservedDialogOnPage: vi.fn(async () => {
     throw new Error("No dialog is pending.");
   }),
-  respondOrArmObservedDialogOnPage: vi.fn(() => ({ kind: "armed" as const })),
+  respondOrArmObservedDialogOnPage: vi.fn<
+    typeof import("./pw-session.js").respondOrArmObservedDialogOnPage
+  >(() => ({ kind: "armed" })),
   armObservedDialogResponseOnPage: vi.fn(() => {}),
   createObservedDialogAbortSignalForPage: vi.fn((opts?: { parentSignal?: AbortSignal }) => ({
     signal: opts?.parentSignal ?? new AbortController().signal,
@@ -119,8 +127,17 @@ const downloadCaptureMocks = vi.hoisted(() => ({
 }));
 
 const navigationGuardMocks = vi.hoisted(() => ({
-  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
-  withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => ({ ssrfPolicy })),
+  assertBrowserNavigationResultAllowed: vi.fn<
+    typeof import("./navigation-guard.js").assertBrowserNavigationResultAllowed
+  >(async () => {}),
+  withBrowserNavigationPolicy: vi.fn<
+    typeof import("./navigation-guard.js").withBrowserNavigationPolicy
+  >((ssrfPolicy, opts) => ({
+    ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
+      ? { browserProxyMode: opts.browserProxyMode }
+      : {}),
+  })),
 }));
 
 vi.mock("./pw-session.js", () => sessionMocks);
@@ -211,8 +228,11 @@ export function installPwToolsCoreTestHooks() {
       fn.mockReset();
     }
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(async () => {});
-    navigationGuardMocks.withBrowserNavigationPolicy.mockImplementation((ssrfPolicy) => ({
-      ssrfPolicy,
+    navigationGuardMocks.withBrowserNavigationPolicy.mockImplementation((ssrfPolicy, opts) => ({
+      ...(ssrfPolicy ? { ssrfPolicy } : {}),
+      ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
+        ? { browserProxyMode: opts.browserProxyMode }
+        : {}),
     }));
   });
 }
