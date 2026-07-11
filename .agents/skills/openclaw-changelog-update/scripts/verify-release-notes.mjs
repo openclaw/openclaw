@@ -846,10 +846,13 @@ export function canonicalMainCommitMatches(commit, candidates) {
   return matches.length === 1 ? [matches[0].hash] : [];
 }
 
-export function canonicalPullRequests(currentPullRequests, mainPullRequests) {
-  return mainPullRequests.length > 0
-    ? [...new Set(mainPullRequests)].toSorted((left, right) => left - right)
-    : [...new Set(currentPullRequests)].toSorted((left, right) => left - right);
+export function canonicalPullRequests(
+  currentPullRequests,
+  mainPullRequests,
+  hasCanonicalMainCommit = mainPullRequests.length > 0,
+) {
+  const pullRequests = hasCanonicalMainCommit ? mainPullRequests : currentPullRequests;
+  return [...new Set(pullRequests)].toSorted((left, right) => left - right);
 }
 
 function canonicalMainCommits(base, mainRef) {
@@ -1108,7 +1111,12 @@ function sourceCommits(base, target, mainRef) {
     const mainPullRequests = (canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? []).flatMap(
       (hash) => canonicalMainPullRequests.get(hash) ?? [],
     );
-    const associatedPullRequests = canonicalPullRequests(currentPullRequests, mainPullRequests);
+    const matchedMainCommits = canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? [];
+    const associatedPullRequests = canonicalPullRequests(
+      currentPullRequests,
+      mainPullRequests,
+      matchedMainCommits.length > 0,
+    );
     commit.pullRequests = associatedPullRequests;
     const suppressedBackportPullRequests = new Set(
       currentPullRequests.filter((number) => !associatedPullRequests.includes(number)),
@@ -2079,8 +2087,7 @@ function main() {
   githubSnapshotState = initializeGithubSnapshot(options);
   let changelog = readFileSync("CHANGELOG.md", "utf8");
   let section = sectionFor(changelog, options.version);
-  const defaultMainRef = options.mainRef ?? (gitCommit("origin/main") ? "origin/main" : undefined);
-  const source = sourceCommits(options.base, options.target, defaultMainRef);
+  const source = sourceCommits(options.base, options.target, options.mainRef ?? "origin/main");
   const shippedBaselineRecords = options.shippedRefs.map(shippedBaselineFor);
   const shippedExclusions = subtractShippedPullRequests(source, shippedBaselineRecords);
   source.shippedBaselines = shippedExclusions.baselines;

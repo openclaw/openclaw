@@ -101,6 +101,10 @@ describe("release-note verification", () => {
     expect(canonicalPullRequests([456], [])).toEqual([456]);
   });
 
+  it("drops the release PR when the matching main forward-port is a direct commit", () => {
+    expect(canonicalPullRequests([456], [], true)).toEqual([]);
+  });
+
   it("reuses exact-range GitHub GraphQL snapshots without caching REST reads", () => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
     try {
@@ -455,6 +459,8 @@ describe("release-note verification", () => {
           "HEAD",
           "--target",
           "HEAD",
+          "--main-ref",
+          "HEAD",
           "--version",
           "2026.7.1",
           "--write-ledger",
@@ -509,7 +515,17 @@ describe("release-note verification", () => {
 
       const result = spawnSync(
         process.execPath,
-        [verifier, "--base", "base-ref", "--target", "HEAD", "--version", "2026.7.1"],
+        [
+          verifier,
+          "--base",
+          "base-ref",
+          "--target",
+          "HEAD",
+          "--main-ref",
+          "HEAD",
+          "--version",
+          "2026.7.1",
+        ],
         { cwd, encoding: "utf8" },
       );
 
