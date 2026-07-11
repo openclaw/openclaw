@@ -1048,12 +1048,18 @@ async function runEmbeddedAgentInternal(
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
-      const fallbackConfigured = hasEmbeddedRunConfiguredModelFallbacks({
-        cfg: params.config,
-        agentId: params.agentId,
-        sessionKey: normalizedSessionKey,
-        modelFallbacksOverride: params.modelFallbacksOverride,
-      });
+      // Outer model-fallback sets isFinalFallbackAttempt=false while more
+      // candidates remain. Treat that as fallback-configured even when the
+      // embedded run's local modelFallbacksOverride is empty (e.g. session
+      // model lock), so prompt-stage FailoverError can reach the outer loop
+      // (#103734 / ClawSweeper guidance on #103868).
+      const fallbackConfigured =
+        hasEmbeddedRunConfiguredModelFallbacks({
+          cfg: params.config,
+          agentId: params.agentId,
+          sessionKey: normalizedSessionKey,
+          modelFallbacksOverride: params.modelFallbacksOverride,
+        }) || params.isFinalFallbackAttempt === false;
       const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
@@ -3375,16 +3381,7 @@ async function runEmbeddedAgentInternal(
               fallbackConfigured,
               aborted,
             });
-            // Codex subscription usage limits are account/window scoped. Rotating
-            // another profile for the same ChatGPT account rarely recovers, and
-            // holding the throw-driven model-fallback path blocks configured
-            // cross-provider fallbacks (see #103734).
-            const isCodexSubscriptionUsageLimit =
-              promptFailoverReason === "rate_limit" &&
-              /you.?ve reached your codex subscription usage limit|codex usage limit reached/i.test(
-                errorText,
-              );
-            if (promptFailoverReason === "rate_limit" && !isCodexSubscriptionUsageLimit) {
+            if (promptFailoverReason === "rate_limit") {
               maybeEscalateRateLimitProfileFallback({
                 failoverProvider: provider,
                 failoverModel: modelId,
@@ -3401,8 +3398,7 @@ async function runEmbeddedAgentInternal(
               harnessOwnsTransport: pluginHarnessOwnsTransport,
               promptTimeoutFallbackSafe,
               timedOutByRunBudget,
-              // Skip rotate_profile so fallback_model can fire when configured.
-              profileRotated: isCodexSubscriptionUsageLimit,
+              profileRotated: false,
             });
             if (
               promptFailoverDecision.action === "rotate_profile" &&
