@@ -174,19 +174,25 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
       })();
 
   const profileState = current.profiles.get(profileCtx.profile.name);
-  const graphics =
-    capabilities.mode === "local-managed" && cdpReady && profileState?.running
-      ? await getCachedChromeGraphicsDiagnostics(
-          profileState.running,
-          async () =>
-            await inspectChromeGraphicsDiagnostics(profileCtx.profile.cdpUrl, {
-              httpTimeoutMs: STATUS_CDP_HTTP_TIMEOUT_MS,
-              handshakeTimeoutMs: STATUS_CDP_TRANSPORT_TIMEOUT_MS,
-              commandTimeoutMs: STATUS_GRAPHICS_COMMAND_TIMEOUT_MS,
-              ssrfPolicy: current.resolved.ssrfPolicy,
-            }),
-        )
-      : null;
+  const running = profileState?.running;
+  const canInspectManagedGraphics =
+    capabilities.mode === "local-managed" &&
+    cdpReady &&
+    running &&
+    !profileState?.reconcile &&
+    running.cdpPort === profileCtx.profile.cdpPort;
+  const graphics = canInspectManagedGraphics
+    ? await getCachedChromeGraphicsDiagnostics(
+        running,
+        async () =>
+          await inspectChromeGraphicsDiagnostics(`http://127.0.0.1:${running.cdpPort}`, {
+            httpTimeoutMs: STATUS_CDP_HTTP_TIMEOUT_MS,
+            handshakeTimeoutMs: STATUS_CDP_TRANSPORT_TIMEOUT_MS,
+            commandTimeoutMs: STATUS_GRAPHICS_COMMAND_TIMEOUT_MS,
+            ssrfPolicy: current.resolved.ssrfPolicy,
+          }),
+      )
+    : null;
   let detectedBrowser: string | null = null;
   let detectedExecutablePath: string | null = null;
   let detectError: string | null = null;

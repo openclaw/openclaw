@@ -295,6 +295,45 @@ describe("basic browser routes", () => {
     expect(responseBodyRecord(first).graphics).toEqual(diagnostics);
     expect(responseBodyRecord(second).graphics).toEqual(diagnostics);
     expect(inspectChromeGraphicsDiagnosticsMock).toHaveBeenCalledTimes(1);
+    expect(inspectChromeGraphicsDiagnosticsMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:18800",
+      expect.any(Object),
+    );
+  });
+
+  it("does not inspect graphics while the managed process is pending reconcile", async () => {
+    const state = createManagedProfileState(
+      {},
+      {
+        isHttpReachable: async () => true,
+        isTransportAvailable: async () => true,
+      },
+    );
+    const profile = (state.forProfile() as { profile: unknown }).profile as never;
+    state.profiles.set("openclaw", {
+      profile,
+      running: {
+        pid: 222,
+        exe: { kind: "chromium", path: "/usr/bin/chromium" },
+        userDataDir: "/tmp/openclaw-profile",
+        cdpPort: 18800,
+        startedAt: Date.now(),
+        proc: {} as never,
+      },
+      reconcile: {
+        previousProfile: profile,
+        reason: "cdp-port-changed",
+      },
+    });
+
+    const response = await callBasicRouteWithState({
+      query: { profile: "openclaw" },
+      state,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(responseBodyRecord(response).graphics).toBeNull();
+    expect(inspectChromeGraphicsDiagnosticsMock).not.toHaveBeenCalled();
   });
 
   it("does not inspect graphics when passive status sees no owned managed process", async () => {
