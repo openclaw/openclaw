@@ -414,6 +414,29 @@ describe("openclaw path CLI", () => {
       expect(out.bytes).toBe(before);
     });
 
+    it("CLI-S07b reports accurate UTF-8 byte counts for multibyte set output", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = '{\n  "version": "1.0"\n}\n';
+      writeFileSync(filePath, before, "utf-8");
+      // Replace the whole file with CJK content via the version key.
+      // CJK chars are 1 UTF-16 unit but 3 UTF-8 bytes.
+      const cjkValue = "中".repeat(30);
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        cjkValue,
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      // bytesWritten must match the file's actual UTF-8 byte size on disk
+      const onDisk = readFileSync(filePath, "utf-8");
+      expect(out.bytesWritten).toBe(Buffer.byteLength(onDisk, "utf8"));
+      // bytesWritten exceeds JS string length (50 UTF-16 units < ~110 UTF-8 bytes)
+      expect(out.bytesWritten).toBeGreaterThan(onDisk.length);
+    });
+
     it("CLI-E03 emit --cwd resolves <file> against the supplied directory", async () => {
       // Closes round-10 finding F2: emit advertises --cwd / --file in
       // the docs but the handler resolved <file> against process.cwd()
