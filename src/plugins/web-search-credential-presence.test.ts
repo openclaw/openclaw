@@ -502,7 +502,7 @@ describe("hasConfiguredWebSearchCredential", () => {
     const restrictiveCompatPlugins = {
       allow: ["some-other-plugin"],
       bundledDiscovery: "compat",
-    } as const;
+    } satisfies NonNullable<OpenClawConfig["plugins"]>;
 
     expect(
       hasConfiguredWebSearchCredential({
