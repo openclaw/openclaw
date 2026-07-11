@@ -3031,8 +3031,6 @@ async function runEmbeddedAgentInternal(
             });
             return handleRetryLimitExhaustion({
               message: breakerMessage,
-              userMessage:
-                "Request stopped after repeated idle timeouts before the model completed a response.",
               decision: breakerDecision,
               provider,
               model: modelId,
@@ -3933,6 +3931,7 @@ async function runEmbeddedAgentInternal(
               aborted,
               externalAbort,
               fallbackConfigured,
+              failoverCode: promptErrorDetails.code,
               failoverFailure: promptFailoverFailure,
               failoverReason: promptFailoverReason,
               harnessOwnsTransport: pluginHarnessOwnsTransport,
@@ -3974,6 +3973,7 @@ async function runEmbeddedAgentInternal(
                 aborted,
                 externalAbort,
                 fallbackConfigured,
+                failoverCode: promptErrorDetails.code,
                 failoverFailure: promptFailoverFailure,
                 failoverReason: promptFailoverReason,
                 harnessOwnsTransport: pluginHarnessOwnsTransport,

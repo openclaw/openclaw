@@ -28,6 +28,7 @@ import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
+  formatCliOutputError,
   parseCliOutput,
   type CliOutput,
   type CliStreamJsonOutputLimits,
@@ -841,15 +842,26 @@ function parseClaudeLiveJsonLine(
 }
 
 function createParsedOutputError(session: ClaudeLiveSession, output: CliOutput): FailoverError {
-  const message = output.errorText || "Claude CLI failed.";
+  const turn = session.currentTurn;
+  const message = formatCliOutputError(output, {
+    runId: turn?.diagnosticRefs.runId,
+    sessionId: turn?.diagnosticRefs.sessionId,
+  });
   const reason = classifyFailoverReason(message, { provider: session.providerId }) ?? "unknown";
-  const code = reason === "context_overflow" ? "cli_context_overflow" : undefined;
+  const code =
+    output.terminalFailure?.reason === "max_turns"
+      ? "cli_max_turns"
+      : reason === "context_overflow"
+        ? "cli_context_overflow"
+        : undefined;
   return new FailoverError(message, {
     reason,
     provider: session.providerId,
     model: session.modelId,
+    sessionId: turn?.diagnosticRefs.sessionId,
     status: resolveFailoverStatus(reason),
     code,
+    rawError: output.errorText,
   });
 }
 

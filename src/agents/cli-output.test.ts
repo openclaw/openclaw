@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
+  formatCliOutputError,
   parseCliJson,
   parseCliJsonl,
   parseCliOutput,
@@ -930,12 +931,16 @@ describe("parseCliJsonl", () => {
     });
   });
 
-  it("uses Claude error subtypes when result text is absent", () => {
+  it("preserves Claude max-turn terminal context for actionable run errors", () => {
     const result = parseCliJsonl(
       JSON.stringify({
         type: "result",
         subtype: "error_max_turns",
         session_id: "session-max-turns",
+        num_turns: 2,
+        stop_reason: "tool_use",
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (1)"],
       }),
       {
         command: "claude",
@@ -949,8 +954,23 @@ describe("parseCliJsonl", () => {
       text: "",
       sessionId: "session-max-turns",
       usage: undefined,
-      errorText: "Claude CLI result subtype error_max_turns.",
+      errorText: "Reached maximum number of turns (1)",
+      terminalFailure: {
+        reason: "max_turns",
+        limit: 1,
+      },
     });
+    expect(
+      formatCliOutputError(result!, {
+        runId: "run-max-turns",
+        sessionId: "openclaw-session-max-turns",
+      }),
+    ).toBe(
+      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+        "OpenClaw run: run-max-turns. OpenClaw session: openclaw-session-max-turns. " +
+        "Claude session: session-max-turns. Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+    );
   });
 });
 

@@ -14,7 +14,6 @@ import type { RetryLimitFailoverDecision } from "./failover-policy.js";
  */
 export function handleRetryLimitExhaustion(params: {
   message: string;
-  userMessage?: string;
   decision: RetryLimitFailoverDecision;
   provider: string;
   model: string;
@@ -37,7 +36,9 @@ export function handleRetryLimitExhaustion(params: {
   return {
     payloads: [
       {
-        text: `${params.userMessage ?? params.message} Please try again, or use /new to start a fresh session.`,
+        text:
+          "Request failed after repeated internal retries. " +
+          "Please try again, or use /new to start a fresh session.",
         isError: true,
       },
     ],
