@@ -592,10 +592,12 @@ struct OnboardingAISetupTests {
         let presentation = try #require(parseWizardDeviceCode([
             "code": AnyCodable("ABCD-1234"),
             "expiresInMinutes": AnyCodable(15),
+            "message": AnyCodable("Enter this code in your browser."),
         ]))
 
         #expect(presentation.code == "ABCD-1234")
         #expect(presentation.expiresInMinutes == 15)
+        #expect(presentation.message == "Enter this code in your browser.")
         #expect(parseWizardDeviceCode(["code": AnyCodable("")]) == nil)
         #expect(parseWizardDeviceCode([
             "code": AnyCodable("ABCD-1234"),

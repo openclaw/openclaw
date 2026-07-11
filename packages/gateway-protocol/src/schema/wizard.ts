@@ -65,6 +65,7 @@ const WizardDeviceCodeSchema = Type.Object(
   {
     code: NonEmptyString,
     expiresInMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1440 })),
+    message: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

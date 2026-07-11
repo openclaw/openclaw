@@ -96,9 +96,14 @@ describe("WizardSession", () => {
     expect(first.step).toMatchObject({
       type: "note",
       title: "Provider sign-in",
-      message: "Enter this one-time code in your browser.",
+      message:
+        "Enter this one-time code in your browser.\nCode: ABCD-1234\nCode expires in 15 minutes. Never share it.",
       externalUrl: "https://provider.example/device",
-      deviceCode: { code: "ABCD-1234", expiresInMinutes: 15 },
+      deviceCode: {
+        code: "ABCD-1234",
+        expiresInMinutes: 15,
+        message: "Enter this one-time code in your browser.",
+      },
     });
   });
 

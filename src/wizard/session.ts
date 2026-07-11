@@ -26,6 +26,7 @@ export type WizardStep = {
   deviceCode?: {
     code: string;
     expiresInMinutes?: number;
+    message?: string;
   };
 };
 
@@ -82,13 +83,21 @@ class WizardSessionPrompter implements WizardPrompter {
     expiresInMinutes?: number;
     message?: string;
   }): Promise<void> {
+    const fallbackMessage = [
+      params.message ?? "Enter this one-time code on the provider's sign-in page.",
+      `Code: ${params.code}`,
+      ...(params.expiresInMinutes
+        ? [`Code expires in ${params.expiresInMinutes} minutes. Never share it.`]
+        : []),
+    ].join("\n");
     await this.prompt({
       type: "note",
       title: params.title,
-      message: params.message,
+      message: fallbackMessage,
       deviceCode: {
         code: params.code,
         ...(params.expiresInMinutes ? { expiresInMinutes: params.expiresInMinutes } : {}),
+        ...(params.message ? { message: params.message } : {}),
       },
       executor: "client",
     });

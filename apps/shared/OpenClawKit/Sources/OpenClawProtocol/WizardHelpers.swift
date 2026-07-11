@@ -15,6 +15,7 @@ public struct WizardOption: Sendable {
 public struct WizardDeviceCodePresentation: Sendable {
     public let code: String
     public let expiresInMinutes: Int?
+    public let message: String?
 }
 
 public func parseWizardDeviceCode(
@@ -32,7 +33,10 @@ public func parseWizardDeviceCode(
         }
     default: nil
     }
-    return WizardDeviceCodePresentation(code: code, expiresInMinutes: expiresInMinutes)
+    return WizardDeviceCodePresentation(
+        code: code,
+        expiresInMinutes: expiresInMinutes,
+        message: raw?["message"]?.value as? String)
 }
 
 public func decodeWizardStep(_ raw: [String: AnyCodable]?) -> WizardStep? {

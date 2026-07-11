@@ -503,7 +503,7 @@ struct OnboardingAISetupView: View {
                     Text(title).font(.headline)
                 }
                 if let deviceCode {
-                    self.deviceCodeStep(deviceCode, message: step.message)
+                    self.deviceCodeStep(deviceCode)
                 } else if let message = step.message, !message.isEmpty {
                     ScrollView {
                         Text(message)
@@ -558,15 +558,12 @@ struct OnboardingAISetupView: View {
         }
     }
 
-    private func deviceCodeStep(
-        _ deviceCode: WizardDeviceCodePresentation,
-        message: String?) -> some View
-    {
+    private func deviceCodeStep(_ deviceCode: WizardDeviceCodePresentation) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Finish in your browser")
                     .font(.headline)
-                Text(message ?? "Enter this one-time code on the provider's sign-in page.")
+                Text(deviceCode.message ?? "Enter this one-time code on the provider's sign-in page.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
