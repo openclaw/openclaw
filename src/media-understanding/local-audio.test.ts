@@ -23,6 +23,33 @@ afterEach(async () => {
 });
 
 describe("local audio selection", () => {
+  it("expands home-directory shorthand in PATH entries", async () => {
+    const tempDir = await createTempDir();
+    const binDir = path.join(tempDir, "bin");
+    const modelPath = path.join(tempDir, "whisper.bin");
+    const commandPath = path.join(binDir, "whisper-cli");
+    await fs.mkdir(binDir);
+    await fs.writeFile(modelPath, "model");
+    await fs.writeFile(commandPath, "#!/bin/sh\n");
+    await fs.chmod(commandPath, 0o755);
+
+    const selection = await inspectLocalAudioSelection({
+      env: {
+        HOME: tempDir,
+        PATH: "~/bin",
+        WHISPER_CPP_MODEL: modelPath,
+      },
+      platform: process.platform,
+      arch: process.arch,
+      inspectLinkedLibraries: async () => null,
+    });
+
+    expect(selection.selected).toMatchObject({
+      id: "whisper-cli",
+      resolvedCommand: commandPath,
+    });
+  });
+
   it("does not rank Metal-capable whisper ahead of sherpa until a run observes Metal", async () => {
     const tempDir = await createTempDir();
     const modelPath = path.join(tempDir, "whisper.bin");

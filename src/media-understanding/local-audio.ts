@@ -135,6 +135,17 @@ function binaryNames(name: string, platform: NodeJS.Platform, env: NodeJS.Proces
   return [name, ...extensions.map((extension) => `${name}${extension}`)];
 }
 
+function expandHomeDir(value: string, env: NodeJS.ProcessEnv): string {
+  const trimmed = value.trim().replace(/^"(.*)"$/, "$1");
+  if (trimmed === "~") {
+    return env.HOME ?? trimmed;
+  }
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return env.HOME ? path.join(env.HOME, trimmed.slice(2)) : trimmed;
+  }
+  return trimmed;
+}
+
 async function findBinary(
   name: string,
   env: NodeJS.ProcessEnv,
@@ -162,7 +173,7 @@ async function findBinary(
     }
     for (const directory of (env.PATH ?? "").split(path.delimiter)) {
       for (const candidate of candidates) {
-        const fullPath = path.join(directory.replace(/^"(.*)"$/, "$1"), candidate);
+        const fullPath = path.join(expandHomeDir(directory, env), candidate);
         if (await isExecutable(fullPath, platform)) {
           return fullPath;
         }
