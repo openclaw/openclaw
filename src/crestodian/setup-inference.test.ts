@@ -3140,7 +3140,7 @@ describe("activateSetupInference", () => {
       "refresh-plugin-registry",
       "reload-active-registry",
     ]);
-    expect(transformConfig).toHaveBeenCalledOnce();
+    expect(transformConfig).not.toHaveBeenCalled();
     expect(transformConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         afterWrite: {
