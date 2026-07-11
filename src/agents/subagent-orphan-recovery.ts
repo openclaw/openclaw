@@ -44,6 +44,18 @@ const log = createSubsystemLogger("subagent-interrupted-resume");
 /** Delay before attempting recovery to let the gateway finish bootstrapping. */
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 
+/**
+ * Module-level (not per-scan) guard against two independent scheduleOrphanRecovery
+ * invocations resuming the same child session concurrently. Debounce only covers
+ * scheduling within ORPHAN_RECOVERY_DEBOUNCE_MS of each other; two triggers spaced
+ * further apart (e.g. cold-start restore and a later completion-retry failure) each
+ * get their own resumedSessionKeys/pendingStaleFinalizations closures and would
+ * otherwise both read entry.abortedLastRun as true and both call resumeOrphanedSession
+ * before either write clears the flag — each with its own crypto.randomUUID()
+ * idempotencyKey, so the gateway's own agent-call dedup cannot catch the duplicate.
+ */
+const sessionKeysWithRecoveryInFlight = new Set<string>();
+
 function isLegacyRestartInterruptedTimeout(
   runRecord: SubagentRunRecord,
   entry: SessionEntry | undefined,
@@ -402,47 +414,61 @@ export async function recoverOrphanedSubagentSessions(params: {
           continue;
         }
 
-        log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
+        if (sessionKeysWithRecoveryInFlight.has(childSessionKey)) {
+          // A different scheduleOrphanRecovery invocation (e.g. a cold-start
+          // scan and a later completion-retry-triggered scan) is already
+          // resuming this exact session. Skip rather than double-fire.
+          result.skipped++;
+          continue;
+        }
+        sessionKeysWithRecoveryInFlight.add(childSessionKey);
 
-        const messages = await readSessionMessagesAsync(
-          {
-            agentId: resolveAgentIdFromSessionKey(childSessionKey),
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
+        let resumeResult: { resumed: boolean; error?: string };
+        try {
+          log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
+
+          const messages = await readSessionMessagesAsync(
+            {
+              agentId: resolveAgentIdFromSessionKey(childSessionKey),
+              sessionEntry: entry,
+              sessionId: entry.sessionId,
+              sessionKey: childSessionKey,
+              storePath,
+            },
+            {
+              mode: "recent",
+              maxMessages: 200,
+              maxBytes: 1024 * 1024,
+            },
+          );
+          const lastHumanMessage = [...messages]
+            .toReversed()
+            .find((msg) => (msg as { role?: unknown } | null)?.role === "user");
+          const configChangeDetected = messages.some((msg) => {
+            if ((msg as { role?: unknown } | null)?.role !== "assistant") {
+              return false;
+            }
+            const text = extractMessageText(msg);
+            return typeof text === "string" && configChangePattern.test(text);
+          });
+
+          // Resume the session with the original task context.
+          // We intentionally do NOT clear abortedLastRun before attempting
+          // the resume — if callGateway fails (e.g. gateway still booting),
+          // the flag stays true so the next restart can retry.
+          resumeResult = await resumeOrphanedSession({
             sessionKey: childSessionKey,
-            storePath,
-          },
-          {
-            mode: "recent",
-            maxMessages: 200,
-            maxBytes: 1024 * 1024,
-          },
-        );
-        const lastHumanMessage = [...messages]
-          .toReversed()
-          .find((msg) => (msg as { role?: unknown } | null)?.role === "user");
-        const configChangeDetected = messages.some((msg) => {
-          if ((msg as { role?: unknown } | null)?.role !== "assistant") {
-            return false;
-          }
-          const text = extractMessageText(msg);
-          return typeof text === "string" && configChangePattern.test(text);
-        });
-
-        // Resume the session with the original task context.
-        // We intentionally do NOT clear abortedLastRun before attempting
-        // the resume — if callGateway fails (e.g. gateway still booting),
-        // the flag stays true so the next restart can retry.
-        const resumeResult = await resumeOrphanedSession({
-          sessionKey: childSessionKey,
-          task: runRecord.task,
-          lastHumanMessage: extractMessageText(lastHumanMessage),
-          configChangeHint: configChangeDetected
-            ? "\n\n[config changes from your previous run were already applied — do not re-modify openclaw.json or restart the gateway]"
-            : undefined,
-          originalRunId: runId,
-          originalRun: runRecord,
-        });
+            task: runRecord.task,
+            lastHumanMessage: extractMessageText(lastHumanMessage),
+            configChangeHint: configChangeDetected
+              ? "\n\n[config changes from your previous run were already applied — do not re-modify openclaw.json or restart the gateway]"
+              : undefined,
+            originalRunId: runId,
+            originalRun: runRecord,
+          });
+        } finally {
+          sessionKeysWithRecoveryInFlight.delete(childSessionKey);
+        }
 
         if (resumeResult.resumed) {
           resumedSessionKeys.add(childSessionKey);

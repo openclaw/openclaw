@@ -814,6 +814,48 @@ describe("subagent-orphan-recovery", () => {
     expect(sessions.updateSessionStore).toHaveBeenCalledOnce();
   });
 
+  it("does not double-resume the same session from two independent concurrent recovery scans", async () => {
+    // resumedSessionKeys is per-scheduleOrphanRecovery-invocation, not global —
+    // two independent triggers (e.g. cold-start restore and a later completion
+    // -retry-triggered scan) each get their own fresh Set. Both would read
+    // abortedLastRun as true and both attempt resume before either write clears
+    // it, unless a scan-independent guard exists. Pause readSessionMessagesAsync
+    // to hold the first scan mid-flight (past the abortedLastRun check, before
+    // the resume call) while the second scan runs concurrently against it.
+    mockSingleAbortedSession();
+    let releaseFirstScan: (() => void) | undefined;
+    const firstScanReachedReadMessages = new Promise<void>((resolveReached) => {
+      vi.mocked(sessionUtils.readSessionMessagesAsync).mockImplementationOnce(async () => {
+        resolveReached();
+        return await new Promise((resolve) => {
+          releaseFirstScan = () => resolve([]);
+        });
+      });
+    });
+    vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "new-run" } as never);
+
+    const activeRuns = createActiveRuns(createTestRunRecord());
+
+    const firstScan = recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
+    await firstScanReachedReadMessages;
+
+    // A second, fully independent scan (its own fresh resumedSessionKeys Set)
+    // starts while the first is still mid-flight and has not yet cleared
+    // abortedLastRun or called callGateway.
+    const secondScan = recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
+    const second = await secondScan;
+
+    expect(second.skipped).toBe(1);
+    expect(second.recovered).toBe(0);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+
+    releaseFirstScan?.();
+    const first = await firstScan;
+
+    expect(first.recovered).toBe(1);
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+  });
+
   it("finalizes interrupted runs with a readable failure after recovery retries are exhausted", async () => {
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {
