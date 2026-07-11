@@ -705,7 +705,6 @@ async function verifyCodexGuardianProbe(params: {
   const allowReview = assertGuardianReviewCompleted({
     events: allowResult.events,
     label: "allow probe",
-    requireEvents: false,
   });
   const allowStatus = findGuardianReviewStatus(allowResult.events);
   if (allowStatus === "denied") {

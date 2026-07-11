@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 // Test Live Codex Harness Docker tests cover test live codex harness docker script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -48,6 +49,39 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     expect(script).toContain("printf 'OPENAI_API_KEY=%s\\n' \"${OPENAI_API_KEY}\"");
     expect(script).toContain("printf 'CODEX_API_KEY=%s\\n' \"${CODEX_API_KEY:-$OPENAI_API_KEY}\"");
     expect(script.indexOf("OPENAI_API_KEY=%s")).toBeLessThan(script.indexOf("CODEX_API_KEY=%s"));
+  });
+
+  it("requires Guardian events only for native Codex auth by default", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+    const functionSource = script.match(
+      /resolve_codex_harness_require_guardian_events\(\) \{[\s\S]*?\n\}/u,
+    )?.[0];
+    expect(functionSource).toBeDefined();
+
+    const resolvePolicy = (authMode: string, explicitValue = "") =>
+      execFileSync(
+        "bash",
+        [
+          "-c",
+          `${functionSource}\nCODEX_HARNESS_AUTH_MODE="$1"\nOPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS="$2"\nresolve_codex_harness_require_guardian_events`,
+          "guardian-policy",
+          authMode,
+          explicitValue,
+        ],
+        { encoding: "utf8" },
+      );
+    expect(resolvePolicy("api-key")).toBe("0");
+    expect(resolvePolicy("codex-auth")).toBe("1");
+    expect(resolvePolicy("api-key", "1")).toBe("1");
+    expect(resolvePolicy("codex-auth", "0")).toBe("0");
+    expect(script.indexOf('source "$PROFILE_FILE"')).toBeLessThan(
+      script.indexOf(
+        'CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS="$(resolve_codex_harness_require_guardian_events)"',
+      ),
+    );
+    expect(script).toContain(
+      '-e OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS="$CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS"',
+    );
   });
 
   it("keeps API-key runs on the ephemeral Docker home", () => {
