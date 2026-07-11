@@ -1,6 +1,7 @@
 // JSON-only task command helpers.
 // These paths avoid maintenance reconciliation so short-lived JSON CLI processes stay read-only and exit cleanly.
 
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
@@ -34,11 +35,6 @@ type TasksAuditJsonArgs = {
   limit?: number;
 };
 
-function normalizeFilter(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function toSystemAuditFindings(params: {
   severityFilter?: TaskSystemAuditSeverity;
   codeFilter?: TaskSystemAuditCode;
@@ -57,8 +53,8 @@ function toSystemAuditFindings(params: {
 }
 
 function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
-  const runtimeFilter = normalizeFilter(opts.runtime);
-  const statusFilter = normalizeFilter(opts.status);
+  const runtimeFilter = normalizeOptionalString(opts.runtime);
+  const statusFilter = normalizeOptionalString(opts.status);
   const tasks = listTaskJsonRecords().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
@@ -77,8 +73,10 @@ function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
 }
 
 function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
-  const severityFilter = normalizeFilter(opts.severity) as TaskSystemAuditSeverity | undefined;
-  const codeFilter = normalizeFilter(opts.code) as TaskSystemAuditCode | undefined;
+  const severityFilter = normalizeOptionalString(opts.severity) as
+    | TaskSystemAuditSeverity
+    | undefined;
+  const codeFilter = normalizeOptionalString(opts.code) as TaskSystemAuditCode | undefined;
   const result = toSystemAuditFindings({
     severityFilter,
     codeFilter,

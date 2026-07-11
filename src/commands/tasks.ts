@@ -58,11 +58,6 @@ const SESSION_REGISTRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 const info = theme.info;
 
-function normalizeFilter(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function formatTaskLookupMiss(lookup: string): string {
   return formatLookupMiss({
     noun: "Task",
@@ -354,8 +349,8 @@ export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
 ) {
-  const runtimeFilter = normalizeFilter(opts.runtime);
-  const statusFilter = normalizeFilter(opts.status);
+  const runtimeFilter = normalizeOptionalString(opts.runtime);
+  const statusFilter = normalizeOptionalString(opts.status);
   const tasks = reconcileInspectableTasks().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
@@ -529,8 +524,10 @@ export async function tasksAuditCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
-  const severityFilter = normalizeFilter(opts.severity) as TaskSystemAuditSeverity | undefined;
-  const codeFilter = normalizeFilter(opts.code) as TaskSystemAuditCode | undefined;
+  const severityFilter = normalizeOptionalString(opts.severity) as
+    | TaskSystemAuditSeverity
+    | undefined;
+  const codeFilter = normalizeOptionalString(opts.code) as TaskSystemAuditCode | undefined;
   const auditResult = toSystemAuditFindings({
     severityFilter,
     codeFilter,
