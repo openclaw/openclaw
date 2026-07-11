@@ -62,6 +62,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
 
 export type CodexAppServerClientOptions = {
   startOptions?: CodexAppServerStartOptions;
+  pluginConfig?: unknown;
   timeoutMs?: number;
   authProfileId?: string | null;
   agentDir?: string;
@@ -120,6 +121,7 @@ async function resolveCodexAppServerClientStartContext(
     agentDir,
     authProfileId: usesNativeAuth ? null : authProfileId,
     config: options?.config,
+    pluginConfig: options?.pluginConfig,
     ...(authProfileStore ? { authProfileStore } : {}),
   });
   return { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions };

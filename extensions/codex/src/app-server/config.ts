@@ -80,6 +80,13 @@ export type CodexComputerUseConfig = {
   enabled?: boolean;
   autoInstall?: boolean;
   marketplaceDiscoveryTimeoutMs?: number;
+  liveTestTimeoutMs?: number;
+  toolCallTimeoutMs?: number;
+  healthCheckEnabled?: boolean;
+  healthCheckIntervalMinutes?: number;
+  pluginCacheMode?: "shared" | "independent";
+  strictReadiness?: boolean;
+  autoRepair?: boolean;
   marketplaceSource?: string;
   marketplacePath?: string;
   marketplaceName?: string;
@@ -91,6 +98,13 @@ export type ResolvedCodexComputerUseConfig = {
   enabled: boolean;
   autoInstall: boolean;
   marketplaceDiscoveryTimeoutMs: number;
+  liveTestTimeoutMs: number;
+  toolCallTimeoutMs: number;
+  healthCheckEnabled: boolean;
+  healthCheckIntervalMinutes: 30 | 60 | 120 | 240;
+  pluginCacheMode: "shared" | "independent";
+  strictReadiness: boolean;
+  autoRepair: boolean;
   pluginName: string;
   mcpServerName: string;
   marketplaceSource?: string;
@@ -304,6 +318,13 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "enabled",
   "autoInstall",
   "marketplaceDiscoveryTimeoutMs",
+  "liveTestTimeoutMs",
+  "toolCallTimeoutMs",
+  "healthCheckEnabled",
+  "healthCheckIntervalMinutes",
+  "pluginCacheMode",
+  "strictReadiness",
+  "autoRepair",
   "marketplaceSource",
   "marketplacePath",
   "marketplaceName",
@@ -352,6 +373,9 @@ export const CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS = [
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES = 60;
 const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket", "unix"]);
@@ -367,6 +391,13 @@ const codexAppServerApprovalPolicySchema = z.preprocess(
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
+const codexComputerUseHealthIntervalSchema = z.union([
+  z.literal(30),
+  z.literal(60),
+  z.literal(120),
+  z.literal(240),
+]);
+const codexComputerUsePluginCacheModeSchema = z.enum(["shared", "independent"]);
 const codexPluginDestructivePolicySchema = z.union([
   z.boolean(),
   z.literal("auto"),
@@ -472,6 +503,13 @@ const codexPluginConfigSchema = z
         enabled: z.boolean().optional(),
         autoInstall: z.boolean().optional(),
         marketplaceDiscoveryTimeoutMs: z.number().positive().optional(),
+        liveTestTimeoutMs: z.number().positive().optional(),
+        toolCallTimeoutMs: z.number().positive().optional(),
+        healthCheckEnabled: z.boolean().optional(),
+        healthCheckIntervalMinutes: codexComputerUseHealthIntervalSchema.optional(),
+        pluginCacheMode: codexComputerUsePluginCacheModeSchema.optional(),
+        strictReadiness: z.boolean().optional(),
+        autoRepair: z.boolean().optional(),
         marketplaceSource: z.string().optional(),
         marketplacePath: z.string().optional(),
         marketplaceName: z.string().optional(),
@@ -955,6 +993,43 @@ export function resolveCodexComputerUseConfig(
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS,
   );
+  const liveTestTimeoutMs = normalizePositiveNumber(
+    params.overrides?.liveTestTimeoutMs ??
+      config.liveTestTimeoutMs ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS),
+    DEFAULT_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS,
+  );
+  const toolCallTimeoutMs = normalizePositiveNumber(
+    params.overrides?.toolCallTimeoutMs ??
+      config.toolCallTimeoutMs ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS),
+    DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS,
+  );
+  const healthCheckIntervalMinutes = normalizeComputerUseHealthCheckIntervalMinutes(
+    params.overrides?.healthCheckIntervalMinutes ??
+      config.healthCheckIntervalMinutes ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES),
+  );
+  const healthCheckEnabled =
+    params.overrides?.healthCheckEnabled ??
+    config.healthCheckEnabled ??
+    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED) ??
+    false;
+  const pluginCacheMode =
+    normalizeComputerUsePluginCacheMode(params.overrides?.pluginCacheMode) ??
+    normalizeComputerUsePluginCacheMode(config.pluginCacheMode) ??
+    normalizeComputerUsePluginCacheMode(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE) ??
+    "independent";
+  const strictReadiness =
+    params.overrides?.strictReadiness ??
+    config.strictReadiness ??
+    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS) ??
+    false;
+  const autoRepair =
+    params.overrides?.autoRepair ??
+    config.autoRepair ??
+    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR) ??
+    false;
   const enabled =
     params.overrides?.enabled ??
     config.enabled ??
@@ -965,6 +1040,13 @@ export function resolveCodexComputerUseConfig(
     enabled,
     autoInstall,
     marketplaceDiscoveryTimeoutMs,
+    liveTestTimeoutMs,
+    toolCallTimeoutMs,
+    healthCheckEnabled,
+    healthCheckIntervalMinutes,
+    pluginCacheMode,
+    strictReadiness,
+    autoRepair,
     pluginName:
       readNonEmptyString(params.overrides?.pluginName) ??
       readNonEmptyString(config.pluginName) ??
@@ -979,6 +1061,16 @@ export function resolveCodexComputerUseConfig(
     ...(marketplacePath ? { marketplacePath } : {}),
     ...(marketplaceName ? { marketplaceName } : {}),
   };
+}
+
+function normalizeComputerUseHealthCheckIntervalMinutes(value: unknown): 30 | 60 | 120 | 240 {
+  return value === 30 || value === 60 || value === 120 || value === 240
+    ? value
+    : DEFAULT_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES;
+}
+
+function normalizeComputerUsePluginCacheMode(value: unknown): "shared" | "independent" | null {
+  return value === "shared" || value === "independent" ? value : null;
 }
 
 export function codexAppServerStartOptionsKey(

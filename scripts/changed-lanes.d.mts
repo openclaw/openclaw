@@ -1,6 +1,7 @@
 export type ChangedLane =
   | "core"
   | "coreTests"
+  | "ui"
   | "extensions"
   | "extensionTests"
   | "scripts"

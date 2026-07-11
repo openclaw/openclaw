@@ -12,7 +12,8 @@ const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
 const DOCS_PATH_RE = /^(?:docs\/|README\.md$|AGENTS\.md$|.*\.mdx?$)/u;
 const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
 const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
-const CORE_PATH_RE = /^(?:src\/|ui\/|packages\/)/u;
+const CORE_PATH_RE = /^(?:src\/|packages\/)/u;
+const UI_PATH_RE = /^(?:ui\/|tsconfig\.ui\.json$)/u;
 const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
 const TEST_ROOT_TYPECHECK_PATH_RE =
@@ -58,7 +59,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "package.json",
 ]);
 
-/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "scripts" | "testRoot" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
+/** @typedef {"core" | "coreTests" | "ui" | "extensions" | "extensionTests" | "scripts" | "testRoot" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
 
 /**
  * @typedef {{
@@ -87,6 +88,7 @@ export function createEmptyChangedLanes() {
   return {
     core: false,
     coreTests: false,
+    ui: false,
     extensions: false,
     extensionTests: false,
     scripts: false,
@@ -214,6 +216,18 @@ export function detectChangedLanes(changedPaths, options = {}) {
         lanes.core = true;
         lanes.coreTests = true;
         reasons.push(`${changedPath}: core production`);
+      }
+      continue;
+    }
+
+    if (UI_PATH_RE.test(changedPath)) {
+      if (isChangedLaneTestPath(changedPath)) {
+        lanes.coreTests = true;
+        reasons.push(`${changedPath}: UI test`);
+      } else {
+        lanes.ui = true;
+        lanes.coreTests = true;
+        reasons.push(`${changedPath}: UI production`);
       }
       continue;
     }
