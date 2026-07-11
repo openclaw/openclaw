@@ -1,0 +1,14 @@
+"CFBundleDisplayName" = "OpenClaw";
+"NSLocalNetworkUsageDescription" = "OpenClaw hittar och ansluter till din OpenClaw Gateway i det lokala nätverket.";
+"NSCameraUsageDescription" = "OpenClaw kan ta bilder eller korta videoklipp när du begär det via gatewayen.";
+"NSCalendarsUsageDescription" = "OpenClaw använder dina kalendrar för att visa händelser och schemainformation när du aktiverar kalenderåtkomst.";
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw använder dina kalendrar för att visa händelser och schemainformation när du aktiverar kalenderåtkomst.";
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw använder dina kalendrar för att lägga till händelser när du aktiverar kalenderåtkomst.";
+"NSContactsUsageDescription" = "OpenClaw använder dina kontakter så att du kan söka efter och hänvisa till personer när du använder assistenten.";
+"NSLocationWhenInUseUsageDescription" = "OpenClaw använder din plats när du tillåter platsdelning.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw kan dela din plats i bakgrunden när du aktiverar Alltid.";
+"NSMicrophoneUsageDescription" = "OpenClaw använder mikrofonen för realtidschatt, röstaktivering, tryck-och-prata och röstmeddelanden.";
+"NSMotionUsageDescription" = "OpenClaw kan använda rörelsedata för att stödja enhetsmedvetna interaktioner och automatiseringar.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw låter din assistent läsa bilder som du tillåter och låter dig välja bilder att dela.";
+"NSRemindersFullAccessUsageDescription" = "OpenClaw använder dina påminnelser för att lista, lägga till och slutföra uppgifter när du aktiverar åtkomst till påminnelser.";
+"NSSpeechRecognitionUsageDescription" = "OpenClaw använder taligenkänning på enheten för Talk-läge och röstaktivering.";

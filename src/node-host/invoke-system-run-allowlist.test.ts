@@ -4,7 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveExecApprovalsFromFile, type ExecCommandSegment } from "../infra/exec-approvals.js";
+import {
+  resolveExecApprovalsFromFile,
+  resolvePlannedSegmentArgv,
+  type ExecCommandSegment,
+} from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
@@ -288,9 +292,18 @@ describe("resolveSystemRunExecArgv", () => {
         env,
       });
 
+      const [candidate] = authorizationPlan.groups[0]?.candidates ?? [];
+      if (!candidate) {
+        throw new Error("expected a safe-bin authorization candidate");
+      }
+      const plannedArgv = resolvePlannedSegmentArgv(candidate.sourceSegment);
+      if (!plannedArgv) {
+        throw new Error("expected a safe-bin execution plan");
+      }
+
       expect(result).not.toBeNull();
       expect(result?.[0]).toBe("/bin/sh");
-      expect(result?.[2]).toBe("/usr/bin/head -c 16");
+      expect(result?.[2]).toBe(plannedArgv.join(" "));
     },
   );
 });

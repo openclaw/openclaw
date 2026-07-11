@@ -1,7 +1,9 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCardSurface
@@ -11,55 +13,66 @@ import ai.openclaw.app.ui.mobileTextSecondary
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /** Renders chat history newest-first while preserving stable scroll behavior during streaming. */
 @Composable
-fun ChatMessageListCard(
+internal fun ChatMessageListCard(
+  sessionKey: String,
   messages: List<ChatMessage>,
   historyLoading: Boolean,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
   healthOk: Boolean,
+  gatewayOffline: Boolean,
   modifier: Modifier = Modifier,
+  outboxItems: List<ChatOutboxItem> = emptyList(),
+  onRetryOutbox: (String) -> Unit = {},
+  onDeleteOutbox: (String) -> Unit = {},
+  onReplyMessage: (String) -> Unit = {},
+  speechState: MessageSpeechState? = null,
+  onToggleListen: ((String, String) -> Unit)? = null,
 ) {
-  val listState = rememberLazyListState()
   val timeline =
-    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText) {
+    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText, outboxItems) {
       buildChatTimeline(
         messages = messages,
         pendingRunCount = pendingRunCount,
         pendingToolCalls = pendingToolCalls,
         streamingAssistantText = streamingAssistantText,
+        outboxItems = outboxItems,
       )
     }
-
-  LaunchedEffect(timeline.scrollTargetIndex, timeline.items.size, pendingRunCount, pendingToolCalls.size) {
-    timeline.scrollTargetIndex?.let { index ->
-      listState.animateScrollToItem(index = index)
-    }
-  }
+  val readerScroll =
+    rememberChatReaderScrollController(
+      sessionKey = sessionKey,
+      timeline = timeline,
+      historyLoading = historyLoading,
+    )
 
   Box(modifier = modifier.fillMaxWidth()) {
     LazyColumn(
       modifier = Modifier.fillMaxSize(),
-      state = listState,
+      state = readerScroll.listState,
       reverseLayout = true,
       verticalArrangement = Arrangement.spacedBy(10.dp),
       contentPadding =
@@ -68,7 +81,19 @@ fun ChatMessageListCard(
     ) {
       itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
         when (item) {
-          is ChatTimelineItem.Message -> ChatMessageBubble(message = item.message)
+          is ChatTimelineItem.Message ->
+            ChatMessageBubble(
+              message = item.message,
+              onReplyMessage = onReplyMessage,
+              speechState = speechState,
+              onToggleListen = onToggleListen,
+            )
+          is ChatTimelineItem.OutboxCommand ->
+            ChatOutboxBubble(
+              item = item.item,
+              onRetry = { onRetryOutbox(item.item.id) },
+              onDelete = { onDeleteOutbox(item.item.id) },
+            )
           is ChatTimelineItem.PendingTools -> ChatPendingToolsBubble(toolCalls = item.toolCalls)
           is ChatTimelineItem.StreamingAssistant -> ChatStreamingAssistantBubble(text = item.text)
           ChatTimelineItem.Thinking -> ChatTypingIndicatorBubble()
@@ -77,10 +102,30 @@ fun ChatMessageListCard(
     }
 
     if (timeline.items.isEmpty()) {
-      if (historyLoading) {
+      if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
         LoadingChatHint(modifier = Modifier.align(Alignment.Center))
       } else {
         EmptyChatHint(modifier = Modifier.align(Alignment.Center), healthOk = healthOk)
+      }
+    }
+
+    if (readerScroll.showJumpToLatest) {
+      Surface(
+        onClick = readerScroll.jumpToLatest,
+        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+        shape = RoundedCornerShape(999.dp),
+        color = mobileCardSurface.copy(alpha = 0.96f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, mobileBorder),
+        shadowElevation = 6.dp,
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = mobileText)
+          Text("Jump to latest", style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileText)
+        }
       }
     }
   }

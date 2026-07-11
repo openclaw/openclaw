@@ -132,12 +132,14 @@ describe("createCopilotToolBridge", () => {
 
   it("forwards supported fields to injected createOpenClawCodingTools", async () => {
     const controller = new AbortController();
+    const computerContextEpoch = { value: 0 };
     const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
 
     await createCopilotToolBridge({
       abortSignal: controller.signal,
       agentDir: "/agent",
       agentId: "agent-1",
+      computerContextEpoch,
       createOpenClawCodingTools,
       cwd: "/workspace/task",
       modelId: "gpt-4o",
@@ -156,6 +158,7 @@ describe("createCopilotToolBridge", () => {
         abortSignal: controller.signal,
         agentDir: "/agent",
         agentId: "agent-1",
+        computerContextEpoch,
         cwd: "/workspace/task",
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
@@ -182,6 +185,29 @@ describe("createCopilotToolBridge", () => {
     expect(result.sourceTools).toEqual(sourceTools);
     expect(result.sdkTools).toHaveLength(2);
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a", "tool-b"]);
+  });
+
+  it("preserves direct-only Crestodian through the exact Copilot allowlist", async () => {
+    const crestodianTool = makeTool({
+      name: "crestodian",
+      catalogMode: "direct-only",
+    } as never);
+
+    const result = await createCopilotToolBridge({
+      agentId: "crestodian",
+      attemptParams: {
+        runId: "crestodian-turn-1",
+        sessionKey: "agent:crestodian:main",
+        toolsAllow: ["crestodian"],
+      } as never,
+      createOpenClawCodingTools: async () => [crestodianTool],
+      modelId: "gpt-4.1",
+      modelProvider: "github-copilot",
+      sessionId: "crestodian-session",
+    });
+
+    expect(result.sourceTools).toEqual([crestodianTool]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["crestodian"]);
   });
 
   it("compacts the Copilot tool surface behind tool_search controls when enabled", async () => {
@@ -515,6 +541,7 @@ describe("createCopilotToolBridge", () => {
           runId: "run-1",
           config,
           onToolOutcome,
+          messageActionTurnCapability: "turn-capability-1",
         } as never,
         createOpenClawCodingTools,
         modelId: "gpt-4o",
@@ -527,6 +554,7 @@ describe("createCopilotToolBridge", () => {
       expect(opts.runId).toBe("run-1");
       expect(opts.config).toBe(config);
       expect(opts.onToolOutcome).toBe(onToolOutcome);
+      expect(opts.messageActionTurnCapability).toBe("turn-capability-1");
     });
 
     it("prefers the unscoped toolAuthProfileStore when building OpenClaw tools", async () => {
@@ -690,6 +718,27 @@ describe("createCopilotToolBridge", () => {
       // runtimeToolAllowlist; consumers (PI plugin tools) read the
       // renamed key, so the bridge must surface the renamed shape too.
       expect(opts.runtimeToolAllowlist).toEqual(["read", "edit"]);
+    });
+
+    it("forwards the native conversation identity from attemptParams", async () => {
+      const { createOpenClawCodingTools, getOpts } = captureCall();
+
+      await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          chatId: "oc_native_chat",
+          chatType: "direct",
+        } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(getOpts()).toMatchObject({
+        chatType: "direct",
+        nativeChannelId: "oc_native_chat",
+      });
     });
 
     it("onYield routes to sessionRef.current.abort() and invokes onYieldDetected when the live session is bound", async () => {
@@ -1184,6 +1233,24 @@ describe("createCopilotToolBridge", () => {
         sessionId: "session-1",
       });
       expect(result.sourceTools.map((tool) => tool.name).toSorted()).toEqual(["edit", "read"]);
+    });
+
+    it("does not discard lean-mode overrides after tool construction", async () => {
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          config: {
+            agents: { defaults: { experimental: { localModelLean: true } } },
+            tools: { alsoAllow: ["image_generate"] },
+          },
+        } as never,
+        createOpenClawCodingTools: async () => [makeTool({ name: "image_generate" })],
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["image_generate"]);
     });
 
     it("keeps plugin tools for plugin group allowlists", async () => {

@@ -1,9 +1,13 @@
 // Imessage tests cover monitor.media policy plugin behavior.
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { stageIMessageAttachments } from "./monitor/media-staging.js";
+import {
+  formatIMessageInboundMediaBody,
+  resolveIMessageInboundMediaInput,
+} from "./monitor/monitor-provider.js";
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -52,8 +56,14 @@ vi.mock("./monitor/media-staging.js", () => ({
 }));
 
 describe("iMessage monitor attachment policy", () => {
+  beforeEach(() => {
+    createIMessageRpcClientMock.mockReset();
+    stageIMessageAttachmentsMock.mockReset();
+    readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  });
+
   it("does not stage local attachments for messages dropped by inbound policy", async () => {
-    stageIMessageAttachmentsMock.mockResolvedValue([]);
+    stageIMessageAttachmentsMock.mockResolvedValue({ attachments: [], unavailableCount: 0 });
     readChannelAllowFromStoreMock.mockResolvedValue([]);
 
     const attachmentPath = "/Users/openclaw/Library/Messages/Attachments/AA/BB/photo.heic";
@@ -114,5 +124,61 @@ describe("iMessage monitor attachment policy", () => {
 
     await vi.waitFor(() => expect(readChannelAllowFromStoreMock).toHaveBeenCalled());
     expect(stageIMessageAttachmentsMock).not.toHaveBeenCalled();
+  });
+
+  it("admits attachment-only messages that are marked missing", async () => {
+    const attachment = {
+      original_path: "/Users/openclaw/Library/Messages/Attachments/missing.heic",
+      mime_type: "image/heic",
+      missing: true,
+    };
+    expect(
+      resolveIMessageInboundMediaInput({
+        messageText: "",
+        attachments: [attachment],
+        effectiveAttachmentRoots: [],
+      }),
+    ).toEqual({
+      bodyText: "<media:image>",
+      mediaPlaceholder: "<media:image>",
+      mediaCandidates: [attachment],
+      rawMediaAttachments: [],
+    });
+  });
+
+  it("uses the first materialized attachment type when earlier media is unavailable", () => {
+    const missingImage = {
+      original_path: "/Users/openclaw/Library/Messages/Attachments/missing.heic",
+      mime_type: "image/heic",
+      missing: true,
+    };
+    const availableDocument = {
+      original_path: "/Users/openclaw/Library/Messages/Attachments/report.pdf",
+      mime_type: "application/pdf",
+      missing: false,
+    };
+
+    expect(
+      resolveIMessageInboundMediaInput({
+        messageText: "",
+        attachments: [missingImage, availableDocument],
+        effectiveAttachmentRoots: ["/Users/openclaw/Library/Messages/Attachments"],
+      }),
+    ).toMatchObject({
+      bodyText: "<media:document>",
+      mediaPlaceholder: "<media:document>",
+      mediaCandidates: [missingImage, availableDocument],
+      rawMediaAttachments: [
+        { path: availableDocument.original_path, contentType: "application/pdf" },
+      ],
+    });
+    expect(
+      formatIMessageInboundMediaBody({
+        messageText: "",
+        optimisticPlaceholder: "<media:image>",
+        mediaAttachments: [{ contentType: "application/pdf" }],
+        unavailableCount: 1,
+      }),
+    ).toBe("<media:document>\n\n[imessage attachment unavailable]");
   });
 });

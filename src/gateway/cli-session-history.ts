@@ -2,6 +2,7 @@
 // Augments local chat history with bound external Claude CLI transcripts.
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import {
   type ClaudeCliFallbackSeed,
   CLAUDE_CLI_PROVIDER,
@@ -30,7 +31,8 @@ export function augmentChatHistoryWithCliSessionImports(params: {
   localMessages: unknown[];
   homeDir?: string;
 }): unknown[] {
-  const cliSessionId = resolveClaudeCliBindingSessionId(params.entry);
+  const cliSessionBinding = getCliSessionBinding(params.entry, CLAUDE_CLI_PROVIDER);
+  const cliSessionId = cliSessionBinding?.sessionId;
   if (!cliSessionId) {
     return params.localMessages;
   }
@@ -48,6 +50,8 @@ export function augmentChatHistoryWithCliSessionImports(params: {
   const importedMessages = readClaudeCliSessionMessages({
     cliSessionId,
     homeDir: params.homeDir,
+    localSessionId: params.entry?.sessionId,
+    reseedReceipt: cliSessionBinding.reseedReceipt,
   });
   return mergeImportedChatHistoryMessages({
     localMessages: params.localMessages,

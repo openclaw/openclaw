@@ -521,6 +521,16 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
   return { found: true, value: current };
 }
 
+function formatConfigUnsetMissingPathMessage(params: {
+  path: string;
+  runtimeOnly: boolean;
+}): string {
+  if (params.runtimeOnly) {
+    return `Config path not found in authored config: ${params.path}. It only exists after runtime defaults are applied, so there is nothing for config unset to remove. Use ${formatCliCommand("openclaw config set <path> <value>")} to override the inherited value.`;
+  }
+  return `Config path not found: ${params.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`;
+}
+
 type JsonSchemaRecord = {
   type?: unknown;
   properties?: unknown;
@@ -943,7 +953,8 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
   return snapshot;
 }
 
-function parseRequiredPath(path: string): PathSegment[] {
+/** Parse and validate the exact path grammar accepted by config set/get/unset. */
+export function parseConfigSetPath(path: string): string[] {
   const parsedPath = parsePath(path);
   if (parsedPath.length === 0) {
     throw new Error("Path is empty.");
@@ -1400,7 +1411,7 @@ function buildValueAssignmentOperation(params: {
 function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperation[] {
   const operations: ConfigSetOperation[] = [];
   for (const [index, entry] of entries.entries()) {
-    const path = parseRequiredPath(entry.path);
+    const path = parseConfigSetPath(entry.path);
     if (entry.ref !== undefined) {
       const ref = parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`);
       operations.push(
@@ -1485,7 +1496,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
 }
 
 function parseReplacePaths(paths: string[] | undefined): PathSegment[][] {
-  return (paths ?? []).map((path) => parseRequiredPath(path));
+  return (paths ?? []).map((path) => parseConfigSetPath(path));
 }
 
 function pathKey(path: PathSegment[]): string {
@@ -1639,7 +1650,7 @@ function buildSingleSetOperations(params: {
   opts: ConfigSetOptions;
 }): ConfigSetOperation[] {
   const pathProvided = typeof params.path === "string" && params.path.trim().length > 0;
-  const parsedPath = pathProvided ? parseRequiredPath(params.path as string) : null;
+  const parsedPath = pathProvided ? parseConfigSetPath(params.path as string) : null;
   const strictJson = Boolean(params.opts.strictJson || params.opts.json);
   const modeResolution = resolveConfigSetMode({
     hasBatchMode: false,
@@ -2425,7 +2436,7 @@ export async function runConfigPatch(opts: {
 export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const parsedPath = parseRequiredPath(opts.path);
+    const parsedPath = parseConfigSetPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
     const redacted = redactConfigObject(snapshot.config);
     const res = getAtPath(redacted, parsedPath);
@@ -2471,7 +2482,7 @@ export async function runConfigUnset(opts: {
     if (cliOptions.json && !cliOptions.dryRun) {
       throw new Error("--json can only be used with --dry-run.");
     }
-    const parsedPath = parseRequiredPath(opts.path);
+    const parsedPath = parseConfigSetPath(opts.path);
     const autoManagedUnsetTargets = findAutoManagedMetaUnsetTargets(parsedPath);
     if (autoManagedUnsetTargets.length > 0) {
       throw new Error(formatAutoManagedMetaError(autoManagedUnsetTargets));
@@ -2486,6 +2497,11 @@ export async function runConfigUnset(opts: {
     );
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
+      const runtimeOnly = getAtPath(snapshot.runtimeConfig, parsedPath).found;
+      const missingPathMessage = formatConfigUnsetMissingPathMessage({
+        path: opts.path,
+        runtimeOnly,
+      });
       if (cliOptions.dryRun && cliOptions.json) {
         throw new ConfigSetDryRunValidationError({
           ok: false,
@@ -2502,16 +2518,14 @@ export async function runConfigUnset(opts: {
           errors: [
             {
               kind: "missing-path",
-              message: `Config path not found: ${opts.path}. Nothing was changed.`,
+              message: runtimeOnly
+                ? missingPathMessage
+                : `Config path not found: ${opts.path}. Nothing was changed.`,
             },
           ],
         });
       }
-      runtime.error(
-        danger(
-          `Config path not found: ${opts.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`,
-        ),
-      );
+      runtime.error(danger(missingPathMessage));
       runtime.exit(1);
       return;
     }
@@ -2542,7 +2556,7 @@ export async function runConfigUnset(opts: {
   }
 }
 
-export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
+async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const snapshot = await readConfigFileSnapshot();
@@ -2567,7 +2581,7 @@ async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
   return schema;
 }
 
-export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
+async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     writeRuntimeJson(runtime, await buildCliConfigSchema());
@@ -2577,7 +2591,7 @@ export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   }
 }
 
-export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
+async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
 

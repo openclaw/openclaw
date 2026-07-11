@@ -35,6 +35,25 @@ describe("readResponseTextSnippet", () => {
     expect(canceled).toBe(true);
   });
 
+  it("does not split surrogate pairs when truncating text snippets", async () => {
+    await expect(readResponseTextSnippet(new Response("abc🤖tail"), { maxChars: 4 })).resolves.toBe(
+      "abc... [truncated]",
+    );
+  });
+
+  it("drops partial UTF-8 characters when byte-capped snippets truncate a stream", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("ab" + String.fromCodePoint(0x1f600) + "cd"));
+      },
+      cancel() {},
+    });
+
+    await expect(
+      readResponseTextSnippet(new Response(stream), { maxBytes: 3, maxChars: 100 }),
+    ).resolves.toBe("ab... [truncated]");
+  });
+
   it("cancels snippet body reads when the caller signal aborts", async () => {
     let canceled = false;
     const response = stallingResponse(() => {

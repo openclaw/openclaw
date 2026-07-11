@@ -25,6 +25,12 @@ describe("extractToolErrorMessage", () => {
     expect(extractToolErrorMessage({ details: { status: "ok" } })).toBeUndefined();
   });
 
+  it("keeps text-only errors classified by the agent-core event", () => {
+    expect(
+      extractToolErrorMessage({ content: [{ type: "text", text: "plugin execution failed" }] }),
+    ).toBe("plugin execution failed");
+  });
+
   it("keeps error-like status values", () => {
     expect(extractToolErrorMessage({ details: { status: "failed" } })).toBe("failed");
     expect(extractToolErrorMessage({ details: { status: "timeout" } })).toBe("timeout");
@@ -92,6 +98,54 @@ describe("extractToolErrorMessage", () => {
         },
       }),
     ).toBe("INVALID_REQUEST");
+  });
+
+  it("preserves structured diagnostic tool error codes through sanitization", () => {
+    const sanitized = sanitizeToolResult({
+      details: {
+        status: "failed",
+        error: {
+          code: "SYSTEM_RUN_DENIED",
+          message: "approval required",
+        },
+      },
+    }) as { details: { error: { code: string; message: string } } };
+
+    expect(sanitized.details.error.code).toBe("SYSTEM_RUN_DENIED");
+    expect(extractToolErrorCode(sanitized)).toBe("SYSTEM_RUN_DENIED");
+  });
+
+  it("preserves structured invalid-request tool error codes through sanitization", () => {
+    const sanitized = sanitizeToolResult({
+      details: {
+        status: "failed",
+        nodeError: {
+          code: "INVALID_REQUEST",
+          message: "approval expired",
+        },
+      },
+    }) as { details: { nodeError: { code: string; message: string } } };
+
+    expect(sanitized.details.nodeError.code).toBe("INVALID_REQUEST");
+    expect(extractToolErrorCode(sanitized)).toBe("INVALID_REQUEST");
+  });
+
+  it("preserves direct structured tool error codes through sanitization", () => {
+    const detailsCode = sanitizeToolResult({
+      details: {
+        status: "failed",
+        code: "output_limit_exceeded",
+      },
+    }) as { details: { code: string } };
+    const rootCode = sanitizeToolResult({
+      status: "failed",
+      code: "output_limit_exceeded",
+    }) as { code: string };
+
+    expect(detailsCode.details.code).toBe("output_limit_exceeded");
+    expect(extractToolErrorCode(detailsCode)).toBe("output_limit_exceeded");
+    expect(rootCode.code).toBe("output_limit_exceeded");
+    expect(extractToolErrorCode(rootCode)).toBe("output_limit_exceeded");
   });
 
   it("does not extract error codes from prose-only tool output", () => {
@@ -397,6 +451,20 @@ describe("sanitizeToolArgs", () => {
 });
 
 describe("extractToolResultText", () => {
+  it("keeps primitive string tool results for visible output", () => {
+    expect(extractToolResultText("plain result")).toBe("plain result");
+  });
+
+  it("omits primitive inline data URI payloads", () => {
+    const result = "data:text/plain;base64,abcdefghijklmnopqrstuvwxyz0123456789";
+
+    expect(extractToolResultText(result)).toBe(`[inline data URI: ${result.length} chars]`);
+  });
+
+  it("keeps primitive data-prefixed text that is not a data URI", () => {
+    expect(extractToolResultText('data: {"status":"ok"}')).toBe('data: {"status":"ok"}');
+  });
+
   it("serializes structured non-image tool result blocks for visible output", () => {
     const text = extractToolResultText({
       content: [

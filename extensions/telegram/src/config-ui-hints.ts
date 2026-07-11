@@ -38,10 +38,6 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Mention Pattern Denylist",
     help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are disabled. Native bot mentions still trigger.",
   },
-  includeGroupHistoryContext: {
-    label: "Telegram Group History Context",
-    help: 'Controls prior Telegram group messages included in model context: "mention-only" keeps messages addressed to the bot and bot replies (default), "recent" includes recent room history, and "none" disables group history context.',
-  },
   "commands.native": {
     label: "Telegram Native Commands",
     help: 'Override native commands for Telegram (bool or "auto").',
@@ -168,7 +164,7 @@ export const telegramChannelConfigUiHints = {
   },
   trustedLocalFileRoots: {
     label: "Telegram Trusted Local File Roots",
-    help: "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths inside these roots are read directly; all other absolute paths are rejected.",
+    help: "Trusted local filesystem roots for self-hosted Telegram Bot API file_path values. Exact in-root paths are read directly; container paths under /var/lib/telegram-bot-api can map into a host volume mount. Other absolute paths are rejected.",
   },
   autoTopicLabel: {
     label: "Telegram Auto Topic Label",

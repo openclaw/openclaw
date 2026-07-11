@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
@@ -272,6 +273,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
+  let sentIndependentBlockText = false;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
@@ -382,7 +384,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingStartPromise = (async () => {
       const creds =
         account.appId && account.appSecret
-          ? { appId: account.appId, appSecret: account.appSecret, domain: account.domain }
+          ? {
+              appId: account.appId,
+              appSecret: account.appSecret,
+              domain: account.domain,
+              httpTimeoutMs: resolveConfiguredHttpTimeoutMs(account),
+            }
           : null;
       if (!creds) {
         return;
@@ -638,6 +645,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!replyLifecycleStateInitialized) {
           replyLifecycleStateInitialized = true;
           deliveredFinalTexts.clear();
+          sentIndependentBlockText = false;
           streamingClosedForReply = false;
           streamingCloseErroredForReply = false;
           visibleReplySent = false;
@@ -717,8 +725,36 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (shouldDeliverText) {
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
+            // streaming-card fallback content or send them as independent
+            // messages for true progressive delivery.
             if (!useStreamingCard) {
+              if (coreBlockStreamingEnabled) {
+                // Reuse normal text chunking, but notify mentions only on the first visible chunk.
+                const isFirstBlock = !sentIndependentBlockText;
+                await sendChunkedTextReply({
+                  text,
+                  useCard: false,
+                  infoKind: "block",
+                  sendChunk: async ({ chunk, isFirst }) => {
+                    await sendMessageFeishu({
+                      cfg,
+                      to: sendTarget,
+                      text: chunk,
+                      replyToMessageId: sendReplyToMessageId,
+                      replyInThread: effectiveReplyInThread,
+                      allowTopLevelReplyFallback,
+                      accountId,
+                      ...(isFirstBlock && isFirst && mentionTargets?.length
+                        ? { mentions: mentionTargets }
+                        : {}),
+                    });
+                  },
+                });
+                sentIndependentBlockText = true;
+                if (hasMedia) {
+                  await sendMediaReplies(payload);
+                }
+              }
               return;
             }
             startStreaming();

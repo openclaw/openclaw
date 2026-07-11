@@ -45,6 +45,7 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
 
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
+  canonicalizeManifestModelCatalogProviderAlias,
   createBundledProviderStaticCatalogContextResolver,
   createBundledProviderStaticCatalogModelResolver,
   createBundledStaticCatalogModelResolver,
@@ -99,6 +100,7 @@ function createMistralManifestPlugin(overrides?: {
               reasoning: true,
               contextWindow: 262144,
               maxTokens: 8192,
+              thinkingLevelMap: { off: null, minimal: "low", max: "max" },
               cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
               mediaInput: {
                 image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
@@ -134,6 +136,28 @@ beforeEach(() => {
   providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
   providerMocks.runProviderStaticCatalog.mockResolvedValue(undefined);
   providerMocks.normalizePluginDiscoveryResult.mockReturnValue({});
+});
+
+describe("canonicalizeManifestModelCatalogProviderAlias", () => {
+  it("canonicalizes unambiguous manifest-owned aliases", () => {
+    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          providers: ["moonshot"],
+          modelCatalog: {
+            aliases: {
+              "moonshot-ai": { provider: "moonshot" },
+              moonshotai: { provider: "moonshot" },
+            },
+          },
+        },
+      ],
+    });
+
+    for (const provider of ["moonshotai", "moonshot-ai"]) {
+      expect(canonicalizeManifestModelCatalogProviderAlias({ provider })).toBe("moonshot");
+    }
+  });
 });
 
 describe("resolveBundledStaticCatalogModel", () => {
@@ -174,6 +198,7 @@ describe("resolveBundledStaticCatalogModel", () => {
       name: "Mistral Medium 3.5",
       provider: "mistral",
       reasoning: true,
+      thinkingLevelMap: { off: null, minimal: "low", max: "max" },
     });
   });
 

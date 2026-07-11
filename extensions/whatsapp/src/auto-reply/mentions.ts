@@ -21,7 +21,7 @@ export type MentionConfig = {
   isSelfChat?: boolean;
 };
 
-export type MentionTargets = {
+type MentionTargets = {
   normalizedMentions: WhatsAppIdentity[];
   self: WhatsAppIdentity;
 };

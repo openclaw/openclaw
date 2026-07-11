@@ -3,6 +3,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -81,39 +82,7 @@ vi.mock("../channels/registry.js", () => ({
 }));
 
 const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
-  channels: [],
-  channelSetups: [],
-  commands: [],
-  providers: [],
-  modelCatalogProviders: [],
-  embeddingProviders: [],
-  speechProviders: [],
-  realtimeTranscriptionProviders: [],
-  realtimeVoiceProviders: [],
-  mediaUnderstandingProviders: [],
-  transcriptSourceProviders: [],
-  imageGenerationProviders: [],
-  musicGenerationProviders: [],
-  videoGenerationProviders: [],
-  webFetchProviders: [],
-  webSearchProviders: [],
-  migrationProviders: [],
-  memoryEmbeddingProviders: [],
-  codexAppServerExtensionFactories: [],
-  agentToolResultMiddlewares: [],
-  textTransforms: [],
-  agentHarnesses: [],
-  gatewayHandlers: {},
-  gatewayMethodDescriptors: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  gatewayDiscoveryServices: [],
-  conversationBindingResolvedHandlers: [],
+  ...createEmptyPluginRegistry(),
   diagnostics,
 });
 
@@ -144,6 +113,7 @@ function addLoadedPlugin(
 function createLookUpTableForTest(params: {
   manifestRegistry?: PluginLookUpTable["manifestRegistry"];
   pluginIds?: readonly string[];
+  workerProviderIds?: readonly string[];
 }): PluginLookUpTable {
   return {
     policyHash: "test",
@@ -179,6 +149,7 @@ function createLookUpTableForTest(params: {
       configuredDeferredChannelPluginIds: [],
       pluginIds: params.pluginIds ?? [],
     },
+    workerProviderIds: params.workerProviderIds ?? [],
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -352,9 +323,11 @@ async function createSubagentRuntime(
   return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).subagent;
 }
 
-async function reloadServerPluginsModule(): Promise<ServerPluginsModule> {
+async function reloadFallbackGatewayContextModule() {
+  // Existing runtimes retain the old module graph; only the process-global state owner
+  // must reload to prove a restarted Gateway can replace their fallback context.
   vi.resetModules();
-  return await import("./server-plugins.js");
+  return await import("./server-plugin-fallback-context.js");
 }
 
 function loadGatewayPluginsForTest(
@@ -577,6 +550,44 @@ describe("loadGatewayPlugins", () => {
     expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["slack"]);
     expect(getLastPluginLoadOption("autoEnabledReasons")).toEqual({
       slack: ["slack configured"],
+    });
+  });
+
+  test("passes durable worker activation reasons to the runtime plugin load", () => {
+    applyPluginAutoEnable.mockReturnValue({
+      config: {},
+      changes: [],
+      autoEnabledReasons: { "qa-lab": ["static-ssh worker provider selected"] },
+    });
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayStartupPluginsForTest({
+      pluginIds: ["qa-lab"],
+      pluginLookUpTable: createLookUpTableForTest({
+        manifestRegistry: {
+          plugins: [
+            {
+              id: "qa-lab",
+              origin: "bundled",
+              channels: [],
+              providers: [],
+              cliBackends: [],
+              skills: [],
+              hooks: [],
+              rootDir: "/tmp/qa-lab",
+              source: "/tmp/qa-lab/index.js",
+              manifestPath: "/tmp/qa-lab/openclaw.plugin.json",
+              contracts: { workerProviders: ["static-ssh"] },
+            },
+          ],
+          diagnostics: [],
+        },
+        workerProviderIds: ["static-ssh"],
+      }),
+    });
+
+    expect(getLastPluginLoadOption("autoEnabledReasons")).toEqual({
+      "qa-lab": ["static-ssh durable worker lease"],
     });
   });
 
@@ -841,6 +852,23 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
   });
 
+  test("marks synthetic cron continuation calls as server-owned", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("cron-run-continuation"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.client?.connect.client.mode).toBe("backend");
+      expect(opts.client?.internal?.cronRunContinuation).toBe(true);
+      opts.respond(true, { status: "ok" });
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "agent:main:cron:job:run:run-1" },
+        { allowSyntheticCronRunContinuation: true, forceSyntheticClient: true },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
   test("uses one timeout budget across accepted and final in-process responses", async () => {
     vi.useFakeTimers();
     try {
@@ -952,6 +980,98 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
+  test("dispatches gateway methods with the trusted plugin identity", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-request"));
+    const runtime = runtimeModule.createPluginRuntime();
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "google-meet", pluginOrigin: "bundled" },
+      () => runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
+    );
+
+    expect(getLastDispatchedParams()).toEqual({ to: "+15550001234" });
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+  });
+
+  test("reports whether trusted in-process Gateway dispatch is available", async () => {
+    const runtime = runtimeModule.createPluginRuntime();
+
+    expect(await runtime.gateway.isAvailable()).toBe(false);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-available"));
+    expect(await runtime.gateway.isAvailable()).toBe(true);
+  });
+
+  test("does not inherit admin scope for trusted plugin gateway requests", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
+    loadGatewayStartupPluginsForTest();
+    const scope = {
+      context: createTestContext("plugin-gateway-request-admin-caller"),
+      client: {
+        connect: {
+          scopes: ["operator.admin"],
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+    const runtime = runtimeModule.createPluginRuntime();
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "google-meet", pluginOrigin: "bundled" },
+        () => runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
+      ),
+    );
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+  });
+
+  test("preserves structured errors from trusted plugin gateway requests", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-error"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(false, undefined, {
+        code: "INVALID_REQUEST",
+        message: "browser login required",
+        details: { manualActionRequired: true, reason: "not-authenticated" },
+      });
+    });
+    const runtime = runtimeModule.createPluginRuntime();
+
+    const request = gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "google-meet", pluginOrigin: "bundled" },
+      () => runtime.gateway.request("googlemeet.join", { url: "https://meet.google.com/abc" }),
+    );
+
+    await expect(request).rejects.toMatchObject({
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      details: { manualActionRequired: true, reason: "not-authenticated" },
+    });
+  });
+
+  test("rejects gateway dispatch from arbitrary plugins", async () => {
+    loadOpenClawPlugins.mockReturnValue(
+      addLoadedPlugin(createRegistry([]), { id: "third-party", origin: "global" }),
+    );
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-rejected"));
+    const runtime = runtimeModule.createPluginRuntime();
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "third-party", pluginOrigin: "global" },
+        () => runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
+      ),
+    ).rejects.toThrow("bundled or trusted official plugins");
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
   test("does not let arbitrary plugin nodes runtime mint admin scope for browser proxy", async () => {
     loadOpenClawPlugins.mockReturnValue(
       addLoadedPlugin(createRegistry([]), { id: "third-party", origin: "global" }),
@@ -1032,6 +1152,24 @@ describe("loadGatewayPlugins", () => {
     expect(params.sessionKey).toBe("s-idem-forward");
     expect(params.message).toBe("hello");
     expect(params.idempotencyKey).toBe("caller-provided-key");
+  });
+
+  test("forwards cwd on plugin-owned subagent runs", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("cwd-forward"));
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "workboard", pluginOrigin: "bundled" },
+      () =>
+        runtime.run({
+          sessionKey: "s-cwd-forward",
+          message: "hello",
+          cwd: "/tmp/managed-worktree",
+        }),
+    );
+
+    expect(getRequiredLastDispatchedParams().cwd).toBe("/tmp/managed-worktree");
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("workboard");
   });
 
   test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {
@@ -1532,7 +1670,7 @@ describe("loadGatewayPlugins", () => {
     await runtime.run({ sessionKey: "s-1", message: "hello" });
     expect(getLastDispatchedContext()).toBe(staleContext);
 
-    const reloaded = await reloadServerPluginsModule();
+    const reloaded = await reloadFallbackGatewayContextModule();
     const freshContext = createTestContext("fresh");
     reloaded.setFallbackGatewayContext(freshContext);
 

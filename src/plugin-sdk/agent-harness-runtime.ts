@@ -37,18 +37,21 @@ export type { AgentMessage } from "../agents/runtime/index.js";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
+  AgentHarnessAuthBindingFingerprintParams,
   AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
+  AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionResult,
   AgentHarnessResetParams,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
+export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputOption,
@@ -119,6 +122,8 @@ export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
+export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.js";
+export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-context.js";
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export {
@@ -150,6 +155,12 @@ export {
   isToolResultError,
   sanitizeToolResult,
 } from "../agents/embedded-agent-subscribe.tools.js";
+export {
+  formatToolExecutionErrorMessage,
+  resolveToolExecutionErrorKind,
+  resolveToolResultFailureKind,
+  type ToolResultFailureKind,
+} from "../agents/tool-result-error.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
@@ -306,6 +317,7 @@ export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   finalizeToolTerminalPresentation,
+  getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
@@ -314,6 +326,7 @@ export {
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
   type BeforeToolCallPolicyDiagnosticState,
+  type BeforeToolCallFailureDisposition,
   type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
 export { isReplaySafeToolCall } from "../agents/tool-mutation.js";

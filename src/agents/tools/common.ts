@@ -21,12 +21,19 @@ import type {
   AgentToolUpdateCallback,
 } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
+import { textResult } from "./tool-results.js";
+
+export { jsonResult, textResult } from "./tool-results.js";
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TParameters,
   TResult
 > & {
   displaySummary?: string;
+  /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
+  catalogMode?: "direct-only";
+  /** Gateway client capabilities required before this tool can be assembled. */
+  requiredClientCaps?: string[];
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
@@ -47,6 +54,10 @@ type ErasedAgentToolExecute = {
 export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
     displaySummary?: string;
+    /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
+    catalogMode?: "direct-only";
+    /** Gateway client capabilities required before this tool can be assembled. */
+    requiredClientCaps?: string[];
     prepareBeforeToolCallParams?: AgentToolWithMeta<
       TSchema,
       unknown
@@ -107,6 +118,12 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
 
 function readParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
+}
+
+// Models may emit blank defaults for optional numeric fields. Treat them as
+// absent while still rejecting nonblank invalid input.
+function isBlankParamValue(raw: unknown): boolean {
+  return typeof raw === "string" && raw.trim() === "";
 }
 
 export function readStringParam(
@@ -241,8 +258,11 @@ export function readPositiveIntegerParam(
     positiveInteger: true,
     strict: true,
   });
-  if (value === undefined && readParamRaw(params, key) != null) {
-    throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
+  if (value === undefined) {
+    const raw = readParamRaw(params, key);
+    if (raw != null && !isBlankParamValue(raw)) {
+      throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
+    }
   }
   if (value !== undefined && options.max !== undefined && value > options.max) {
     throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
@@ -262,8 +282,11 @@ export function readNonNegativeIntegerParam(
     nonNegativeInteger: true,
     strict: true,
   });
-  if (value === undefined && readParamRaw(params, key) != null) {
-    throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
+  if (value === undefined) {
+    const raw = readParamRaw(params, key);
+    if (raw != null && !isBlankParamValue(raw)) {
+      throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
+    }
   }
   if (value !== undefined && options.max !== undefined && value > options.max) {
     throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
@@ -286,7 +309,8 @@ export function readFiniteNumberParam(
     strict: true,
   });
   if (value === undefined) {
-    if (readParamRaw(params, key) != null) {
+    const raw = readParamRaw(params, key);
+    if (raw != null && !isBlankParamValue(raw)) {
       throw new ToolInputError(options.message ?? `${key} must be a finite number`);
     }
     return undefined;
@@ -391,18 +415,6 @@ export function stringifyToolPayload(payload: unknown): string {
   return String(payload);
 }
 
-export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
-  return {
-    content: [
-      {
-        type: "text",
-        text,
-      },
-    ],
-    details,
-  };
-}
-
 export function failedTextResult<TDetails extends { status: "failed" }>(
   text: string,
   details: TDetails,
@@ -412,10 +424,6 @@ export function failedTextResult<TDetails extends { status: "failed" }>(
 
 export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
   return textResult(stringifyToolPayload(payload), payload);
-}
-
-export function jsonResult(payload: unknown): AgentToolResult<unknown> {
-  return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
 export type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;

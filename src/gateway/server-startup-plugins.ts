@@ -3,8 +3,10 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { collectUnregisteredConfiguredMemoryEmbeddingProviders } from "../plugins/channel-plugin-ids.js";
-import { listRegisteredEmbeddingProviders } from "../plugins/embedding-providers.js";
+import {
+  collectRegisteredEmbeddingProviderIds,
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
+} from "../plugins/channel-plugin-ids.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
@@ -47,6 +49,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   activationSourceConfig?: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  workerProviderIds?: readonly string[];
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
   loadRuntimePlugins?: boolean;
@@ -79,6 +82,28 @@ export async function prepareGatewayPluginBootstrap(params: {
           log: params.log,
         }),
       );
+      const { migrateLegacyDevicePairingStore } =
+        await import("../infra/device-pairing-migration.js");
+      const { migrateLegacyNodePairingStore } = await import("../infra/node-pairing-migration.js");
+      startupTasks.push(
+        // The device store import must complete before the node-surface fold:
+        // the fold writes onto device records in SQLite and would drop every
+        // legacy node row as an orphan if the devices were not imported yet.
+        migrateLegacyDevicePairingStore({ log: params.log }).then(
+          () =>
+            migrateLegacyNodePairingStore({ log: params.log }).then(
+              () => undefined,
+              (error: unknown) => {
+                // A failed fold must not block gateway startup; the legacy
+                // files stay in place and the next boot retries.
+                params.log.warn(`node pairing store migration failed: ${String(error)}`);
+              },
+            ),
+          (error: unknown) => {
+            params.log.warn(`device pairing store migration failed: ${String(error)}`);
+          },
+        ),
+      );
     }
     await Promise.all(startupTasks);
   }
@@ -110,6 +135,7 @@ export async function prepareGatewayPluginBootstrap(params: {
           env: process.env,
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
+          workerProviderIds: params.workerProviderIds ?? [],
         });
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
@@ -194,16 +220,9 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
   log: Pick<GatewayPluginBootstrapLog, "warn">;
 }): void {
-  const registeredProviderIds = new Set(
-    [
-      ...(params.pluginRegistry.memoryEmbeddingProviders ?? []),
-      ...(params.pluginRegistry.embeddingProviders ?? []),
-      ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
-    ].map((entry) => entry.provider.id),
-  );
   const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
     config: params.config,
-    registeredProviderIds,
+    registeredProviderIds: collectRegisteredEmbeddingProviderIds(params.pluginRegistry),
   });
   for (const provider of unregistered) {
     const path = `memorySearch.${provider.source}`;

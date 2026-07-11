@@ -9,13 +9,15 @@ import {
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 const fetchGuardMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string }) => {
-    return {
-      response: await globalThis.fetch(params.url),
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  }),
+  fetchWithSsrFGuard: vi.fn(
+    async (params: { url: string; timeoutMs?: number; requireHttps?: boolean }) => {
+      return {
+        response: await globalThis.fetch(params.url),
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  ),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -221,10 +223,10 @@ describe("nodes camera helpers", () => {
     ).rejects.toThrow(/node remoteip/i);
   });
 
-  it("writes base64 to file", async () => {
+  it("normalizes valid base64 before writing", async () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
-      await writeBase64ToFile(out, "aGk=");
+      await writeBase64ToFile(out, " aGk\n");
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("hi");
     });
   });
@@ -245,6 +247,22 @@ describe("nodes camera helpers", () => {
     });
   });
 
+  it("rejects empty and malformed base64 payloads before writing", async () => {
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "x.bin");
+      for (const base64 of ["", " \n", "a", "a===", "not-base64!"]) {
+        await expect(writeBase64ToFile(out, base64)).rejects.toThrow(/invalid base64/i);
+        await expectPathMissing(out);
+      }
+      await expect(writeScreenRecordToFile(out, "not-base64!")).rejects.toThrow(/invalid base64/i);
+      await expectPathMissing(out);
+      await expect(writeScreenSnapshotToFile(out, "not-base64!")).rejects.toThrow(
+        /invalid base64/i,
+      );
+      await expectPathMissing(out);
+    });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -257,6 +275,9 @@ describe("nodes camera helpers", () => {
         expectedHost: "198.51.100.42",
       });
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-content");
+      expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ requireHttps: true, timeoutMs: 15 * 60_000 }),
+      );
     });
   });
 
@@ -426,6 +447,7 @@ describe("nodes screen helpers", () => {
       parseScreenSnapshotPayload({
         format: "png",
         base64: "Zm9v",
+        displayFrameId: "display-42-frame",
         screenIndex: 1,
         width: 1200,
         height: 800,
@@ -433,6 +455,7 @@ describe("nodes screen helpers", () => {
     ).toEqual({
       format: "png",
       base64: "Zm9v",
+      displayFrameId: "display-42-frame",
       screenIndex: 1,
       width: 1200,
       height: 800,

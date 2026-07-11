@@ -6,9 +6,14 @@ import { copyChannelAgentToolMeta } from "../channel-tools.js";
 import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 
-export type GatewayToolCallerIdentity = {
+type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
+  // Trusted run context, carried separately from model-authored tool arguments.
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
 };
 
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
@@ -28,6 +33,16 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: identity.agentId.trim(),
       sessionKey: identity.sessionKey.trim(),
+      ...(identity.turnSourceChannel?.trim()
+        ? { turnSourceChannel: identity.turnSourceChannel.trim() }
+        : {}),
+      ...(identity.turnSourceTo?.trim() ? { turnSourceTo: identity.turnSourceTo.trim() } : {}),
+      ...(identity.turnSourceAccountId?.trim()
+        ? { turnSourceAccountId: identity.turnSourceAccountId.trim() }
+        : {}),
+      ...(identity.turnSourceThreadId !== undefined
+        ? { turnSourceThreadId: identity.turnSourceThreadId }
+        : {}),
     },
     run,
   );

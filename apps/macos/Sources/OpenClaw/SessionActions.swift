@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawKit
 
 enum SessionActions {
     static func patchSession(
@@ -32,9 +33,12 @@ enum SessionActions {
     }
 
     static func compactSession(key: String, maxLines: Int = 400) async throws {
-        _ = try await ControlChannel.shared.request(
+        let response = try await ControlChannel.shared.request(
             method: "sessions.compact",
-            params: ["key": AnyHashable(key), "maxLines": AnyHashable(maxLines)])
+            params: ["key": AnyHashable(key), "maxLines": AnyHashable(maxLines)],
+            timeoutMs: 0,
+            retryTransportFailures: false)
+        try OpenClawSessionsCompactResponse.requireSuccess(from: response)
     }
 
     @MainActor

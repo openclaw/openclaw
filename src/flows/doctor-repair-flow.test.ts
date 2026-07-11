@@ -292,7 +292,7 @@ describe("runDoctorHealthRepairs", () => {
           return {
             status: "skipped",
             reason: "manual confirmation required",
-            changes: [],
+            changes: ["Review required before changing gateway.mode."],
           };
         },
       }),
@@ -304,6 +304,7 @@ describe("runDoctorHealthRepairs", () => {
     expect(result.checksRepaired).toBe(0);
     expect(result.checksValidated).toBe(0);
     expect(result.remainingFindings).toEqual([]);
+    expect(result.changes).toEqual(["Review required before changing gateway.mode."]);
     expect(result.warnings).toEqual(["test/skipped repair skipped: manual confirmation required"]);
   });
 
