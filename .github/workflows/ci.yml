@@ -1922,8 +1922,14 @@ jobs:
 
       - name: Swift lint
         run: |
-          ./scripts/lint-swift.sh macos
-          ./scripts/format-swift.sh macos
+          if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
+            ./scripts/lint-swift.sh macos
+            ./scripts/format-swift.sh macos
+          else
+            # Frozen release targets before the shared wrappers used these commands directly.
+            swiftlint lint --config config/swiftlint.yml
+            swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
+          fi
 
       - name: Swift build (release)
         run: |
@@ -2023,8 +2029,13 @@ jobs:
 
       - name: Swift lint
         run: |
-          ./scripts/lint-swift.sh ios
-          ./scripts/format-swift.sh ios
+          if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
+            ./scripts/lint-swift.sh ios
+            ./scripts/format-swift.sh ios
+          else
+            # Frozen release targets before the iOS lint lane have no equivalent target-owned step.
+            echo "Swift lint wrappers are absent; skipping iOS lint for this frozen target."
+          fi
 
       - name: Build iOS app
         run: pnpm ios:build

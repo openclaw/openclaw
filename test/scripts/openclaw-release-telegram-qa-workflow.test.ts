@@ -515,6 +515,11 @@ describe("release Telegram QA workflow", () => {
     expect(source).not.toContain("exec /usr/bin/unshare");
     expect(source).not.toContain("set -x");
     expect(source).toContain('temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"');
+    expect(source).toContain("sudo install -d -o root -g root -m 0700 /tmp/openclaw");
+    expect(source).toContain(
+      '-m 0711 \\\n            "${runtime_root}/tmp/openclaw-${runner_uid}"',
+    );
+    expect(source).toContain('"$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*');
     expect(source).toContain('proc_stat="$(cat "/proc/${pid}/stat")"');
     expect(source).not.toContain('proc_stat="$(cat /proc/self/stat)"');
     expect(source).toContain('if [[ "${1:-}" == "--root-verify" ]]');
