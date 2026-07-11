@@ -382,4 +382,37 @@ describe("process supervisor", () => {
     expect(exit.stdout.endsWith("stdout-tail")).toBe(true);
     expect(exit.stderr.endsWith("stderr-tail")).toBe(true);
   });
+
+  it("keeps retained stdout and stderr tails on complete UTF-16 boundaries", async () => {
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    const maxCapturedOutputChars = 256;
+    const marker = `[openclaw: captured stdout truncated to last ${maxCapturedOutputChars} chars]\n`;
+    const tailChars = maxCapturedOutputChars - marker.length;
+    const evictedPrefixChars = marker.length + 1;
+    const boundaryChunk = "a".repeat(evictedPrefixChars - 1) + "😀" + "z".repeat(tailChars - 1);
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-capture-unicode",
+      argv: createWriteStdoutArgv(boundaryChunk),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+      maxCapturedOutputChars,
+    });
+
+    adapter.emitStdout(boundaryChunk);
+    adapter.emitStderr(boundaryChunk);
+    adapter.settle(0);
+
+    const exit = await run.wait();
+    const unpairedSurrogate =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(exit.stdout).not.toMatch(unpairedSurrogate);
+    expect(exit.stderr).not.toMatch(unpairedSurrogate);
+    expect(exit.stdout).not.toContain("\uFFFD");
+    expect(exit.stderr).not.toContain("\uFFFD");
+    expect(exit.stdout.length).toBeLessThanOrEqual(maxCapturedOutputChars);
+    expect(exit.stderr.length).toBeLessThanOrEqual(maxCapturedOutputChars);
+  });
 });
