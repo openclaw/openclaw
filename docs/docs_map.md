@@ -3889,6 +3889,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Security boundary (important)
   - H2: Request body
   - H2: Policy + routing behavior
+  - H3: Opt-in: coding tool read over direct-invoke
   - H2: Responses
   - H2: Example
   - H2: Related
