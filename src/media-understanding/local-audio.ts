@@ -195,14 +195,13 @@ async function inspectLinkedLibraries(
     return await cached;
   }
   const inspection = (async () => {
-    const command = platform === "darwin" ? "otool" : platform === "linux" ? "ldd" : null;
+    const command = platform === "darwin" ? "otool" : platform === "linux" ? "readelf" : null;
     if (!command) {
       return null;
     }
     try {
-      const result = await runExec(command, platform === "darwin" ? ["-L", filePath] : [filePath], {
-        timeoutMs: 1500,
-      });
+      const args = platform === "darwin" ? ["-L", filePath] : ["-d", filePath];
+      const result = await runExec(command, args, { timeoutMs: 1500 });
       return `${result.stdout}\n${result.stderr ?? ""}`;
     } catch {
       return null;

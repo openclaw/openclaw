@@ -254,7 +254,7 @@ async function setupAudioAutoDetectCase(stdout?: string): Promise<{
 
 function mockWhisperCliTranscript(transcript: string) {
   mockedRunExec.mockImplementation(async (command, args) => {
-    if (command === "ldd" || command === "otool") {
+    if (command === "readelf" || command === "otool") {
       return { stdout: "", stderr: "" };
     }
     const outputBaseIndex = args.indexOf("-of");
@@ -889,6 +889,16 @@ describe("applyMediaUnderstanding", () => {
     expect(typeof args[4]).toBe("string");
     expect(String(args[4]).endsWith("sample")).toBe(true);
     expect(args.slice(5)).toEqual(["-nt", await fs.realpath(ctx.MediaPath ?? "")]);
+    if (process.platform === "linux") {
+      expect(mockedRunExec.mock.calls).toContainEqual([
+        "readelf",
+        ["-d", expect.stringContaining("whisper-cli")],
+        expect.objectContaining({ timeoutMs: 1500 }),
+      ]);
+      expect(mockedRunExec.mock.calls.some(([calledCommand]) => calledCommand === "ldd")).toBe(
+        false,
+      );
+    }
     expectCliRunOptions(options);
   });
 
