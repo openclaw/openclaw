@@ -11,6 +11,10 @@ import {
 // Projects one metadata-only audit terminal per logical outbound payload.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import {
+  normalizeSessionPeerId,
+  parseSessionDeliveryRoute,
+} from "../../sessions/session-key-utils.js";
+import {
   countPhysicalOutboundSends,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
@@ -206,23 +210,53 @@ export function uniformOutboundAuditTerminals(
   return Array.from({ length: payloadCount }, (_, payloadIndex) => ({ payloadIndex, terminal }));
 }
 
+// Delivery targets may carry a kind prefix (e.g. "channel:C123", "user:U123")
+// that session-key peer ids do not retain.
+const TARGET_KIND_PREFIX_RE = /^(?:channel|group|direct|dm|user):/i;
+
+/** True when a parsed session route provably names this delivery's destination. */
+function routeNamesDestination(
+  route: ReturnType<typeof parseSessionDeliveryRoute>,
+  context: OutboundAuditDeliveryContext,
+): route is NonNullable<ReturnType<typeof parseSessionDeliveryRoute>> {
+  if (!route || route.channel !== context.channel.toLowerCase()) {
+    return false;
+  }
+  const candidates = [context.to, context.to.replace(TARGET_KIND_PREFIX_RE, "")];
+  return candidates.some((candidate) => {
+    const normalized = normalizeSessionPeerId({
+      channel: route.channel,
+      peerKind: route.peerKind,
+      peerId: candidate,
+    });
+    return normalized !== "" && normalized.toLowerCase() === route.peerId.toLowerCase();
+  });
+}
+
+// Privacy gate: a false "direct" over-collects under audit.messages="direct",
+// so "direct" requires destination proof (caller-declared kind or a session
+// route that names this exact channel+peer). Weaker origin/policy signals may
+// only classify away from collection ("group"), never toward "direct".
 function resolveConversationKind(
   context: OutboundAuditDeliveryContext,
 ): AuditMessageConversationKind {
   if (context.session?.conversationKind) {
+    // Declared destination facts only; see OutboundSessionContext.conversationKind.
     return context.session.conversationKind;
   }
-  if (
-    context.session?.conversationType === "direct" ||
-    context.session?.conversationType === "group"
-  ) {
-    return context.session.conversationType;
+  const routeCandidates = [
+    context.session?.policyKey,
+    context.session?.key,
+    context.mirror?.sessionKey,
+  ];
+  for (const candidate of routeCandidates) {
+    const route = parseSessionDeliveryRoute(candidate);
+    if (routeNamesDestination(route, context)) {
+      return route.peerKind === "dm" || route.peerKind === "direct" ? "direct" : route.peerKind;
+    }
   }
-  if (context.mirror?.isGroup === true) {
+  if (context.session?.conversationType === "group" || context.mirror?.isGroup === true) {
     return "group";
-  }
-  if (context.mirror?.isGroup === false) {
-    return "direct";
   }
   return "unknown";
 }
@@ -230,6 +264,9 @@ function resolveConversationKind(
 function firstIdentifier(...values: Array<string | undefined>): string | undefined {
   for (const value of values) {
     const normalized = value?.trim();
+    // "unknown"/"suppressed" are adapter sentinel messageIds (telegram/slack
+    // outbound adapters), not platform identifiers; treating them as real ids
+    // would pseudonymize a constant and corrupt correlation refs.
     if (normalized && normalized !== "unknown" && normalized !== "suppressed") {
       return normalized;
     }

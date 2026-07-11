@@ -36,7 +36,12 @@ export type OutboundSessionContext = {
   policyKey?: string;
   /** Explicit conversation type for policy resolution when a session key is generic. */
   conversationType?: SilentReplyConversationType;
-  /** Original transport conversation kind retained for metadata-only audit projection. */
+  /**
+   * Caller-declared destination conversation kind for metadata-only audit
+   * projection. Never derived from session-key parsing: policy keys can name
+   * an acted-on session that is not the delivery destination, and a wrong
+   * "direct" here over-collects under audit.messages="direct".
+   */
   conversationKind?: "direct" | "group" | "channel";
   /** Active agent id used for workspace-scoped media roots. */
   agentId?: string;
@@ -69,12 +74,19 @@ export function buildOutboundSessionContext(params: {
   const key = normalizeOptionalString(params.sessionKey);
   const policyKey = normalizeOptionalString(params.policySessionKey);
   const deliveryRoute = parseSessionDeliveryRoute(policyKey ?? key);
-  const normalizedChatType =
-    normalizeChatType(params.conversationType ?? undefined) ??
-    normalizeChatType(deliveryRoute?.peerKind);
-  // Policy intentionally folds channels into groups; retain only the detail
-  // that would otherwise be lost before metadata-only audit projection.
-  const conversationKind = normalizedChatType === "channel" ? "channel" : undefined;
+  const declaredChatType = normalizeChatType(params.conversationType ?? undefined);
+  const normalizedChatType = declaredChatType ?? normalizeChatType(deliveryRoute?.peerKind);
+  // conversationKind feeds the metadata-only audit projection and must carry
+  // only caller-declared destination facts. Session-key parses can name a
+  // policy/acted-on session that is not this delivery's destination (native
+  // command target overrides); a guessed "direct" would over-collect under
+  // audit.messages="direct". Destination-gated parsing lives in outbound-audit.
+  const conversationKind =
+    declaredChatType ??
+    (params.isGroup === true ? "group" : params.isGroup === false ? "direct" : undefined);
+  // conversationType keeps the historical policy derivation (declared type,
+  // then session-key parse, then isGroup) and intentionally folds channels
+  // into groups for silent-reply policy.
   const conversationType: SilentReplyConversationType | undefined =
     normalizedChatType === "group" || normalizedChatType === "channel"
       ? "group"

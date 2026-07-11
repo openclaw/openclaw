@@ -2187,7 +2187,9 @@ describe("deliverOutboundPayloads", () => {
       runId: "run-1",
       direction: "outbound",
       channel: "matrix",
-      conversationKind: "direct",
+      // Policy conversationType alone must not claim "direct" for a room
+      // target; only declared destination facts or a matching route may.
+      conversationKind: "unknown",
       outcome: "sent",
       deliveryKind: "text",
       resultCount: 1,

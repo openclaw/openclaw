@@ -218,4 +218,74 @@ describe("outbound audit projection", () => {
       resultCount: 6,
     });
   });
+
+  function conversationKindFor(
+    context: Omit<Parameters<typeof emitOutboundAuditTerminals>[0]["context"], "payloads">,
+  ): string | undefined {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+    try {
+      emitOutboundAuditTerminals({
+        context: { ...context, payloads: [{ text: "x" }] },
+        terminals: uniformOutboundAuditTerminals(1, {
+          outcome: "sent",
+          results: [{ channel: context.channel, messageId: "m-1" }],
+        }),
+        startedAt: Date.now(),
+      });
+    } finally {
+      unsubscribe();
+    }
+    return events[0]?.conversationKind;
+  }
+
+  it("classifies direct only from a session route naming this exact destination", () => {
+    expect(
+      conversationKindFor({
+        channel: "matrix",
+        to: "@user:server",
+        session: { key: "agent:main:matrix:default:direct:@user:server" },
+      }),
+    ).toBe("direct");
+    expect(
+      conversationKindFor({
+        channel: "slack",
+        to: "channel:C0AGENT",
+        session: { key: "agent:main:slack:channel:c0agent" },
+      }),
+    ).toBe("channel");
+  });
+
+  it("does not classify by a policy session that names another conversation", () => {
+    // Native command acting on a WhatsApp DM session, response delivered to a
+    // Matrix room: the acted-on session must not stamp the destination "direct".
+    expect(
+      conversationKindFor({
+        channel: "matrix",
+        to: "!room:server",
+        session: {
+          key: "agent:main:matrix:default:direct:@user:server",
+          policyKey: "agent:main:whatsapp:default:direct:+15551234567",
+          conversationType: "direct",
+        },
+      }),
+    ).toBe("unknown");
+  });
+
+  it("lets weak origin facts escalate to group but never to direct", () => {
+    expect(
+      conversationKindFor({
+        channel: "matrix",
+        to: "!room:server",
+        mirror: { sessionKey: "control-session", agentId: "a", isGroup: true },
+      }),
+    ).toBe("group");
+    expect(
+      conversationKindFor({
+        channel: "matrix",
+        to: "!room:server",
+        mirror: { sessionKey: "control-session", agentId: "a", isGroup: false },
+      }),
+    ).toBe("unknown");
+  });
 });

@@ -137,6 +137,7 @@ describe("buildOutboundSessionContext", () => {
       }),
     ).toEqual({
       conversationType: "direct",
+      conversationKind: "direct",
     });
   });
 
@@ -150,6 +151,7 @@ describe("buildOutboundSessionContext", () => {
     ).toEqual({
       key: "agent:main:generic",
       conversationType: "group",
+      conversationKind: "group",
     });
     expect(
       buildOutboundSessionContext({
@@ -158,6 +160,7 @@ describe("buildOutboundSessionContext", () => {
       }),
     ).toEqual({
       conversationType: "direct",
+      conversationKind: "direct",
     });
   });
 
@@ -169,6 +172,22 @@ describe("buildOutboundSessionContext", () => {
       }),
     ).toEqual({
       key: "agent:main:discord:dm:U123",
+      conversationType: "direct",
+    });
+  });
+
+  it("never derives the audit conversation kind from session-key parsing", () => {
+    // A policy key can name an acted-on session that is not the delivery
+    // destination; conversationKind must stay unset without declared facts.
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "agent:main:discord:dm:U123",
+        policySessionKey: "agent:main:whatsapp:default:direct:+15551234567",
+      }),
+    ).toEqual({
+      key: "agent:main:discord:dm:U123",
+      policyKey: "agent:main:whatsapp:default:direct:+15551234567",
       conversationType: "direct",
     });
   });
