@@ -619,6 +619,7 @@ export async function runBtwSideQuestion(
       messages: await readBtwTranscriptMessages({
         sessionFile,
         sessionId,
+        sessionKey: params.sessionKey,
         snapshotLeafId: activeRunSnapshot?.transcriptLeafId,
       }),
       imageLimits,
@@ -757,7 +758,6 @@ export async function runBtwSideQuestion(
       : requireApiKey(apiKeyInfo, model.provider);
   if (apiKey) {
     const preparedAuth = protectPreparedProviderRuntimeAuth({
-      sourceApiKey: apiKey,
       provider: model.provider,
       preparedAuth: await prepareProviderRuntimeAuth({
         provider: model.provider,

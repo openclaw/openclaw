@@ -38,6 +38,15 @@ import {
 } from "../../agents/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
+import type {
+  AuditInboundMessageCompletedReasonCode,
+  AuditInboundMessageSkippedReasonCode,
+  InboundMessageAuditTerminal,
+} from "../../audit/audit-event-types.js";
+import {
+  emitTrustedMessageAuditEvent,
+  hasTrustedMessageAuditListeners,
+} from "../../audit/message-audit-events.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -48,6 +57,7 @@ import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/ex
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import {
   appendAssistantMessageToSessionTranscript,
   type SessionTranscriptDeliveryMirror,
@@ -131,9 +141,7 @@ import {
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   createInternalHookEvent,
-  loadSessionStore,
-  readSessionEntry,
-  resolveSessionStoreEntry,
+  loadSessionStoreEntry,
   resolveStorePath,
   triggerInternalHook,
   updateSessionStoreEntry,
@@ -251,10 +259,6 @@ function isDispatchReplyOperationAbortedError(
   error: unknown,
 ): error is DispatchReplyOperationAbortedError {
   return error instanceof DispatchReplyOperationAbortedError;
-}
-
-function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
-  return status === "failed" || status === "timeout" || status === "killed";
 }
 
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
@@ -450,12 +454,18 @@ const resolveSessionStoreLookup = (
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   try {
-    const store = loadSessionStore(storePath);
+    const entry = loadSessionStoreEntry({
+      agentId,
+      storePath,
+      sessionKey,
+      readConsistency: "latest",
+      clone: false,
+    });
     return {
       sessionKey,
       storePath,
-      store,
-      entry: resolveSessionStoreEntry({ store, sessionKey }).existing,
+      entry,
+      store: entry ? { [sessionKey]: entry } : undefined,
     };
   } catch {
     return {
@@ -497,6 +507,7 @@ const resolveBoundAcpDispatchSessionKey = (params: {
 };
 
 const createShouldEmitVerboseProgress = (params: {
+  agentId?: string;
   sessionKey?: string;
   storePath?: string;
   initialExplicitLevel?: string;
@@ -505,7 +516,13 @@ const createShouldEmitVerboseProgress = (params: {
   const resolveCurrentExplicitLevel = () => {
     if (params.sessionKey && params.storePath) {
       try {
-        const entry = readSessionEntry(params.storePath, params.sessionKey);
+        const entry = loadSessionStoreEntry({
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          readConsistency: "latest",
+          clone: false,
+        });
         return normalizeVerboseLevel(entry?.verboseLevel ?? "");
       } catch {
         // Ignore transient store read failures and fall back to the current dispatch snapshot.
@@ -543,6 +560,227 @@ function createReplyDispatchEvent(
     enumerable: true,
     get: shouldSendToolSummaries,
   }) as PluginHookReplyDispatchEvent;
+}
+
+type DispatchProcessedOutcome = "completed" | "skipped" | "error";
+type DispatchProcessedOptions = {
+  reason?: string;
+  error?: string;
+};
+
+function resolveCompletedInboundAuditReason(
+  reason: string | undefined,
+): AuditInboundMessageCompletedReasonCode | undefined {
+  switch (reason) {
+    case "fast_abort":
+      return "fast_abort";
+    case "plugin-bound-handled":
+      return "plugin_bound_handled";
+    case "plugin-bound-fallback-missing-plugin":
+    case "plugin-bound-fallback-no-handler":
+      return "plugin_bound_unavailable";
+    case "plugin-bound-declined":
+      return "plugin_bound_declined";
+    case "before_dispatch_handled":
+      return "before_dispatch_handled";
+    case "acp_dispatch":
+      return "acp_dispatch_completed";
+    case "acp_empty_prompt":
+      return "acp_dispatch_empty";
+    default:
+      return undefined;
+  }
+}
+
+function resolveSkippedInboundAuditReason(
+  reason: string | undefined,
+): AuditInboundMessageSkippedReasonCode | undefined {
+  switch (reason) {
+    case "duplicate":
+      return "duplicate";
+    case "reply-operation-active":
+      return "reply_operation_active";
+    case "reply_operation_aborted":
+      return "reply_operation_aborted";
+    default:
+      return undefined;
+  }
+}
+
+function resolveInboundMessageAuditTerminal(
+  outcome: DispatchProcessedOutcome,
+  reason: string | undefined,
+): InboundMessageAuditTerminal {
+  // Diagnostics keep their legacy outcomes and reason strings; audit projects
+  // those signals into the stricter terminal contract independently.
+  if (reason === "plugin-bound-error") {
+    return {
+      status: "failed",
+      outcome: "failed",
+      errorCode: "message_processing_failed",
+      reasonCode: "plugin_bound_error",
+    };
+  }
+  if (reason?.startsWith("acp_error:")) {
+    return {
+      status: "failed",
+      outcome: "failed",
+      errorCode: "message_processing_failed",
+      reasonCode: "acp_dispatch_failed",
+    };
+  }
+  if (reason === "reply_operation_aborted") {
+    return {
+      status: "blocked",
+      outcome: "skipped",
+      reasonCode: "reply_operation_aborted",
+    };
+  }
+  if (reason === "acp_aborted") {
+    return {
+      status: "blocked",
+      outcome: "skipped",
+      reasonCode: "acp_dispatch_aborted",
+    };
+  }
+  if (outcome === "completed") {
+    const reasonCode = resolveCompletedInboundAuditReason(reason);
+    return {
+      status: "succeeded",
+      outcome: "completed",
+      ...(reasonCode ? { reasonCode } : {}),
+    };
+  }
+  if (outcome === "skipped") {
+    const reasonCode = resolveSkippedInboundAuditReason(reason);
+    return {
+      status: "blocked",
+      outcome: "skipped",
+      ...(reasonCode ? { reasonCode } : {}),
+    };
+  }
+  return {
+    status: "failed",
+    outcome: "failed",
+    errorCode: "message_processing_failed",
+  };
+}
+
+type InboundMessageAuditTerminalRecorder = {
+  note: (outcome: DispatchProcessedOutcome, options?: DispatchProcessedOptions) => void;
+  observeRunId: (runId: string) => void;
+  finishSuccess: (result: DispatchFromConfigResult) => void;
+  finishError: () => void;
+};
+
+/**
+ * Captures one terminal event for the reply-processing boundary. Channel admission and
+ * pre-dispatch drops remain outside this boundary and need their own ingress projection.
+ */
+function createInboundMessageAuditTerminal(
+  params: DispatchFromConfigParams,
+): InboundMessageAuditTerminalRecorder | undefined {
+  if (!hasTrustedMessageAuditListeners()) {
+    return undefined;
+  }
+
+  const startedAt = Date.now();
+  let notedTerminal:
+    | { outcome: DispatchProcessedOutcome; options?: DispatchProcessedOptions }
+    | undefined;
+  let observedRunId = normalizeOptionalString(params.replyOptions?.runId);
+  let finished = false;
+
+  const emitTerminal = (
+    terminal: { outcome: DispatchProcessedOutcome; options?: DispatchProcessedOptions },
+    counts: Record<ReplyDispatchKind, number>,
+  ) => {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    const { ctx, cfg } = params;
+    const occurredAt = Date.now();
+    const sessionKey =
+      normalizeOptionalString(ctx.SessionKey) ??
+      normalizeOptionalString(ctx.CommandTargetSessionKey);
+    const actorId = normalizeOptionalString(ctx.SenderId);
+    const accountId = normalizeOptionalString(ctx.AccountId);
+    const conversationId =
+      normalizeOptionalString(ctx.NativeChannelId) ??
+      normalizeOptionalString(ctx.OriginatingTo) ??
+      normalizeOptionalString(ctx.To) ??
+      normalizeOptionalString(ctx.From);
+    const messageId =
+      normalizeOptionalString(ctx.MessageSidFull) ??
+      normalizeOptionalString(ctx.MessageSid) ??
+      normalizeOptionalString(ctx.MessageSidFirst) ??
+      normalizeOptionalString(ctx.MessageSidLast);
+    const terminalFields = resolveInboundMessageAuditTerminal(
+      terminal.outcome,
+      terminal.options?.reason,
+    );
+    let agentId = normalizeOptionalString(ctx.AgentId);
+    try {
+      agentId = resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+        agentId: ctx.AgentId,
+      });
+    } catch {
+      // Malformed setup must still produce a content-free terminal with available attribution.
+    }
+    try {
+      emitTrustedMessageAuditEvent({
+        occurredAt,
+        kind: "message",
+        action: "message.inbound.processed",
+        ...terminalFields,
+        actorType: actorId ? "channel_sender" : "system",
+        actorId: actorId ?? "gateway",
+        ...(agentId ? { agentId } : {}),
+        ...(observedRunId ? { runId: observedRunId } : {}),
+        direction: "inbound",
+        // OriginatingChannel is the canonical routing channel id and matches
+        // outbound rows' channel; Surface/Provider can be UI-surface variants
+        // and plugin channels may set only OriginatingChannel.
+        channel:
+          normalizeLowercaseStringOrEmpty(ctx.OriginatingChannel) ||
+          normalizeLowercaseStringOrEmpty(ctx.Surface) ||
+          normalizeLowercaseStringOrEmpty(ctx.Provider) ||
+          "unknown",
+        conversationKind: normalizeChatType(ctx.ChatType) ?? "unknown",
+        durationMs: Math.max(0, occurredAt - startedAt),
+        resultCount: counts.tool + counts.block + counts.final,
+        ...(accountId ? { accountId } : {}),
+        ...(conversationId ? { conversationId } : {}),
+        ...(messageId ? { messageId } : {}),
+      });
+    } catch {
+      // Optional audit observers must never alter message dispatch semantics.
+    }
+  };
+
+  return {
+    note(outcome, options) {
+      notedTerminal = { outcome, ...(options ? { options } : {}) };
+    },
+    observeRunId(runId) {
+      observedRunId = normalizeOptionalString(runId) ?? observedRunId;
+    },
+    finishSuccess(result) {
+      emitTerminal(notedTerminal ?? { outcome: "completed" }, result.counts);
+    },
+    finishError() {
+      let counts: Record<ReplyDispatchKind, number> = { tool: 0, block: 0, final: 0 };
+      try {
+        counts = params.dispatcher.getQueuedCounts();
+      } catch {
+        // Preserve the original dispatch error if the dispatcher is also unhealthy.
+      }
+      emitTerminal({ outcome: "error" }, counts);
+    },
+  };
 }
 
 /** Test-only hooks for overriding selected dispatch dependencies. */
@@ -631,13 +869,30 @@ function resolveChannelModelCandidate(params: {
 }
 
 function resolveStoredModelCandidate(params: {
+  cfg: OpenClawConfig;
   defaultProvider: string;
   entry?: SessionEntry;
   parentSessionKey?: string;
+  sessionAgentId: string;
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
 }): HarnessDefaultCandidate | undefined {
   const storedModelRef = resolveStoredModelOverride({
+    loadSessionEntry: (sessionKey) => {
+      const agentId = resolveSessionAgentId({
+        sessionKey,
+        config: params.cfg,
+        fallbackAgentId: params.sessionAgentId,
+      });
+      const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+      return loadSessionStoreEntry({
+        agentId,
+        storePath,
+        sessionKey,
+        readConsistency: "latest",
+        clone: false,
+      });
+    },
     sessionEntry: params.entry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
@@ -699,9 +954,11 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
       parentSessionKey,
     });
     const storedModelCandidate = resolveStoredModelCandidate({
+      cfg: params.cfg,
       defaultProvider: defaultModelRef.provider,
       entry: params.entry,
       parentSessionKey,
+      sessionAgentId: params.sessionAgentId,
       sessionKey: params.sessionKey,
       sessionStore: params.sessionStore,
     });
@@ -1187,8 +1444,24 @@ export type {
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
+  const messageAuditTerminal = createInboundMessageAuditTerminal(params);
+  try {
+    const result = await dispatchReplyFromConfigInner(params, messageAuditTerminal);
+    messageAuditTerminal?.finishSuccess(result);
+    return result;
+  } catch (error) {
+    messageAuditTerminal?.finishError();
+    throw error;
+  }
+}
+
+async function dispatchReplyFromConfigInner(
+  params: DispatchFromConfigParams,
+  messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
+): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
   if (params.replyOptions?.abortSignal?.aborted) {
+    messageAuditTerminal?.note("skipped", { reason: "reply_operation_aborted" });
     return {
       queuedFinal: false,
       counts: dispatcher.getQueuedCounts(),
@@ -1197,7 +1470,8 @@ export async function dispatchReplyFromConfig(
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");
   const chatId = ctx.To ?? ctx.From;
-  const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+  const messageId =
+    ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey =
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
@@ -1245,13 +1519,8 @@ export async function dispatchReplyFromConfig(
     );
   let agentDispatchStartedAt = 0;
 
-  const recordProcessed = (
-    outcome: "completed" | "skipped" | "error",
-    opts?: {
-      reason?: string;
-      error?: string;
-    },
-  ) => {
+  const recordProcessed = (outcome: DispatchProcessedOutcome, opts?: DispatchProcessedOptions) => {
+    messageAuditTerminal?.note(outcome, opts);
     if (diagnosticsEnabled) {
       replyHotPathTiming.logIfSlow({
         channel,
@@ -1342,6 +1611,7 @@ export async function dispatchReplyFromConfig(
     dispatchOperationSessionKey &&
     initialDispatchReplyOperation
   ) {
+    messageAuditTerminal?.note("skipped", { reason: "reply-operation-active" });
     return {
       queuedFinal: false,
       counts: dispatcher.getQueuedCounts(),
@@ -1388,6 +1658,7 @@ export async function dispatchReplyFromConfig(
     if (sessionKeysMatch(binding.sessionKey, operationSessionStoreEntry.sessionKey)) {
       preparedOperationSessionBinding = binding;
     }
+    params.replyOptions?.onSessionPrepared?.(binding);
   };
   const resolveOperationExpectedSessionId = () =>
     preparedOperationSessionBinding?.sessionId ?? operationSessionStoreEntry.entry?.sessionId;
@@ -1407,6 +1678,7 @@ export async function dispatchReplyFromConfig(
   });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
   const verboseProgress = createShouldEmitVerboseProgress({
+    agentId: sessionAgentId,
     sessionKey: acpDispatchSessionKey,
     storePath: sessionStoreEntry.storePath,
     initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
@@ -1741,13 +2013,24 @@ export async function dispatchReplyFromConfig(
   };
   const getReplyOptions = () => {
     const abortSignal = getDispatchAbortSignal();
-    if (!abortSignal) {
+    const onAgentRunStart = messageAuditTerminal
+      ? (runId: string) => {
+          messageAuditTerminal.observeRunId(runId);
+          params.replyOptions?.onAgentRunStart?.(runId);
+        }
+      : undefined;
+    if (!abortSignal && !onAgentRunStart) {
       return params.replyOptions;
     }
     return {
       ...params.replyOptions,
-      abortSignal,
-      queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
+      ...(abortSignal
+        ? {
+            abortSignal,
+            queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
+          }
+        : {}),
+      ...(onAgentRunStart ? { onAgentRunStart } : {}),
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
     };
   };

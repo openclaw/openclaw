@@ -51,7 +51,6 @@ import {
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveCodexAppServerForModelProvider,
@@ -251,6 +250,7 @@ import {
   buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   resolveCodexAppServerThreadModelSelection,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
@@ -263,6 +263,7 @@ import {
 } from "./tool-progress-normalization.js";
 import {
   createCodexTrajectoryRecorder,
+  type CodexHostTrajectoryRecorder,
   normalizeCodexTrajectoryError,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
@@ -1063,7 +1064,6 @@ export async function runCodexAppServerAttempt(
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
-  const hadSessionFile = await pathExists(activeSessionFile);
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
     sessionFile: activeSessionFile,
@@ -1074,6 +1074,7 @@ export async function runCodexAppServerAttempt(
     !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
       ? []
       : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []);
+  const hadSessionTranscriptState = historyMessages.length > 0;
   const hookContextWindowFields = {
     ...(effectiveContextWindowInfo?.tokens
       ? { contextTokenBudget: effectiveContextWindowInfo.tokens }
@@ -1114,11 +1115,12 @@ export async function runCodexAppServerAttempt(
     });
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
-      hadSessionFile,
+      hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
       sessionKey: contextSessionKey,
       sessionFile: activeSessionFile,
+      sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
       providerId: effectiveRuntimeProviderId,
@@ -1231,6 +1233,7 @@ export async function runCodexAppServerAttempt(
           ),
           projection: contextEngineProjection,
           dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+          legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
         })
       : { project: true, reason: "per-turn-projection" };
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
@@ -1582,12 +1585,20 @@ export async function runCodexAppServerAttempt(
     skillsPrompt: skillsCollaborationInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
     tools: toolBridge.availableSpecs,
   });
+  const hostTrajectoryRecorder = (
+    params as EmbeddedRunAttemptParams & {
+      trajectoryRecorder?: CodexHostTrajectoryRecorder | null;
+    }
+  ).trajectoryRecorder;
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveCwd,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
+    trajectoryRecorder: hostTrajectoryRecorder,
+    trajectorySessionFile: params.trajectorySessionFile,
     tools: toolBridge.availableSpecs,
+    warn: (message, fields) => embeddedAgentLog.warn(message, fields),
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadLifecycleBinding;
@@ -3633,6 +3644,7 @@ export async function runCodexAppServerAttempt(
         sessionIdUsed: activeSessionId,
         sessionKey: contextSessionKey,
         sessionFile: activeSessionFile,
+        sessionTarget: params.sessionTarget,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,
         tokenBudget: effectiveContextTokenBudget,

@@ -139,12 +139,13 @@ export function agentLoopContinue(
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
 ): EventStream<AgentEvent, AgentMessage[]> {
-  if (context.messages.length === 0) {
+  const lastMessage = context.messages.at(-1);
+  if (!lastMessage) {
     throw new Error("Cannot continue: no messages in context");
   }
 
-  if (context.messages[context.messages.length - 1].role === "assistant") {
-    throw new TranscriptNotContinuableError(context.messages[context.messages.length - 1].role);
+  if (lastMessage.role === "assistant") {
+    throw new TranscriptNotContinuableError(lastMessage.role);
   }
 
   const stream = createAgentStream();
@@ -205,12 +206,13 @@ export async function runAgentLoopContinue(
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AgentMessage[]> {
-  if (context.messages.length === 0) {
+  const lastMessage = context.messages.at(-1);
+  if (!lastMessage) {
     throw new Error("Cannot continue: no messages in context");
   }
 
-  if (context.messages[context.messages.length - 1].role === "assistant") {
-    throw new TranscriptNotContinuableError(context.messages[context.messages.length - 1].role);
+  if (lastMessage.role === "assistant") {
+    throw new TranscriptNotContinuableError(lastMessage.role);
   }
 
   const newMessages: AgentMessage[] = [];
