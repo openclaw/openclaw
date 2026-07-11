@@ -196,25 +196,20 @@ export async function fetchChatUsers(
 
           if (result.success) {
             const users = result.data?.users ?? [];
-            // Evict stale entries for this origin so a hostile caller that
-            // rotates through many webhook URLs cannot grow the Map without
-            // bound. Preserve other origins' entries — a different endpoint's
-            // refresh must not delete another endpoint's last-known-good
-            // fallback (the stale-on-error contract in the failure branches).
-            const currentOrigin = parsedUrl.origin;
-            for (const [key, entry] of chatUserCache) {
-              let sameOrigin = false;
-              try {
-                sameOrigin = new URL(key).origin === currentOrigin;
-              } catch {
-                // Malformed cache key — skip, do not evict.
+            // Bound cache growth without deleting other endpoints' fallback
+            // data. Each key is its own listUrl, so a stale entry is replaced
+            // naturally when the same endpoint refreshes. A cap on total
+            // entries reclaims space only when the cache actually grows large,
+            // and the oldest (least-recently refreshed) entry is removed first.
+            // This preserves every active endpoint's stale-on-error fallback
+            // even when another endpoint on the same NAS refreshes.
+            const MAX_CHAT_USER_CACHE_ENTRIES = 100;
+            while (chatUserCache.size >= MAX_CHAT_USER_CACHE_ENTRIES) {
+              const oldestKey = chatUserCache.keys().next().value;
+              if (oldestKey === undefined) {
+                break;
               }
-              if (!sameOrigin) {
-                continue;
-              }
-              if (now - entry.cachedAt >= CACHE_TTL_MS) {
-                chatUserCache.delete(key);
-              }
+              chatUserCache.delete(oldestKey);
             }
             chatUserCache.set(listUrl, {
               users,

@@ -442,74 +442,70 @@ describe("fetchChatUsers", () => {
     const firstCall = firstHttpsGetCall();
     expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
-  it("evicts stale same-origin cache entries when inserting a fresh one", async () => {
-    // The module-level chatUserCache only evicts stale entries on
-    // successful insert. Verify that stale entries are removed from
-    // the Map so a caller rotating through many webhook URLs cannot
-    // grow the cache without bound.
+  it("bounds cache growth by removing the oldest entry when the cap is reached", async () => {
+    // Regression: a caller rotating through many webhook URLs must not
+    // grow the Map without bound. When the cache reaches its cap, the
+    // oldest entry (least-recently refreshed) is evicted and newer
+    // entries remain.
     const clientModule = await import("./client.js");
-    const { chatUserCache, CACHE_TTL_MS } = clientModule.testing;
-    const listUrlA =
-      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22regression-a%22";
-    const listUrlB =
-      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22regression-b%22";
+    const { chatUserCache } = clientModule.testing;
+    chatUserCache.clear();
 
-    // Populate cache with a fresh entry for urlA
-    chatUserCache.set(listUrlA, {
-      users: [{ user_id: 1, username: "alice", nickname: "a" }],
-      cachedAt: fakeNowMs,
-    });
+    // Fill the cache up to its cap (100). Each key is a distinct URL.
+    const base =
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22seed-";
+    for (let i = 0; i < 100; i++) {
+      chatUserCache.set(`${base}${i}%22`, {
+        users: [{ user_id: i, username: `user-${i}`, nickname: `nick-${i}` }],
+        cachedAt: fakeNowMs - i,
+      });
+    }
+    expect(chatUserCache.size).toBe(100);
 
-    // Advance past TTL so urlA entry is stale
-    fakeNowMs += CACHE_TTL_MS + 1;
-    vi.setSystemTime(fakeNowMs);
-
-    // Insert urlB via fetchChatUsers — the eviction pass must
-    // delete stale urlA from the Map
-    mockUserListResponse([{ user_id: 2, username: "bob", nickname: "b" }]);
+    // Refresh a new endpoint — the oldest entry must be evicted to
+    // make room, and the new entry must be present.
+    mockUserListResponse([{ user_id: 999, username: "new", nickname: "new" }]);
     await fetchChatUsers(
-      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22regression-b%22",
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22newest%22",
     );
 
-    // Verify stale urlA was evicted
-    expect(chatUserCache.has(listUrlA)).toBe(false);
-
-    // Verify fresh urlB is still present
-    expect(chatUserCache.has(listUrlB)).toBe(true);
+    expect(chatUserCache.size).toBe(100);
+    expect(chatUserCache.has(`${base}0%22`)).toBe(false); // oldest evicted
+    expect(
+      chatUserCache.has(
+        "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22newest%22",
+      ),
+    ).toBe(true);
   });
 
-  it("preserves other-origin stale cache entries on cross-origin refresh", async () => {
-    // Regression: a successful refresh for endpoint B (nas2) must
-    // NOT evict endpoint A's stale entry (nas1).  If it did, A's
-    // last-known-good fallback would be lost and reply delivery
-    // would fall back to the incompatible webhook user ID.
+  it("preserves other endpoints' fallback entries on same-origin refresh", async () => {
+    // Regression: a successful refresh for endpoint B must NOT evict
+    // endpoint A's stale entry, even on the same NAS origin. Both
+    // endpoints are active; A's stale fallback is still needed if A's
+    // next refresh fails.
     const clientModule = await import("./client.js");
     const { chatUserCache, CACHE_TTL_MS } = clientModule.testing;
     const listUrlA =
-      "https://nas1.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22origin-a%22";
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22same-origin-a%22";
     const listUrlB =
-      "https://nas2.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22origin-b%22";
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22same-origin-b%22";
 
-    // Seed cache with a stale entry for endpoint A (nas1 origin)
+    // Seed cache with a stale entry for endpoint A
     chatUserCache.set(listUrlA, {
       users: [{ user_id: 1, username: "alice", nickname: "a" }],
       cachedAt: fakeNowMs - CACHE_TTL_MS - 1,
     });
 
-    // Refresh endpoint B (nas2, different origin) — must NOT
-    // evict A's stale entry
+    // Refresh endpoint B on the same origin — must NOT evict A's entry
     mockUserListResponse([{ user_id: 2, username: "bob", nickname: "b" }]);
     await fetchChatUsers(
-      "https://nas2.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22origin-b%22",
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22same-origin-b%22",
     );
 
-    // Verify A's stale entry is preserved (fallback for failed refresh)
     expect(chatUserCache.has(listUrlA)).toBe(true);
     expect(chatUserCache.get(listUrlA)?.users).toEqual([
       { user_id: 1, username: "alice", nickname: "a" },
     ]);
-
-    // Verify B's fresh entry is present
     expect(chatUserCache.has(listUrlB)).toBe(true);
   });
 });
