@@ -277,6 +277,54 @@ describe("AppSidebar session scroll fade", () => {
   });
 });
 
+describe("AppSidebar session pagination", () => {
+  it("does not show pagination controls at the ten-session boundary", async () => {
+    const keys = [
+      "agent:main:main",
+      ...Array.from({ length: 9 }, (_, index) => `agent:main:session-${index + 1}`),
+    ];
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", keys));
+
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
+  });
+
+  it("reveals sessions ten at a time and offers See less after thirty", async () => {
+    const keys = Array.from({ length: 41 }, (_, index) => `agent:main:session-${index + 1}`);
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", keys));
+    const rows = () => sidebar.querySelectorAll(".sidebar-recent-session");
+    const button = (label: string) =>
+      sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+
+    expect(rows()).toHaveLength(10);
+    expect(button("See more")).not.toBeNull();
+    expect(button("See less")).toBeNull();
+
+    button("See more")?.click();
+    await sidebar.updateComplete;
+    expect(rows()).toHaveLength(20);
+    expect(button("See less")).toBeNull();
+
+    button("See more")?.click();
+    await sidebar.updateComplete;
+    expect(rows()).toHaveLength(30);
+    expect(button("See less")).toBeNull();
+
+    button("See more")?.click();
+    await sidebar.updateComplete;
+    expect(rows()).toHaveLength(40);
+    expect(button("See more")).not.toBeNull();
+    expect(button("See less")).not.toBeNull();
+
+    button("See less")?.click();
+    await sidebar.updateComplete;
+    expect(rows()).toHaveLength(30);
+    expect(button("See less")).toBeNull();
+  });
+});
+
 describe("AppSidebar lobster outcome wiring", () => {
   it.each([
     ["panel", "failed", "error"],

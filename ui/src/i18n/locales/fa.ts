@@ -2171,6 +2171,8 @@ export const fa: TranslationMap = {
       sortUpdated: "آخرین به‌روزرسانی",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "اقدامات برای {count} نشست",
+      seeLess: "See less",
+      seeMore: "See more",
       workSessions: "کار",
     },
     welcome: {

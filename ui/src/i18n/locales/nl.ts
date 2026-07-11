@@ -2183,6 +2183,8 @@ export const nl: TranslationMap = {
       sortUpdated: "Laatst bijgewerkt",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Acties voor {count} sessies",
+      seeLess: "See less",
+      seeMore: "See more",
       workSessions: "Werk",
     },
     welcome: {

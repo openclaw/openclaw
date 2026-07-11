@@ -2150,6 +2150,8 @@ export const hi: TranslationMap = {
       sortUpdated: "अंतिम अपडेट",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "{count} सत्रों के लिए कार्रवाइयाँ",
+      seeLess: "See less",
+      seeMore: "See more",
       workSessions: "कार्य",
     },
     welcome: {

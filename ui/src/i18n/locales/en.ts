@@ -2159,6 +2159,8 @@ export const en: TranslationMap = {
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} sessions",
+      seeLess: "See less",
+      seeMore: "See more",
       workSessions: "Work",
     },
     welcome: {

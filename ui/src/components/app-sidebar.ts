@@ -121,6 +121,8 @@ type SidebarSessionGroupDropTarget = {
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
+const SIDEBAR_SESSION_PAGE_SIZE = 10;
+const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
 
@@ -226,6 +228,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
   @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
+  @state() private visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
@@ -423,6 +426,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.sessionsAgentId = null;
     this.sessionRowsByAgent = {};
     this.sessionCreatedOrder.clear();
+    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
   }
 
   private renderBrand() {
@@ -571,7 +575,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       agents.length > 1
         ? this.sidebarRowsForAgent(this.expandedAgentId(), navigationState)
         : navigationState.visibleSessions;
-    const sections = groupSidebarSessionRows(rows, {
+    const sections = groupSidebarSessionRows(rows.slice(0, this.visibleSessionLimit), {
       grouping: this.sessionsGrouping,
       knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
     });
@@ -670,6 +674,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     this.clearSessionSelection();
+    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
     context.agentSelection.set(nextAgentId);
     void context.sessions.refresh({
       agentId: nextAgentId,
@@ -1983,7 +1988,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     rows: SidebarRecentSession[],
     options: { showDraft: boolean; showFallback: boolean },
   ) {
-    const sections = groupSidebarSessionRows(rows, {
+    const visibleRows = rows.slice(0, this.visibleSessionLimit);
+    const sections = groupSidebarSessionRows(visibleRows, {
       grouping: this.sessionsGrouping,
       // Stored-but-empty groups stay visible as sections so a freshly created
       // group is usable as a move target before its first session arrives.
@@ -1997,6 +2003,50 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           options.showFallback && rows.length === 0 && section.id === "ungrouped",
         ),
       )}
+      ${this.renderSessionPagination(rows.length, visibleRows.length)}
+    `;
+  }
+
+  private renderSessionPagination(total: number, visible: number) {
+    const canShowMore = visible < total;
+    const canShowLess = visible > SIDEBAR_SESSION_SEE_LESS_THRESHOLD;
+    if (!canShowMore && !canShowLess) {
+      return nothing;
+    }
+    return html`
+      <div class="sidebar-session-pagination">
+        ${canShowMore
+          ? html`<button
+              type="button"
+              class="sidebar-session-pagination__button"
+              aria-label=${t("chat.sidebar.seeMore")}
+              @click=${() => {
+                this.visibleSessionLimit = Math.min(
+                  total,
+                  this.visibleSessionLimit + SIDEBAR_SESSION_PAGE_SIZE,
+                );
+              }}
+            >
+              ${t("chat.sidebar.seeMore")}
+            </button>`
+          : nothing}
+        ${canShowLess
+          ? html`<button
+              type="button"
+              class="sidebar-session-pagination__button"
+              aria-label=${t("chat.sidebar.seeLess")}
+              @click=${() => {
+                this.clearSessionSelection();
+                this.visibleSessionLimit = Math.max(
+                  SIDEBAR_SESSION_PAGE_SIZE,
+                  this.visibleSessionLimit - SIDEBAR_SESSION_PAGE_SIZE,
+                );
+              }}
+            >
+              ${t("chat.sidebar.seeLess")}
+            </button>`
+          : nothing}
+      </div>
     `;
   }
 

@@ -2175,6 +2175,8 @@ export const uk: TranslationMap = {
       sortUpdated: "Останнє оновлення",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Дії для {count} сеансів",
+      seeLess: "See less",
+      seeMore: "See more",
       workSessions: "Робота",
     },
     welcome: {

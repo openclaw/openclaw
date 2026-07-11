@@ -2200,6 +2200,8 @@ export const de: TranslationMap = {
       sortUpdated: "Zuletzt aktualisiert",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Aktionen für {count} Sitzungen",
+      seeLess: "See less",
+      seeMore: "See more",
       workSessions: "Arbeit",
     },
     welcome: {

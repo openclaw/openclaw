@@ -745,7 +745,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
-  it("shows every sidebar session and supports complete drag-managed groups", async () => {
+  it("pages sidebar sessions and supports complete drag-managed groups", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await browser.newContext({
       locale: "en-US",
@@ -771,6 +771,8 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       const sidebarRows = page.locator(".sidebar-recent-session");
+      await expect.poll(() => sidebarRows.count()).toBe(10);
+      await page.getByRole("button", { name: "See more" }).click();
       await expect.poll(() => sidebarRows.count()).toBe(12);
       await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(page, "sidebar-all-sessions.png");
@@ -867,6 +869,8 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             .getAttribute("aria-expanded"),
         )
         .toBe("false");
+      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(9);
+      await page.getByRole("button", { name: "See more" }).click();
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;

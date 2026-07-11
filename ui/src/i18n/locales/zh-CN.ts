@@ -2123,6 +2123,8 @@ export const zh_CN: TranslationMap = {
       sortUpdated: "最近更新",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "{count} 个会话的操作",
+      seeLess: "See less",
+      seeMore: "See more",
       workSessions: "工作",
     },
     welcome: {

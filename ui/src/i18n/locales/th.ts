@@ -2130,6 +2130,8 @@ export const th: TranslationMap = {
       sortUpdated: "อัปเดตล่าสุด",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "การดำเนินการสำหรับเซสชัน {count} รายการ",
+      seeLess: "See less",
+      seeMore: "See more",
       workSessions: "งาน",
     },
     welcome: {

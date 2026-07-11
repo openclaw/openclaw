@@ -2149,6 +2149,8 @@ export const ar: TranslationMap = {
       sortUpdated: "آخر تحديث",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "إجراءات لـ {count} جلسات",
+      seeLess: "See less",
+      seeMore: "See more",
       workSessions: "العمل",
     },
     welcome: {
