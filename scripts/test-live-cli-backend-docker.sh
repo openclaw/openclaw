@@ -374,6 +374,7 @@ WRAP
   fi
   if [ "$auth_mode" = "subscription" ]; then
     claude --version
+    direct_probe_output="$(mktemp)"
     direct_probe_log="$(mktemp)"
     set +e
     claude \
@@ -384,28 +385,31 @@ WRAP
       --setting-sources user \
       --strict-mcp-config \
       --mcp-config '{"mcpServers":{}}' \
-      --no-session-persistence >"$direct_probe_log" 2>&1
+      --no-session-persistence >"$direct_probe_output" 2>"$direct_probe_log"
     direct_probe_status=$?
     set -e
     print_redacted_direct_probe_log() {
-      sed -E \
+      {
+        cat "$direct_probe_output"
+        cat "$direct_probe_log"
+      } | sed -E \
         -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<redacted-email>/g' \
-        -e 's/(sk-ant-|sk-)[A-Za-z0-9_-]+/<redacted-secret>/g' \
-        "$direct_probe_log" >&2
+        -e 's/(sk-ant-|sk-)[A-Za-z0-9_-]+/<redacted-secret>/g' >&2
     }
     if [ "$direct_probe_status" -ne 0 ]; then
       echo "ERROR: direct Claude subscription probe exited with status $direct_probe_status." >&2
       print_redacted_direct_probe_log
-      rm -f "$direct_probe_log"
+      rm -f "$direct_probe_output" "$direct_probe_log"
       exit "$direct_probe_status"
     fi
-    if ! grep -Eiq '(^|[^[:alnum:]])(4|four)([^[:alnum:]]|$)' "$direct_probe_log"; then
+    direct_output="$(<"$direct_probe_output")"
+    if [[ ! "$direct_output" =~ ^[[:space:]]*(4|[Ff][Oo][Uu][Rr])[[:space:]]*$ ]]; then
       echo "ERROR: direct Claude subscription probe did not return the expected arithmetic result." >&2
       print_redacted_direct_probe_log
-      rm -f "$direct_probe_log"
+      rm -f "$direct_probe_output" "$direct_probe_log"
       exit 1
     fi
-    rm -f "$direct_probe_log"
+    rm -f "$direct_probe_output" "$direct_probe_log"
     echo "[claude-subscription] direct claude -p probe ok"
   else
     claude auth status || true
