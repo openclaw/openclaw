@@ -70,7 +70,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "write",
     label: "write",
-    description: "Create or overwrite files",
+    description: "Create, overwrite, or append to files",
     sectionId: "fs",
     profiles: ["coding"],
   },

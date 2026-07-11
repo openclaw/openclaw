@@ -43,7 +43,7 @@ const FALLBACK_TOOL_SECTIONS: AgentToolSection[] = [
     label: "Files",
     tools: [
       { id: "read", label: "read", description: "Read file contents" },
-      { id: "write", label: "write", description: "Create or overwrite files" },
+      { id: "write", label: "write", description: "Create, overwrite, or append to files" },
       { id: "edit", label: "edit", description: "Make precise edits" },
       { id: "apply_patch", label: "apply_patch", description: "Patch files (OpenAI)" },
     ],
