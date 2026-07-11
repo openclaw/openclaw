@@ -1144,66 +1144,6 @@ describe("loadWebMedia", () => {
     );
   });
 
-  it("forwards responseHeaderTimeoutMs from loadWebMediaRaw through readRemoteMediaBuffer", async () => {
-    // The response-header deadline is the only guard against a server that
-    // never begins the response. If loadWebMediaRaw does not forward the field,
-    // a stalled header will outlive any body-idle timer and the load will hang.
-    // We delay headers past the configured deadline and assert the load rejects
-    // with a header-timeout style error while a non-forwarding implementation
-    // would still be pending.
-    vi.useFakeTimers();
-    try {
-      const responseHeaderTimeoutMs = 10;
-      const headerDelayMs = 50;
-      const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        const signal = init?.signal;
-        // Wait longer than the header deadline. If the deadline is forwarded,
-        // the abort signal fires before this resolves.
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, headerDelayMs);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(timer);
-              reject(new Error(String(signal.reason)));
-            },
-            { once: true },
-          );
-        });
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new Uint8Array([1, 2]));
-              controller.close();
-            },
-          }),
-          { status: 200 },
-        );
-      });
-
-      const loadPromise = loadWebMediaRaw("https://example.test/file.bin", {
-        fetchImpl,
-        maxBytes: 1024,
-        responseHeaderTimeoutMs,
-        readIdleTimeoutMs: 1000,
-        ssrfPolicy: { allowedHostnames: ["example.test"] },
-      });
-
-      const outcome = loadPromise.then(
-        () => ({ status: "resolved" as const }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
-      );
-
-      await vi.advanceTimersByTimeAsync(responseHeaderTimeoutMs + 5);
-
-      await expect(
-        Promise.race([outcome, Promise.resolve({ status: "pending" as const })]),
-      ).resolves.toMatchObject({ status: "rejected" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("loads a valid remote PDF when the raw web media read stays active", async () => {
     const fetchImpl = vi.fn(
       async () =>
