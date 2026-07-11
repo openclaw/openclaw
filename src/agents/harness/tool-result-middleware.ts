@@ -69,7 +69,7 @@ function isValidMiddlewareDetails(
     return false;
   }
   if (typeof value === "string") {
-    state.bytes += value.length;
+    state.bytes += Buffer.byteLength(value, "utf8");
     return state.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
   }
   if (typeof value === "number" || typeof value === "boolean") {
@@ -97,7 +97,7 @@ function isValidMiddlewareDetails(
   }
   for (const [key, entry] of Object.entries(value)) {
     state.keys += 1;
-    state.bytes += key.length;
+    state.bytes += Buffer.byteLength(key, "utf8");
     if (state.keys > MAX_MIDDLEWARE_DETAILS_KEYS || state.bytes > MAX_MIDDLEWARE_DETAILS_BYTES) {
       return false;
     }

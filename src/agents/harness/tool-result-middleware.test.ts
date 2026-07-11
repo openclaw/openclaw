@@ -634,4 +634,35 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
     expect(result.details).toEqual({ compacted: true, runtime: "codex", harness: "codex" });
   });
+
+  it("counts multi-byte UTF-8 characters towards the details byte budget", async () => {
+    // Each CJK character is 1 UTF-16 code unit but 3 UTF-8 bytes.
+    // A details payload of 40_000 CJK chars is 40_000 .length units
+    // but 120_000 UTF-8 bytes — exceeding the 100_000 byte budget.
+    // The byte counter must use Buffer.byteLength, not string.length,
+    // to reject oversized non-ASCII payloads.
+    const cjkChar = "中"; // 中 — 3 UTF-8 bytes
+    const payload = cjkChar.repeat(40_000);
+    // 40_000 UTF-16 units < 100_000, but 120_000 UTF-8 bytes > 100_000
+    expect(payload.length).toBe(40_000);
+    expect(Buffer.byteLength(payload, "utf8")).toBe(120_000);
+
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({
+        result: {
+          content: [{ type: "text", text: "compacted" }],
+          details: { payload },
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+  });
 });
