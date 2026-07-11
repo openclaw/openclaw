@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import WebKit
 
 private final class DashboardWindowContentView: NSView {
@@ -114,7 +115,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         splitViewController.splitView.autosaveName = DashboardWindowLayout.linkBrowserSplitAutosaveName
 
         let dashboardViewController = NSViewController()
-        dashboardViewController.view = self.webView
+        dashboardViewController.view = Self.makeDashboardPane(webView: self.webView)
         let dashboardItem = NSSplitViewItem(viewController: dashboardViewController)
         dashboardItem.minimumThickness = DashboardWindowLayout.mainBrowserMinWidth
 
@@ -273,6 +274,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window?.makeFirstResponder(self.webView)
         window?.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+        Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
     }
 
     func closeDashboard() {
@@ -578,6 +580,34 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return self.webView
         }
         return linkWebView
+    }
+
+    /// The dashboard pane hosts the web UI plus the floating browser-login
+    /// import banner; the banner renders empty (zero height) until the shared
+    /// model has an offer or outcome to show.
+    private static func makeDashboardPane(webView: WKWebView) -> NSView {
+        let container = NSView()
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(webView)
+        let banner = NSHostingView(rootView: BrowserProfileImportBannerView(model: .shared))
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(banner)
+        // Preferred card width; the required side insets win on narrow panes.
+        let bannerWidth = banner.widthAnchor.constraint(equalToConstant: 560)
+        bannerWidth.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            // Float just below the 50px titlebar clearance the native chrome
+            // CSS reserves so the card never collides with window controls.
+            banner.topAnchor.constraint(equalTo: container.topAnchor, constant: 58),
+            banner.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            banner.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 16),
+            bannerWidth,
+        ])
+        return container
     }
 
     private static func makeWindow(contentView: NSView) -> NSWindow {
