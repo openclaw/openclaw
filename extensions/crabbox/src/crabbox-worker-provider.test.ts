@@ -12,6 +12,7 @@ import {
 const LEASE_ID = "cbx_012345abcdef";
 const FALLBACK_LEASE_ID = "cbx_20260711123456123456";
 const TESTBOX_LEASE_ID = "tbx_Test-123";
+const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 const HOST_KEY_ERROR =
   "Crabbox inspect does not expose the SSH host key required by the worker provider contract";
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
@@ -63,6 +64,37 @@ function providerWithRunner(runCommand: CrabboxCommandRunner) {
 }
 
 describe("Crabbox worker provider", () => {
+  it("returns a pinned endpoint when inspect exposes provisioned host-key material", async () => {
+    let warmed = false;
+    const provider = providerWithRunner(async (argv) => {
+      if (argv[1] === "warmup") {
+        warmed = true;
+        return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+      }
+      if (argv.includes(LEASE_ID)) {
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      return warmed
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult({ code: 4, stderr: `lease/server not found: ${argv.at(-2)}` });
+    });
+
+    await expect(provider.provision(PROFILE, "provision:host-pin")).resolves.toEqual({
+      leaseId: LEASE_ID,
+      ssh: {
+        host: "worker.example.test",
+        port: 2222,
+        user: "openclaw",
+        hostKey: HOST_KEY,
+        keyRef: {
+          source: "file",
+          provider: "crabbox",
+          id: `/leases/${LEASE_ID}/identity`,
+        },
+      },
+    });
+  });
+
   it("stops a newly provisioned lease when inspect cannot supply a host key", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const runCommand: CrabboxCommandRunner = async (argv, options) => {
@@ -476,6 +508,52 @@ describe("Crabbox worker provider", () => {
       [binary, "inspect", "--provider", "coder", "--id", LEASE_ID, "--json"],
       [binary, "stop", "--provider", "coder", "--id", LEASE_ID],
     ]);
+  });
+
+  it("resolves its lease-bound identity marker through current inspect output", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+    });
+    if (!provider.resolveSshIdentity) {
+      throw new Error("expected Crabbox identity resolver");
+    }
+
+    await expect(
+      provider.resolveSshIdentity({
+        leaseId: LEASE_ID,
+        profile: PROFILE,
+        keyRef: {
+          source: "file",
+          provider: "crabbox",
+          id: `/leases/${LEASE_ID}/identity`,
+        },
+      }),
+    ).resolves.toEqual({ kind: "path", path: "/tmp/crabbox-worker-key" });
+    expect(calls).toEqual([
+      [SIBLING_BINARY, "inspect", "--provider", "aws", "--id", LEASE_ID, "--json"],
+    ]);
+  });
+
+  it("rejects a Crabbox identity marker for another lease before invoking the CLI", async () => {
+    let invoked = false;
+    const provider = providerWithRunner(async () => {
+      invoked = true;
+      return commandResult();
+    });
+    if (!provider.resolveSshIdentity) {
+      throw new Error("expected Crabbox identity resolver");
+    }
+
+    await expect(
+      provider.resolveSshIdentity({
+        leaseId: LEASE_ID,
+        profile: PROFILE,
+        keyRef: { source: "file", provider: "crabbox", id: "/leases/cbx_other/identity" },
+      }),
+    ).rejects.toThrow("does not match its lease");
+    expect(invoked).toBe(false);
   });
 
   it("rejects non-Crabbox lifecycle lease ids before invoking the CLI", async () => {
