@@ -2236,6 +2236,73 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(committedBinding).not.toHaveProperty("pendingSupervisionBranch");
   });
 
+  it("rejects an applied commit when verification sees a changed connection", async () => {
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const finalThreadId = "thread-final";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const identity = await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId },
+    });
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/archive") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const bindingStore: CodexAppServerBindingStore = {
+      ...testCodexAppServerBindingStore,
+      read: vi.fn(async (storeIdentity) => {
+        const current = await testCodexAppServerBindingStore.read(storeIdentity);
+        if (current?.threadId !== finalThreadId || current.pendingSupervisionBranch) {
+          return current;
+        }
+        return { ...current, appServerRuntimeFingerprint: "changed-connection" };
+      }),
+      mutate: vi.fn(async (storeIdentity, mutation) => {
+        const result = await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
+        if (mutation.kind === "commit-pending-supervision-branch") {
+          throw new Error("binding write failed after commit");
+        }
+        return result;
+      }),
+    };
+    const abandonClient = vi.fn(async () => undefined);
+
+    await expect(
+      startOrResumeThreadImpl({
+        client: { request } as never,
+        abandonClient,
+        bindingStore,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      }),
+    ).rejects.toThrow(`binding changed while commit was uncertain: ${finalThreadId}`);
+    expect(
+      request.mock.calls
+        .filter(([method]) => method === "thread/archive")
+        .map(([, requestParams]) => requestParams),
+    ).toEqual([{ threadId: probeThreadId }]);
+    expect(abandonClient).toHaveBeenCalledOnce();
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      threadId: finalThreadId,
+    });
+  });
+
   it("abandons without cleanup when a failed canonical commit cannot be verified", async () => {
     const sourceThreadId = "thread-source";
     const probeThreadId = "thread-probe";
@@ -2307,7 +2374,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
   });
 
-  it("abandons without cleanup when failed canonical commit verification sees changed state", async () => {
+  it("abandons without cleanup when failed commit verification sees a changed connection", async () => {
     const sourceThreadId = "thread-source";
     const probeThreadId = "thread-probe";
     const finalThreadId = "thread-final";
@@ -2343,7 +2410,10 @@ describe("Codex app-server supervised branch lifecycle", () => {
         }
         return {
           ...current,
-          pendingSupervisionBranch: { sourceThreadId },
+          pendingSupervisionBranch: {
+            ...current.pendingSupervisionBranch,
+            connectionFingerprint: "changed-connection",
+          },
         };
       }),
       mutate: vi.fn(async (storeIdentity, mutation) => {

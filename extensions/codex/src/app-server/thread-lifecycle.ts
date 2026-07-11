@@ -1367,6 +1367,7 @@ async function materializePendingSupervisionBranch(
       if (
         matchesMaterializedSupervisionBranch(current, {
           sourceThreadId: pending.sourceThreadId,
+          connectionFingerprint,
           threadId: finalThreadId,
           model: nativeModel,
           modelProvider: bindingModelProvider,
@@ -1565,6 +1566,7 @@ function matchesPendingSupervisionState(
     binding.connectionScope === "supervision" &&
     binding.supervisionSourceThreadId === expected.sourceThreadId &&
     pending?.sourceThreadId === expected.sourceThreadId &&
+    pending.connectionFingerprint === expected.connectionFingerprint &&
     pending.lastTurnId === expected.lastTurnId &&
     cleanupThreadIds.length === expectedCleanupThreadIds.length &&
     cleanupThreadIds.every((threadId, index) => threadId === expectedCleanupThreadIds[index])
@@ -1575,6 +1577,7 @@ function matchesMaterializedSupervisionBranch(
   binding: CodexAppServerThreadBinding | undefined,
   expected: {
     sourceThreadId: string;
+    connectionFingerprint: string;
     threadId: string;
     model: string;
     modelProvider: string | undefined;
@@ -1585,6 +1588,7 @@ function matchesMaterializedSupervisionBranch(
     binding?.threadId === expected.threadId &&
     binding.connectionScope === "supervision" &&
     binding.supervisionSourceThreadId === expected.sourceThreadId &&
+    binding.appServerRuntimeFingerprint === expected.connectionFingerprint &&
     binding.pendingSupervisionBranch === undefined &&
     binding.model === expected.model &&
     binding.modelProvider === expected.modelProvider &&
