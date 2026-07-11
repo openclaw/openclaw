@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loginMiniMaxPortalOAuth, normalizeOAuthExpires } from "./oauth.js";
 
 const MINIMAX_OAUTH_FETCH_TIMEOUT_MS = 30_000;
-const ACCELERATED_FETCH_TIMEOUT_MS = 50;
 
 function cancelTrackedResponse(
   text: string,
@@ -36,19 +35,31 @@ function timeoutResult<T>(value: T, timeoutMs: number): Promise<T> {
   });
 }
 
-function accelerateMiniMaxOAuthFetchTimeout() {
+function captureMiniMaxOAuthFetchTimeout() {
   const originalSetTimeout = globalThis.setTimeout;
-  return vi
-    .spyOn(globalThis, "setTimeout")
-    .mockImplementation(((
-      callback: (...args: unknown[]) => void,
-      timeout?: number,
-      ...args: unknown[]
-    ) =>
-      originalSetTimeout(
-        () => callback(...args),
-        timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS ? ACCELERATED_FETCH_TIMEOUT_MS : timeout,
-      )) as typeof setTimeout);
+  let fireTimeout: (() => void) | undefined;
+  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+    callback: (...args: unknown[]) => void,
+    timeout?: number,
+    ...args: unknown[]
+  ) => {
+    if (timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS) {
+      fireTimeout = () => callback(...args);
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }
+    return originalSetTimeout(() => callback(...args), timeout);
+  }) as typeof setTimeout);
+  return {
+    setTimeoutSpy,
+    fire() {
+      if (!fireTimeout) {
+        throw new Error("expected MiniMax OAuth fetch timeout to be scheduled");
+      }
+      const callback = fireTimeout;
+      fireTimeout = undefined;
+      callback();
+    },
+  };
 }
 
 async function listenOnLoopback(server: ReturnType<typeof createServer>): Promise<number> {
@@ -128,7 +139,7 @@ async function startHangingLoopbackServer(): Promise<{
             waiters.splice(index, 1);
           }
           reject(new Error(`server received ${requests.length} request(s), expected ${count}`));
-        }, 500);
+        }, 2_000);
         waiters.push(waiter);
       });
     },
@@ -155,10 +166,15 @@ async function startHangingLoopbackServer(): Promise<{
   };
 }
 
-async function expectFetchWithoutDeadlineToStayPending(url: string, init?: RequestInit) {
+async function expectFetchWithoutDeadlineToStayPending(params: {
+  url: string;
+  init?: RequestInit;
+  waitForRequest: () => Promise<void>;
+}) {
   const controller = new AbortController();
-  const request = fetch(url, { ...init, signal: controller.signal });
+  const request = fetch(params.url, { ...params.init, signal: controller.signal });
   request.catch(() => undefined);
+  await params.waitForRequest();
 
   const result = await Promise.race([
     request.then(
@@ -227,15 +243,15 @@ describe("loginMiniMaxPortalOAuth", () => {
   it("times out authorization code HTTP requests against a hanging loopback server", async () => {
     const realFetch = fetch;
     const server = await startHangingLoopbackServer();
-    const setTimeoutSpy = accelerateMiniMaxOAuthFetchTimeout();
+    const oauthTimeout = captureMiniMaxOAuthFetchTimeout();
     let loginPromise: Promise<unknown> | undefined;
 
     try {
-      await expectFetchWithoutDeadlineToStayPending(`${server.origin}/control`, {
-        method: "POST",
-        body: "response_type=code",
+      await expectFetchWithoutDeadlineToStayPending({
+        url: `${server.origin}/control`,
+        init: { method: "POST", body: "response_type=code" },
+        waitForRequest: () => server.waitForRequestCount(1),
       });
-      await server.waitForRequestCount(1);
 
       const fetchMock = vi.fn(
         async (_input: RequestInfo | URL, init?: RequestInit) =>
@@ -251,7 +267,8 @@ describe("loginMiniMaxPortalOAuth", () => {
       loginPromise.catch(() => undefined);
 
       await server.waitForRequestCount(2);
-      const result = await loginOutcomeWithin(loginPromise, 500);
+      oauthTimeout.fire();
+      const result = await loginOutcomeWithin(loginPromise, 2_000);
       if (result.status !== "rejected") {
         throw new Error(`expected authorization code request to reject, got ${result.status}`);
       }
@@ -259,7 +276,9 @@ describe("loginMiniMaxPortalOAuth", () => {
       expect(server.requests).toContain("/device-code");
       expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
       expect(
-        setTimeoutSpy.mock.calls.some(([, timeout]) => timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS),
+        oauthTimeout.setTimeoutSpy.mock.calls.some(
+          ([, timeout]) => timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
+        ),
       ).toBe(true);
     } finally {
       await server.close();
@@ -270,15 +289,15 @@ describe("loginMiniMaxPortalOAuth", () => {
   it("times out token polling HTTP requests against a hanging loopback server", async () => {
     const realFetch = fetch;
     const server = await startHangingLoopbackServer();
-    const setTimeoutSpy = accelerateMiniMaxOAuthFetchTimeout();
+    const oauthTimeout = captureMiniMaxOAuthFetchTimeout();
     let loginPromise: Promise<unknown> | undefined;
 
     try {
-      await expectFetchWithoutDeadlineToStayPending(`${server.origin}/control`, {
-        method: "POST",
-        body: "grant_type=user_code",
+      await expectFetchWithoutDeadlineToStayPending({
+        url: `${server.origin}/control`,
+        init: { method: "POST", body: "grant_type=user_code" },
+        waitForRequest: () => server.waitForRequestCount(1),
       });
-      await server.waitForRequestCount(1);
 
       let callCount = 0;
       const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -310,7 +329,8 @@ describe("loginMiniMaxPortalOAuth", () => {
       loginPromise.catch(() => undefined);
 
       await server.waitForRequestCount(2);
-      const result = await loginOutcomeWithin(loginPromise, 500);
+      oauthTimeout.fire();
+      const result = await loginOutcomeWithin(loginPromise, 2_000);
       if (result.status !== "rejected") {
         throw new Error(`expected token polling request to reject, got ${result.status}`);
       }
@@ -318,7 +338,9 @@ describe("loginMiniMaxPortalOAuth", () => {
       expect(server.requests).toContain("/token");
       expect(fetchMock.mock.calls[1]?.[1]?.signal).toBeInstanceOf(AbortSignal);
       expect(
-        setTimeoutSpy.mock.calls.some(([, timeout]) => timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS),
+        oauthTimeout.setTimeoutSpy.mock.calls.some(
+          ([, timeout]) => timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
+        ),
       ).toBe(true);
     } finally {
       await server.close();
