@@ -7,6 +7,8 @@ import { randomUUID } from "node:crypto";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
 import {
+  buildExecDenylistRuleKey,
+  evaluateExecDenylist,
   type ExecDenylistEntry,
   resolveEffectiveExecDenylist,
 } from "../infra/exec-approvals-denylist.js";
@@ -20,6 +22,7 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalUnavailableDecisions,
+  type ExecCommandSegment,
 } from "../infra/exec-approvals.js";
 import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
 import { tail } from "./bash-process-registry.js";
@@ -62,12 +65,55 @@ type NodeGatewayPolicyCheckpoint = {
   askFallback: ExecSecurity;
 };
 
+type NodeGatewayDenylistDispatchBinding = {
+  approvedRuleKeys: readonly string[];
+  screenings: readonly {
+    command: string;
+    segments: readonly ExecCommandSegment[];
+    analysisOk: boolean;
+  }[];
+  resolveCurrentConfigDenylist?: () => readonly ExecDenylistEntry[];
+  configDenylist: readonly ExecDenylistEntry[];
+};
+
+function assertCurrentNodeGatewayDenylistAllowsDispatch(
+  binding: NodeGatewayDenylistDispatchBinding | undefined,
+): void {
+  if (!binding) {
+    return;
+  }
+  const currentConfigDenylist = binding.resolveCurrentConfigDenylist?.() ?? binding.configDenylist;
+  const currentEffective = resolveEffectiveExecDenylist({
+    layers: [currentConfigDenylist],
+  });
+  const approvedRuleKeys = new Set(binding.approvedRuleKeys);
+  const newlyCurrent = currentEffective.filter(
+    (entry) => !approvedRuleKeys.has(buildExecDenylistRuleKey(entry)),
+  );
+  if (newlyCurrent.length === 0) {
+    return;
+  }
+  for (const screening of binding.screenings) {
+    const evaluation = evaluateExecDenylist({
+      command: screening.command,
+      segments: screening.segments,
+      denylist: newlyCurrent,
+      analysisOk: screening.analysisOk,
+    });
+    if (evaluation.match !== null || evaluation.conservativeApproval) {
+      throw new Error("Exec approval changed before execution");
+    }
+  }
+}
+
 async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
   request: ExecuteNodeHostCommandParams;
   authority: NodeGatewayDispatchAuthority;
   currentPolicyAllows?: (policy: { hostSecurity: ExecSecurity; hostAsk: ExecAsk }) => boolean;
   fallbackPolicy?: NodeGatewayPolicyCheckpoint;
+  denylistBinding?: NodeGatewayDenylistDispatchBinding;
 }): Promise<void> {
+  assertCurrentNodeGatewayDenylistAllowsDispatch(params.denylistBinding);
   const current = await execHostShared.resolveExecHostApprovalContext({
     agentId: params.request.agentId,
     security: params.request.security,
@@ -269,9 +315,20 @@ export async function executeNodeHostCommand(
     requiresSecurityAuditSuppressionApproval,
     requiresDenylistApproval,
     denylistWarning,
+    denylistScreenings,
     autoReviewArgv,
     allowAlwaysPersistence,
   } = approvalAnalysis;
+  const gatewayDenylistBinding: NodeGatewayDenylistDispatchBinding = {
+    // Every rule effective before the approval wait (config + approvals-file
+    // layers) was already screened; only rules beyond these keys can revoke.
+    approvedRuleKeys: preparedDenylist.map(buildExecDenylistRuleKey),
+    screenings: denylistScreenings,
+    configDenylist,
+    ...(params.resolveCurrentExecConfigDenylist
+      ? { resolveCurrentConfigDenylist: params.resolveCurrentExecConfigDenylist }
+      : {}),
+  };
   const approvalDecisionAsk =
     nodeApprovalPolicyKnown && nodeAsk !== undefined ? maxAsk(hostAsk, nodeAsk) : "always";
   const effectiveAllowAlwaysPersistence = requiresDenylistApproval
@@ -654,6 +711,7 @@ export async function executeNodeHostCommand(
               request: params,
               authority: approvalSource ? "ask-fallback" : "human-approval",
               fallbackPolicy: currentFallback ?? undefined,
+              denylistBinding: gatewayDenylistBinding,
             });
             // Approved follow-up invocations need approval scopes because they mutate remote node state.
             const raw = await callGatewayTool(
@@ -750,6 +808,7 @@ export async function executeNodeHostCommand(
     request: params,
     authority: inlineDispatchAuthority,
     fallbackPolicy: inlineFallbackPolicy,
+    denylistBinding: gatewayDenylistBinding,
     currentPolicyAllows: (current) =>
       !requiresExecApproval({
         ask: current.hostAsk,

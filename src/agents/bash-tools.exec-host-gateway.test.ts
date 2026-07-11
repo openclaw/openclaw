@@ -2252,6 +2252,38 @@ EOF`,
     expect(runExecProcessMock).not.toHaveBeenCalled();
   });
 
+  it("threads the live config denylist resolver into explicit approval commits", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    const resolveCurrentExecConfigDenylist = () => [{ pattern: "pwd", reason: "hot config" }];
+    commitExecAuthorizationMock.mockRejectedValueOnce(
+      new Error("Exec approval changed before execution"),
+    );
+
+    await expect(
+      runGatewayAllowlist({
+        command: "pwd",
+        turnSourceChannel: "webchat",
+        resolveCurrentExecConfigDenylist,
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+
+    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          denylistBinding: expect.objectContaining({
+            resolveCurrentConfigDenylist: resolveCurrentExecConfigDenylist,
+          }),
+        }),
+      }),
+    );
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+  });
+
   it("binds explicit allow-always persistence to its evaluated policy snapshot", async () => {
     const command = "sh -c 'git status'";
     const env = { PATH: "/usr/bin:/bin" };

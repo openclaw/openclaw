@@ -693,6 +693,49 @@ describe("executeNodeHostCommand", () => {
     ).toBe(false);
   });
 
+  it("does not dispatch an async human approval after a hot config denylist tightens", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    const resolveCurrentExecConfigDenylist = vi.fn(() => [
+      { pattern: "bun **", reason: "tightened during approval wait" },
+    ]);
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      execConfigDenylist: [],
+      resolveCurrentExecConfigDenylist,
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalId: "approval-1" }),
+        "Exec denied (node=node-1 id=approval-1, invoke-failed): bun ./script.ts",
+      );
+    });
+    expect(resolveCurrentExecConfigDenylist).toHaveBeenCalled();
+    expect(
+      callGatewayToolMock.mock.calls.some(
+        ([method, , callParams]) =>
+          method === "node.invoke" &&
+          (callParams as MockNodeInvokeParams | undefined)?.command === "system.run",
+      ),
+    ).toBe(false);
+  });
+
   it("does not dispatch an auto-reviewed command after gateway policy requires a human", async () => {
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
       decision: "allow-once",

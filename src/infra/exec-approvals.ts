@@ -2138,8 +2138,10 @@ export function isExecApprovalPolicySnapshotCurrent(
  * The approvals-file denylist layer is intentionally NOT captured here: it is
  * re-read fresh under the approvals lock at commit time (operators edit
  * exec-approvals.json live), mirroring how allowlist revalidation re-reads the
- * current file. Only the openclaw.json config layer — which is not re-read
- * under the approvals lock — is carried on {@link configDenylist}.
+ * current file. The openclaw.json config layer is also re-resolved under the
+ * lock when the caller can provide {@link resolveCurrentConfigDenylist}; the
+ * captured {@link configDenylist} remains the fallback for runtimes without
+ * access to live gateway config.
  */
 export type ExecDenylistAuthorizationBinding = {
   /** Canonical command text screened at approval time. */
@@ -2153,6 +2155,12 @@ export type ExecDenylistAuthorizationBinding = {
    * `agents.list.<id>.tools.exec.denylist`) captured before the approval wait.
    */
   configDenylist: readonly ExecDenylistEntry[];
+  /**
+   * Re-resolves the current openclaw.json config-layer denylist under the
+   * approvals lock. This lets hot-reloaded STOP rules revoke pending authority
+   * before dispatch.
+   */
+  resolveCurrentConfigDenylist?: () => readonly ExecDenylistEntry[];
   /**
    * Rule keys of the FULL effective denylist (config + approvals-file) present
    * when the approval was requested. Any currently-effective rule whose key is
@@ -2181,11 +2189,12 @@ export type ExecApprovalUsageAuthorization = {
 /**
  * Deny-over-allow re-screen under the approvals lock. Re-reads the current
  * approvals-file denylist (operators edit exec-approvals.json live) and unions
- * it with the config-layer denylist captured before the approval wait, then
- * screens the approved command against only the rules that became effective
- * AFTER the authorization was snapshotted. A newly-current STOP rule that
- * matches — or that leaves an unanalyzable command unscreenable — fails the
- * commit closed so the already-pending approval cannot reach dispatch.
+ * it with the live config-layer denylist when available (fallback: config
+ * layer captured before the approval wait), then screens the approved command
+ * against only the rules that became effective AFTER the authorization was
+ * snapshotted. A newly-current STOP rule that matches — or that leaves an
+ * unanalyzable command unscreenable — fails the commit closed so the
+ * already-pending approval cannot reach dispatch.
  */
 function assertCurrentDenylistAuthorization(params: {
   file: ExecApprovalsFile;
@@ -2200,8 +2209,9 @@ function assertCurrentDenylistAuthorization(params: {
     file: params.file,
     agentId: params.agentId,
   }).denylist;
+  const currentConfigDenylist = binding.resolveCurrentConfigDenylist?.() ?? binding.configDenylist;
   const currentEffective = resolveEffectiveExecDenylist({
-    layers: [binding.configDenylist, currentFileDenylist],
+    layers: [currentConfigDenylist, currentFileDenylist],
   });
   const approvedRuleKeys = new Set(binding.approvedRuleKeys);
   const newlyCurrent = currentEffective.filter(

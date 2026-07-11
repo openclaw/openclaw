@@ -313,6 +313,38 @@ async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<
   return getRuntimeConfig();
 }
 
+/**
+ * Resolves the runtime-config accessor used for the locked commit re-screen:
+ * the injected test/embedding accessor when present, otherwise the same config
+ * module {@link loadSystemRunConfig} reads, so production node hosts also see
+ * hot config changes.
+ */
+async function resolveRuntimeConfigAccessor(
+  opts: HandleSystemRunInvokeOptions,
+): Promise<() => OpenClawConfig> {
+  if (opts.getRuntimeConfig) {
+    return opts.getRuntimeConfig;
+  }
+  const { getRuntimeConfig } = await import("../config/config.js");
+  return getRuntimeConfig;
+}
+
+/**
+ * Re-resolves the current config-layer exec denylist (global + agent override
+ * union) so a STOP rule hot-added while a system.run approval was pending
+ * revokes the pending authority at commit time.
+ */
+function resolveCurrentSystemRunConfigDenylist(
+  getConfig: () => OpenClawConfig,
+  agentId: string | undefined,
+): readonly ExecDenylistEntry[] {
+  const cfg = getConfig();
+  const agentExec = resolveAgentExecConfig(cfg, agentId);
+  return resolveEffectiveExecDenylist({
+    layers: [cfg.tools?.exec?.denylist, agentExec?.denylist],
+  });
+}
+
 async function sendSystemRunDenied(
   opts: Pick<
     HandleSystemRunInvokeOptions,
@@ -1080,6 +1112,7 @@ async function executeSystemRunPhase(
         : (phase.approvalGrantSource ?? "current-policy");
   const delayedAuthorization =
     authorizationSource === "explicit-approval" || authorizationSource === "auto-review";
+  const getCurrentRuntimeConfig = await resolveRuntimeConfigAccessor(opts);
   const authorization: ExecApprovalUsageAuthorization = {
     source: authorizationSource,
     security: phase.security,
@@ -1096,6 +1129,8 @@ async function executeSystemRunPhase(
       segments: phase.segments,
       analysisOk: phase.analysisOk,
       configDenylist: phase.denylistConfigEntries,
+      resolveCurrentConfigDenylist: () =>
+        resolveCurrentSystemRunConfigDenylist(getCurrentRuntimeConfig, phase.agentId),
       approvedRuleKeys: phase.approvedDenylistRuleKeys,
     },
   };

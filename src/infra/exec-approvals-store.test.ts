@@ -2088,6 +2088,43 @@ describe("exec approvals store helpers", () => {
     ).rejects.toThrow("Exec approval changed before execution");
   });
 
+  it("rejects a commit when the config denylist resolver tightens during approval", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    const denylistBinding = {
+      command: "printf approved",
+      segments: [{ argv: ["printf", "approved"] }],
+      analysisOk: true,
+      configDenylist: [],
+      resolveCurrentConfigDenylist: () => [{ pattern: "printf*", reason: "hot config" }],
+      approvedRuleKeys: [],
+    };
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf approved",
+        authorization: {
+          source: "explicit-approval",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          policySnapshot,
+          denylistBinding,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
   it("commits when the matching denylist rule was already effective at approval time", async () => {
     createHomeDir();
     saveExecApprovals({

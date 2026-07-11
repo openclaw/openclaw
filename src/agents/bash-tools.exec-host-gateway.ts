@@ -128,6 +128,12 @@ type ProcessGatewayAllowlistParams = {
    * exec-approvals.json file-layer denylist; deny in either layer denies.
    */
   execConfigDenylist?: ExecDenylistEntry[];
+  /**
+   * Re-resolves the current openclaw.json config-layer exec denylist at the
+   * locked pre-dispatch commit point. Used to revoke pending approvals when a
+   * hot config reload adds/tightens a matching STOP rule.
+   */
+  resolveCurrentExecConfigDenylist?: () => readonly ExecDenylistEntry[];
 };
 
 /** Gateway allowlist outcome before command execution continues. */
@@ -605,6 +611,9 @@ export async function processGatewayAllowlist(
     segments: allowlistEval.segments,
     analysisOk,
     configDenylist: params.execConfigDenylist ?? [],
+    ...(params.resolveCurrentExecConfigDenylist
+      ? { resolveCurrentConfigDenylist: params.resolveCurrentExecConfigDenylist }
+      : {}),
     approvedRuleKeys: resolveEffectiveExecDenylist({
       layers: [approvals.denylist, params.execConfigDenylist],
     }).map(buildExecDenylistRuleKey),

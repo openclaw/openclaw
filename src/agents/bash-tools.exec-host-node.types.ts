@@ -51,4 +51,10 @@ export type ExecuteNodeHostCommandParams = {
    * node approvals-file denylist; deny in either layer denies.
    */
   execConfigDenylist?: ExecDenylistEntry[];
+  /**
+   * Re-resolves the current openclaw.json config-layer exec denylist before
+   * node dispatch. Used to revoke pending approvals when hot config adds or
+   * tightens a matching STOP rule.
+   */
+  resolveCurrentExecConfigDenylist?: () => readonly ExecDenylistEntry[];
 };

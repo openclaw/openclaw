@@ -3611,6 +3611,50 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it("denies dispatch when tools.exec.denylist tightens while node approval is pending", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+        },
+        agents: {},
+      },
+      run: async () => {
+        const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] = async (
+          params,
+        ) => {
+          setRuntimeConfigSnapshot({
+            tools: {
+              exec: {
+                denylist: [{ pattern: "echo *", reason: "tightened hot config" }],
+              },
+            },
+          });
+          await commitExecAuthorizationLocked(params);
+        };
+
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["echo", "ok"],
+          security: "full",
+          ask: "off",
+          approvalDecision: "allow-once",
+          approved: true,
+          commitExecAuthorization: commitAuthorization,
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval state could not be persisted",
+          exact: true,
+        });
+      },
+    });
+  });
+
   it("downgrades denylist-approved allow-always to one-shot before mac companion delegation", async () => {
     await withTempApprovalsHome({
       approvals: {

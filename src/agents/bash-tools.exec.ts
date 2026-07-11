@@ -12,6 +12,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveEffectiveExecDenylist } from "../infra/exec-approvals-denylist.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -52,6 +54,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { resolveAgentConfig } from "./agent-scope.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -1300,6 +1303,32 @@ function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
   return normalizeChatChannelId(defaults?.messageProvider) !== null;
 }
 
+/**
+ * Re-resolves the effective config-layer exec denylist from the live runtime
+ * config so a hot-reloaded STOP rule can revoke a pending approval at the
+ * locked commit point. Mirrors the config + agent-override denylist union used
+ * when exec tool defaults are built (see resolveExecToolConfig).
+ */
+function resolveCurrentExecConfigDenylist(params: {
+  defaults?: ExecToolDefaults;
+  agentId?: string;
+}) {
+  try {
+    const cfg = getRuntimeConfig();
+    const globalExec = cfg.tools?.exec;
+    const agentExec = params.agentId
+      ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec
+      : undefined;
+    return resolveEffectiveExecDenylist({
+      layers: [globalExec?.denylist, agentExec?.denylist],
+    });
+  } catch {
+    // Never screen with less than the pre-wait capture: if live config is
+    // unavailable, fall back to the denylist resolved at tool creation.
+    return params.defaults?.denylist ?? [];
+  }
+}
+
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
@@ -1357,6 +1386,8 @@ export function createExecTool(
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const resolveCurrentConfigDenylist = () =>
+    resolveCurrentExecConfigDenylist({ defaults, agentId });
   const resolveHostForParams = (params: ExecToolArgs): ExecHost => {
     const elevatedDefaults = defaults?.elevated;
     const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
@@ -1893,6 +1924,7 @@ export function createExecTool(
             notifyOnExit,
             trustedSafeBinDirs,
             execConfigDenylist: defaults?.denylist,
+            resolveCurrentExecConfigDenylist: resolveCurrentConfigDenylist,
           });
         }
 
@@ -1919,6 +1951,7 @@ export function createExecTool(
             safeBinProfiles,
             strictInlineEval: defaults?.strictInlineEval,
             execConfigDenylist: defaults?.denylist,
+            resolveCurrentExecConfigDenylist: resolveCurrentConfigDenylist,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
             agentId,

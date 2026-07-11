@@ -84,6 +84,11 @@ type NodeApprovalAnalysis = {
   requiresSecurityAuditSuppressionApproval: boolean;
   requiresDenylistApproval: boolean;
   denylistWarning: string | null;
+  denylistScreenings: readonly {
+    command: string;
+    segments: readonly ExecCommandSegment[];
+    analysisOk: boolean;
+  }[];
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
@@ -735,6 +740,11 @@ export async function analyzeNodeApprovalRequirement(params: {
     requiresSecurityAuditSuppressionApproval,
     requiresDenylistApproval,
     denylistWarning,
+    denylistScreenings: policyCommandEvals.map((entry) => ({
+      command: entry.command,
+      segments: entry.allowlistEval.segments,
+      analysisOk: entry.allowlistEval.analysisOk,
+    })),
     allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
       segments: baseAllowlistEval.segments,
       commandText: approvalCommand,
