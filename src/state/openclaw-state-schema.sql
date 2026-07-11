@@ -220,6 +220,9 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   approval_id TEXT NOT NULL PRIMARY KEY CHECK (
     length(approval_id) > 0 AND approval_id NOT IN ('.', '..')
   ),
+  resolution_ref TEXT NOT NULL CHECK (
+    length(resolution_ref) = 43 AND resolution_ref NOT GLOB '*[^A-Za-z0-9_-]*'
+  ),
   kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin')),
   status TEXT NOT NULL CHECK (status IN ('pending', 'allowed', 'denied', 'expired', 'cancelled')),
   presentation_json TEXT NOT NULL,
@@ -321,6 +324,9 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
 
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry
   ON operator_approvals(status, expires_at_ms, approval_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_resolution_ref
+  ON operator_approvals(resolution_ref);
 
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_source_session_created
   ON operator_approvals(source_session_key, created_at_ms DESC, approval_id);

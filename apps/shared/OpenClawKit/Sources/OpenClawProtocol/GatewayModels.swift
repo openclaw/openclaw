@@ -10191,18 +10191,22 @@ public struct ApprovalGetResult: Codable, Sendable {
 
 public struct ApprovalResolveParams: Codable, Sendable {
     public let id: String
+    public let kind: ApprovalKind
     public let decision: ApprovalDecision
 
     public init(
         id: String,
+        kind: ApprovalKind,
         decision: ApprovalDecision)
     {
         self.id = id
+        self.kind = kind
         self.decision = decision
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case kind
         case decision
     }
 }
