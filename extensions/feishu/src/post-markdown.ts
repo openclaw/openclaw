@@ -98,6 +98,55 @@ function startsMarkdownTableTerminator(line: string): boolean {
   );
 }
 
+function stripMarkdownBlockQuoteContainers(line: string): string {
+  let remaining = line;
+  while (true) {
+    const match = /^ {0,3}> ?/.exec(remaining);
+    if (!match) {
+      return remaining;
+    }
+    remaining = remaining.slice(match[0].length);
+  }
+}
+
+function isMarkdownBlankLine(line: string): boolean {
+  return stripMarkdownBlockQuoteContainers(line).trim().length === 0;
+}
+
+function isIndentedMarkdownCodeLine(line: string): boolean {
+  return /^(?: {4}|\t)/.test(stripMarkdownBlockQuoteContainers(line));
+}
+
+// Indented CommonMark code is literal too; only prose line breaks should
+// receive the extra paragraph separator Feishu needs for visible wrapping.
+function resolveIndentedMarkdownCodeBreaks(lines: string[]): Set<number> {
+  const breaks = new Set<number>();
+  const codeBlockLines = new Set<number>();
+  let inCodeBlock = false;
+  let canStartCodeBlock = true;
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex] ?? "";
+    const isBlank = isMarkdownBlankLine(line);
+    const isIndentedCodeLine = isIndentedMarkdownCodeLine(line);
+    if (inCodeBlock && !isBlank && !isIndentedCodeLine) {
+      inCodeBlock = false;
+    }
+    if (!inCodeBlock && isIndentedCodeLine && canStartCodeBlock) {
+      inCodeBlock = true;
+    }
+    if (inCodeBlock && (isIndentedCodeLine || isBlank)) {
+      codeBlockLines.add(lineIndex);
+    }
+    canStartCodeBlock = isBlank || inCodeBlock;
+  }
+  for (let lineIndex = 0; lineIndex < lines.length - 1; lineIndex++) {
+    if (codeBlockLines.has(lineIndex) && codeBlockLines.has(lineIndex + 1)) {
+      breaks.add(lineIndex);
+    }
+  }
+  return breaks;
+}
+
 function resolveRawMarkdownTableBreaks(lines: string[]): Set<number> {
   const breaks = new Set<number>();
   for (let lineIndex = 0; lineIndex < lines.length - 1; lineIndex++) {
@@ -123,7 +172,9 @@ function resolveRawMarkdownTableBreaks(lines: string[]): Set<number> {
 
 export function materializeFeishuPostMarkdownLineBreaks(text: string): string {
   const parts = text.split(/(\r\n|\n|\r)/);
-  const tableBreaks = resolveRawMarkdownTableBreaks(parts.filter((_, index) => index % 2 === 0));
+  const lines = parts.filter((_, index) => index % 2 === 0);
+  const indentedCodeBreaks = resolveIndentedMarkdownCodeBreaks(lines);
+  const tableBreaks = resolveRawMarkdownTableBreaks(lines);
   let activeFence: MarkdownFence | undefined;
   let result = "";
   for (let index = 0; index < parts.length; index += 2) {
@@ -146,13 +197,16 @@ export function materializeFeishuPostMarkdownLineBreaks(text: string): string {
       continue;
     }
     const nextLine = parts[index + 2] ?? "";
+    const lineIsBlank = isMarkdownBlankLine(line);
+    const nextLineIsBlank = isMarkdownBlankLine(nextLine);
     const keepSingleBreak =
       wasInFence ||
       isFenceBoundary ||
       Boolean(readOpeningMarkdownFence(nextLine)) ||
+      indentedCodeBreaks.has(lineIndex) ||
       tableBreaks.has(lineIndex) ||
-      line.trim().length === 0 ||
-      nextLine.trim().length === 0;
+      lineIsBlank ||
+      nextLineIsBlank;
     result += keepSingleBreak ? separator : `${separator}${separator}`;
   }
   return result;

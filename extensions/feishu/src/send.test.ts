@@ -227,6 +227,85 @@ describe("buildFeishuPostMessagePayload", () => {
     });
   });
 
+  it("preserves single newlines inside indented markdown code blocks", () => {
+    const indentedCode = "    const a = 1;\n    const b = 2;";
+    const payload = buildFeishuPostMessagePayload({
+      messageText: indentedCode,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: indentedCode,
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("preserves single newlines inside blockquoted indented markdown code blocks", () => {
+    const quotedCode = ">     const a = 1;\n>     const b = 2;";
+    const payload = buildFeishuPostMessagePayload({
+      messageText: quotedCode,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: quotedCode,
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("preserves quoted blank lines inside blockquoted indented markdown code blocks", () => {
+    const quotedCode = ">     const a = 1;\n>\n>     const b = 2;";
+    const payload = buildFeishuPostMessagePayload({
+      messageText: quotedCode,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: quotedCode,
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("materializes indented continuations that cannot start code blocks", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Before\n    continuation",
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "Before\n\n    continuation",
+            },
+          ],
+        ],
+      },
+    });
+  });
+
   it("keeps materialized post text instead of reverting at send limits", () => {
     const payload = buildFeishuPostMessagePayload({
       messageText: "abcd\nefgh",
