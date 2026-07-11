@@ -180,7 +180,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       compact: true,
     });
 
-    expect(compact).toHaveLength(20);
+    expect(compact).toHaveLength(19);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
@@ -225,9 +225,18 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
     expect(
       compact
-        .filter((shard) => shard.groups.some((group) => !group.includePatterns))
+        .filter((shard) => shard.checkName.includes("-whole-"))
         .every((shard) => shard.timeoutMinutes === 120),
     ).toBe(true);
+    const largeJobs = compact.filter((shard) =>
+      shard.checkName.startsWith("checks-node-compact-large-"),
+    );
+    expect(
+      largeJobs.map((shard) => shard.groups.filter((group) => !group.includePatterns).length),
+    ).toEqual([2, 2, 2]);
+    expect(
+      compact.some((shard) => shard.checkName.startsWith("checks-node-compact-large-whole-")),
+    ).toBe(false);
     const smallWholeJobs = compact.filter((shard) =>
       shard.checkName.startsWith("checks-node-compact-small-whole-"),
     );

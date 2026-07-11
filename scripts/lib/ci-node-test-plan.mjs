@@ -1190,7 +1190,24 @@ function createCompactNodeTestShardBundles(options = {}) {
 
     const wholeGroups = sortedGroups.filter((candidate) => !candidate.includePatterns);
     const wholeJobCount = Math.ceil(wholeGroups.length / COMPACT_WHOLE_NODE_TEST_JOB_GROUPS);
-    const wholeGroupBatches = createStripedBatches(wholeGroups, wholeJobCount);
+    // A lone whole-config job serializes every fixed suite and owns PR wall time.
+    // Fold it into already-admitted same-runner jobs when their group caps allow it.
+    const canSpreadWholeGroups =
+      wholeJobCount === 1 &&
+      bins.length > 1 &&
+      bins.every(
+        (bin) =>
+          bin.groups.length + Math.ceil(wholeGroups.length / bins.length) <=
+          COMPACT_NODE_TEST_JOB_GROUPS,
+      );
+    const wholeGroupBatches = canSpreadWholeGroups
+      ? []
+      : createStripedBatches(wholeGroups, wholeJobCount);
+    if (canSpreadWholeGroups) {
+      for (const [index, group] of wholeGroups.entries()) {
+        bins[index % bins.length].groups.push(group);
+      }
+    }
     for (const [index, groupBatch] of wholeGroupBatches.entries()) {
       const runnerClass = groupBatch[0].runner.includes("-8vcpu-") ? "large" : "small";
       const distSuffix = groupBatch[0].requiresDist ? "-dist" : "";
