@@ -685,6 +685,19 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(JSON.stringify(events)).not.toContain("[read]");
   });
 
+  it("bounds blank-line buffering after a complete call", async () => {
+    const call = "<function=read></function>\n";
+    const whitespaceChunks = Array.from({ length: 65 }, () => "\n".repeat(4096));
+    const events = await normalize([
+      { type: "text_delta", contentIndex: 0, delta: call },
+      ...whitespaceChunks.map((delta) => ({ type: "text_delta", contentIndex: 0, delta })),
+      { type: "text_delta", contentIndex: 0, delta: "Visible" },
+    ]);
+
+    expect(textDeltas(events)).toEqual(["Visible"]);
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
   it("preserves visible whitespace when an optional JSON closer is absent", async () => {
     const prefix = `[tool:read] {"path":"${"x".repeat(256_001)}`;
     const suffix = '"}\n\nVisible';

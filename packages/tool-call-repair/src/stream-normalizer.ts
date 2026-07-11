@@ -801,7 +801,9 @@ function classifyPending(
     return { kind: "stripped", text: createRangeRemover([leading])(candidate.text) };
   }
   if (leading && leading.activeStart === undefined) {
-    return pending.sequenceOverCap ? { kind: "stripped", text: "" } : { kind: "complete" };
+    return pending.sequenceOverCap || pending.bufferBytes > MAX_PAYLOAD_BYTES
+      ? { kind: "stripped", text: "" }
+      : { kind: "complete" };
   }
   if (leading?.activeStart !== undefined) {
     return !hasNamedCandidate && finalize ? { kind: "false-positive" } : { kind: "incomplete" };
