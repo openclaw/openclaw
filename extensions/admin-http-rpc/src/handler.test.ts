@@ -261,7 +261,9 @@ describe("admin-http-rpc plugin handler", () => {
     const server = createServer((req, res) => {
       void handleAdminHttpRpcRequest(req, res);
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
 
     try {
       const address = server.address() as AddressInfo;
