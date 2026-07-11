@@ -50,6 +50,7 @@ const providerArtifactMocks = vi.hoisted(() => ({
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
 }));
 
 function closeSessionSqliteDatabasesForTest(): void {
