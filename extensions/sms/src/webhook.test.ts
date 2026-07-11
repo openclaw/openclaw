@@ -349,4 +349,43 @@ describe("createSmsWebhookHandler", () => {
 
     expect(defaultRes.statusCode).toBe(200);
   });
+
+  it("rate limits validation-disabled webhook traffic with the invalid-request budget", async () => {
+    const account = createAccount({ dangerouslyDisableSignatureValidation: true });
+    const handler = createSmsWebhookHandler({
+      cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+
+    for (let i = 0; i < 300; i += 1) {
+      const valid = createSignedBody({
+        account,
+        messageSid: `SM-disabled-${i}`,
+      });
+      const res = createResponse();
+      await handler(
+        createRequest(valid.body, "unused-signature", {
+          headers: { "x-forwarded-for": "203.0.113.20" },
+        }),
+        res,
+      );
+      expect(res.statusCode).toBe(200);
+    }
+
+    const overBudget = createSignedBody({
+      account,
+      messageSid: "SM-disabled-over-budget",
+    });
+    const overBudgetRes = createResponse();
+    await handler(
+      createRequest(overBudget.body, "unused-signature", {
+        headers: { "x-forwarded-for": "203.0.113.20" },
+      }),
+      overBudgetRes,
+    );
+
+    expect(overBudgetRes.statusCode).toBe(429);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(300);
+  });
 });
