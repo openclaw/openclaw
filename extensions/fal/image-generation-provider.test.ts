@@ -148,6 +148,63 @@ describe("fal image-generation provider", () => {
     });
   });
 
+  it("applies configured Fal request headers to image generation requests", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      ["api" + "Key"]: "fal-unit-test-value",
+      source: "env",
+      mode: "api-key",
+    } as Awaited<ReturnType<typeof providerAuth.resolveApiKeyForProvider>>);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/generated.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("png-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "fal-ai/flux/dev",
+      prompt: "draw a cat",
+      cfg: {
+        models: {
+          providers: {
+            fal: {
+              request: {
+                headers: {
+                  "X-Fal-Trace": "trace-1",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    if (!request) {
+      throw new Error("expected fal image generation request");
+    }
+    const headers = new Headers(request.init?.headers);
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(headers.get("x-fal-trace")).toBe("trace-1");
+  });
+
   it("shares an explicit operation deadline across generated image downloads", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T00:00:00Z"));

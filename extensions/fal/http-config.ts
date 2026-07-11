@@ -19,6 +19,10 @@ function resolveFalConfiguredBaseUrl(cfg?: OpenClawConfig): string | undefined {
   return normalizeOptionalString(cfg?.models?.providers?.fal?.baseUrl);
 }
 
+function resolveFalConfiguredRequest(cfg?: OpenClawConfig) {
+  return cfg?.models?.providers?.fal?.request;
+}
+
 export async function resolveFalHttpRequestConfig(params: {
   req: FalAuthenticatedRequest;
   baseUrl?: string;
@@ -45,5 +49,6 @@ export async function resolveFalHttpRequestConfig(params: {
     provider: "fal",
     capability: params.capability,
     transport: "http",
+    request: resolveFalConfiguredRequest(params.req.cfg),
   });
 }
