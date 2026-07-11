@@ -142,6 +142,28 @@ describe("browser control server", () => {
     slowTimeoutMs,
   );
 
+  it.each([
+    {
+      body: { kind: "clickCoords", x: "0x10", y: "20" },
+      message: "clickCoords requires non-negative x and y",
+    },
+    {
+      body: { kind: "clickCoords", x: "20", y: "0x10" },
+      message: "clickCoords requires non-negative x and y",
+    },
+  ])(
+    "returns ACT_INVALID_REQUEST for non-decimal coordinate clicks",
+    async ({ body, message }) => {
+      const base = await startServerAndBase();
+      const response = await postActAndReadError(base, body);
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("ACT_INVALID_REQUEST");
+      expect(response.body.error).toContain(message);
+    },
+    slowTimeoutMs,
+  );
+
   it(
     "returns ACT_EXISTING_SESSION_UNSUPPORTED for unsupported existing-session actions",
     async () => {

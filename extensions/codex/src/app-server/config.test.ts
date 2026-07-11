@@ -1473,7 +1473,33 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
-  it("rejects non-curated native plugin identities", () => {
+  it("parses workspace-directory native plugin identities", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          workspaceData: {
+            marketplaceName: "workspace-directory",
+            pluginName: "workspace-data@workspace-directory",
+            allow_destructive_actions: "ask",
+          },
+        },
+      },
+    });
+
+    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([
+      {
+        configKey: "workspaceData",
+        marketplaceName: "workspace-directory",
+        pluginName: "workspace-data@workspace-directory",
+        enabled: true,
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "ask",
+      },
+    ]);
+  });
+
+  it("rejects unsupported native plugin identities", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {
         enabled: true,
@@ -2909,6 +2935,10 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(Object.keys(supervisionEndpointVariants[1]?.properties ?? {}).toSorted()).toEqual(
       [...CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS].toSorted(),
     );
+    expect((pluginEntryProperties.marketplaceName as { enum: string[] }).enum).toStrictEqual([
+      "openai-curated",
+      "workspace-directory",
+    ]);
   });
 
   it("does not schema-default mode-derived policy fields", async () => {

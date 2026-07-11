@@ -163,15 +163,18 @@ describe("browser element commands", () => {
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
-  it("rejects non-decimal coordinate values before dispatch", async () => {
+  it.each([
+    ["0x10", "20", "x"],
+    ["10", "1e3", "y"],
+  ])("rejects non-decimal coordinate value %s before dispatch", async (x, y, label) => {
     const program = createElementProgram();
 
     await expect(
-      program.parseAsync(["browser", "click-coords", "0x10", "20"], { from: "user" }),
+      program.parseAsync(["browser", "click-coords", x, y], { from: "user" }),
     ).rejects.toThrow("__exit__:1");
 
     const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("Invalid x: must be a finite number");
+    expect(capture.runtimeErrors.join("\n")).toContain(`Invalid ${label}: must be a finite number`);
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 

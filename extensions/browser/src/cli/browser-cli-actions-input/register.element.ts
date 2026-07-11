@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseBrowserClickCoordinate } from "../../browser/click-coordinate.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   parseBrowserNonNegativeIntegerOption,
@@ -23,17 +24,8 @@ export function registerBrowserElementCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
-  const parseDecimalNumber = (value: string): number | undefined => {
-    const trimmed = value.trim();
-    if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed)) {
-      return undefined;
-    }
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  };
-
   const parseRequiredNumber = (value: string, label: string): number | undefined => {
-    const parsed = parseDecimalNumber(value);
+    const parsed = parseBrowserClickCoordinate(value);
     if (parsed === undefined) {
       defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
       defaultRuntime.exit(1);

@@ -11,6 +11,7 @@ import {
   ACT_MAX_WAIT_TIME_MS,
   normalizeActBoundedNonNegativeMs,
 } from "../act-policy.js";
+import { parseBrowserClickCoordinate } from "../click-coordinate.js";
 import type { BrowserActRequest, BrowserFormField } from "../client-actions.types.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
@@ -26,8 +27,6 @@ import {
   readRouteTimerTimeoutMs,
 } from "./route-numeric.js";
 import { toBoolean, toStringArray, toStringOrEmpty } from "./utils.js";
-
-const DECIMAL_COORDINATE_PATTERN = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 
 function normalizeActKind(raw: unknown): ActKind {
   const kind = toStringOrEmpty(raw);
@@ -107,18 +106,7 @@ function readActionTimeoutMs(body: Record<string, unknown>): number | undefined 
 }
 
 function readClickCoordinate(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  if (!DECIMAL_COORDINATE_PATTERN.test(normalized)) {
-    return undefined;
-  }
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseBrowserClickCoordinate(value);
 }
 
 function readBoundedActionDurationMs(
