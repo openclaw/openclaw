@@ -45,16 +45,28 @@ struct OpenClawWatchApp: App {
                 },
                 onExecApprovalDecision: { approvalId, gatewayStableID, decision in
                     guard let receiver = self.receiver else { return }
-                    self.inboxStore.markExecApprovalSending(approvalId: approvalId, decision: decision)
+                    guard let attemptID = self.inboxStore.beginExecApprovalDecision(
+                        approvalId: approvalId,
+                        gatewayStableID: gatewayStableID,
+                        decision: decision)
+                    else { return }
                     Task { @MainActor in
                         let result = await receiver.sendExecApprovalResolve(
                             approvalId: approvalId,
                             gatewayStableID: gatewayStableID,
+                            attemptID: attemptID,
                             decision: decision)
-                        self.inboxStore.markExecApprovalSendResult(
+                        self.inboxStore.completeExecApprovalDecision(
                             approvalId: approvalId,
+                            gatewayStableID: gatewayStableID,
+                            attemptID: attemptID,
                             decision: decision,
                             result: result)
+                        if result.requiresCanonicalReadback {
+                            // WatchConnectivity errors can race successful delivery. Keep
+                            // actions frozen while the iPhone reads canonical gateway state.
+                            self.refreshExecApprovalReview(force: true)
+                        }
                     }
                 },
                 onRefreshExecApprovalReview: {
@@ -150,12 +162,52 @@ struct OpenClawWatchApp: App {
 
         self.execApprovalRefreshTask?.cancel()
         self.execApprovalRefreshTask = Task { @MainActor in
+            var requestTokens: [WatchExecApprovalSnapshotRequestToken] = []
+            func consumeCurrentOwnerAcknowledgment(gatewayStableID: String?) -> Bool {
+                var received = false
+                var retainedTokens: [WatchExecApprovalSnapshotRequestToken] = []
+                for token in requestTokens where token.matchesGatewayStableID(gatewayStableID) {
+                    if receiver.consumeExecApprovalSnapshotAcknowledgment(for: token) {
+                        received = true
+                    } else {
+                        retainedTokens.append(token)
+                    }
+                }
+                requestTokens = retainedTokens
+                return received
+            }
+
             self.inboxStore.beginExecApprovalReviewLoading()
             for attempt in 0..<5 {
-                if Task.isCancelled { return }
-                await receiver.requestExecApprovalSnapshot()
-                if !self.inboxStore.execApprovals.isEmpty
-                    || self.inboxStore.hasCompletedExecApprovalSnapshotRefresh
+                if Task.isCancelled {
+                    return
+                }
+                let gatewayStableID = self.inboxStore.execApprovalReviewGatewayStableID
+                receiver.discardExecApprovalSnapshotAcknowledgments(
+                    exceptGatewayStableID: gatewayStableID)
+                let receivedBeforeRequest = consumeCurrentOwnerAcknowledgment(
+                    gatewayStableID: gatewayStableID)
+                let reviewAlreadyAvailable = !force
+                    && !self.inboxStore.execApprovals.contains(where: \.isResolving)
+                    && (!self.inboxStore.execApprovals.isEmpty
+                        || self.inboxStore.hasCompletedExecApprovalSnapshotRefresh)
+                if receivedBeforeRequest || reviewAlreadyAvailable {
+                    self.inboxStore.markExecApprovalReviewLoaded()
+                    return
+                }
+
+                if let token = await receiver.requestExecApprovalSnapshot(
+                    gatewayStableID: gatewayStableID,
+                    heldApprovals: self.inboxStore.execApprovalSnapshotRequestItems(
+                        gatewayStableID: gatewayStableID))
+                {
+                    let currentGatewayStableID = self.inboxStore.execApprovalReviewGatewayStableID
+                    if token.matchesGatewayStableID(currentGatewayStableID) {
+                        requestTokens.append(token)
+                    }
+                }
+                if consumeCurrentOwnerAcknowledgment(
+                    gatewayStableID: self.inboxStore.execApprovalReviewGatewayStableID)
                 {
                     self.inboxStore.markExecApprovalReviewLoaded()
                     return
