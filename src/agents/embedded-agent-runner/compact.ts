@@ -733,7 +733,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
       }
     } else {
       const preparedAuth = protectPreparedProviderRuntimeAuth({
-        sourceApiKey: apiKeyInfo.apiKey,
         provider: runtimeModel.provider,
         preparedAuth: await prepareProviderRuntimeAuth({
           provider: runtimeModel.provider,
