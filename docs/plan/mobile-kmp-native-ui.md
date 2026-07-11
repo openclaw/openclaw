@@ -10,7 +10,15 @@ read_when:
 
 ## Status
 
-Proposed. This is a migration plan, not an approval for a broad rewrite.
+Proposed experiment plan, not an approval for a broad rewrite or a KMP
+foundation-only merge.
+
+The first feasibility prototype established an important negative result: a
+local SwiftPM binary target pointing at a Gradle-produced XCFramework makes a
+clean `OpenClawKit` checkout fail before SwiftPM can build it. That is not an
+acceptable integration model for a package used by iOS, macOS, and Apple Watch.
+Do not move production callers onto that model or add a pre-build script as an
+implicit package requirement.
 
 Kotlin Multiplatform is a good fit for OpenClaw's duplicated, deterministic
 mobile domain logic. It is not a fit for a shared UI rewrite. Android keeps
@@ -21,9 +29,10 @@ No KMP foundation-only PR should merge. The first implementation PR must both
 introduce the minimal build bridge and delete a larger amount of replaced
 production logic while preserving the contract described below.
 
-## Decision
+## Candidate architecture, pending feasibility
 
-Create one small KMP module under the existing Android Gradle root:
+If the feasibility gates below are met, create one small KMP module under the
+existing Android Gradle root:
 
 ```text
 apps/android/
@@ -33,13 +42,24 @@ apps/android/
     src/androidMain/            # only unavoidable Android adapters
     src/iosMain/                # only unavoidable Apple adapters
 apps/ios/
-  OpenClawMobile/               # local SwiftPM facade over the KMP XCFramework
+  OpenClawMobile/               # app-local Swift facade over the KMP XCFramework
 ```
 
-The Android app consumes `:mobile-core` as a normal Gradle dependency. The
-iOS app consumes a local Swift package generated from the KMP XCFramework.
+The Android app consumes `:mobile-core` as a normal Gradle dependency.
 `OpenClawMobile` is the only Swift-facing import for migrated features; the
 generated Kotlin framework stays an implementation detail.
+
+This is a candidate, not a settled package layout. Before a production slice,
+Android and Apple owners must choose one of these supported Apple contracts:
+
+- A self-contained distribution contract that keeps every existing
+  `OpenClawKit` consumer buildable from a clean checkout.
+- An iOS-app-local integration that leaves `OpenClawKit` independent and does
+  not change macOS or Apple Watch behavior as collateral.
+
+If neither contract is both reproducible and net-negative for a complete
+domain slice, retain the native implementations and use shared fixtures to
+manage parity instead.
 
 This keeps one Gradle wrapper and version catalog, rather than creating a
 second mobile build system. The current Android toolchain already uses Kotlin
@@ -131,9 +151,14 @@ facade. This is the stable choice today:
 - Stateful shared services are wrapped by a Swift `actor` when actor isolation
   is the natural iOS contract. Pure functions remain simple Swift value APIs;
   they do not gain an actor merely to hide Kotlin.
-- The generated framework is a local SwiftPM binary target in development.
-  This app-internal integration does not require a hosted binary package or a
-  new publishing system.
+- A local SwiftPM binary target may be used only when it is self-contained at
+  package resolution time. A binary target that points to an untracked Gradle
+  output is rejected: it breaks clean SwiftPM builds before any build script
+  can prepare the framework.
+- An app-local Xcode integration may be evaluated separately, but it must not
+  weaken the existing `OpenClawKit` package contract. It needs explicit Apple
+  ownership, repeatable clean-checkout proof, and a documented framework
+  lifecycle before a production caller moves.
 
 The public Swift symbol graph stays small and intentional: a KMP core remains
 shared, while a deliberately small Swift package hides generated Kotlin symbols
@@ -175,8 +200,12 @@ on its own merits.
 The user's heuristic is a merge gate, not an aspiration:
 
 - For each implementation PR, production additions minus production deletions
-  must be less than zero. Count Gradle, KMP, Swift facade, platform adapter,
-  and build-integration lines as production additions.
+  must be materially less than zero. Count Gradle, KMP, Swift facade, platform
+  adapter, and build-integration lines as production additions.
+- A `-4` diff is not sufficient evidence of a maintenance win. The first
+  production extraction must retire one complete duplicated semantic domain,
+  including its obsolete adapters and tests, and should remove several hundred
+  production lines after all bridge code is counted.
 - Tests, docs, generated Xcode output, and ABI baselines are reported
   separately and do not conceal production growth.
 - A build-only or wrapper-only KMP PR fails this gate. Combine the bridge with
@@ -218,7 +247,8 @@ reviewed.
 | Milestone                   | Deliverable                                                               | Must prove                                                                   | Stop when                                                                     |
 | --------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | 0. Contract map             | Characterization fixtures and documented behavior decisions               | Every first-slice candidate has Android, Swift, test, and protocol evidence. | A behavior difference has no clear authority.                                 |
-| 1. First net-negative slice | KMP module, local SwiftPM facade, deleted parser/normalizer code          | Native UI unchanged; Android and iOS fixture parity; app builds link.        | The bridge cannot be made net-negative or creates a generated-type Swift API. |
+| 0.5 Apple feasibility       | Owner-selected Apple framework lifecycle and a clean-checkout build probe | Existing `OpenClawKit` build remains independent, or an app-local boundary is proven reproducible. | SwiftPM needs a hidden Gradle pre-build, or macOS/watchOS ownership is unclear. |
+| 1. First net-negative slice | KMP module, native Swift facade, deleted complete parser/normalizer domain | Native UI unchanged; Android and iOS fixture parity; app builds link.        | The bridge cannot be materially net-negative or creates a generated-type Swift API. |
 | 2. Protocol value kernel    | Endpoint, auth, TLS, and gateway decision helpers with platform ports     | Security and pairing tests stay equivalent.                                  | Platform secure storage or trust prompts leak into common code.               |
 | 3. Chat domain policy       | Shared transcript/outbox/session reducers, native storage and UI adapters | Offline/reconnect and message identity behavior remain stable.               | Storage requires a dual-read or runtime fallback path.                        |
 | 4. Session orchestration    | Shared state machine only, with native transport and lifecycle adapters   | Reconnect, cancellation, backgrounding, and device invocation are proven.    | A transport or lifecycle invariant cannot be expressed through a narrow port. |

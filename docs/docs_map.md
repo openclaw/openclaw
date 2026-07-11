@@ -4836,7 +4836,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plan/mobile-kmp-native-ui
 - Headings:
   - H2: Status
-  - H2: Decision
+  - H2: Candidate architecture, pending feasibility
   - H2: What stays native
   - H2: Evidence and migration order
   - H2: Target boundaries
