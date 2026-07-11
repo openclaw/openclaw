@@ -35,6 +35,8 @@ import {
 const DEFAULT_CHECKOUT = "/Users/steipete/openclaw";
 const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
 const FULL_SHA_RE = /^[0-9a-f]{40}$/u;
+const GATEWAY_READINESS_ATTEMPTS = 3;
+const GATEWAY_READINESS_RETRY_DELAY_MS = 5_000;
 const DEPENDENCY_INPUT_RE =
   /^(?:\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|patches\/)|(?:^|\/)package\.json$/u;
 
@@ -522,9 +524,50 @@ function assertExactBuild(checkout, expectedSha) {
   return state;
 }
 
+function runBuildWithPreservedMacApp(runCommand, checkout) {
+  const appBundle = path.join(checkout, "dist/OpenClaw.app");
+  if (!existsSync(appBundle)) {
+    runCommand("pnpm", ["build"], checkout);
+    return;
+  }
+  const appStat = lstatSync(appBundle);
+  if (!appStat.isDirectory() || appStat.isSymbolicLink()) {
+    throw new UpdateInvariantError(
+      "unsafe_mac_bundle",
+      `refusing to preserve unsafe Mac app bundle: ${appBundle}`,
+    );
+  }
+  const preservedBundle = path.join(
+    checkout,
+    ".git",
+    `.openclaw-live-mac-${process.pid}-${randomUUID()}.app`,
+  );
+  renameSync(appBundle, preservedBundle);
+  try {
+    runCommand("pnpm", ["build"], checkout);
+  } finally {
+    if (!existsSync(preservedBundle)) {
+      throw new UpdateInvariantError(
+        "missing_preserved_mac_bundle",
+        `preserved Mac app bundle disappeared: ${preservedBundle}`,
+      );
+    }
+    if (existsSync(appBundle)) {
+      throw new UpdateInvariantError(
+        "mac_bundle_restore_conflict",
+        `build unexpectedly created ${appBundle}; preserved bundle remains at ${preservedBundle}`,
+      );
+    }
+    mkdirSync(path.dirname(appBundle), { recursive: true });
+    renameSync(preservedBundle, appBundle);
+  }
+}
+
 function restartGateway(runCommand, checkout, expectedSha) {
   assertExactBuild(checkout, expectedSha);
+  const startedAtMs = Date.now();
   runCommand("pnpm", ["openclaw", "gateway", "restart"], checkout);
+  return startedAtMs;
 }
 
 function verifyGateway(runCommand, checkout, expectedSha) {
@@ -535,6 +578,159 @@ function verifyGateway(runCommand, checkout, expectedSha) {
     checkout,
   );
   runCommand("pnpm", ["openclaw", "health", "--verbose", "--json"], checkout);
+}
+
+function defaultSleep(ms) {
+  execFileSync("sleep", [String(ms / 1_000)]);
+}
+
+export function verifyGatewayReadiness(runCommand, checkout, expectedSha, sleep = defaultSleep) {
+  let lastError;
+  for (let attempt = 1; attempt <= GATEWAY_READINESS_ATTEMPTS; attempt += 1) {
+    try {
+      verifyGateway(runCommand, checkout, expectedSha);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < GATEWAY_READINESS_ATTEMPTS) {
+        sleep(GATEWAY_READINESS_RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw lastError;
+}
+
+function summarizeGatewayLogEntry(entry) {
+  return {
+    time: entry.time,
+    level: entry.level,
+    subsystem: entry.subsystem ?? null,
+    message: String(entry.message ?? "").slice(0, 500),
+  };
+}
+
+export function parseGatewayLogAudit(output, sinceMs) {
+  const entries = output
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        const raw = JSON.parse(line);
+        const rawLevel = raw.type === "log" ? raw.level : raw._meta?.logLevelName;
+        const level = String(rawLevel ?? "").toLowerCase();
+        const time = raw.time ?? raw._meta?.date;
+        const timestamp = Date.parse(time ?? "");
+        if (!level || !Number.isFinite(timestamp) || timestamp < sinceMs) {
+          return [];
+        }
+        let subsystem = raw.subsystem ?? null;
+        if (!subsystem && typeof raw["0"] === "string") {
+          try {
+            subsystem = JSON.parse(raw["0"]).subsystem ?? null;
+          } catch {
+            subsystem = null;
+          }
+        }
+        return [
+          {
+            time,
+            level,
+            subsystem,
+            message: raw.message ?? raw["1"] ?? raw["0"] ?? "",
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
+  const errors = entries
+    .filter((entry) => entry.level === "error" || entry.level === "fatal")
+    .map(summarizeGatewayLogEntry);
+  const warnings = entries.filter((entry) => entry.level === "warn").map(summarizeGatewayLogEntry);
+  return {
+    entries: entries.length,
+    errorCount: errors.length,
+    warningCount: warnings.length,
+    errors: errors.slice(0, 20),
+    warnings: warnings.slice(0, 20),
+  };
+}
+
+function localDateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function readFallbackGatewayLogs(sinceMs) {
+  const dates = new Set([localDateKey(new Date(sinceMs)), localDateKey(new Date())]);
+  const directories = new Set(["/tmp/openclaw", path.join(tmpdir(), "openclaw")]);
+  const contents = [];
+  for (const directory of directories) {
+    for (const date of dates) {
+      const logPath = path.join(directory, `openclaw-${date}.log`);
+      if (existsSync(logPath)) {
+        contents.push(readFileSync(logPath, "utf8"));
+      }
+    }
+  }
+  return contents.join("\n");
+}
+
+function defaultAuditGatewayLogs(checkout, sinceMs) {
+  let output;
+  try {
+    output = execFileSync(
+      process.execPath,
+      [
+        "openclaw.mjs",
+        "logs",
+        "--json",
+        "--limit",
+        "1000",
+        "--max-bytes",
+        "1000000",
+        "--timeout",
+        "10000",
+      ],
+      { cwd: checkout, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
+    );
+  } catch (error) {
+    output = readFallbackGatewayLogs(sinceMs);
+    if (!output) {
+      throw error;
+    }
+  }
+  const audit = parseGatewayLogAudit(output, sinceMs);
+  if (audit.errorCount > 0) {
+    throw new UpdateInvariantError(
+      "gateway_restart_log_errors",
+      `Gateway emitted ${audit.errorCount} error/fatal log entries after restart: ${JSON.stringify(audit.errors.slice(0, 5))}`,
+    );
+  }
+  return audit;
+}
+
+function verifyAndAuditGateway({
+  runCommand,
+  auditGatewayLogs,
+  checkout,
+  expectedSha,
+  sinceMs,
+  sleep,
+}) {
+  let verificationError;
+  try {
+    verifyGatewayReadiness(runCommand, checkout, expectedSha, sleep);
+  } catch (error) {
+    verificationError = error;
+  }
+  const audit = auditGatewayLogs(checkout, sinceMs);
+  if (verificationError) {
+    throw verificationError;
+  }
+  return audit;
 }
 
 export function findExactMacTarget(processes, executable) {
@@ -601,6 +797,9 @@ export function maintainMain(options, dependencies = {}) {
     }
     const runCommand = dependencies.runCommand ?? defaultRunCommand;
     const verifyMacTarget = dependencies.verifyMacTarget ?? defaultVerifyMacTarget;
+    const auditGatewayLogs = dependencies.auditGatewayLogs ?? defaultAuditGatewayLogs;
+    const sleep = dependencies.sleep ?? defaultSleep;
+    let gatewayLogAudit = null;
     let queuedMacState = null;
     if (actions.macAppRebuild) {
       queuedMacState = {
@@ -617,18 +816,35 @@ export function maintainMain(options, dependencies = {}) {
       runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
     }
     if (actions.gatewayBuild) {
-      runCommand("pnpm", ["build"], update.checkout);
+      // Use the existing built CLI directly. Source launchers may auto-build a
+      // stale dist before dispatching `gateway stop`, recreating the live-import race.
+      runCommand(process.execPath, ["dist/index.js", "gateway", "stop"], update.checkout);
+      runBuildWithPreservedMacApp(runCommand, update.checkout);
       assertExactBuild(update.checkout, update.afterSha);
-      restartGateway(runCommand, update.checkout, update.afterSha);
-      verifyGateway(runCommand, update.checkout, update.afterSha);
+      const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
+      gatewayLogAudit = verifyAndAuditGateway({
+        runCommand,
+        auditGatewayLogs,
+        checkout: update.checkout,
+        expectedSha: update.afterSha,
+        sinceMs: restartStartedAt,
+        sleep,
+      });
     } else {
       try {
         verifyGateway(runCommand, update.checkout, update.afterSha);
       } catch {
         actions.gatewayRestart = true;
         actions.gatewaySelfHeal = true;
-        restartGateway(runCommand, update.checkout, update.afterSha);
-        verifyGateway(runCommand, update.checkout, update.afterSha);
+        const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
+        gatewayLogAudit = verifyAndAuditGateway({
+          runCommand,
+          auditGatewayLogs,
+          checkout: update.checkout,
+          expectedSha: update.afterSha,
+          sinceMs: restartStartedAt,
+          sleep,
+        });
       }
     }
     if (actions.macAppRebuild) {
@@ -664,6 +880,7 @@ export function maintainMain(options, dependencies = {}) {
       buildBefore,
       buildChangedPaths,
       actions,
+      ...(gatewayLogAudit ? { gatewayLogAudit } : {}),
       ...(maintenanceState.macTarget ? { macTarget: maintenanceState.macTarget } : {}),
     };
   } finally {

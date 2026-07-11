@@ -630,7 +630,11 @@ export function signalCommandTree(
     useProcessGroup = platform !== "win32",
   }: {
     platform?: NodeJS.Platform;
-    runTaskkill?: typeof spawnSync;
+    runTaskkill?: (
+      command: string,
+      args: readonly string[],
+      options: { stdio: "ignore" },
+    ) => { error?: Error; status: number | null };
     useProcessGroup?: boolean;
   } = {},
 ) {
@@ -1206,10 +1210,11 @@ export async function startLocalSut(
       cwd: params.repoRoot,
       env: mockServerEnv({ ...params, requestLog }),
     });
+    const runningMock = mock;
     await waitForOutputReady(
-      mock.child,
+      runningMock.child,
       /mock-openai listening/u,
-      () => mock.output,
+      () => runningMock.output,
       "mock-openai",
       10_000,
     );
@@ -1219,23 +1224,24 @@ export async function startLocalSut(
       repoRoot: params.repoRoot,
     });
     gateway = spawnLoggedCommand(gatewaySpec.command, gatewaySpec.args, gatewaySpec.options);
+    const runningGateway = gateway;
     await waitForOutputReady(
-      gateway.child,
+      runningGateway.child,
       /\[gateway\] ready/u,
-      () => gateway.output,
+      () => runningGateway.output,
       "gateway",
       60_000,
     );
     return {
       ...config,
       drained,
-      gateway: gateway.child,
+      gateway: runningGateway.child,
       get gatewayLog() {
-        return gateway.output;
+        return runningGateway.output;
       },
-      mock: mock.child,
+      mock: runningMock.child,
       get mockLog() {
-        return mock.output;
+        return runningMock.output;
       },
       requestLog,
     };
@@ -1327,10 +1333,10 @@ async function startLocalSutDaemon(params: {
     gatewayPid = spawnDaemon({
       args: gatewaySpec.args,
       command: gatewaySpec.command,
-      cwd: gatewaySpec.options.cwd ?? params.repoRoot,
+      cwd: (gatewaySpec.options.cwd ?? params.repoRoot) as string,
       env: gatewaySpec.options.env ?? gatewayEnvVars,
       logPath: gatewayLog,
-      shell: gatewaySpec.options.shell,
+      shell: gatewaySpec.options.shell as boolean | undefined,
       windowsVerbatimArguments: gatewaySpec.options.windowsVerbatimArguments,
     });
     if (!gatewayPid) {

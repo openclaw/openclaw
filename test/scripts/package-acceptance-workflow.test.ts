@@ -1,7 +1,6 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -59,6 +58,7 @@ type WorkflowStep = {
   if?: string;
   name?: string;
   run?: string;
+  shell?: string;
   uses?: string;
   with?: Record<string, string>;
 };
@@ -2508,23 +2508,24 @@ describe("package artifact reuse", () => {
     );
   });
 
-  it("lets CI Telegram consumers wait on Convex leases instead of GitHub concurrency", () => {
+  it("uses bounded Convex lease waits instead of GitHub concurrency for CI Telegram consumers", () => {
     const telegramJobs = [
-      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E"],
-      [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane"],
-      [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane"],
+      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "1800000"],
+      [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane", "60000"],
+      [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane", "1800000"],
       [
         ".github/workflows/mantis-telegram-live.yml",
         "run_telegram_live",
         "Run Telegram live scenario and capture desktop evidence",
+        "1800000",
       ],
     ] as const;
 
-    for (const [workflowPath, jobName, stepName] of telegramJobs) {
+    for (const [workflowPath, jobName, stepName, acquireTimeoutMs] of telegramJobs) {
       const job = workflowJob(workflowPath, jobName);
       expect(job.concurrency).toBeUndefined();
       const step = workflowStep(job, stepName);
-      expect(step.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("1800000");
+      expect(step.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe(acquireTimeoutMs);
     }
   });
 
