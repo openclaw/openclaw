@@ -234,6 +234,24 @@ describe("detectZaiEndpoint", () => {
     }
   });
 
+  it("includes user-agent header in probe requests", async () => {
+    let capturedHeaders: Record<string, string> = {};
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      capturedHeaders = (init?.headers as Record<string, string>) ?? {};
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      fetchFn,
+    });
+
+    expect(capturedHeaders["user-agent"]).toMatch(/^openclaw\//);
+  });
+
   it("caps oversized probe timeouts before scheduling", async () => {
     const timeoutSpy = vi
       .spyOn(globalThis, "setTimeout")

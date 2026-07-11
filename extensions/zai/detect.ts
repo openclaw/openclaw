@@ -84,6 +84,7 @@ async function probeZaiChatCompletions(params: {
 }): Promise<ProbeResult> {
   try {
     const fetchFn = params.fetchFn ?? globalThis.fetch;
+    const version = process.env.OPENCLAW_VERSION?.trim();
     const res = await fetchWithTimeoutLocal(
       fetchFn,
       `${params.baseUrl}/chat/completions`,
@@ -92,6 +93,7 @@ async function probeZaiChatCompletions(params: {
         headers: {
           authorization: `Bearer ${params.apiKey}`,
           "content-type": "application/json",
+          "user-agent": `openclaw/${version || "dev"}`,
         },
         body: JSON.stringify({
           model: params.modelId,
