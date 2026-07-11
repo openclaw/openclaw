@@ -634,11 +634,16 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
         [
           "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/cli/program/register.onboard.test.ts",
           "src/cli/run-main.test.ts",
           "src/cli/run-main.exit.test.ts",
+          "src/commands/crestodian-with-inference.test.ts",
+          "src/crestodian/assistant.configured.test.ts",
+          "src/crestodian/assistant.test.ts",
           "src/crestodian/crestodian.test.ts",
           "src/crestodian/operations.test.ts",
           "src/crestodian/overview.test.ts",
+          "src/crestodian/setup-inference.test.ts",
           "src/crestodian/audit.test.ts",
         ],
       ],
@@ -646,24 +651,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/e2e/crestodian-first-run-spec.json",
         [
           "test/scripts/docker-e2e-crestodian.test.ts",
-          "src/crestodian/operations.test.ts",
-          "src/crestodian/audit.test.ts",
-        ],
-      ],
-      [
-        "scripts/e2e/crestodian-planner-docker.sh",
-        [
-          "test/scripts/docker-build-helper.test.ts",
-          "test/scripts/docker-e2e-plan.test.ts",
-          "test/scripts/docker-e2e-crestodian.test.ts",
-        ],
-      ],
-      [
-        "scripts/e2e/crestodian-planner-docker-client.mjs",
-        [
-          "test/scripts/docker-e2e-crestodian.test.ts",
-          "src/crestodian/assistant.test.ts",
-          "src/crestodian/crestodian.test.ts",
           "src/crestodian/operations.test.ts",
           "src/crestodian/audit.test.ts",
         ],
@@ -1194,6 +1181,13 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(resolveChangedTestTargetPlan(["scripts/tsconfig.json"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/oxlint-config.test.ts"],
+    });
+  });
+
+  it("keeps the scripts typecheck project on its routing tests", () => {
+    expect(resolveChangedTestTargetPlan(["tsconfig.scripts.json"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
     });
   });
 
@@ -2314,6 +2308,25 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes gateway package targets through the gateway-client lane", () => {
+    expect(
+      buildVitestRunPlans([
+        "packages/gateway-client/src/timeouts.test.ts",
+        "packages/gateway-protocol/src/frame-guards.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.gateway-client.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "packages/gateway-client/src/timeouts.test.ts",
+          "packages/gateway-protocol/src/frame-guards.test.ts",
+        ],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes explicit imported source files through import-graph tests", () => {
     let plans: ReturnType<typeof buildVitestRunPlans> = [];
     withTinyGitRepo(
@@ -2610,8 +2623,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/e2e/crestodian-first-run-docker.sh",
       "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
       "scripts/e2e/crestodian-first-run-spec.json",
-      "scripts/e2e/crestodian-planner-docker.sh",
-      "scripts/e2e/crestodian-planner-docker-client.mjs",
       "scripts/e2e/crestodian-rescue-docker.sh",
       "scripts/e2e/crestodian-rescue-docker-client.ts",
     ];
@@ -2623,13 +2634,17 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-build-helper.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/docker-e2e-crestodian.test.ts",
+        "src/cli/program/register.onboard.test.ts",
         "src/cli/run-main.test.ts",
         "src/cli/run-main.exit.test.ts",
+        "src/commands/crestodian-with-inference.test.ts",
+        "src/crestodian/assistant.configured.test.ts",
+        "src/crestodian/assistant.test.ts",
         "src/crestodian/crestodian.test.ts",
         "src/crestodian/operations.test.ts",
         "src/crestodian/overview.test.ts",
+        "src/crestodian/setup-inference.test.ts",
         "src/crestodian/audit.test.ts",
-        "src/crestodian/assistant.test.ts",
         "src/crestodian/rescue-policy.test.ts",
         "src/crestodian/rescue-message.test.ts",
       ],

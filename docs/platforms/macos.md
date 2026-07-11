@@ -30,22 +30,41 @@ has no macOS app asset, use the newest one that does, or build from source with
 1. Install and launch **OpenClaw.app**.
 2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
 3. Local mode: wait while the app installs its user-space runtime and Gateway.
-4. Complete provider setup and the macOS permission checklist.
-5. Send the onboarding test message.
+4. Establish inference with a live model check. After it passes, Crestodian
+   handles the remaining setup.
+5. Complete the macOS permission checklist and send the onboarding test message.
 
-If the app finds an existing Gateway configuration and connects successfully,
-it treats that Gateway as already set up, skips provider onboarding, and opens
-the dashboard. If the configured Gateway cannot connect, onboarding remains
-available for recovery.
+If the app reaches an existing Gateway whose default agent has a configured
+model, it treats that Gateway as already set up, skips provider onboarding and
+Crestodian, and opens the dashboard. If the Gateway cannot connect or its
+default agent has no model, inference onboarding remains available for
+recovery.
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
+
+## Updates
+
+The dashboard update card updates the signed macOS app through Sparkle first.
+After the app relaunches, it automatically updates and restarts the matching
+app-managed local Gateway. Homebrew and other user-managed CLI installs keep
+the normal Gateway update flow (the card runs the Gateway update directly),
+and the automatic repair never downgrades a newer Gateway or overrides an
+`extended-stable` channel pin.
+
+Sparkle follows the Gateway's `update.channel` setting. `beta` and `dev` opt in
+to beta app builds; `stable`, `extended-stable`, and missing or unknown values
+stay on stable app builds.
 
 ## Open dashboard links
 
 In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar. Each link opens in its own tab; clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls, and it remembers its width.
 
 Right-click an external link to choose **Open in Sidebar**, **Open in Default Browser**, or **Copy Link**. Modified clicks and user-activated new-window links from the dashboard continue to open in the default browser; new-window links inside the sidebar open as new sidebar tabs. Regular browser-hosted Control UI pages keep the browser's normal link and context-menu behavior.
+
+## Import browser logins
+
+When the app runs against a local Gateway and a Chrome-family profile with cookies exists on the Mac, the dashboard window shows a dismissible banner offering to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from the banner's **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Settings → General → Browser login → Import…** re-offers it at any time. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
 
 ## Choose a Gateway mode
 
