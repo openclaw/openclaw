@@ -374,7 +374,12 @@ describe("memory index", () => {
     cacheEnabled?: boolean;
     minScore?: number;
     onSearch?: boolean;
-    hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
+    hybrid?: {
+      enabled: boolean;
+      vectorWeight?: number;
+      textWeight?: number;
+      temporalDecay?: { enabled: boolean; halfLifeDays: number };
+    };
   }): TestCfg {
     return {
       agents: {
@@ -2275,6 +2280,118 @@ describe("memory index", () => {
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
+  });
+
+  it("ranks an exact path stem ahead of a body match before applying the result limit", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0.35,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(path.join(memoryDir, "project-lantern.md"), "Unrelated exact-path body.");
+    await fs.writeFile(
+      path.join(memoryDir, "body-match.md"),
+      "Project lantern project lantern project lantern.",
+    );
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("project-lantern", { maxResults: 1 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/project-lantern.md");
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("uses body relevance within the same exact basename tier in FTS-only mode", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    const weakDir = path.join(memoryDir, "a");
+    const strongDir = path.join(memoryDir, "z");
+    await fs.mkdir(weakDir, { recursive: true });
+    await fs.mkdir(strongDir, { recursive: true });
+    await fs.writeFile(path.join(weakDir, "foo.md"), "Unrelated weak body.");
+    await fs.writeFile(path.join(strongDir, "foo.md"), "foo md foo md foo md strong body");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("foo.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/z/foo.md");
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("keeps boosted score ordering for non-exact FTS-only body matches", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(
+      path.join(memoryDir, "project-memory-notes.md"),
+      "Project memory notes covering workspace context and retrieval behavior.",
+    );
+    await fs.writeFile(path.join(memoryDir, "notes.md"), "Project memory context.");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("project memory context", {
+      maxResults: 1,
+      minScore: 0,
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/project-memory-notes.md");
+    expect(results[0]?.score).toBeLessThanOrEqual(1);
+  });
+
+  it("keeps an exact dated path ahead when temporal decay is enabled", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0.35,
+      hybrid: {
+        enabled: true,
+        temporalDecay: { enabled: true, halfLifeDays: 1 },
+      },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(path.join(memoryDir, "2020-01-01.md"), "Unrelated exact-path body.");
+    await fs.writeFile(path.join(memoryDir, "body-match.md"), "2020 01 01 2020 01 01 2020 01 01");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("2020-01-01", { maxResults: 1 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/2020-01-01.md");
+    expect(results[0]?.score).toBe(1);
   });
 
   it("fails fast instead of searching FTS when an explicit provider is unavailable", async () => {

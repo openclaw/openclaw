@@ -10,7 +10,14 @@ export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
 export const MEMORY_EMBEDDING_CACHE_TABLE = "memory_embedding_cache";
 export const MEMORY_INDEX_STATE_TABLE = "memory_index_state";
 export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
+export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 export const MEMORY_INDEX_VECTOR_TABLE = "memory_index_chunks_vec";
+
+const MEMORY_PATH_FTS_TRIGGER_NAMES = [
+  "memory_index_paths_fts_after_insert",
+  "memory_index_paths_fts_after_update",
+  "memory_index_paths_fts_after_delete",
+] as const;
 
 const LEGACY_MEMORY_INDEX_TRIGGERS = [
   "memory_files_revision_after_insert",
@@ -279,6 +286,66 @@ function migrateLegacyMemoryIndexTables(
   }
 }
 
+/** Drop the canonical source-to-path-FTS maintenance triggers. */
+export function dropMemoryPathFtsTriggers(db: DatabaseSync): void {
+  for (const triggerName of MEMORY_PATH_FTS_TRIGGER_NAMES) {
+    db.exec(`DROP TRIGGER IF EXISTS main.${triggerName}`);
+  }
+}
+
+/** Install the canonical source-to-path-FTS maintenance triggers. */
+export function ensureMemoryPathFtsTriggers(db: DatabaseSync): void {
+  db.exec(`
+    -- Source rowids are implicit and may change during VACUUM. Keep the
+    -- durable derived-index identity on the canonical path/source key.
+    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_insert
+    AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
+    BEGIN
+      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (path, source)
+      VALUES (NEW.path, NEW.source);
+    END;
+    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_update
+    AFTER UPDATE OF path, source ON ${MEMORY_INDEX_SOURCES_TABLE}
+    BEGIN
+      DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
+      WHERE path = OLD.path AND source = OLD.source;
+      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (path, source)
+      VALUES (NEW.path, NEW.source);
+    END;
+    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_delete
+    AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
+    BEGIN
+      DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
+      WHERE path = OLD.path AND source = OLD.source;
+    END;
+  `);
+}
+
+function ensureMemoryPathFtsSchema(params: { db: DatabaseSync; tokenizeClause: string }): void {
+  params.db.exec("SAVEPOINT ensure_memory_index_paths_fts");
+  try {
+    params.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE} USING fts5(
+        path,
+        source UNINDEXED
+        ${params.tokenizeClause}
+      );
+      -- The initial copy and trigger installation share this savepoint. Once
+      -- populated, the triggers own completeness; per-row FTS probes are too costly.
+      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (path, source)
+      SELECT path, source
+      FROM ${MEMORY_INDEX_SOURCES_TABLE}
+      WHERE NOT EXISTS (SELECT 1 FROM ${MEMORY_INDEX_PATHS_FTS_TABLE} LIMIT 1);
+    `);
+    ensureMemoryPathFtsTriggers(params.db);
+    params.db.exec("RELEASE ensure_memory_index_paths_fts");
+  } catch (err) {
+    params.db.exec("ROLLBACK TO ensure_memory_index_paths_fts");
+    params.db.exec("RELEASE ensure_memory_index_paths_fts");
+    throw err;
+  }
+}
+
 /** Ensure canonical memory index tables and the optional FTS table exist. */
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
@@ -416,6 +483,11 @@ export function ensureMemoryIndexSchema(params: {
         FROM ${MEMORY_INDEX_CHUNKS_TABLE}
         WHERE NOT EXISTS (SELECT 1 FROM ${ftsTable} LIMIT 1);
       `);
+      // Deprecated custom FTS tables preserve their body-only contract. The
+      // canonical index owns the separate path table and its source triggers.
+      if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
+        ensureMemoryPathFtsSchema({ db: params.db, tokenizeClause });
+      }
       ftsAvailable = true;
     } catch (err) {
       const message = formatErrorMessage(err);

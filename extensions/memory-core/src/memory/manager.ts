@@ -16,6 +16,7 @@ import {
   readMemoryFile,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
@@ -57,7 +58,7 @@ import {
 } from "./manager-provider-state.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
-import { searchKeyword, searchVector } from "./manager-search.js";
+import { searchKeyword, searchPathKeyword, searchVector } from "./manager-search.js";
 import {
   collectMemoryStatusAggregate,
   resolveInitialMemoryDirty,
@@ -83,6 +84,7 @@ function getLocalEmbeddingRuntimeFacts(provider: EmbeddingProvider | null): unkn
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
+const PATH_FTS_TABLE = MEMORY_INDEX_PATHS_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
@@ -104,7 +106,13 @@ type EmbeddingProbeCacheEntry = {
   expireAtMs: number;
 };
 
-type KeywordSearchHit = MemorySearchResult & { id: string; textScore: number };
+type ExactPathSpecificity = 0 | 1 | 2 | 3;
+
+type KeywordSearchHit = MemorySearchResult & {
+  id: string;
+  textScore: number;
+  exactPathSpecificity: ExactPathSpecificity;
+};
 
 const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
 
@@ -739,8 +747,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         temporalDecay: hybrid.temporalDecay,
         workspaceDir: this.workspaceDir,
       });
-      const sorted = decayed.toSorted((a, b) => b.score - a.score);
-      return this.selectScoredResults(sorted, maxResults, minScore, 0);
+      const ranked = this.rankKeywordOnlyResults(decayed);
+      return this.toMemorySearchResults(this.selectScoredResults(ranked, maxResults, minScore, 0));
     }
 
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
@@ -788,7 +796,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal);
       } else if (!this.provider && this.fts.enabled && this.fts.available) {
         log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
-        return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
+        const ranked = this.rankKeywordOnlyResults(keywordResults);
+        return this.toMemorySearchResults(
+          this.selectScoredResults(ranked, maxResults, minScore, 0),
+        );
       } else {
         throw err;
       }
@@ -850,6 +861,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return results.filter((entry) => entry.score >= relaxedMinScore).slice(0, maxResults);
   }
 
+  private rankKeywordOnlyResults(results: KeywordSearchHit[]): KeywordSearchHit[] {
+    return results
+      .toSorted(
+        (a, b) =>
+          b.exactPathSpecificity - a.exactPathSpecificity ||
+          b.score - a.score ||
+          b.textScore - a.textScore ||
+          a.path.localeCompare(b.path) ||
+          a.startLine - b.startLine ||
+          a.id.localeCompare(b.id),
+      )
+      .map((entry) => (entry.exactPathSpecificity > 0 ? { ...entry, score: 1 } : entry));
+  }
+
   private hasIndexedContent(): boolean {
     const chunkRow = this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() as
       | {
@@ -909,20 +934,40 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
-    const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
-    const results = await searchKeyword({
+    const bodySearch = searchKeyword({
       db: this.db,
       ftsTable: FTS_TABLE,
       query,
       ftsTokenizer: this.settings.store.fts.tokenizer,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
-      sourceFilter,
+      sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
       buildFtsQuery: (raw) => this.buildFtsQuery(raw),
       bm25RankToScore,
       boostFallbackRanking: options?.boostFallbackRanking,
+    }).catch((err: unknown) => {
+      log.warn(`memory search: body keyword query failed: ${formatErrorMessage(err)}`);
+      return [];
     });
-    return results.map((entry) => entry as KeywordSearchHit);
+    const pathSearch = searchPathKeyword({
+      db: this.db,
+      pathFtsTable: PATH_FTS_TABLE,
+      query,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
+      limit,
+      snippetMaxChars: SNIPPET_MAX_CHARS,
+      sourceFilter: this.buildSourceFilter(PATH_FTS_TABLE, sourceFilterList),
+      buildFtsQuery: (raw) => this.buildFtsQuery(raw),
+      bm25RankToScore,
+    }).catch((err: unknown) => {
+      log.warn(`memory search: path keyword query failed: ${formatErrorMessage(err)}`);
+      return [];
+    });
+    const [bodyResults, pathResults] = await Promise.all([bodySearch, pathSearch]);
+    return this.mergeKeywordSearchHits([
+      bodyResults.map((entry) => Object.assign(entry, { exactPathSpecificity: 0 })),
+      pathResults,
+    ]).slice(0, limit);
   }
 
   private async searchKeywordWithFallback(
@@ -969,21 +1014,47 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     for (const results of resultSets) {
       for (const result of results) {
         const existing = seenIds.get(result.id);
-        if (
-          !existing ||
-          result.textScore > existing.textScore ||
-          (result.textScore === existing.textScore && result.score > existing.score)
-        ) {
+        if (!existing) {
           seenIds.set(result.id, result);
+          continue;
+        }
+        existing.textScore = Math.max(existing.textScore, result.textScore);
+        existing.exactPathSpecificity = Math.max(
+          existing.exactPathSpecificity,
+          result.exactPathSpecificity,
+        ) as ExactPathSpecificity;
+        existing.score = Math.max(existing.score, result.score);
+        if (result.snippet.length > existing.snippet.length) {
+          existing.snippet = result.snippet;
         }
       }
     }
-    return [...seenIds.values()].toSorted((a, b) => b.score - a.score);
+    return [...seenIds.values()].toSorted(
+      (a, b) =>
+        b.exactPathSpecificity - a.exactPathSpecificity ||
+        b.score - a.score ||
+        b.textScore - a.textScore ||
+        a.path.localeCompare(b.path) ||
+        a.startLine - b.startLine ||
+        a.id.localeCompare(b.id),
+    );
+  }
+
+  private toMemorySearchResults(results: KeywordSearchHit[]): MemorySearchResult[] {
+    return results.map(
+      ({ id: _id, exactPathSpecificity: _exactPathSpecificity, ...result }) => result,
+    );
   }
 
   private mergeHybridResults(params: {
     vector: Array<MemorySearchResult & { id: string }>;
-    keyword: Array<MemorySearchResult & { id: string; textScore: number }>;
+    keyword: Array<
+      MemorySearchResult & {
+        id: string;
+        textScore: number;
+        exactPathSpecificity: ExactPathSpecificity;
+      }
+    >;
     vectorWeight: number;
     textWeight: number;
     mmr?: { enabled: boolean; lambda: number };
@@ -1007,6 +1078,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         source: r.source,
         snippet: r.snippet,
         textScore: r.textScore,
+        exactPathSpecificity: r.exactPathSpecificity,
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,

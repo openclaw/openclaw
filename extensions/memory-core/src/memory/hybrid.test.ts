@@ -68,6 +68,188 @@ describe("memory hybrid helpers", () => {
     expect(b?.textScore).toBeCloseTo(1);
   });
 
+  it("keeps exact path identifiers ahead of weighted semantic matches", async () => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      vector: [
+        {
+          id: "semantic",
+          path: "memory/semantic.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "semantic",
+          vectorScore: 0.99,
+        },
+      ],
+      keyword: [
+        {
+          id: "exact-path",
+          path: "memory/project-lantern.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "path",
+          textScore: 0.01,
+          exactPathSpecificity: 1,
+        },
+      ],
+    });
+
+    expect(merged.map((entry) => entry.path)).toEqual([
+      "memory/project-lantern.md",
+      "memory/semantic.md",
+    ]);
+    expect(merged[0]?.score).toBe(1);
+    expect(merged[0]?.textScore).toBe(0.01);
+    expect(merged[1]?.score).toBeCloseTo(0.7 * 0.99);
+  });
+
+  it("uses specificity across exact tiers and combined relevance within one tier", async () => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.5,
+      textWeight: 0.5,
+      vector: [
+        {
+          id: "full",
+          path: "memory/full.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "full",
+          vectorScore: 0,
+        },
+        {
+          id: "basename-weak",
+          path: "memory/a/foo.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "basename weak",
+          vectorScore: 0.2,
+        },
+        {
+          id: "basename-strong",
+          path: "memory/z/foo.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "basename strong",
+          vectorScore: 0.9,
+        },
+        {
+          id: "stem",
+          path: "memory/foo.md.bak",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "stem",
+          vectorScore: 1,
+        },
+      ],
+      keyword: [
+        {
+          id: "full",
+          path: "memory/full.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "full",
+          textScore: 0,
+          exactPathSpecificity: 3,
+        },
+        {
+          id: "basename-weak",
+          path: "memory/a/foo.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "basename weak",
+          textScore: 0.1,
+          exactPathSpecificity: 2,
+        },
+        {
+          id: "basename-strong",
+          path: "memory/z/foo.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "basename strong",
+          textScore: 0.8,
+          exactPathSpecificity: 2,
+        },
+        {
+          id: "stem",
+          path: "memory/foo.md.bak",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "stem",
+          textScore: 1,
+          exactPathSpecificity: 1,
+        },
+      ],
+    });
+
+    expect(merged.map((entry) => entry.path)).toEqual([
+      "memory/full.md",
+      "memory/z/foo.md",
+      "memory/a/foo.md",
+      "memory/foo.md.bak",
+    ]);
+    expect(merged.map((entry) => entry.score)).toEqual([1, 1, 1, 1]);
+  });
+
+  it("keeps exact path identifiers ahead after decay, oversized weights, and MMR", async () => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 1,
+      nowMs: Date.UTC(2026, 6, 11),
+      temporalDecay: { enabled: true, halfLifeDays: 1 },
+      mmr: { enabled: true, lambda: 0.5 },
+      vector: [
+        {
+          id: "semantic",
+          path: "memory/semantic.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "semantic neighbor",
+          vectorScore: 1,
+        },
+      ],
+      keyword: [
+        {
+          id: "semantic",
+          path: "memory/semantic.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "semantic neighbor",
+          textScore: 1,
+        },
+        {
+          id: "exact-path",
+          path: "memory/2020-01-01.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "dated exact path",
+          textScore: 0.01,
+          exactPathSpecificity: 1,
+        },
+      ],
+    });
+
+    expect(merged.map((entry) => entry.path)).toEqual([
+      "memory/2020-01-01.md",
+      "memory/semantic.md",
+    ]);
+    expect(merged[0]?.score).toBe(1);
+    expect(merged[1]?.score).toBe(2);
+  });
+
   it("mergeHybridResults prefers keyword snippet when ids overlap", async () => {
     const merged = await mergeHybridResults({
       vectorWeight: 0.5,
