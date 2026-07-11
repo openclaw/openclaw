@@ -75,6 +75,10 @@ export type CodexPluginDestructivePolicy = boolean | "auto" | "ask";
 export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "ask";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
+export const CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME = "workspace-directory";
+export type CodexPluginMarketplaceName =
+  | typeof CODEX_PLUGINS_MARKETPLACE_NAME
+  | typeof CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME;
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;
@@ -184,7 +188,7 @@ export type ResolvedCodexAppServerNetworkProxyConfig = {
 
 export type ResolvedCodexPluginPolicy = {
   configKey: string;
-  marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  marketplaceName: CodexPluginMarketplaceName;
   pluginName: string;
   enabled: boolean;
   allowDestructiveActions: boolean;
@@ -441,7 +445,9 @@ const codexAppServerNetworkProxySchema = z
 const codexPluginEntryConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    marketplaceName: z.literal(CODEX_PLUGINS_MARKETPLACE_NAME).optional(),
+    marketplaceName: z
+      .enum([CODEX_PLUGINS_MARKETPLACE_NAME, CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME])
+      .optional(),
     pluginName: z.string().trim().min(1).optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
   })
@@ -596,7 +602,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   );
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
-      if (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME || !entry.pluginName) {
+      if (!isCodexPluginMarketplaceName(entry.marketplaceName) || !entry.pluginName) {
         return [];
       }
       const entryDestructivePolicy = resolveCodexPluginDestructivePolicy(
@@ -605,7 +611,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
       return [
         {
           configKey,
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          marketplaceName: entry.marketplaceName,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
           allowDestructiveActions: entryDestructivePolicy.allowDestructiveActions,
@@ -622,6 +628,14 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
     destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
     pluginPolicies,
   };
+}
+
+function isCodexPluginMarketplaceName(
+  value: string | undefined,
+): value is CodexPluginMarketplaceName {
+  return (
+    value === CODEX_PLUGINS_MARKETPLACE_NAME || value === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
+  );
 }
 
 function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolicy): {

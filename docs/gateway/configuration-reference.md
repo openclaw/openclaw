@@ -310,7 +310,7 @@ conversation bindings, or any non-Codex harness.
   currently accessible app connected to the authenticated Codex account in
   each new native Codex thread. Default: `false`.
 - `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
-  default destructive-action policy for migrated plugin app elicitations.
+  default destructive-action policy for configured plugin app elicitations.
   Use `true` to accept safe Codex approval schemas without prompting, `false`
   to decline them, `"auto"` to route Codex-required approvals through OpenClaw
   plugin approvals, or `"ask"` to prompt for every plugin write/destructive
@@ -319,12 +319,17 @@ conversation bindings, or any non-Codex harness.
   approvals reviewer for that app before the Codex thread starts.
   Default: `true`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
-  migrated plugin entry when global `codexPlugins.enabled` is also true.
+  configured plugin entry when global `codexPlugins.enabled` is also true.
   Default: `true` for explicit entries.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.marketplaceName`:
-  stable marketplace identity. V1 only supports `"openai-curated"`.
+  stable marketplace identity, required with `pluginName` for every resolved
+  entry. Supports `"openai-curated"` and `"workspace-directory"`. Entries
+  missing either identity field are ignored.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.pluginName`: stable
-  Codex plugin identity from migration, for example `"google-calendar"`.
+  Codex plugin identity, required with `marketplaceName`. A
+  `workspace-directory` entry must use the exact marketplace-qualified
+  `summary.id` returned by `plugin/list`, for example
+  `"example-plugin@workspace-directory"`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the
@@ -335,10 +340,17 @@ to the human reviewer. Other apps and non-app thread approvals keep their
 configured reviewer, so mixed plugin policies do not inherit `"ask"` behavior.
 
 `codexPlugins.enabled` is the global enablement directive. Explicit plugin
-entries written by migration are the durable install and repair eligibility set.
-`plugins["*"]` is not supported, there is no `install` switch, and local
-`marketplacePath` values are intentionally not config fields because they are
-host-specific.
+entries written by migration are the durable curated install and repair
+eligibility set. Manually configured `workspace-directory` entries must already
+be installed and enabled, and their owned apps must be accessible; OpenClaw
+does not install or authenticate them. If Codex rejects the explicit workspace
+catalog request, enabled workspace entries fail closed with
+`marketplace_missing` while curated entries from the default catalog remain
+available. `plugins["*"]` is not supported, there is no `install` switch, and
+local `marketplacePath` values are intentionally not config fields because they
+are host-specific. See
+[Native Codex plugins](/plugins/codex-native-plugins) for app-server version and
+readiness requirements.
 
 `app/list` readiness checks are cached for one hour and refreshed
 asynchronously when stale. Codex thread app config is computed at Codex harness
