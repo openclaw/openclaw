@@ -33,18 +33,9 @@ const noTables = {
   tables: false,
 } satisfies Partial<ChannelPresentationCapabilities>;
 
-type BlockText = { type: string; text: string };
-
-function blockText(b: { type: string; text?: string }): BlockText {
-  return { type: b.type, text: b.text ?? "" };
-}
-
 describe("splitPresentationText (via adapter path)", () => {
   describe("empty-prefix handling (P2 fix)", () => {
     test("text starting with supplementary emoji at utf16-units limit 1", () => {
-      const presentation: MessagePresentation = {
-        blocks: [{ type: "table", caption: "🎉" } as any],
-      };
       // Build a realistic table so fallback text starts with emoji caption
       const p: MessagePresentation = {
         blocks: [
