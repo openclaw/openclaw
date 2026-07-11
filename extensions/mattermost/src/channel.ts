@@ -33,6 +33,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 import {
   chunkTextForOutbound,
@@ -627,6 +628,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   deliveryCapabilities: {
     durableFinal: {
       text: true,
@@ -866,7 +868,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       }),
     }),
     gateway: {
-      resolveGatewayAuthBypassPaths: ({ cfg }) => resolveMattermostGatewayAuthBypassPaths(cfg),
+      // Same function as the public gateway-auth artifact so the pre-plugin
+      // fast path and the loaded plugin cannot drift (pinned by contract test).
+      resolveGatewayAuthBypassPaths: resolveMattermostGatewayAuthBypassPaths,
       startAccount: async (ctx) => {
         const account = ctx.account;
         const statusSink = createAccountStatusSink({
@@ -922,16 +926,19 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       matchesMattermostToolContextTarget({ target, toolContext }),
     resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
       const ambientThreadId = threadId != null ? String(threadId) : undefined;
-      const resolvedThreadId =
-        replyDelivery?.chatType === "direct"
-          ? undefined
-          : replyDelivery
-            ? replyToIsExplicit
-              ? (replyToId ?? ambientThreadId)
-              : (ambientThreadId ?? replyToId ?? undefined)
-            : (ambientThreadId ?? replyToId);
+      // Direct chats stay flat when their effective mode is off. Opted-in DMs
+      // preserve the thread root for routed replies and message-tool follow-ups.
+      const isFlatDirect =
+        replyDelivery?.chatType === "direct" && replyDelivery.replyToMode === "off";
+      const resolvedThreadId = isFlatDirect
+        ? undefined
+        : replyDelivery
+          ? replyToIsExplicit
+            ? (replyToId ?? ambientThreadId)
+            : (ambientThreadId ?? replyToId ?? undefined)
+          : (ambientThreadId ?? replyToId);
       return {
-        replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
+        replyToId: isFlatDirect ? null : resolvedThreadId,
         threadId: resolvedThreadId ?? null,
       };
     },

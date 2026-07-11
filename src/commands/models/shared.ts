@@ -31,10 +31,12 @@ export const formatTokenK = (value?: number | null) => {
   if (!value || !Number.isFinite(value)) {
     return "-";
   }
-  if (value < 1024) {
+  // Token counts use decimal-K (/1000), matching formatTokenCount and how
+  // providers advertise context windows (e.g. 200000 -> "200k", not "195k").
+  if (value < 1000) {
     return `${Math.round(value)}`;
   }
-  return `${Math.round(value / 1024)}k`;
+  return `${Math.round(value / 1000)}k`;
 };
 
 /** Formats millisecond durations for model command output. */

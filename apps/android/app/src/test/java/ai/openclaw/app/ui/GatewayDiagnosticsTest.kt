@@ -12,8 +12,11 @@ class GatewayDiagnosticsTest {
       mapOf(
         "AUTH_BOOTSTRAP_TOKEN_INVALID" to "Setup code expired",
         "AUTH_TOKEN_MISSING" to "Gateway token needed",
+        "AUTH_TOKEN_NOT_CONFIGURED" to "Gateway token not configured",
         "AUTH_PASSWORD_MISSING" to "Gateway password needed",
         "AUTH_PASSWORD_MISMATCH" to "Gateway password invalid",
+        "AUTH_PASSWORD_NOT_CONFIGURED" to "Gateway password not configured",
+        "AUTH_SCOPE_MISMATCH" to "Gateway access needs review",
         "AUTH_TOKEN_MISMATCH" to "Saved auth invalid",
         "AUTH_DEVICE_TOKEN_MISMATCH" to "Saved auth invalid",
         "CONTROL_UI_DEVICE_IDENTITY_REQUIRED" to "Device identity required",

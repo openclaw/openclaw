@@ -162,10 +162,7 @@ function buildAutoReplySystemPrompt(params: {
       : "",
     params.includeGroupIntro
       ? buildGroupIntro({
-          cfg: {} as OpenClawConfig,
-          sessionCtx: params.sessionCtx,
           defaultActivation: "mention",
-          silentToken: SILENT_REPLY_TOKEN,
         })
       : "",
     params.groupSystemPrompt?.trim() ?? "",
@@ -350,11 +347,11 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
   return {
     scenario: "auto-reply-group",
     focus: "Group chat bootstrap, steady state, and runtime event turns",
-    expectedStableSystemAfterTurnIds: ["t3"],
+    expectedStableSystemAfterTurnIds: ["t2", "t3"],
     turns: [
       {
         id: "t1",
-        label: "First group turn with one-time intro",
+        label: "First group turn with session-stable intro",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: {
@@ -375,7 +372,7 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
           },
           body: "Can you investigate this issue?",
         }),
-        notes: ["Expected first-turn bootstrap churn", "Not steady-state"],
+        notes: ["Group intro belongs to the session-stable system prompt"],
       },
       {
         id: "t2",
@@ -392,6 +389,7 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
             ],
           },
           includeGroupChatContext: true,
+          includeGroupIntro: true,
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -405,7 +403,7 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
           },
           body: "Give a short update.",
         }),
-        notes: ["One-time intro gone", "Should settle afterward"],
+        notes: ["Group intro remains stable after turn one"],
       },
       {
         id: "t3",
@@ -422,6 +420,7 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
             ],
           },
           includeGroupChatContext: true,
+          includeGroupIntro: true,
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -739,7 +738,7 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
 }
 
 /** Create a temp workspace with prompt composition context files. */
-export async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
+async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
   const workspaceDir = await makeTempWorkspace("openclaw-prompt-cache-");
   await writeWorkspaceFile({
     dir: workspaceDir,

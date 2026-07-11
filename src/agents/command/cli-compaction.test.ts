@@ -273,6 +273,74 @@ describe("runCliTurnCompactionLifecycle", () => {
     );
   });
 
+  it("treats already-compacted CLI transcript compaction as a no-op", async () => {
+    const sessionKey = "agent:main:qwen-already-compacted";
+    const sessionId = "session-qwen-already-compacted";
+    const sessionFile = path.join(tmpDir, "session-qwen-already-compacted.jsonl");
+    const storePath = path.join(tmpDir, "sessions-qwen-already-compacted.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const recordCliCompactionInStore = vi.fn();
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => ({
+        ...buildContextEngine({ compactCalls }),
+        async compact(compactParams) {
+          compactCalls.push(compactParams);
+          throw new Error("Already compacted");
+        },
+      }),
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: maintenance,
+      recordCliCompactionInStore,
+    });
+
+    const updatedEntry = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "ollama",
+      model: "qwen3:14b",
+    });
+
+    expect(compactCalls).toHaveLength(1);
+    expect(maintenance).not.toHaveBeenCalled();
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(updatedEntry).toBe(sessionEntry);
+  });
+
   it("routes OpenAI Codex harness CLI compaction through native harness compaction", async () => {
     const sessionKey = "agent:main:codex";
     const sessionId = "session-codex";
@@ -288,6 +356,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       totalTokens: 950,
       totalTokensFresh: true,
       agentHarnessId: "codex",
+      modelSelectionLocked: true,
       authProfileOverride: "github-copilot:work",
       authProfileOverrideSource: "auto",
     };
@@ -378,12 +447,15 @@ describe("runCliTurnCompactionLifecycle", () => {
       currentTokenCount: 950,
       contextEngine,
       agentHarnessId: "codex",
+      modelSelectionLocked: true,
       authProfileId: "github-copilot:work",
       trigger: "budget",
       force: true,
     });
     expect(compactAgentHarnessSessionCalls[0]?.[0].contextEngineRuntimeContext).toMatchObject({
       authProfileId: "github-copilot:work",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
     });
     expect(compactCalls).toHaveLength(0);
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
@@ -527,6 +599,25 @@ describe("runCliTurnCompactionLifecycle", () => {
 
     expect(compactAgentHarnessSession).not.toHaveBeenCalled();
     expect(compactCalls).toHaveLength(1);
+
+    const lockedEntry: SessionEntry = { ...sessionEntry, modelSelectionLocked: true };
+    await expect(
+      runCliTurnCompactionLifecycle({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        sessionEntry: lockedEntry,
+        sessionStore: { [sessionKey]: lockedEntry },
+        storePath,
+        sessionAgentId: "main",
+        workspaceDir: tmpDir,
+        agentDir: tmpDir,
+        provider: "openclaw",
+        model: "sonnet-4.6",
+      }),
+    ).rejects.toThrow("CLI compaction cannot replace a model-locked native harness runtime");
+    expect(compactAgentHarnessSession).not.toHaveBeenCalled();
+    expect(compactCalls).toHaveLength(1);
   });
 
   it("surfaces nonrecoverable native harness CLI compaction failures", async () => {
@@ -622,7 +713,7 @@ describe("runCliTurnCompactionLifecycle", () => {
 
     const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
     const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
-    const compactAgentHarnessSession = vi.fn(async () => ({
+    const compactAgentHarnessSession = vi.fn(async (_params: Record<string, unknown>) => ({
       ok: true,
       compacted: false,
       reason: "codex app-server owns automatic compaction",
@@ -687,6 +778,39 @@ describe("runCliTurnCompactionLifecycle", () => {
       }),
     );
     expect(result?.compactionCount).toBe(1);
+
+    const lockedEntry: SessionEntry = { ...sessionEntry, modelSelectionLocked: true };
+    sessionStore[sessionKey] = lockedEntry;
+    const lockedResult = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry: lockedEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "codex",
+      model: "gpt-5.5",
+    });
+
+    expect(compactAgentHarnessSession).toHaveBeenCalledTimes(2);
+    expect(compactCalls).toHaveLength(1);
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
+    const lockedNativeCall = compactAgentHarnessSession.mock.calls[1]?.[0];
+    expect(lockedNativeCall).toMatchObject({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      contextEngineRuntimeContext: expect.objectContaining({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        provider: "codex",
+        model: "gpt-5.5",
+      }),
+    });
+    expect(lockedResult).toBe(lockedEntry);
   });
 
   it("does not fall back when native harness compaction returns no result", async () => {

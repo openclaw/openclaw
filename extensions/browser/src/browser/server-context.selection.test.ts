@@ -4,6 +4,7 @@ import {
   OPEN_TAB_DISCOVERY_POLL_MS,
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
+import { createProfileRuntimeState } from "./server-context.lifecycle.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
 
@@ -46,12 +47,7 @@ function createSelectionHarness(params: {
     }
     return lastSnapshot;
   });
-  const profileState: ProfileRuntimeState = {
-    profile: LOCAL_PROFILE,
-    running: null,
-    lastTargetId: null,
-    reconcile: null,
-  };
+  const profileState: ProfileRuntimeState = createProfileRuntimeState(LOCAL_PROFILE);
   const openTab = vi.fn(async () => {
     const openedTab = params.openedTab ?? tab("OPENED");
     profileState.lastTargetId = openedTab.targetId;
@@ -59,7 +55,7 @@ function createSelectionHarness(params: {
   });
   const selection = createProfileSelectionOps({
     profile: LOCAL_PROFILE,
-    getProfileState: () => profileState,
+    runtime: profileState,
     getCdpControlPolicy: () => undefined,
     ensureBrowserAvailable: async () => {},
     listTabs,
@@ -87,6 +83,30 @@ describe("browser profile tab selection", () => {
     await expect(selection.ensureTabAvailable()).resolves.toEqual(openedTab);
     expect(openTab).toHaveBeenCalledOnce();
     expect(listTabs).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes the request budget to tab discovery", async () => {
+    const ready = tab("READY", "ws://127.0.0.1/devtools/page/READY");
+    const { selection, listTabs } = createSelectionHarness({ snapshots: [[ready]] });
+    const ctrl = new AbortController();
+
+    await expect(
+      selection.ensureTabAvailable(undefined, { signal: ctrl.signal, timeoutMs: 1234 }),
+    ).resolves.toEqual(ready);
+
+    expect(listTabs).toHaveBeenCalledWith({ signal: ctrl.signal, timeoutMs: 1234 });
+  });
+
+  it("does not start tab discovery for an aborted request", async () => {
+    const { selection, listTabs } = createSelectionHarness({ snapshots: [[tab("READY")]] });
+    const ctrl = new AbortController();
+    ctrl.abort(new Error("request cancelled"));
+
+    await expect(selection.ensureTabAvailable(undefined, { signal: ctrl.signal })).rejects.toThrow(
+      /request cancelled/i,
+    );
+
+    expect(listTabs).not.toHaveBeenCalled();
   });
 
   it("preserves a target-id-only opened tab for a Playwright-backed caller", async () => {
@@ -153,6 +173,35 @@ describe("browser profile tab selection", () => {
     await advancePastDiscoveryWindow();
 
     await expect(selected).resolves.toEqual(stickyWithoutWs);
+  });
+
+  it("preserves a sticky raw target when another tab has a colliding friendly reference", async () => {
+    const sticky = {
+      ...tab("STICKY", "ws://127.0.0.1/devtools/page/STICKY"),
+      suggestedTargetId: "t1",
+      tabId: "t1",
+    };
+    const colliding = {
+      ...tab("OTHER", "ws://127.0.0.1/devtools/page/OTHER"),
+      suggestedTargetId: "STICKY",
+      tabId: "t2",
+      label: "STICKY",
+    };
+    const { selection, profileState } = createSelectionHarness({
+      snapshots: [[sticky, colliding]],
+    });
+    profileState.lastTargetId = sticky.targetId;
+
+    await expect(selection.ensureTabAvailable()).resolves.toEqual(sticky);
+  });
+
+  it("rejects when a sticky target disappears instead of selecting another tab", async () => {
+    const other = tab("OTHER", "ws://127.0.0.1/devtools/page/OTHER");
+    const { selection, profileState } = createSelectionHarness({ snapshots: [[other]] });
+    profileState.lastTargetId = "STALE";
+
+    await expect(selection.ensureTabAvailable()).rejects.toThrow(/use action=tabs/i);
+    expect(profileState.lastTargetId).toBe("STALE");
   });
 
   it("keeps polling after a transient tab-list rejection", async () => {

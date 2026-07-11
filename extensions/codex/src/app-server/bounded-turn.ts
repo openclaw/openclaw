@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { readModelListResult } from "./models.js";
@@ -27,6 +26,10 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import {
+  isCodexAppServerStartSelectionChangedError,
+  type CodexAppServerClientFactory,
+} from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 
 const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
@@ -79,6 +82,7 @@ export async function runBoundedCodexAppServerTurn(
 ): Promise<CodexBoundedTurnResult> {
   const appServer = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.options.pluginConfig,
+    managedCommandOrder: params.isolation === "private-stdio" ? "package-first" : undefined,
   });
   if (params.isolation === "configured-transport") {
     return await runBoundedCodexAppServerTurnInWorkspace(params, appServer, {
@@ -109,8 +113,15 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   params: CodexBoundedTurnParams,
   appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
   workspace: { codexHome?: string; cwd: string },
+  selectionAttempt = 0,
+  timing?: { deadline: number; timeoutMs: number },
 ): Promise<CodexBoundedTurnResult> {
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const totalTimeoutMs = timing?.timeoutMs ?? resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const deadline = timing?.deadline ?? Date.now() + totalTimeoutMs;
+  const timeoutMs = deadline - Date.now();
+  if (timeoutMs <= 0) {
+    throw new Error(`${params.taskLabel} timed out`);
+  }
   const agentDir = params.agentDir?.trim() || undefined;
   // Hosted search needs a private Codex home and cwd so inherited native tools
   // cannot escape the bounded turn. Media calls retain configured transport
@@ -120,7 +131,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     : appServer.start;
   const ownsClient = !params.options.clientFactory;
   const client = params.options.clientFactory
-    ? await params.options.clientFactory(startOptions, params.profile, agentDir, params.config, {
+    ? await params.options.clientFactory({
+        startOptions,
+        authProfileId: params.profile,
+        agentDir,
+        config: params.config,
         timeoutMs,
       })
     : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
@@ -140,9 +155,14 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   } else {
     params.signal?.addEventListener("abort", abortFromCaller, { once: true });
   }
-  const timeout = setTimeout(() => abortController.abort("timeout"), timeoutMs);
+  const remainingRunMs = deadline - Date.now();
+  if (remainingRunMs <= 0) {
+    abortController.abort("timeout");
+  }
+  const timeout = setTimeout(() => abortController.abort("timeout"), Math.max(1, remainingRunMs));
   timeout.unref?.();
 
+  let retrySelection = false;
   try {
     const model = await resolveCodexBoundedTurnModel({
       client,
@@ -168,7 +188,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           environments: [],
           dynamicTools: [],
           experimentalRawEvents: true,
-          persistExtendedHistory: false,
           ephemeral: true,
         } satisfies CodexThreadStartParams,
         { timeoutMs, signal: abortController.signal },
@@ -205,6 +224,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       requestCleanup();
       cleanup();
     }
+  } catch (error) {
+    if (ownsClient && isCodexAppServerStartSelectionChangedError(error) && selectionAttempt === 0) {
+      retrySelection = true;
+    } else {
+      throw error;
+    }
   } finally {
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
@@ -212,6 +237,16 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       client.close();
     }
   }
+  if (retrySelection) {
+    return await runBoundedCodexAppServerTurnInWorkspace(
+      params,
+      appServer,
+      workspace,
+      selectionAttempt + 1,
+      { deadline, timeoutMs: totalTimeoutMs },
+    );
+  }
+  throw new Error("Codex bounded turn selection retry exited unexpectedly");
 }
 
 function resolveBoundedThreadConfig(

@@ -131,7 +131,10 @@ import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
+import {
+  resolveCanonicalDistRuntimeSource,
+  resolvePluginRuntimeArtifact,
+} from "./plugin-runtime-artifact-resolution.js";
 import {
   createPluginIdScopeSet,
   hasExplicitPluginIdScope,
@@ -348,7 +351,7 @@ function matchesScopedPluginOrDreamingSidecar(params: {
   );
 }
 
-export class PluginLoadFailureError extends Error {
+class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
   readonly registry: PluginRegistry;
 
@@ -387,6 +390,7 @@ const fullWorkspacePluginLoaderCacheState = new PluginLoaderCacheState<CachedPlu
 );
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
+  "gateway",
   "config",
   "agent",
   "subagent",
@@ -462,7 +466,7 @@ type PluginRegistrySnapshot = {
     channelSetups: PluginRegistry["channelSetups"];
     providers: PluginRegistry["providers"];
     modelCatalogProviders: PluginRegistry["modelCatalogProviders"];
-    cliBackends: NonNullable<PluginRegistry["cliBackends"]>;
+    cliBackends: PluginRegistry["cliBackends"];
     textTransforms: PluginRegistry["textTransforms"];
     embeddingProviders: PluginRegistry["embeddingProviders"];
     speechProviders: PluginRegistry["speechProviders"];
@@ -475,28 +479,29 @@ type PluginRegistrySnapshot = {
     musicGenerationProviders: PluginRegistry["musicGenerationProviders"];
     webFetchProviders: PluginRegistry["webFetchProviders"];
     webSearchProviders: PluginRegistry["webSearchProviders"];
+    workerProviders: PluginRegistry["workerProviders"];
     migrationProviders: PluginRegistry["migrationProviders"];
     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
-    trustedToolPolicies: NonNullable<PluginRegistry["trustedToolPolicies"]>;
+    trustedToolPolicies: PluginRegistry["trustedToolPolicies"];
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
     agentHarnesses: PluginRegistry["agentHarnesses"];
     httpRoutes: PluginRegistry["httpRoutes"];
     cliRegistrars: PluginRegistry["cliRegistrars"];
-    reloads: NonNullable<PluginRegistry["reloads"]>;
-    nodeHostCommands: NonNullable<PluginRegistry["nodeHostCommands"]>;
-    nodeInvokePolicies: NonNullable<PluginRegistry["nodeInvokePolicies"]>;
-    securityAuditCollectors: NonNullable<PluginRegistry["securityAuditCollectors"]>;
+    reloads: PluginRegistry["reloads"];
+    nodeHostCommands: PluginRegistry["nodeHostCommands"];
+    nodeInvokePolicies: PluginRegistry["nodeInvokePolicies"];
+    securityAuditCollectors: PluginRegistry["securityAuditCollectors"];
     services: PluginRegistry["services"];
     commands: PluginRegistry["commands"];
-    interactiveHandlers: NonNullable<PluginRegistry["interactiveHandlers"]>;
-    sessionActions: NonNullable<PluginRegistry["sessionActions"]>;
+    interactiveHandlers: PluginRegistry["interactiveHandlers"];
+    sessionActions: PluginRegistry["sessionActions"];
     conversationBindingResolvedHandlers: PluginRegistry["conversationBindingResolvedHandlers"];
     diagnostics: PluginRegistry["diagnostics"];
   };
   gatewayHandlers: PluginRegistry["gatewayHandlers"];
   gatewayMethodDescriptors: PluginRegistry["gatewayMethodDescriptors"];
-  coreGatewayMethodNames: NonNullable<PluginRegistry["coreGatewayMethodNames"]>;
+  coreGatewayMethodNames: PluginRegistry["coreGatewayMethodNames"];
 };
 
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapshot {
@@ -509,7 +514,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       channelSetups: [...registry.channelSetups],
       providers: [...registry.providers],
       modelCatalogProviders: [...registry.modelCatalogProviders],
-      cliBackends: [...(registry.cliBackends ?? [])],
+      cliBackends: [...registry.cliBackends],
       textTransforms: [...registry.textTransforms],
       embeddingProviders: [...registry.embeddingProviders],
       speechProviders: [...registry.speechProviders],
@@ -522,28 +527,29 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       musicGenerationProviders: [...registry.musicGenerationProviders],
       webFetchProviders: [...registry.webFetchProviders],
       webSearchProviders: [...registry.webSearchProviders],
+      workerProviders: new Map(registry.workerProviders),
       migrationProviders: [...registry.migrationProviders],
       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
-      trustedToolPolicies: [...(registry.trustedToolPolicies ?? [])],
+      trustedToolPolicies: [...registry.trustedToolPolicies],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
       agentHarnesses: [...registry.agentHarnesses],
       httpRoutes: [...registry.httpRoutes],
       cliRegistrars: [...registry.cliRegistrars],
-      reloads: [...(registry.reloads ?? [])],
-      nodeHostCommands: [...(registry.nodeHostCommands ?? [])],
-      nodeInvokePolicies: [...(registry.nodeInvokePolicies ?? [])],
-      securityAuditCollectors: [...(registry.securityAuditCollectors ?? [])],
+      reloads: [...registry.reloads],
+      nodeHostCommands: [...registry.nodeHostCommands],
+      nodeInvokePolicies: [...registry.nodeInvokePolicies],
+      securityAuditCollectors: [...registry.securityAuditCollectors],
       services: [...registry.services],
       commands: [...registry.commands],
-      interactiveHandlers: [...(registry.interactiveHandlers ?? [])],
-      sessionActions: [...(registry.sessionActions ?? [])],
+      interactiveHandlers: [...registry.interactiveHandlers],
+      sessionActions: [...registry.sessionActions],
       conversationBindingResolvedHandlers: [...registry.conversationBindingResolvedHandlers],
       diagnostics: [...registry.diagnostics],
     },
     gatewayHandlers: { ...registry.gatewayHandlers },
     gatewayMethodDescriptors: [...registry.gatewayMethodDescriptors],
-    coreGatewayMethodNames: [...(registry.coreGatewayMethodNames ?? [])],
+    coreGatewayMethodNames: [...registry.coreGatewayMethodNames],
   };
 }
 
@@ -568,6 +574,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.musicGenerationProviders = snapshot.arrays.musicGenerationProviders;
   registry.webFetchProviders = snapshot.arrays.webFetchProviders;
   registry.webSearchProviders = snapshot.arrays.webSearchProviders;
+  registry.workerProviders = snapshot.arrays.workerProviders;
   registry.migrationProviders = snapshot.arrays.migrationProviders;
   registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
@@ -673,143 +680,6 @@ function createPluginModuleLoader(options: {
   };
   return (modulePath: string): unknown =>
     createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
-}
-
-function resolveCanonicalDistRuntimeSource(source: string): string {
-  const marker = `${path.sep}dist-runtime${path.sep}extensions${path.sep}`;
-  const index = source.indexOf(marker);
-  if (index === -1) {
-    return source;
-  }
-  const candidate = `${source.slice(0, index)}${path.sep}dist${path.sep}extensions${path.sep}${source.slice(index + marker.length)}`;
-  return fs.existsSync(candidate) ? candidate : source;
-}
-
-function rewriteBundledRuntimeArtifactRelativePath(relativePath: string): string {
-  return relativePath.replace(/\.[^.]+$/u, ".js");
-}
-
-function listPackageLocalRuntimeArtifactOutputExtensions(sourceExt: string): string[] {
-  switch (sourceExt) {
-    case ".mts":
-    case ".mjs":
-      return [".mjs", ".js", ".cjs"];
-    case ".cts":
-    case ".cjs":
-      return [".cjs", ".js", ".mjs"];
-    default:
-      return [".js", ".mjs", ".cjs"];
-  }
-}
-
-function listPackageLocalRuntimeArtifactRelativePathBases(relativePath: string): string[] {
-  const ext = path.extname(relativePath).toLowerCase();
-  const withoutExt = ext ? relativePath.slice(0, -ext.length) : relativePath;
-  if (!withoutExt.startsWith(`src${path.sep}`) && !withoutExt.startsWith("src/")) {
-    return [withoutExt];
-  }
-  return [withoutExt.slice(4), withoutExt];
-}
-
-function listPackageLocalDistRuntimeArtifactRelativePaths(relativePath: string): string[] {
-  const ext = path.extname(relativePath).toLowerCase();
-  const candidates = new Set<string>();
-  for (const base of listPackageLocalRuntimeArtifactRelativePathBases(relativePath)) {
-    for (const outputExt of listPackageLocalRuntimeArtifactOutputExtensions(ext)) {
-      candidates.add(`${base}${outputExt}`);
-    }
-  }
-  return [...candidates];
-}
-
-function shouldPreferPackageLocalDistRuntimeArtifact(source: string): boolean {
-  switch (path.extname(source).toLowerCase()) {
-    case ".ts":
-    case ".tsx":
-    case ".mts":
-    case ".cts":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function resolvePackageLocalDistRuntimeArtifact(params: {
-  source: string;
-  rootDir: string;
-}): string | null {
-  const relativeSource = path.relative(params.rootDir, params.source);
-  if (
-    !shouldPreferPackageLocalDistRuntimeArtifact(relativeSource) ||
-    relativeSource === "" ||
-    relativeSource.startsWith("..") ||
-    path.isAbsolute(relativeSource)
-  ) {
-    return null;
-  }
-  const artifactRoot = path.join(params.rootDir, "dist");
-  for (const artifactRelativePath of listPackageLocalDistRuntimeArtifactRelativePaths(
-    relativeSource,
-  )) {
-    const artifactSource = path.join(artifactRoot, artifactRelativePath);
-    if (fs.existsSync(artifactSource)) {
-      return safeRealpathOrResolve(artifactSource);
-    }
-  }
-  return null;
-}
-
-function resolvePreferredBuiltRuntimeArtifact(params: {
-  source: string;
-  rootDir: string;
-  origin: PluginOrigin;
-  preferBuiltPluginArtifacts: boolean;
-}): { source: string; rootDir: string } {
-  const rootDir = safeRealpathOrResolve(params.rootDir);
-  const source = safeRealpathOrResolve(params.source);
-  if (!params.preferBuiltPluginArtifacts) {
-    return { source, rootDir };
-  }
-  if (params.origin !== "bundled") {
-    const artifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
-    if (artifactSource) {
-      return { source: artifactSource, rootDir };
-    }
-    return { source, rootDir };
-  }
-  const packageLocalArtifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
-  if (packageLocalArtifactSource) {
-    return { source: packageLocalArtifactSource, rootDir };
-  }
-  const extensionsDir = path.dirname(rootDir);
-  if (path.basename(extensionsDir) !== "extensions") {
-    return { source, rootDir };
-  }
-  const packageRoot = path.dirname(extensionsDir);
-  if (path.basename(packageRoot) === "dist" || path.basename(packageRoot) === "dist-runtime") {
-    return { source, rootDir };
-  }
-  const relativeSource = path.relative(rootDir, source);
-  if (relativeSource === "" || relativeSource.startsWith("..") || path.isAbsolute(relativeSource)) {
-    return { source, rootDir };
-  }
-  const artifactRelativePath = rewriteBundledRuntimeArtifactRelativePath(relativeSource);
-  for (const artifactRootName of ["dist-runtime", "dist"] as const) {
-    const artifactRoot = path.join(
-      packageRoot,
-      artifactRootName,
-      "extensions",
-      path.basename(rootDir),
-    );
-    const artifactSource = path.join(artifactRoot, artifactRelativePath);
-    if (fs.existsSync(artifactSource)) {
-      return {
-        source: safeRealpathOrResolve(artifactSource),
-        rootDir: safeRealpathOrResolve(artifactRoot),
-      };
-    }
-  }
-  return { source, rootDir };
 }
 
 function formatPluginRuntimeModuleResolutionError(params: {
@@ -1511,7 +1381,7 @@ function getCompatibleActivePluginRegistry(
     return pluginLoadOptionsMatchCacheKey(
       {
         ...candidate,
-        coreGatewayMethodNames: activeRegistry.coreGatewayMethodNames ?? [],
+        coreGatewayMethodNames: activeRegistry.coreGatewayMethodNames,
       },
       activeCacheKey,
     );
@@ -2048,6 +1918,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       allow: normalized.allow,
       warningCacheKey: cacheKey,
       warningCache: pluginLoaderCacheState,
+      explicitlyEnabledPluginIds: new Set(
+        Object.entries(normalized.entries)
+          .filter(([, entry]) => entry.enabled === true)
+          .map(([pluginId]) => pluginId),
+      ),
       // Keep warning input scoped as well so partial snapshot loads only mention the
       // plugins that were intentionally requested for this registry.
       discoverablePlugins: manifestRegistry.plugins
@@ -2241,14 +2116,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
       const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
-      const runtimeCandidateEntry = resolvePreferredBuiltRuntimeArtifact({
+      const runtimeCandidateEntry = resolvePluginRuntimeArtifact({
         source: candidate.source,
         rootDir: pluginRoot,
         origin: candidate.origin,
         preferBuiltPluginArtifacts,
       });
       const runtimeSetupEntry = manifestRecord.setupSource
-        ? resolvePreferredBuiltRuntimeArtifact({
+        ? resolvePluginRuntimeArtifact({
             source: manifestRecord.setupSource,
             rootDir: pluginRoot,
             origin: candidate.origin,
@@ -3038,6 +2913,11 @@ export async function loadOpenClawPluginCliRegistry(
     allow: normalized.allow,
     warningCacheKey: `${cacheKey}::cli-metadata`,
     warningCache: pluginLoaderCacheState,
+    explicitlyEnabledPluginIds: new Set(
+      Object.entries(normalized.entries)
+        .filter(([, entry]) => entry.enabled === true)
+        .map(([pluginId]) => pluginId),
+    ),
     discoverablePlugins: manifestRegistry.plugins
       .filter((plugin) => !onlyPluginIdSet || onlyPluginIdSet.has(plugin.id))
       .map((plugin) => ({

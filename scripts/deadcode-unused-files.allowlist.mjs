@@ -1,7 +1,7 @@
 // Intentional Knip unused-file findings. These are dynamic entrypoints,
 // generated/build inputs, manifest-discovered plugin surfaces, live-test
 // helpers, or package bridge files that static production scanning cannot see.
-export const KNIP_UNUSED_FILE_ALLOWLIST = [];
+export const KNIP_UNUSED_FILE_ALLOWLIST = ["extensions/qa-lab/src/ci-smoke-plan.ts"];
 
 // Knip can disagree across supported local/CI platforms for files that are
 // only reachable through test-only import graphs, sparse-checkout proof
@@ -16,10 +16,8 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/diffs/src/viewer-client.ts",
   "extensions/diffs/src/viewer-payload.ts",
   "extensions/matrix/src/plugin-entry.runtime.js",
-  "ui/src/ui/browser-redact.ts",
   "src/agents/subagent-registry.runtime.ts",
   "src/auto-reply/reply/get-reply.test-loader.ts",
-  "src/cli/daemon-cli-compat.ts",
   "src/commands/doctor/shared/deprecation-compat.ts",
   "src/config/doc-baseline.runtime.ts",
   "src/config/doc-baseline.ts",

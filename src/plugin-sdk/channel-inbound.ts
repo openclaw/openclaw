@@ -183,6 +183,7 @@ export {
   toHistoryMediaEntries,
   toInboundMediaFacts,
   buildChannelInboundMediaPayload,
+  formatInboundMediaUnavailableText,
   // @deprecated Prefer `buildChannelInboundMediaPayload`.
   buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";

@@ -426,14 +426,18 @@ class DeviceHandler private constructor(
           put(
             "contacts",
             permissionStateJson(
-              granted = hasPermission(Manifest.permission.READ_CONTACTS),
+              granted =
+                hasPermission(Manifest.permission.READ_CONTACTS) &&
+                  hasPermission(Manifest.permission.WRITE_CONTACTS),
               promptableWhenDenied = true,
             ),
           )
           put(
             "calendar",
             permissionStateJson(
-              granted = hasPermission(Manifest.permission.READ_CALENDAR),
+              granted =
+                hasPermission(Manifest.permission.READ_CALENDAR) &&
+                  hasPermission(Manifest.permission.WRITE_CALENDAR),
               promptableWhenDenied = true,
             ),
           )

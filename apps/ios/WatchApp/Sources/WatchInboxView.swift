@@ -3,17 +3,19 @@ import WatchKit
 
 struct WatchInboxView: View {
     var store: WatchInboxStore
+    var directNode: WatchDirectNode
     var onAction: ((WatchPromptAction) -> Void)?
-    var onExecApprovalDecision: ((String, WatchExecApprovalDecision) -> Void)?
+    var onExecApprovalDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
     var onRefreshExecApprovalReview: (() -> Void)?
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
-    var onSendChatMessage: ((String) -> Void)?
+    var onSendChatMessage: ((String) -> String?)?
 
     var body: some View {
         NavigationStack {
             WatchControlSurfaceView(
                 store: self.store,
+                directNode: self.directNode,
                 onAction: self.onAction,
                 onExecApprovalDecision: self.onExecApprovalDecision,
                 onRefreshExecApprovalReview: self.onRefreshExecApprovalReview,
@@ -27,12 +29,13 @@ struct WatchInboxView: View {
 
 private struct WatchControlSurfaceView: View {
     var store: WatchInboxStore
+    var directNode: WatchDirectNode
     var onAction: ((WatchPromptAction) -> Void)?
-    var onExecApprovalDecision: ((String, WatchExecApprovalDecision) -> Void)?
+    var onExecApprovalDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
     var onRefreshExecApprovalReview: (() -> Void)?
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
-    var onSendChatMessage: ((String) -> Void)?
+    var onSendChatMessage: ((String) -> String?)?
     @State private var selectedFace = 0
 
     var body: some View {
@@ -43,6 +46,8 @@ private struct WatchControlSurfaceView: View {
                 .tag(1)
             self.approvalsFace
                 .tag(2)
+            self.connectionFace
+                .tag(3)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .background(WatchClawStyle.background.ignoresSafeArea())
@@ -50,7 +55,7 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var faceCount: Int {
-        3
+        4
     }
 
     private var pageRail: some View {
@@ -183,7 +188,7 @@ private struct WatchControlSurfaceView: View {
                 subtitle: self.store.body,
                 accessory: self.updatedText)
 
-            if let details = self.promptDetails {
+            if let details = promptDetails {
                 WatchDetailText(text: details)
             }
 
@@ -197,7 +202,7 @@ private struct WatchControlSurfaceView: View {
                 .disabled(self.store.isReplySending)
             }
 
-            if let replyStatusText = self.store.replyStatusText, !replyStatusText.isEmpty {
+            if let replyStatusText = store.replyStatusText, !replyStatusText.isEmpty {
                 WatchTinyStatus(text: replyStatusText)
             }
         }
@@ -249,13 +254,19 @@ private struct WatchControlSurfaceView: View {
                     HStack(spacing: 8) {
                         if record.approval.allowedDecisions.contains(.allowOnce) {
                             WatchDecisionButton(title: "Approve", color: .green) {
-                                self.onExecApprovalDecision?(record.id, .allowOnce)
+                                self.onExecApprovalDecision?(
+                                    record.id,
+                                    record.approval.gatewayStableID,
+                                    .allowOnce)
                             }
                         }
 
                         if record.approval.allowedDecisions.contains(.deny) {
                             WatchDecisionButton(title: "Deny", color: WatchClawStyle.accent) {
-                                self.onExecApprovalDecision?(record.id, .deny)
+                                self.onExecApprovalDecision?(
+                                    record.id,
+                                    record.approval.gatewayStableID,
+                                    .deny)
                             }
                         }
                     }
@@ -289,6 +300,52 @@ private struct WatchControlSurfaceView: View {
         }
     }
 
+    private var connectionFace: some View {
+        WatchFaceScroll {
+            self.pageRail
+            WatchFaceHeader(
+                section: "Connection",
+                title: self.directNode.isConnected ? "Watch node online" : "Direct Gateway",
+                subtitle: self.directNode.statusText,
+                isOnline: self.directNode.isConnected,
+                avatarImageSource: self.avatarImageSource,
+                avatarText: self.avatarText)
+
+            WatchHeroCard(
+                label: self.directNode.isConnected ? "Direct" : "Setup",
+                title: self.directNode.endpointText ?? "Enable from iPhone",
+                subtitle: self.directNode.isConfigured
+                    ? "Uses Wi-Fi or cellular while OpenClaw is active"
+                    : "Open iPhone Settings → Apple Watch",
+                accessory: self.directNode.isConnected ? "Online" : "Offline")
+
+            WatchDetailText(
+                text: """
+                Direct mode supports device info, status, and notifications. \
+                Chat, Talk, and approvals still use the iPhone.
+                """)
+
+            if self.directNode.isConfigured {
+                Toggle(isOn: Binding(
+                    get: { self.directNode.isEnabled },
+                    set: { self.directNode.setEnabled($0) }))
+                {
+                    Text("Direct connection")
+                        .font(WatchClawType.body(size: 13))
+                }
+                .tint(WatchClawStyle.accent)
+                .padding(.horizontal, 8)
+
+                WatchSecondaryButton(title: "Forget direct setup") {
+                    self.directNode.forget()
+                }
+            } else {
+                WatchDetailText(
+                    text: "The iPhone securely sends a one-time setup code. Existing relay features stay available.")
+            }
+        }
+    }
+
     private var chatItems: [WatchChatItem] {
         self.store.appSnapshot?.chatItems ?? []
     }
@@ -300,12 +357,14 @@ private struct WatchControlSurfaceView: View {
             sendStatusText: self.chatSendStatusText,
             avatarImageSource: self.avatarImageSource,
             avatarText: self.avatarText,
+            completedChatCommandId: self.store.chatCompletion?.commandId,
+            completedChatReplyText: self.store.chatCompletion?.replyText,
             onRefresh: self.onRefreshAppSnapshot,
             onSendMessage: self.onSendChatMessage)
     }
 
     @ViewBuilder private var primaryDestination: some View {
-        if let record = self.store.activeExecApproval {
+        if let record = store.activeExecApproval {
             WatchExecApprovalDetailView(
                 store: self.store,
                 record: record,
@@ -332,7 +391,7 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var connectionLine: String {
-        if let snapshot = self.store.appSnapshot {
+        if let snapshot = store.appSnapshot {
             return snapshot.gatewayConnected ? "AI agent online" : "Reconnect on iPhone"
         }
         return "Pair iPhone"
@@ -344,7 +403,7 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var primaryTitle: String {
-        if let record = self.store.activeExecApproval {
+        if let record = store.activeExecApproval {
             return record.approval.commandPreview ?? record.approval.commandText
         }
         if self.chatCount > 0 {
@@ -368,7 +427,7 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var approvalSubtitle: String {
-        guard let record = self.store.activeExecApproval else { return "No approvals waiting" }
+        guard let record = store.activeExecApproval else { return "No approvals waiting" }
         return record.approval.commandPreview ?? record.approval.commandText
     }
 
@@ -378,7 +437,7 @@ private struct WatchControlSurfaceView: View {
 
     private func approvalDecisionSubtitle(_ record: WatchExecApprovalRecord) -> String {
         var parts: [String] = []
-        if let expiresText = self.expiryText(record.approval.expiresAtMs) {
+        if let expiresText = expiryText(record.approval.expiresAtMs) {
             parts.append("Expires in \(expiresText)")
         }
         if let host = record.approval.host, !host.isEmpty {
@@ -394,7 +453,7 @@ private struct WatchControlSurfaceView: View {
         if record.isResolving {
             return "Sending"
         }
-        if let risk = self.approvalRiskText(record.approval.risk) {
+        if let risk = approvalRiskText(record.approval.risk) {
             return risk
         }
         return "Review"
@@ -414,7 +473,7 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var chatPreviewTitle: String {
-        guard let item = self.chatItems.last else { return "No chat synced" }
+        guard let item = chatItems.last else { return "No chat synced" }
         return self.roleTitle(item.role)
     }
 
@@ -423,7 +482,7 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var chatStatusText: String {
-        if let status = self.store.appSnapshot?.chatStatusText, !status.isEmpty {
+        if let status = store.appSnapshot?.chatStatusText, !status.isEmpty {
             return status
         }
         if self.chatCount > 0 {
@@ -433,14 +492,14 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var chatSendStatusText: String? {
-        guard let status = self.store.appCommandStatusText, status.hasPrefix("Chat:") else {
+        guard let status = store.appCommandStatusText, status.hasPrefix("Chat:") else {
             return nil
         }
         return status
     }
 
     private var greetingText: String {
-        if let greetingTextOverride = self.store.greetingTextOverride {
+        if let greetingTextOverride = store.greetingTextOverride {
             return greetingTextOverride
         }
         let hour = Calendar.current.component(.hour, from: Date())
@@ -450,20 +509,20 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var statusLine: String {
-        if let status = self.store.appSnapshotStatusText, !status.isEmpty {
+        if let status = store.appSnapshotStatusText, !status.isEmpty {
             return status
         }
-        if let commandStatus = self.store.appCommandStatusText, !commandStatus.isEmpty {
+        if let commandStatus = store.appCommandStatusText, !commandStatus.isEmpty {
             return commandStatus
         }
-        if let replyStatus = self.store.replyStatusText, !replyStatus.isEmpty {
+        if let replyStatus = store.replyStatusText, !replyStatus.isEmpty {
             return replyStatus
         }
         return self.store.hasAppSnapshot ? "Synced" : "Waiting for iPhone"
     }
 
     private var updatedText: String {
-        guard let updatedAt = self.store.updatedAt else { return "Just now" }
+        guard let updatedAt = store.updatedAt else { return "Just now" }
         return updatedAt.formatted(date: .omitted, time: .shortened)
     }
 
@@ -489,9 +548,9 @@ private struct WatchControlSurfaceView: View {
         }
     }
 
-    private func expiryText(_ expiresAtMs: Int?) -> String? {
+    private func expiryText(_ expiresAtMs: Int64?) -> String? {
         guard let expiresAtMs else { return nil }
-        let deltaSeconds = max(0, (expiresAtMs - Int(Date().timeIntervalSince1970 * 1000)) / 1000)
+        let deltaSeconds = max(0, (expiresAtMs - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
         if deltaSeconds < 60 {
             return "<1m"
         }
@@ -536,7 +595,7 @@ private enum WatchAvatarSource {
     }
 
     static func dataImage(from source: String?) -> UIImage? {
-        guard let source = self.normalized(source),
+        guard let source = normalized(source),
               source.lowercased().hasPrefix("data:image/"),
               let commaIndex = source.firstIndex(of: ",")
         else {
@@ -550,7 +609,7 @@ private enum WatchAvatarSource {
     }
 
     static func remoteURL(from source: String?) -> URL? {
-        guard let source = self.normalized(source),
+        guard let source = normalized(source),
               let url = URL(string: source),
               let scheme = url.scheme?.lowercased(),
               scheme == "https" || scheme == "http"
@@ -587,11 +646,11 @@ private struct WatchClawAvatar: View {
     }
 
     @ViewBuilder private var avatarContent: some View {
-        if let image = self.dataImage {
+        if let image = dataImage {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()
-        } else if let url = WatchAvatarSource.remoteURL(from: self.imageSource) {
+        } else if let url = WatchAvatarSource.remoteURL(from: imageSource) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case let .success(image):
@@ -608,9 +667,9 @@ private struct WatchClawAvatar: View {
     }
 
     @ViewBuilder private var fallbackContent: some View {
-        if let text = WatchAvatarSource.normalized(self.text) {
+        if let text = WatchAvatarSource.normalized(text) {
             Text(String(text.prefix(3)))
-                .font(.system(size: self.size * 0.42, weight: .bold, design: .rounded))
+                .font(WatchClawType.avatar(size: self.size * 0.42))
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
@@ -642,15 +701,15 @@ private struct WatchFaceHeader: View {
                 text: self.avatarText)
             VStack(alignment: .leading, spacing: 1) {
                 Text(self.section)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WatchClawType.label(size: 10, weight: .bold))
                     .foregroundStyle(WatchClawStyle.accent)
                     .lineLimit(1)
                 Text(self.title)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(WatchClawType.title(size: 18))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Text(self.subtitle)
-                    .font(.caption2)
+                    .font(WatchClawType.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -668,21 +727,21 @@ private struct WatchHeroCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
                 Text(self.label)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WatchClawType.label(size: 10, weight: .bold))
                     .foregroundStyle(WatchClawStyle.accent)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text(self.accessory)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(WatchClawType.label(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Text(self.title)
-                .font(.system(size: 19, weight: .semibold))
+                .font(WatchClawType.title(size: 19))
                 .lineLimit(3)
                 .minimumScaleFactor(0.75)
             Text(self.subtitle)
-                .font(.system(size: 13))
+                .font(WatchClawType.body(size: 13))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         }
@@ -704,7 +763,7 @@ private struct WatchDetailText: View {
 
     var body: some View {
         Text(self.text)
-            .font(.system(size: 12))
+            .font(WatchClawType.body(size: 12))
             .foregroundStyle(.secondary)
             .lineLimit(5)
             .fixedSize(horizontal: false, vertical: true)
@@ -728,7 +787,7 @@ private struct WatchCompactStatusStrip: View {
             WatchCompactMetric(label: "Inbox", value: self.inboxCount)
             WatchCompactMetric(label: "Approvals", value: self.approvalCount)
             Text(self.status)
-                .font(.system(size: 10, weight: .medium))
+                .font(WatchClawType.label(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
@@ -750,10 +809,10 @@ private struct WatchCompactMetric: View {
     var body: some View {
         HStack(spacing: 3) {
             Text(self.label)
-                .font(.system(size: 9, weight: .semibold))
+                .font(WatchClawType.label(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(self.value)
-                .font(.system(size: 10, weight: .bold))
+                .font(WatchClawType.label(size: 10, weight: .bold))
         }
         .lineLimit(1)
     }
@@ -766,7 +825,7 @@ private struct WatchPrimaryLabel: View {
         HStack(spacing: 7) {
             WatchVoiceGlyph()
             Text(self.title)
-                .font(.caption.weight(.bold))
+                .font(WatchClawType.captionBold)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
@@ -813,7 +872,7 @@ private struct WatchSecondaryLabel: View {
 
     var body: some View {
         Text(self.title)
-            .font(.caption.weight(.semibold))
+            .font(WatchClawType.captionSemiBold)
             .lineLimit(1)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
@@ -851,14 +910,14 @@ private struct WatchStackCard: View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.label)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WatchClawType.label(size: 10, weight: .bold))
                     .foregroundStyle(WatchClawStyle.accent)
                     .lineLimit(1)
                 Text(self.title)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(WatchClawType.title(size: 17))
                     .lineLimit(1)
                 Text(self.subtitle)
-                    .font(.system(size: 13))
+                    .font(WatchClawType.body(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -866,7 +925,7 @@ private struct WatchStackCard: View {
             HStack(spacing: 5) {
                 if let badge {
                     Text(badge)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(WatchClawType.label(size: 10, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(minWidth: 18, minHeight: 18)
                         .background {
@@ -875,7 +934,7 @@ private struct WatchStackCard: View {
                         }
                 }
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WatchClawType.symbol(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
             }
         }
@@ -918,7 +977,7 @@ private struct WatchDecisionButton: View {
     var body: some View {
         Button(action: self.action) {
             Text(self.title)
-                .font(.caption.weight(.bold))
+                .font(WatchClawType.captionBold)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 9)
@@ -936,7 +995,7 @@ private struct WatchTinyStatus: View {
 
     var body: some View {
         Text(self.text)
-            .font(.caption2)
+            .font(WatchClawType.caption2)
             .foregroundStyle(.secondary)
             .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -961,10 +1020,10 @@ private struct WatchChatBubble: View {
 
             VStack(alignment: self.isUser ? .trailing : .leading, spacing: 3) {
                 Text(self.roleTitle)
-                    .font(.system(size: 9, weight: .bold))
+                    .font(WatchClawType.label(size: 9, weight: .bold))
                     .foregroundStyle(self.isUser ? .secondary : WatchClawStyle.accent)
                 Text(self.item.text)
-                    .font(.system(size: 13))
+                    .font(WatchClawType.body(size: 13))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 9)
@@ -1006,8 +1065,13 @@ private struct WatchChatTimelineView: View {
     let sendStatusText: String?
     var avatarImageSource: String?
     var avatarText: String?
+    var completedChatCommandId: String?
+    var completedChatReplyText: String?
     var onRefresh: (() -> Void)?
-    var onSendMessage: ((String) -> Void)?
+    var onSendMessage: ((String) -> String?)?
+    @State private var voiceTurnTracker = WatchVoiceTurnTracker()
+    @State private var speechPlayback = WatchSpeechPlayback()
+    @State private var voiceReplyTimeout: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 7) {
@@ -1028,6 +1092,18 @@ private struct WatchChatTimelineView: View {
                         WatchTinyStatus(text: sendStatusText)
                     }
 
+                    if let voiceStatusText = self.voiceStatusText {
+                        VStack(alignment: .leading, spacing: 3) {
+                            // Watch TTS runs through AVSpeechSynthesizer, which has no
+                            // metering API, so speaking uses the wave's synthetic pulse.
+                            TalkWaveformView(
+                                phase: self.speechPlayback.isSpeaking ? .speaking(level: nil) : .thinking)
+                                .frame(height: 24)
+                                .accessibilityHidden(true)
+                            WatchTinyStatus(text: voiceStatusText)
+                        }
+                    }
+
                     WatchSecondaryButton(title: "Refresh") {
                         self.onRefresh?()
                     }
@@ -1041,19 +1117,80 @@ private struct WatchChatTimelineView: View {
 
             WatchChatComposer(
                 onSendMessage: { text in
-                    self.sendMessage(text)
+                    _ = self.sendMessage(text)
+                },
+                onStartVoiceTurn: {
+                    self.startVoiceTurn()
+                },
+                isAwaitingVoiceReply: self.voiceTurnTracker.isAwaitingReply,
+                onCancelVoiceTurn: {
+                    self.cancelVoiceTurn()
+                },
+                isSpeaking: self.speechPlayback.isSpeaking,
+                onStopSpeaking: {
+                    self.speechPlayback.stop()
                 })
                 .padding(.horizontal, 7)
                 .padding(.bottom, 5)
         }
         .background(WatchClawStyle.background.ignoresSafeArea())
         .navigationTitle("Chat")
+        .onChange(of: self.completedChatCommandId) { _, commandId in
+            self.handleCompletedVoiceTurn(commandId: commandId)
+        }
+        .onDisappear {
+            self.cancelVoiceTurn()
+            self.speechPlayback.stop()
+        }
     }
 
-    private func sendMessage(_ text: String) {
+    private func sendMessage(_ text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.onSendMessage?(trimmed)
+        guard !trimmed.isEmpty else { return nil }
+        return self.onSendMessage?(trimmed)
+    }
+
+    private var voiceStatusText: String? {
+        if self.speechPlayback.isSpeaking {
+            return "Speaking reply…"
+        }
+        if self.voiceTurnTracker.isAwaitingReply {
+            return "Waiting for spoken reply…"
+        }
+        return nil
+    }
+
+    private func startVoiceTurn() {
+        WatchNativeTextInput.present(suggestions: []) { text in
+            guard let commandId = self.sendMessage(text) else { return }
+            self.voiceTurnTracker.begin(commandId: commandId)
+            self.scheduleVoiceReplyTimeout()
+        }
+    }
+
+    private func handleCompletedVoiceTurn(commandId: String?) {
+        guard let reply = voiceTurnTracker.takeReply(
+            completedCommandId: commandId,
+            text: completedChatReplyText)
+        else {
+            return
+        }
+        self.voiceReplyTimeout?.cancel()
+        self.speechPlayback.speak(reply)
+    }
+
+    private func cancelVoiceTurn() {
+        self.voiceReplyTimeout?.cancel()
+        self.voiceTurnTracker.cancel()
+    }
+
+    private func scheduleVoiceReplyTimeout() {
+        self.voiceReplyTimeout?.cancel()
+        self.voiceReplyTimeout = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(90))
+            guard !Task.isCancelled else { return }
+            self.voiceTurnTracker.cancel()
+        }
     }
 }
 
@@ -1063,14 +1200,14 @@ private struct WatchChatEmptyState: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("No chat synced")
-                .font(.system(size: 16, weight: .semibold))
+                .font(WatchClawType.title(size: 16))
                 .lineLimit(2)
             Text(self.statusText)
-                .font(.system(size: 12))
+                .font(WatchClawType.body(size: 12))
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
             Text("Tap the message pill below to start from your watch.")
-                .font(.system(size: 11, weight: .medium))
+                .font(WatchClawType.body(size: 11, weight: .medium))
                 .foregroundStyle(WatchClawStyle.accent)
                 .lineLimit(2)
         }
@@ -1091,7 +1228,7 @@ private struct WatchChatEmptyState: View {
 private struct WatchMiniUserDot: View {
     var body: some View {
         Text("You")
-            .font(.system(size: 8, weight: .bold))
+            .font(WatchClawType.label(size: 8, weight: .bold))
             .foregroundStyle(.white.opacity(0.86))
             .frame(width: 22, height: 18)
             .background {
@@ -1103,40 +1240,84 @@ private struct WatchMiniUserDot: View {
 
 private struct WatchChatComposer: View {
     let onSendMessage: (String) -> Void
+    let onStartVoiceTurn: () -> Void
+    let isAwaitingVoiceReply: Bool
+    let onCancelVoiceTurn: () -> Void
+    let isSpeaking: Bool
+    let onStopSpeaking: () -> Void
 
     var body: some View {
-        Button {
-            WatchNativeTextInput.present(
-                suggestions: [],
-                onSubmit: self.onSendMessage)
-        } label: {
-            HStack(spacing: 6) {
-                Text("Message OpenClaw")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                WatchVoiceGlyph()
-                    .frame(width: 18, height: 18)
-                    .padding(5)
-                    .background {
-                        Circle()
-                            .fill(WatchClawStyle.hotGradient)
-                    }
+        HStack(spacing: 6) {
+            Button {
+                WatchNativeTextInput.present(
+                    suggestions: [],
+                    onSubmit: self.onSendMessage)
+            } label: {
+                HStack(spacing: 5) {
+                    Text("Message OpenClaw")
+                        .font(WatchClawType.body(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "text.bubble")
+                        .font(WatchClawType.symbol(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 10)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.09))
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+                        }
+                }
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 5)
-            .padding(.vertical, 5)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.09))
-                    .overlay {
-                        Capsule(style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+            .buttonStyle(.plain)
+            .disabled(self.isAwaitingVoiceReply)
+
+            Button {
+                if self.isSpeaking {
+                    self.onStopSpeaking()
+                } else if self.isAwaitingVoiceReply {
+                    self.onCancelVoiceTurn()
+                } else {
+                    self.onStartVoiceTurn()
+                }
+            } label: {
+                Group {
+                    if self.isSpeaking {
+                        Image(systemName: "speaker.slash.fill")
+                            .font(WatchClawType.symbol(size: 13, weight: .bold))
+                    } else if self.isAwaitingVoiceReply {
+                        Image(systemName: "xmark")
+                            .font(WatchClawType.symbol(size: 13, weight: .bold))
+                    } else {
+                        WatchVoiceGlyph()
                     }
+                }
+                .foregroundStyle(.white)
+                .frame(width: 20, height: 20)
+                .padding(8)
+                .background {
+                    Circle()
+                        .fill(WatchClawStyle.hotGradient)
+                }
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(self.voiceButtonAccessibilityLabel)
         }
-        .buttonStyle(.plain)
+    }
+
+    private var voiceButtonAccessibilityLabel: String {
+        if self.isSpeaking {
+            return "Stop speaking"
+        }
+        if self.isAwaitingVoiceReply {
+            return "Cancel voice turn"
+        }
+        return "Start voice turn"
     }
 }
 
@@ -1173,7 +1354,7 @@ private enum WatchNativeTextInput {
 
 private struct WatchExecApprovalListView: View {
     var store: WatchInboxStore
-    var onDecision: ((String, WatchExecApprovalDecision) -> Void)?
+    var onDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
 
     var body: some View {
         WatchDetailScroll(title: "Approvals") {
@@ -1224,9 +1405,9 @@ private struct WatchExecApprovalListView: View {
         return parts.isEmpty ? "Pending review" : parts.joined(separator: " · ")
     }
 
-    private static func expiresText(_ expiresAtMs: Int?) -> String? {
+    private static func expiresText(_ expiresAtMs: Int64?) -> String? {
         guard let expiresAtMs else { return nil }
-        let deltaSeconds = max(0, (expiresAtMs - Int(Date().timeIntervalSince1970 * 1000)) / 1000)
+        let deltaSeconds = max(0, (expiresAtMs - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
         if deltaSeconds < 60 {
             return "Expires in <1m"
         }
@@ -1237,7 +1418,7 @@ private struct WatchExecApprovalListView: View {
 private struct WatchExecApprovalDetailView: View {
     var store: WatchInboxStore
     let record: WatchExecApprovalRecord
-    var onDecision: ((String, WatchExecApprovalDecision) -> Void)?
+    var onDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
 
     var body: some View {
         WatchDetailScroll(title: "Approval") {
@@ -1259,13 +1440,19 @@ private struct WatchExecApprovalDetailView: View {
                     HStack(spacing: 8) {
                         if currentRecord.approval.allowedDecisions.contains(.allowOnce) {
                             WatchDecisionButton(title: "Approve", color: .green) {
-                                self.onDecision?(currentRecord.id, .allowOnce)
+                                self.onDecision?(
+                                    currentRecord.id,
+                                    currentRecord.approval.gatewayStableID,
+                                    .allowOnce)
                             }
                         }
 
                         if currentRecord.approval.allowedDecisions.contains(.deny) {
                             WatchDecisionButton(title: "Deny", color: WatchClawStyle.accent) {
-                                self.onDecision?(currentRecord.id, .deny)
+                                self.onDecision?(
+                                    currentRecord.id,
+                                    currentRecord.approval.gatewayStableID,
+                                    .deny)
                             }
                         }
                     }
@@ -1309,9 +1496,9 @@ private struct WatchExecApprovalDetailView: View {
         }
     }
 
-    private static func expiresText(_ expiresAtMs: Int?) -> String? {
+    private static func expiresText(_ expiresAtMs: Int64?) -> String? {
         guard let expiresAtMs else { return nil }
-        let deltaSeconds = max(0, (expiresAtMs - Int(Date().timeIntervalSince1970 * 1000)) / 1000)
+        let deltaSeconds = max(0, (expiresAtMs - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
         if deltaSeconds < 60 {
             return "<1 minute"
         }

@@ -9,6 +9,24 @@ describe("Apple app i18n catalogs", () => {
     await expect(checkAppleAppI18n()).resolves.toBeUndefined();
   });
 
+  it("does not mark English setup fallbacks as completed translations", async () => {
+    const catalog = JSON.parse(
+      await readFile("apps/ios/Resources/Localizable.xcstrings", "utf8"),
+    ) as {
+      strings: Record<
+        string,
+        { localizations?: Record<string, { stringUnit?: { state?: string; value?: string } }> }
+      >;
+    };
+
+    expect(
+      catalog.strings["Connect a nearby Gateway"]?.localizations?.de?.stringUnit,
+    ).toMatchObject({
+      state: "new",
+      value: "Connect a nearby Gateway",
+    });
+  });
+
   it("compiles macOS catalogs into app-bundle localization directories", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-apple-i18n-"));
     try {

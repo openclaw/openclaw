@@ -4,9 +4,52 @@
  * Handles Chat Completions, Responses, Azure variants, tool-call replay, reasoning events, and
  * provider-specific payload policy before converting SDK streams into OpenClaw assistant events.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import {
+  clampOpenAIPromptCacheKey,
+  convertMessages,
+  findOpenAIStrictToolProjectionDiagnostics,
+  isOpenAICompatibleAzureResponsesBaseUrl,
+  isOpenAIGpt54MiniModel,
+  isOpenAIGpt55Model,
+  isOpenAIGpt56Model,
+  isResponsesTextContentPartType,
+  isResponsesTextDeltaEventType,
+  mapOpenAIStopReason,
+  normalizeOpenAIReasoningEffort,
+  normalizeOpenAIStrictToolParameters,
+  projectOpenAITools,
+  reconcileOpenAICompletionsToolChoice,
+  reconcileOpenAIResponsesToolChoice,
+  resolveAzureDeploymentNameFromMap,
+  resolveOpenAIProjectedToolsStrictToolFlag,
+  resolveOpenAIReasoningEffortForModel,
+  resolveResponsesMessageSnapshotCollapse,
+  type OpenAIApiReasoningEffort,
+  type OpenAICompletionsToolChoice,
+  type OpenAIReasoningEffort,
+  type OpenAIToolProjection,
+} from "@openclaw/ai/internal/openai";
+import {
+  applyProviderReportedUsageCost,
+  calculateCost,
+  createFirstStreamEventAbortController,
+  createReasoningTagTextPartitioner,
+  getEnvApiKey,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  parseStreamingJson,
+  withFirstStreamEventTimeout,
+} from "@openclaw/ai/internal/runtime";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -21,32 +64,21 @@ import type {
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import { calculateCost } from "../llm/model-utils.js";
-import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
-import { convertMessages } from "../llm/providers/openai-completions.js";
-import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
-import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultText,
-} from "../llm/providers/tool-result-text.js";
-import type { Api, Context, Model } from "../llm/types.js";
+import { sha256Hex, sha256HexPrefix } from "../infra/crypto-digest.js";
+import type { Api, Context, Model, Usage } from "../llm/types.js";
+import "../llm/ai-transport-host.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+} from "../plugin-sdk/provider-stream-shared.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
-import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-responses-client-compat.js";
-import {
-  isResponsesTextContentPartType,
-  isResponsesTextDeltaEventType,
-  resolveResponsesMessageSnapshotCollapse,
-} from "../shared/openai-responses-stream-compat.js";
-import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
+import { isCodeModeModelVisibleToolName } from "./code-mode-control-tools.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
@@ -65,31 +97,11 @@ import {
 } from "./openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import {
-  isOpenAIGpt54MiniModel,
-  isOpenAIGpt55Model,
-  normalizeOpenAIReasoningEffort,
-  resolveOpenAIReasoningEffortForModel,
-  type OpenAIApiReasoningEffort,
-  type OpenAIReasoningEffort,
-} from "./openai-reasoning-effort.js";
-import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
-import {
-  projectOpenAITools,
-  reconcileOpenAICompletionsToolChoice,
-  reconcileOpenAIResponsesToolChoice,
-  type OpenAICompletionsToolChoice,
-  type OpenAIToolProjection,
-} from "./openai-tool-projection.js";
-import {
-  findOpenAIStrictToolProjectionDiagnostics,
-  normalizeOpenAIStrictToolParameters,
-  resolveOpenAIProjectedToolsStrictToolFlag,
-} from "./openai-tool-schema.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
@@ -98,13 +110,6 @@ import {
 } from "./provider-transport-fetch.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import type { StreamFn } from "./runtime/index.js";
-import {
-  createFirstStreamEventAbortController,
-  getFirstStreamEventTimeoutHandler,
-  getFirstStreamEventTimeoutMs,
-  withFirstStreamEventTimeout,
-} from "./stream-first-event-timeout.js";
-import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,
@@ -251,7 +256,7 @@ type MutableAssistantOutput = {
     cacheWrite: number;
     reasoningTokens?: number;
     totalTokens: number;
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+    cost: Usage["cost"];
   };
   stopReason: string;
   timestamp: number;
@@ -431,7 +436,7 @@ function enforceCodeModeResponsesToolSurface(payload: unknown): void {
   }
   payload.tools = payload.tools.filter((tool) => {
     const name = responsesPayloadToolName(tool);
-    return name === "exec" || name === "wait";
+    return typeof name === "string" && isCodeModeModelVisibleToolName(name);
   });
 }
 
@@ -443,11 +448,17 @@ function assertCodeModeResponsesToolSurface(payload: unknown): void {
     .map(responsesPayloadToolName)
     .filter((name): name is string => typeof name === "string" && name.length > 0)
     .toSorted((a, b) => a.localeCompare(b));
-  if (names.length === 2 && names[0] === "exec" && names[1] === "wait") {
+  if (
+    names.length >= 2 &&
+    new Set(names).size === names.length &&
+    names.filter((name) => name === "exec").length === 1 &&
+    names.filter((name) => name === "wait").length === 1 &&
+    names.every(isCodeModeModelVisibleToolName)
+  ) {
     return;
   }
   throw new Error(
-    `Code mode payload tool surface violation: expected exec,wait; got ${
+    `Code mode payload tool surface violation: expected exec,wait plus direct-only tools; got ${
       names.length > 0 ? names.join(",") : "none"
     }`,
   );
@@ -460,7 +471,7 @@ function stringifyRedactedPayload(value: unknown): string {
       return "<empty>";
     }
     const redacted = redactSensitiveText(encoded, { mode: "tools" });
-    return redacted.length > 8000 ? `${redacted.slice(0, 8000)}…<truncated>` : redacted;
+    return redacted.length > 8000 ? `${truncateUtf16Safe(redacted, 8000)}…<truncated>` : redacted;
   } catch {
     return "<unserializable>";
   }
@@ -468,7 +479,7 @@ function stringifyRedactedPayload(value: unknown): string {
 
 function stringifyRedactedEvent(value: unknown): string {
   const redacted = stringifyRedactedPayload(value);
-  return redacted.length > 2000 ? `${redacted.slice(0, 2000)}…<truncated>` : redacted;
+  return redacted.length > 2000 ? `${truncateUtf16Safe(redacted, 2000)}…<truncated>` : redacted;
 }
 
 type ResponsesFailedNoDetailsObservation = {
@@ -817,14 +828,17 @@ function isInvalidEncryptedContentError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
   }
-  const record = error as { code?: unknown; message?: unknown };
+  const record = error as { code?: unknown; message?: unknown; status?: unknown };
   if (record.code === "invalid_encrypted_content" || record.code === "thinking_signature_invalid") {
     return true;
   }
+  const message = typeof record.message === "string" ? record.message : "";
   return (
-    typeof record.message === "string" &&
-    (record.message.includes("invalid_encrypted_content") ||
-      record.message.includes("thinking_signature_invalid"))
+    message.includes("invalid_encrypted_content") ||
+    message.includes("thinking_signature_invalid") ||
+    // xAI reports this exact prose contract without an error code.
+    (record.status === 400 &&
+      message.toLowerCase().includes("could not decrypt the provided encrypted_content"))
   );
 }
 
@@ -1023,7 +1037,7 @@ export function resolveAzureOpenAIApiVersion(env = process.env): string {
 }
 
 function shortHash(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+  return sha256HexPrefix(value, 16);
 }
 
 function normalizeResponsesReplayItemId(
@@ -1133,7 +1147,9 @@ function convertResponsesMessages(
     if (!id.includes("|")) {
       return normalizeIdPart(id);
     }
-    const [callId, itemId] = id.split("|");
+    const separatorIndex = id.indexOf("|");
+    const callId = id.slice(0, separatorIndex);
+    const itemId = id.slice(separatorIndex + 1);
     const normalizedCallId = normalizeIdPart(callId);
     const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
     let normalizedItemId = isForeignToolCall
@@ -1264,7 +1280,9 @@ function convertResponsesMessages(
           output.push(messageItem as ResponseInputItem);
           previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
-          const [callId, itemIdRaw] = block.id.split("|");
+          const separatorIndex = block.id.indexOf("|");
+          const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
+          const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
           const itemId =
             shouldReplayResponsesItemIds && !(isDifferentModel && itemIdRaw?.startsWith("fc_"))
               ? itemIdRaw
@@ -1291,7 +1309,9 @@ function convertResponsesMessages(
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some((item) => item.type === "image");
-      const [callId] = msg.toolCallId.split("|");
+      const separatorIndex = msg.toolCallId.indexOf("|");
+      const callId =
+        separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
       messages.push({
         type: "function_call_output",
         call_id: callId,
@@ -1385,20 +1405,18 @@ function buildOpenAIStrictToolDowngradeDiagnosticKey(
   diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        transport: context.transport,
-        provider: context.model.provider ?? null,
-        model: context.model.id ?? null,
-        diagnostics: diagnostics.map((entry) => ({
-          toolIndex: entry.toolIndex,
-          toolName: entry.toolName ?? null,
-          violations: entry.violations,
-        })),
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify({
+      transport: context.transport,
+      provider: context.model.provider ?? null,
+      model: context.model.id ?? null,
+      diagnostics: diagnostics.map((entry) => ({
+        toolIndex: entry.toolIndex,
+        toolName: entry.toolName ?? null,
+        violations: entry.violations,
+      })),
+    }),
+  );
 }
 
 function shouldLogOpenAIStrictToolDowngradeDiagnostic(
@@ -1438,8 +1456,28 @@ async function processResponsesStream(
     authProfileId?: string;
   },
 ) {
+  const resolveToolCallId = (item: Record<string, unknown>, fallbackId?: string): string => {
+    const callId = stringifyUnknown(item.call_id).trim();
+    const itemId = stringifyUnknown(item.id).trim();
+    const [fallbackCallId = "", fallbackItemId = ""] = (fallbackId ?? "").split("|");
+    const resolvedCallId = callId || fallbackCallId;
+    const resolvedItemId = itemId || fallbackItemId;
+    if (resolvedCallId) {
+      return resolvedItemId ? `${resolvedCallId}|${resolvedItemId}` : resolvedCallId;
+    }
+    const generatedCallId = `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
+    return resolvedItemId ? `${generatedCallId}|${resolvedItemId}` : generatedCallId;
+  };
   let currentItem: Record<string, unknown> | null = null;
   let currentBlock: Record<string, unknown> | null = null;
+  type StreamingToolCallIdentity = { itemId?: string; callId?: string };
+  type StreamingToolCallState = StreamingToolCallIdentity & {
+    block: Record<string, unknown>;
+    contentIndex: number;
+    argumentStreamReliable: boolean;
+  };
+  const toolCallsByOutputIndex = new Map<number, StreamingToolCallState>();
+  const unindexedToolCalls = new Set<StreamingToolCallState>();
   let lastTextBlock: {
     block: Record<string, unknown>;
     index: number;
@@ -1454,6 +1492,132 @@ async function processResponsesStream(
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
+  const readOutputIndex = (event: Record<string, unknown>): number | undefined =>
+    typeof event.output_index === "number" &&
+    Number.isInteger(event.output_index) &&
+    event.output_index >= 0
+      ? event.output_index
+      : undefined;
+  const readIdentityValue = (value: unknown): string | undefined => {
+    const identity = typeof value === "string" ? value.trim() : "";
+    return identity || undefined;
+  };
+  const readEventToolCallIdentity = (
+    event: Record<string, unknown>,
+  ): StreamingToolCallIdentity => ({ itemId: readIdentityValue(event.item_id) });
+  const readItemToolCallIdentity = (item: Record<string, unknown>): StreamingToolCallIdentity => ({
+    itemId: readIdentityValue(item.id),
+    callId: readIdentityValue(item.call_id),
+  });
+  const identitiesConflict = (
+    state: StreamingToolCallState,
+    identity: StreamingToolCallIdentity,
+  ): boolean =>
+    Boolean(
+      (state.itemId && identity.itemId && state.itemId !== identity.itemId) ||
+      (state.callId && identity.callId && state.callId !== identity.callId),
+    );
+  const sharesIdentity = (
+    state: StreamingToolCallState,
+    identity: StreamingToolCallIdentity,
+  ): boolean =>
+    Boolean(
+      (state.itemId && identity.itemId && state.itemId === identity.itemId) ||
+      (state.callId && identity.callId && state.callId === identity.callId),
+    );
+  const adoptToolCallIdentity = (
+    state: StreamingToolCallState,
+    identity: StreamingToolCallIdentity,
+  ): StreamingToolCallState => {
+    state.itemId ??= identity.itemId;
+    state.callId ??= identity.callId;
+    return state;
+  };
+  const resolveCompatibleToolCall = (
+    candidates: Iterable<StreamingToolCallState>,
+    identity: StreamingToolCallIdentity,
+  ): StreamingToolCallState | undefined => {
+    const uniqueCandidates = [...new Set(candidates)];
+    if (!identity.itemId && !identity.callId) {
+      return uniqueCandidates.length === 1 ? uniqueCandidates[0] : undefined;
+    }
+    const compatible = uniqueCandidates.filter((state) => !identitiesConflict(state, identity));
+    const matches = compatible.filter((state) => sharesIdentity(state, identity));
+    if (matches.length === 1) {
+      const match = matches.at(0);
+      return match ? adoptToolCallIdentity(match, identity) : undefined;
+    }
+    // Only a sole active call may adopt an identity it did not already know.
+    // Parallel calls require a positive match so missing indices stay fail-closed.
+    if (uniqueCandidates.length !== 1 || compatible.length !== 1 || matches.length !== 0) {
+      return undefined;
+    }
+    const candidate = compatible.at(0);
+    return candidate ? adoptToolCallIdentity(candidate, identity) : undefined;
+  };
+  const resolveStreamingToolCall = (
+    event: Record<string, unknown>,
+    identity: StreamingToolCallIdentity = readEventToolCallIdentity(event),
+  ): StreamingToolCallState | undefined => {
+    const outputIndex = readOutputIndex(event);
+    if (outputIndex !== undefined) {
+      const indexed = toolCallsByOutputIndex.get(outputIndex);
+      if (indexed) {
+        return !identitiesConflict(indexed, identity)
+          ? adoptToolCallIdentity(indexed, identity)
+          : undefined;
+      }
+      // A compatibility stream may add calls without indices, then start
+      // including them. Bind only the one identity-matched (or sole) candidate.
+      const unindexed = resolveCompatibleToolCall(unindexedToolCalls, identity);
+      if (unindexed) {
+        unindexedToolCalls.delete(unindexed);
+        toolCallsByOutputIndex.set(outputIndex, unindexed);
+      }
+      return unindexed;
+    }
+
+    return resolveCompatibleToolCall(
+      [...toolCallsByOutputIndex.values(), ...unindexedToolCalls],
+      identity,
+    );
+  };
+  const forgetStreamingToolCall = (toolCall: StreamingToolCallState) => {
+    for (const [trackedIndex, tracked] of toolCallsByOutputIndex) {
+      if (tracked === toolCall) {
+        toolCallsByOutputIndex.delete(trackedIndex);
+      }
+    }
+    unindexedToolCalls.delete(toolCall);
+  };
+  const markActiveToolCallArgumentsUnreliable = () => {
+    // An unrouteable argument event may belong to any active call. Only an
+    // authoritative full argument snapshot can recover that call.
+    for (const toolCall of new Set([...toolCallsByOutputIndex.values(), ...unindexedToolCalls])) {
+      toolCall.argumentStreamReliable = false;
+    }
+  };
+  const hasActiveStreamingToolCall = () =>
+    toolCallsByOutputIndex.size > 0 || unindexedToolCalls.size > 0;
+  // Opening fragments may carry the only function name. A conflicting
+  // completion must never retarget an already-started call.
+  const resolveCompletedToolCallName = (
+    toolCall: StreamingToolCallState | undefined,
+    value: unknown,
+  ): string => {
+    const streamedName = readIdentityValue(toolCall?.block.name);
+    const completedName = readIdentityValue(value);
+    if (streamedName && completedName && streamedName !== completedName) {
+      throw new Error(
+        `Responses stream changed tool-call function name from ${streamedName} to ${completedName}`,
+      );
+    }
+    const name = completedName ?? streamedName;
+    if (!name) {
+      throw new Error("Responses stream completed tool call without a function name");
+    }
+    return name;
+  };
   const appendPendingMessageDelta = (delta: string) => {
     pendingMessageText = `${pendingMessageText ?? ""}${delta}`;
     const priorText = stringifyUnknown(lastTextBlock?.block.text);
@@ -1462,7 +1626,19 @@ async function processResponsesStream(
     }
     // Diverged from the prior text: this is a distinct message, so open its
     // block now and replay the withheld text as one delta.
-    currentBlock = { type: "text", text: pendingMessageText };
+    const phase =
+      currentItem?.type === "message"
+        ? ((currentItem.phase as "commentary" | "final_answer" | undefined) ?? undefined)
+        : undefined;
+    currentBlock = {
+      type: "text",
+      text: pendingMessageText,
+      ...(currentItem?.type === "message" && phase
+        ? {
+            textSignature: encodeTextSignatureV1(stringifyUnknown(currentItem.id), phase),
+          }
+        : {}),
+    };
     output.content.push(currentBlock);
     stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
     stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: pendingMessageText });
@@ -1512,10 +1688,11 @@ async function processResponsesStream(
   };
   const appendCompletedResponseToolCallItem = (item: Record<string, unknown>) => {
     const args = parseStreamingJson(stringifyJsonLike(item.arguments, "{}"));
+    const name = resolveCompletedToolCallName(undefined, item.name);
     const block = {
       type: "toolCall",
-      id: `${stringifyUnknown(item.call_id)}|${stringifyUnknown(item.id)}`,
-      name: stringifyUnknown(item.name),
+      id: resolveToolCallId(item),
+      name,
       arguments: args,
       partialJson: stringifyJsonLike(item.arguments, "{}"),
     };
@@ -1605,21 +1782,44 @@ async function processResponsesStream(
           currentBlock = null;
           pendingMessageText = "";
         } else {
-          currentBlock = { type: "text", text: "" };
+          const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
+          currentBlock = {
+            type: "text",
+            text: "",
+            ...(phase
+              ? { textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase) }
+              : {}),
+          };
           output.content.push(currentBlock);
           stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
         }
       } else if (item.type === "function_call") {
+        const outputIndex = readOutputIndex(event);
+        if (outputIndex !== undefined && toolCallsByOutputIndex.has(outputIndex)) {
+          throw new Error(`Responses stream reused active tool-call output index ${outputIndex}`);
+        }
         currentItem = item;
         currentBlock = {
           type: "toolCall",
-          id: `${stringifyUnknown(item.call_id)}|${stringifyUnknown(item.id)}`,
-          name: stringifyUnknown(item.name),
+          id: resolveToolCallId(item),
+          name: readIdentityValue(item.name) ?? "",
           arguments: {},
           partialJson: stringifyJsonLike(item.arguments),
         };
         output.content.push(currentBlock);
-        stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+        const contentIndex = blockIndex();
+        const toolCallState = {
+          block: currentBlock,
+          contentIndex,
+          argumentStreamReliable: true,
+          ...readItemToolCallIdentity(item),
+        };
+        if (outputIndex !== undefined) {
+          toolCallsByOutputIndex.set(outputIndex, toolCallState);
+        } else {
+          unindexedToolCalls.add(toolCallState);
+        }
+        stream.push({ type: "toolcall_start", contentIndex, partial: output });
       }
     } else if (type === "response.reasoning_summary_text.delta") {
       if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
@@ -1645,15 +1845,47 @@ async function processResponsesStream(
         }
       }
     } else if (type === "response.function_call_arguments.delta") {
-      if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
-        currentBlock.partialJson = `${stringifyJsonLike(currentBlock.partialJson)}${stringifyJsonLike(event.delta)}`;
-        currentBlock.arguments = parseStreamingJson(stringifyJsonLike(currentBlock.partialJson));
+      const toolCall = resolveStreamingToolCall(event);
+      if (toolCall) {
+        toolCall.block.partialJson = `${stringifyJsonLike(toolCall.block.partialJson)}${stringifyJsonLike(event.delta)}`;
+        toolCall.block.arguments = parseStreamingJson(
+          stringifyJsonLike(toolCall.block.partialJson),
+        );
         stream.push({
           type: "toolcall_delta",
-          contentIndex: blockIndex(),
+          contentIndex: toolCall.contentIndex,
           delta: stringifyJsonLike(event.delta),
           partial: output,
         });
+      } else if (hasActiveStreamingToolCall()) {
+        markActiveToolCallArgumentsUnreliable();
+      }
+    } else if (type === "response.function_call_arguments.done") {
+      const toolCall = resolveStreamingToolCall(event);
+      if (toolCall) {
+        const previousPartialJson = stringifyJsonLike(toolCall.block.partialJson);
+        const doneArguments = typeof event.arguments === "string" ? event.arguments : undefined;
+        if (
+          doneArguments !== undefined &&
+          (doneArguments.length > 0 || previousPartialJson === "")
+        ) {
+          toolCall.block.partialJson = doneArguments;
+          toolCall.block.arguments = parseStreamingJson(doneArguments);
+          toolCall.argumentStreamReliable = true;
+        }
+        if (doneArguments?.startsWith(previousPartialJson)) {
+          const delta = doneArguments.slice(previousPartialJson.length);
+          if (delta.length > 0) {
+            stream.push({
+              type: "toolcall_delta",
+              contentIndex: toolCall.contentIndex,
+              delta,
+              partial: output,
+            });
+          }
+        }
+      } else if (hasActiveStreamingToolCall()) {
+        markActiveToolCallArgumentsUnreliable();
       }
     } else if (type === "response.output_item.done") {
       const item = event.item as Record<string, unknown>;
@@ -1732,7 +1964,13 @@ async function processResponsesStream(
           if (currentBlock?.type !== "text") {
             // Deferred distinct message: open its block now, balanced with the
             // text_end below.
-            currentBlock = { type: "text", text: "" };
+            currentBlock = {
+              type: "text",
+              text: "",
+              ...(phase
+                ? { textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase) }
+                : {}),
+            };
             output.content.push(currentBlock);
             stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
           }
@@ -1748,24 +1986,74 @@ async function processResponsesStream(
         }
         currentBlock = null;
       } else if (item.type === "function_call") {
-        const args =
-          currentBlock?.type === "toolCall" && currentBlock.partialJson
-            ? parseStreamingJson(stringifyJsonLike(currentBlock.partialJson, "{}"))
-            : parseStreamingJson(stringifyJsonLike(item.arguments, "{}"));
+        const streamingToolCall = resolveStreamingToolCall(event, readItemToolCallIdentity(item));
+        // Do not turn an unresolved completion into a second public call while
+        // an indexed call is still open. Its identity or index must match.
+        if (!streamingToolCall && hasActiveStreamingToolCall()) {
+          await cooperativeScheduler.afterEvent();
+          continue;
+        }
+        const completedName = resolveCompletedToolCallName(streamingToolCall, item.name);
+        const streamedPartialJson = streamingToolCall
+          ? stringifyJsonLike(streamingToolCall.block.partialJson)
+          : "";
+        const completedArguments = typeof item.arguments === "string" ? item.arguments : undefined;
+        if (streamingToolCall && !streamingToolCall.argumentStreamReliable && !completedArguments) {
+          await cooperativeScheduler.afterEvent();
+          continue;
+        }
+        const finalPartialJson =
+          completedArguments !== undefined &&
+          (completedArguments.length > 0 || !streamedPartialJson)
+            ? completedArguments
+            : streamedPartialJson || "{}";
+        const args = parseStreamingJson(finalPartialJson);
+        let toolCallBlock: Record<string, unknown>;
+        let contentIndex: number;
+        if (streamingToolCall) {
+          toolCallBlock = streamingToolCall.block;
+          contentIndex = streamingToolCall.contentIndex;
+        } else {
+          toolCallBlock = {
+            type: "toolCall",
+            id: resolveToolCallId(item),
+            name: completedName,
+            arguments: args,
+            partialJson: finalPartialJson,
+          };
+          output.content.push(toolCallBlock);
+          contentIndex = blockIndex();
+          stream.push({ type: "toolcall_start", contentIndex, partial: output });
+        }
+        const provisionalId = typeof toolCallBlock.id === "string" ? toolCallBlock.id : undefined;
+        const currentToolCallId = resolveToolCallId(item, provisionalId);
+        toolCallBlock.id = currentToolCallId;
+        toolCallBlock.name = completedName;
+        toolCallBlock.arguments = args;
+        toolCallBlock.partialJson = finalPartialJson;
         stream.push({
           type: "toolcall_end",
-          contentIndex: blockIndex(),
+          contentIndex,
           toolCall: {
             type: "toolCall",
-            id: `${stringifyUnknown(item.call_id)}|${stringifyUnknown(item.id)}`,
-            name: stringifyUnknown(item.name),
+            id: currentToolCallId,
+            name: completedName,
             arguments: args,
           },
           partial: output,
         });
-        currentBlock = null;
+        if (streamingToolCall) {
+          forgetStreamingToolCall(streamingToolCall);
+        }
+        if (currentBlock === toolCallBlock) {
+          currentBlock = null;
+          currentItem = null;
+        }
       }
     } else if (type === "response.completed") {
+      if (hasActiveStreamingToolCall()) {
+        throw new Error("Responses stream completed with unresolved tool calls");
+      }
       const response = event.response as Record<string, unknown> | undefined;
       if (typeof response?.id === "string") {
         output.responseId = response.id;
@@ -1832,6 +2120,9 @@ async function processResponsesStream(
     }
     await cooperativeScheduler.afterEvent();
   }
+  if (hasActiveStreamingToolCall()) {
+    throw new Error("Responses stream ended with unresolved tool calls");
+  }
   const eventTypeSummary = [...eventTypes.entries()]
     .slice(0, 12)
     .map(([eventType, count]) => `${eventType}:${count}`)
@@ -1887,6 +2178,7 @@ function buildOpenAIClientHeaders(
   context: Context,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -1909,7 +2201,20 @@ function buildOpenAIClientHeaders(
     callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
     precedence: "caller-wins",
   }).headers;
-  return headers ?? {};
+  const resolvedHeaders = headers ?? {};
+  // This header routes ChatGPT Responses session affinity; without it requests land
+  // on arbitrary machines and prompt cache misses. codex-rs sends "session-id"
+  // (codex-rs/codex-api/src/requests/headers.rs), but backend accepts "session_id"; align with packages/ai openai-chatgpt-responses.
+  if (
+    sessionId &&
+    !Object.keys(resolvedHeaders).some(
+      (key) => normalizeLowercaseStringOrEmpty(key) === "session_id",
+    ) &&
+    usesNativeOpenAICodexResponsesBackend(model)
+  ) {
+    resolvedHeaders.session_id = sessionId;
+  }
+  return resolvedHeaders;
 }
 
 function resolveProviderTransportTurnState(
@@ -1977,12 +2282,13 @@ function createOpenAIResponsesClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -2026,6 +2332,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          options?.sessionId,
         );
         let params = buildOpenAIResponsesParams(
           model,
@@ -2638,11 +2945,63 @@ function assertOpenAICompletionsPayloadHasConversationTurn(
   );
 }
 
+const SSE_DONE_LINE_RE = /^data:[ \t]*\[DONE\][ \t]*$/i;
+const SSE_DONE_MAX_LINE_CHARS = 1_024;
+
+function createSseDoneDetector() {
+  const decoder = new TextDecoder();
+  let line = "";
+  let lineOverflowed = false;
+  let sawDone = false;
+
+  const finishLine = () => {
+    if (!lineOverflowed && SSE_DONE_LINE_RE.test(line)) {
+      sawDone = true;
+    }
+    line = "";
+    lineOverflowed = false;
+  };
+  const observeText = (text: string) => {
+    for (const char of text) {
+      if (char === "\n" || char === "\r") {
+        finishLine();
+        continue;
+      }
+      if (!lineOverflowed && line.length < SSE_DONE_MAX_LINE_CHARS) {
+        line += char;
+      } else {
+        // Never let truncation turn a suffix of a large data line into a
+        // standalone terminal marker.
+        lineOverflowed = true;
+      }
+    }
+  };
+
+  return {
+    observe(chunk: Uint8Array) {
+      if (!sawDone) {
+        observeText(decoder.decode(chunk, { stream: true }));
+      }
+    },
+    finish() {
+      if (sawDone) {
+        return;
+      }
+      observeText(decoder.decode());
+      if (line || lineOverflowed) {
+        finishLine();
+      }
+    },
+    sawDone: () => sawDone,
+  };
+}
+
 function createOpenAICompletionsClient(
   model: Model,
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  opts?: { fetch?: typeof globalThis.fetch },
 ) {
   const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
   return new OpenAI({
@@ -2651,7 +3010,7 @@ function createOpenAICompletionsClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: clientConfig.defaultHeaders,
     defaultQuery: clientConfig.defaultQuery,
-    fetch: buildGuardedModelFetch(model),
+    fetch: opts?.fetch ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
 }
@@ -2752,7 +3111,38 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers);
+        // The OpenAI SDK consumes the SSE terminal without yielding it. Observe
+        // the raw body so native tool calls can distinguish clean DONE from EOF.
+        const doneDetector = createSseDoneDetector();
+        const baseFetch = buildGuardedModelFetch(model);
+        const doneDetectingFetch: typeof globalThis.fetch = async (url, init) => {
+          const response = await baseFetch(url as never, init);
+          if (!response.body || !response.ok) {
+            return response;
+          }
+          if (typeof TransformStream === "undefined" || !response.body.pipeThrough) {
+            return response;
+          }
+          const transformed = response.body.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                doneDetector.observe(chunk);
+                controller.enqueue(chunk);
+              },
+              flush() {
+                doneDetector.finish();
+              },
+            }),
+          );
+          return new Response(transformed, {
+            headers: response.headers,
+            status: response.status,
+            statusText: response.statusText,
+          });
+        };
+        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers, {
+          fetch: doneDetectingFetch,
+        });
         let params = buildOpenAICompletionsParams(
           model as OpenAIModeModel,
           context,
@@ -2789,6 +3179,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
           abortFirstEventStream: firstEventAbort.abort,
           onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+          sawStreamDONE: doneDetector.sawDone,
         });
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
@@ -2812,6 +3203,7 @@ async function processOpenAICompletionsStream(
     firstEventTimeoutMs?: number;
     abortFirstEventStream?: (reason: Error) => void;
     onFirstEventTimeout?: (reason: Error) => void;
+    sawStreamDONE?: () => boolean;
   },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
@@ -2841,12 +3233,12 @@ async function processOpenAICompletionsStream(
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
   let isFlushingPendingPostToolCallDeltas = false;
-  let recoveredDeepSeekToolCallIndex = 0;
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   let sawStopFinishReason = false;
+  let sawNativeToolCallDelta = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   let chunkPushedEvent = false;
@@ -2967,10 +3359,11 @@ async function processOpenAICompletionsStream(
       currentBlock = null;
       flushPendingPostToolCallDeltas();
     }
-    recoveredDeepSeekToolCallIndex += 1;
     const block: ToolCallBlock = {
       type: "toolCall",
-      id: `call_deepseek_dsml_${recoveredDeepSeekToolCallIndex}`,
+      // DSML has no provider call id. A response-local counter would alias a
+      // later assistant response and could collapse distinct mutating calls.
+      id: `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`,
       name: toolCall.name,
       arguments: toolCall.arguments,
       partialArgs: toolCall.partialArgs,
@@ -3149,6 +3542,18 @@ async function processOpenAICompletionsStream(
         }
       }
     }
+    // Chat Completions can put safety/structured-output refusals in a top-level
+    // `refusal` field with content null. Surface that as visible text so the
+    // assistant turn is not empty (Responses path already routes refusal deltas).
+    const refusalText = typeof choiceDelta.refusal === "string" ? choiceDelta.refusal : "";
+    if (refusalText) {
+      const routedDeltas = hasMirroredReasoning
+        ? reasoningTagTextPartitioner.push(refusalText)
+        : reasoningTagTextPartitioner.pushVisible(refusalText);
+      for (const routedDelta of routedDeltas) {
+        appendPartitionedVisibleDelta(routedDelta);
+      }
+    }
     for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "thinking" && !emitReasoning) {
         continue;
@@ -3164,6 +3569,7 @@ async function processOpenAICompletionsStream(
       }
     }
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
+      sawNativeToolCallDelta = true;
       flushReasoningTagTextPartitionerAtEnd();
       for (const toolCall of choiceDelta.tool_calls) {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
@@ -3246,9 +3652,20 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
-  // Tool-call recovery is executable only after an explicit provider terminal.
-  // EOF alone can mean transport truncation, even when the recovered call parses.
-  if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
+  // Promote complete silent tool-call-only responses when the stream finished
+  // cleanly (reached post-loop). Two paths:
+  //   sawStopFinishReason: explicit provider terminal (legacy DSML / #88791)
+  //   sawNativeToolCallDelta + sawStreamDONE: structured delta.tool_calls with
+  //     a clean SSE [DONE] terminal but no finish_reason (e.g. Evolink
+  //     DeepSeek V4). [DONE] tracking distinguishes clean termination from
+  //     connection drops (EOF without [DONE] remains fail-closed).
+  // Truncated streams throw before reaching this code.
+  if (
+    output.stopReason === "stop" &&
+    hasToolCalls &&
+    !hasVisibleText &&
+    (sawStopFinishReason || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)))
+  ) {
     output.stopReason = "toolUse";
   }
   if (hasToolCalls && output.stopReason !== "toolUse") {
@@ -3978,7 +4395,7 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
 }
 
 function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
-  return model.id.toLowerCase().includes("gemini-3");
+  return isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id);
 }
 
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
@@ -4421,6 +4838,11 @@ export function buildOpenAICompletionsParams(
     params.tools.length > 0 &&
     (isOpenAIGpt54MiniModel(model) ||
       (isOpenAIGpt55Model(model) && isKnownOpenAICompletionsEndpoint(model)));
+  const disableChatCompletionsToolReasoning =
+    Array.isArray(params.tools) &&
+    params.tools.length > 0 &&
+    isOpenAIGpt56Model(model) &&
+    isKnownOpenAICompletionsEndpoint(model);
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
@@ -4433,7 +4855,11 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
-  if (
+  if (disableChatCompletionsToolReasoning) {
+    // GPT-5.6 Chat Completions defaults reasoning on, but rejects function
+    // tools unless reasoning is explicitly disabled.
+    params.reasoning_effort = "none";
+  } else if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
     resolvedCompletionsReasoningEffort
@@ -4454,15 +4880,15 @@ export function buildOpenAICompletionsParams(
 }
 
 export function parseTransportChunkUsage(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]> & { cost?: unknown },
   model: Model,
-) {
+): MutableAssistantOutput["usage"] {
   const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
   const promptTokens = rawUsage.prompt_tokens || 0;
   const input = Math.max(0, promptTokens - cachedTokens);
   const outputTokens = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
-  const usage = {
+  const usage: MutableAssistantOutput["usage"] = {
     input,
     output: outputTokens,
     cacheRead: cachedTokens,
@@ -4474,6 +4900,7 @@ export function parseTransportChunkUsage(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model as never, usage as never);
+  applyProviderReportedUsageCost(usage, rawUsage.cost);
   return usage;
 }
 
@@ -4493,6 +4920,7 @@ export const testing = {
   buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
   createAzureOpenAIClient,
+  createSseDoneDetector,
   createOpenAICompletionsClient,
   createOpenAIResponsesClient,
   enforceCodeModeResponsesToolSurface,
@@ -4504,6 +4932,7 @@ export const testing = {
   formatModelTransportDebugBaseUrl,
   buildResponsesFailedNoDetailsObservation,
   buildOpenAIResponsesReasoningReplayMetadata,
+  isInvalidEncryptedContentError,
   normalizeResponsesFailedEvent,
   prepareOpenAIResponsesReasoningItemForReplay,
   createResponsesStreamWithEncryptedContentRetry,
@@ -4512,5 +4941,7 @@ export const testing = {
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,
+  stringifyRedactedEvent,
+  stringifyRedactedPayload,
 };
 export { testing as __testing };

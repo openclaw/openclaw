@@ -18,6 +18,7 @@ import { z } from "zod";
 import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
+import { startQaGatewayRpcClient } from "../../gateway-rpc-client.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
@@ -50,7 +51,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-export type WhatsAppQaRuntimeEnv = {
+type WhatsAppQaRuntimeEnv = {
   driverAuthArchiveBase64: string;
   driverPhoneE164: string;
   sutAuthArchiveBase64: string;
@@ -59,10 +60,6 @@ export type WhatsAppQaRuntimeEnv = {
 };
 
 type WhatsAppQaScenarioId =
-  | "whatsapp-access-control-dm-disabled"
-  | "whatsapp-access-control-dm-open"
-  | "whatsapp-access-control-group-disabled"
-  | "whatsapp-access-control-group-open"
   | "whatsapp-approval-exec-deny-native"
   | "whatsapp-approval-exec-group-reaction-native"
   | "whatsapp-approval-exec-reaction-native"
@@ -71,8 +68,6 @@ type WhatsAppQaScenarioId =
   | "whatsapp-audio-preflight"
   | "whatsapp-broadcast-group-fanout"
   | "whatsapp-canary"
-  | "whatsapp-commands-command"
-  | "whatsapp-context-command"
   | "whatsapp-group-allowlist-block"
   | "whatsapp-group-activation-always"
   | "whatsapp-group-agent-message-action-react"
@@ -85,29 +80,22 @@ type WhatsAppQaScenarioId =
   | "whatsapp-group-reply-to-bot-triggers"
   | "whatsapp-group-reply-to-message"
   | "whatsapp-inbound-reaction-no-trigger"
-  | "whatsapp-help-command"
   | "whatsapp-inbound-image-caption"
   | "whatsapp-inbound-structured-messages"
   | "whatsapp-message-actions"
-  | "whatsapp-native-new-command"
   | "whatsapp-outbound-document-preserves-filename"
   | "whatsapp-outbound-media-matrix"
   | "whatsapp-outbound-poll"
-  | "whatsapp-pairing-block"
+  | "whatsapp-outbound-send-serialization"
   | "whatsapp-mention-gating"
   | "whatsapp-reply-delivery-shape"
   | "whatsapp-reply-context-isolation"
   | "whatsapp-reply-to-message"
   | "whatsapp-reply-to-mode-batched"
-  | "whatsapp-restart-resume"
   | "whatsapp-stream-final-message-accounting"
-  | "whatsapp-status-command"
   | "whatsapp-status-reaction-lifecycle"
   | "whatsapp-status-reactions"
   | "whatsapp-top-level-reply-shape"
-  | "whatsapp-tools-compact-command"
-  | "whatsapp-tool-only-usage-footer"
-  | "whatsapp-whoami-command"
   | "whatsapp-approval-exec-native"
   | "whatsapp-approval-plugin-native";
 
@@ -121,10 +109,6 @@ function toWhatsAppQaError(error: unknown): Error {
 }
 
 const WHATSAPP_QA_SCENARIO_POSTURES = {
-  "whatsapp-access-control-dm-disabled": "user-path",
-  "whatsapp-access-control-dm-open": "user-path",
-  "whatsapp-access-control-group-disabled": "user-path",
-  "whatsapp-access-control-group-open": "user-path",
   "whatsapp-agent-message-action-react": "user-path",
   "whatsapp-agent-message-action-upload-file": "user-path",
   "whatsapp-approval-exec-deny-native": "native-approval",
@@ -135,8 +119,6 @@ const WHATSAPP_QA_SCENARIO_POSTURES = {
   "whatsapp-audio-preflight": "user-path",
   "whatsapp-broadcast-group-fanout": "user-path",
   "whatsapp-canary": "user-path",
-  "whatsapp-commands-command": "user-path",
-  "whatsapp-context-command": "user-path",
   "whatsapp-group-activation-always": "user-path",
   "whatsapp-group-allowlist-block": "user-path",
   "whatsapp-group-agent-message-action-react": "user-path",
@@ -148,30 +130,23 @@ const WHATSAPP_QA_SCENARIO_POSTURES = {
   "whatsapp-group-pending-history-context": "user-path",
   "whatsapp-group-reply-to-bot-triggers": "user-path",
   "whatsapp-group-reply-to-message": "user-path",
-  "whatsapp-help-command": "user-path",
   "whatsapp-inbound-image-caption": "user-path",
   "whatsapp-inbound-reaction-no-trigger": "user-path",
   "whatsapp-inbound-structured-messages": "user-path",
   "whatsapp-mention-gating": "user-path",
   "whatsapp-message-actions": "direct-gateway",
-  "whatsapp-native-new-command": "user-path",
   "whatsapp-outbound-document-preserves-filename": "direct-gateway",
   "whatsapp-outbound-media-matrix": "direct-gateway",
   "whatsapp-outbound-poll": "direct-gateway",
-  "whatsapp-pairing-block": "user-path",
+  "whatsapp-outbound-send-serialization": "direct-gateway",
   "whatsapp-reply-context-isolation": "direct-gateway",
   "whatsapp-reply-delivery-shape": "direct-gateway",
   "whatsapp-reply-to-message": "user-path",
   "whatsapp-reply-to-mode-batched": "user-path",
-  "whatsapp-restart-resume": "user-path",
-  "whatsapp-status-command": "user-path",
   "whatsapp-status-reaction-lifecycle": "user-path",
   "whatsapp-status-reactions": "user-path",
   "whatsapp-stream-final-message-accounting": "user-path",
-  "whatsapp-tool-only-usage-footer": "user-path",
-  "whatsapp-tools-compact-command": "user-path",
   "whatsapp-top-level-reply-shape": "user-path",
-  "whatsapp-whoami-command": "user-path",
 } satisfies Record<WhatsAppQaScenarioId, WhatsAppQaScenarioPosture>;
 
 type WhatsAppQaMessageSendMode =
@@ -186,7 +161,8 @@ type WhatsAppQaMessageSendMode =
     };
 
 type WhatsAppQaGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
-type WhatsAppQaGatewayRuntime = Pick<WhatsAppQaGateway, "call" | "restart" | "workspaceDir">;
+type WhatsAppQaGatewayRuntime = Pick<WhatsAppQaGateway, "call" | "restart" | "workspaceDir"> &
+  Partial<Pick<WhatsAppQaGateway, "logs" | "token" | "wsUrl">>;
 type WhatsAppQaGatewayCallContext = {
   gateway: Pick<WhatsAppQaGatewayRuntime, "call">;
   gatewayTarget: string;
@@ -624,19 +600,6 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
     },
   },
   {
-    id: "whatsapp-pairing-block",
-    title: "WhatsApp non-allowlisted DM gets pairing gate",
-    defaultProviderModes: ["live-frontier", "mock-openai"],
-    timeoutMs: 20_000,
-    buildRun: () => ({
-      configMode: "pairing",
-      expectReply: true,
-      input: `Do not run the agent for this pairing QA marker ${randomUUID().slice(0, 8)}`,
-      matchText: /OpenClaw: access not configured|Pairing code:/iu,
-      target: "dm",
-    }),
-  },
-  {
     id: "whatsapp-mention-gating",
     standardId: "mention-gating",
     title: "WhatsApp group mention gating",
@@ -899,153 +862,6 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
             );
           }
         },
-      };
-    },
-  },
-  {
-    id: "whatsapp-restart-resume",
-    standardId: "restart-resume",
-    title: "WhatsApp DM resumes after gateway restart",
-    timeoutMs: 120_000,
-    buildRun: () => {
-      const firstToken = `WHATSAPP_QA_RESTART_BEFORE_${randomUUID().slice(0, 8).toUpperCase()}`;
-      const secondToken = `WHATSAPP_QA_RESTART_AFTER_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        afterReply: async (_reply, context) => {
-          await context.gateway.restart();
-          await context.waitForReady();
-          const secondStartedAt = new Date();
-          await context.driver.sendText(
-            context.target,
-            `After the restart, reply with only this exact marker: ${secondToken}`,
-          );
-          await context.driver.waitForMessage({
-            observedAfter: secondStartedAt,
-            timeoutMs: 60_000,
-            match: (message) =>
-              message.fromPhoneE164 === context.sutPhoneE164 && message.text.includes(secondToken),
-          });
-          return "gateway restarted and post-restart reply matched";
-        },
-        configMode: "allowlist",
-        expectReply: true,
-        input: `Before the restart, reply with only this exact marker: ${firstToken}`,
-        matchText: firstToken,
-        target: "dm",
-      };
-    },
-  },
-  {
-    id: "whatsapp-help-command",
-    standardId: "help-command",
-    title: "WhatsApp help command replies",
-    timeoutMs: 60_000,
-    buildRun: () => ({
-      configMode: "allowlist",
-      expectReply: true,
-      input: "/help",
-      matchText: /OpenClaw|commands|status|\/new/iu,
-      target: "dm",
-    }),
-  },
-  {
-    id: "whatsapp-status-command",
-    title: "WhatsApp status command replies",
-    timeoutMs: 60_000,
-    buildRun: () => ({
-      configMode: "allowlist",
-      expectReply: true,
-      input: "/status",
-      matchText: /OpenClaw|status|session|agent/iu,
-      target: "dm",
-    }),
-  },
-  {
-    id: "whatsapp-commands-command",
-    title: "WhatsApp commands list replies",
-    defaultProviderModes: ["mock-openai"],
-    timeoutMs: 60_000,
-    buildRun: () => ({
-      configMode: "allowlist",
-      expectReply: true,
-      expectedJoinedSutTextIncludes: ["/session", "/verbose"],
-      input: "/commands",
-      matchText: /Commands \(|\/session|\/verbose/iu,
-      settleMs: 4_000,
-      target: "dm",
-    }),
-  },
-  {
-    id: "whatsapp-tools-compact-command",
-    title: "WhatsApp tools compact reply",
-    defaultProviderModes: ["mock-openai"],
-    timeoutMs: 60_000,
-    buildRun: () => ({
-      configMode: "allowlist",
-      expectReply: true,
-      expectedJoinedSutTextIncludes: ["exec", "Use /tools verbose for descriptions"],
-      input: "/tools compact",
-      matchText: /Available tools|exec|Use \/tools verbose for descriptions/iu,
-      settleMs: 4_000,
-      target: "dm",
-    }),
-  },
-  {
-    id: "whatsapp-whoami-command",
-    title: "WhatsApp whoami reply",
-    defaultProviderModes: ["mock-openai"],
-    timeoutMs: 60_000,
-    buildRun: () => ({
-      configMode: "allowlist",
-      expectReply: true,
-      input: "/whoami",
-      matchText: /(?=.*Identity)(?=.*Channel: whatsapp)(?=.*AllowFrom:)/isu,
-      target: "dm",
-    }),
-  },
-  {
-    id: "whatsapp-context-command",
-    title: "WhatsApp context list reply",
-    defaultProviderModes: ["mock-openai"],
-    timeoutMs: 60_000,
-    buildRun: () => ({
-      configMode: "allowlist",
-      expectReply: true,
-      input: "/context list",
-      matchText: /(?=.*Context breakdown)(?=.*Workspace:)(?=.*Tool schemas)/isu,
-      target: "dm",
-    }),
-  },
-  {
-    id: "whatsapp-tool-only-usage-footer",
-    title: "WhatsApp tool-only reply includes usage footer",
-    defaultProviderModes: ["mock-openai"],
-    timeoutMs: 120_000,
-    buildRun: () => {
-      const token = `WHATSAPP_QA_USAGE_FOOTER_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        afterReply: async (_reply, context) => {
-          const usageStartedAt = new Date();
-          await context.driver.sendText(
-            context.target,
-            `Reply with only this exact marker after usage footer setup: ${token}`,
-          );
-          const usageReply = await context.driver.waitForMessage({
-            observedAfter: usageStartedAt,
-            timeoutMs: 60_000,
-            match: (message) =>
-              message.fromPhoneE164 === context.sutPhoneE164 &&
-              message.text.includes(token) &&
-              message.text.includes("Usage:"),
-          });
-          context.recordObservedMessage(usageReply);
-          return "model reply included visible usage footer";
-        },
-        configMode: "allowlist",
-        expectReply: true,
-        input: "/usage tokens",
-        matchText: /Usage footer: tokens/iu,
-        target: "dm",
       };
     },
   },
@@ -1531,6 +1347,43 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
     },
   },
   {
+    id: "whatsapp-outbound-send-serialization",
+    title: "WhatsApp parallel Gateway sends deliver every outbound message",
+    defaultEnabled: false,
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 90_000,
+    buildRun: () => {
+      const token = `WHATSAPP_QA_SERIAL_SEND_${randomUUID().slice(0, 8).toUpperCase()}`;
+      const markers = Array.from({ length: 5 }, (_, index) => `${token}_${index + 1}`);
+      return {
+        afterReply: async (_reply, context) => {
+          const sendsStartedAt = new Date();
+          await callWhatsAppGatewaySendConcurrently(
+            context,
+            markers.map((marker, index) => ({
+              label: `parallel-${index + 1}`,
+              message: marker,
+            })),
+          );
+          await Promise.all(
+            markers.map((marker) =>
+              waitForScenarioObservedMessage(context, {
+                observedAfter: sendsStartedAt,
+                match: (message) => message.kind === "text" && message.text.includes(marker),
+              }),
+            ),
+          );
+          return `gateway parallel send delivered ${markers.length}/${markers.length} messages`;
+        },
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker before parallel send checks: ${token}`,
+        matchText: token,
+        target: "dm",
+      };
+    },
+  },
+  {
     id: "whatsapp-outbound-poll",
     title: "WhatsApp direct Gateway poll delivers outbound native poll",
     defaultProviderModes: ["mock-openai"],
@@ -1862,78 +1715,6 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
     }),
   },
   {
-    id: "whatsapp-access-control-dm-open",
-    title: "WhatsApp dmPolicy open allows direct messages",
-    defaultProviderModes: ["mock-openai"],
-    timeoutMs: 60_000,
-    buildRun: () => {
-      const token = `WHATSAPP_QA_DM_OPEN_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "open",
-        expectReply: true,
-        input: `Reply with only this exact marker under dmPolicy open: ${token}`,
-        matchText: token,
-        target: "dm",
-      };
-    },
-  },
-  {
-    id: "whatsapp-access-control-dm-disabled",
-    title: "WhatsApp dmPolicy disabled stays quiet",
-    defaultProviderModes: ["mock-openai"],
-    timeoutMs: 8_000,
-    buildRun: () => {
-      const token = `WHATSAPP_QA_DM_DISABLED_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "disabled",
-        expectReply: false,
-        input: `Do not reply under dmPolicy disabled. Forbidden marker: ${token}`,
-        matchText: token,
-        target: "dm",
-      };
-    },
-  },
-  {
-    id: "whatsapp-access-control-group-open",
-    title: "WhatsApp groupPolicy open allows mention-gated groups",
-    defaultProviderModes: ["mock-openai"],
-    requiresGroupJid: true,
-    timeoutMs: 60_000,
-    configOverrides: {
-      groupPolicy: "open",
-    },
-    buildRun: () => {
-      const token = `WHATSAPP_QA_GROUP_OPEN_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "allowlist",
-        expectReply: true,
-        input: `openclawqa reply with only this exact marker under groupPolicy open: ${token}`,
-        matchText: token,
-        target: "group",
-      };
-    },
-  },
-  {
-    id: "whatsapp-access-control-group-disabled",
-    title: "WhatsApp groupPolicy disabled stays quiet",
-    defaultProviderModes: ["mock-openai"],
-    requiresGroupJid: true,
-    timeoutMs: 8_000,
-    configOverrides: {
-      groupPolicy: "disabled",
-    },
-    buildRun: () => {
-      const token = `WHATSAPP_QA_GROUP_DISABLED_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "allowlist",
-        expectReply: false,
-        input: `openclawqa groupPolicy disabled must not reply with ${token}`,
-        matchText: token,
-        target: "group",
-      };
-    },
-  },
-  {
     id: "whatsapp-reply-delivery-shape",
     title: "WhatsApp direct Gateway send chunks long replies",
     defaultProviderModes: ["mock-openai"],
@@ -2009,19 +1790,6 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
       input: "WhatsApp long final QA check. Use the scripted long final response.",
       matchText: "WHATSAPP-LONG-FINAL-BEGIN",
       settleMs: 4_000,
-      target: "dm",
-    }),
-  },
-  {
-    id: "whatsapp-native-new-command",
-    title: "WhatsApp /new command starts a new session",
-    defaultProviderModes: ["mock-openai"],
-    timeoutMs: 60_000,
-    buildRun: () => ({
-      configMode: "allowlist",
-      expectReply: true,
-      input: "/new",
-      matchText: /new session|session/i,
       target: "dm",
     }),
   },
@@ -2200,6 +1968,10 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
 export const WHATSAPP_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   scenarios: WHATSAPP_QA_SCENARIOS,
 });
+
+export function listWhatsAppQaScenarioCatalog() {
+  return WHATSAPP_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
+}
 
 function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KEYS)[number]) {
   const value = env[key]?.trim();
@@ -2874,6 +2646,16 @@ function buildWhatsAppQaIdempotencyKey(scenarioId: WhatsAppQaScenarioId, label: 
   return `${scenarioId}:${label}:${randomUUID()}`;
 }
 
+type WhatsAppQaGatewaySendParams = {
+  asVoice?: boolean;
+  forceDocument?: boolean;
+  label: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  message?: string;
+  replyToId?: string;
+};
+
 async function writeWhatsAppQaWorkspaceFixture(
   context: WhatsAppQaMessageScenarioContext,
   params: {
@@ -2890,33 +2672,70 @@ async function writeWhatsAppQaWorkspaceFixture(
 
 async function callWhatsAppGatewaySend(
   context: WhatsAppQaGatewayCallContext,
-  params: {
-    asVoice?: boolean;
-    forceDocument?: boolean;
-    label: string;
-    mediaUrl?: string;
-    mediaUrls?: string[];
-    message?: string;
-    replyToId?: string;
-  },
+  params: WhatsAppQaGatewaySendParams,
 ) {
-  return await context.gateway.call(
-    "send",
-    {
-      accountId: context.sutAccountId,
-      agentId: "main",
-      channel: "whatsapp",
-      idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
-      to: context.gatewayTarget,
-      ...(params.message !== undefined ? { message: params.message } : {}),
-      ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
-      ...(params.mediaUrls ? { mediaUrls: params.mediaUrls } : {}),
-      ...(params.asVoice !== undefined ? { asVoice: params.asVoice } : {}),
-      ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
-      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    },
-    { timeoutMs: 60_000 },
+  return await context.gateway.call("send", buildWhatsAppGatewaySendRequest(context, params), {
+    timeoutMs: 60_000,
+  });
+}
+
+function buildWhatsAppGatewaySendRequest(
+  context: WhatsAppQaGatewayCallContext,
+  params: WhatsAppQaGatewaySendParams,
+) {
+  return {
+    accountId: context.sutAccountId,
+    agentId: "main",
+    channel: "whatsapp",
+    idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
+    to: context.gatewayTarget,
+    ...(params.message !== undefined ? { message: params.message } : {}),
+    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaUrls ? { mediaUrls: params.mediaUrls } : {}),
+    ...(params.asVoice !== undefined ? { asVoice: params.asVoice } : {}),
+    ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
+    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+  };
+}
+
+async function callWhatsAppGatewaySendConcurrently(
+  context: WhatsAppQaMessageScenarioContext,
+  sends: WhatsAppQaGatewaySendParams[],
+) {
+  // Each QA RPC client serializes its own requests. Separate clients preserve
+  // real Gateway overlap so this probe reaches the shared WhatsApp socket concurrently.
+  const connection = resolveWhatsAppGatewayRpcConnection(context.gateway);
+  const clients = await Promise.all(
+    sends.map(() =>
+      startQaGatewayRpcClient({
+        logs: connection.logs,
+        token: connection.token,
+        wsUrl: connection.wsUrl,
+      }),
+    ),
   );
+  try {
+    await Promise.all(
+      clients.map((client, index) =>
+        client.request("send", buildWhatsAppGatewaySendRequest(context, sends[index]), {
+          timeoutMs: 60_000,
+        }),
+      ),
+    );
+  } finally {
+    await Promise.all(clients.map((client) => client.stop()));
+  }
+}
+
+function resolveWhatsAppGatewayRpcConnection(gateway: WhatsAppQaGatewayRuntime) {
+  if (!gateway.logs || !gateway.token || !gateway.wsUrl) {
+    throw new Error("WhatsApp concurrent Gateway probe requires a live RPC connection.");
+  }
+  return {
+    logs: gateway.logs,
+    token: gateway.token,
+    wsUrl: gateway.wsUrl,
+  };
 }
 
 async function callWhatsAppGatewayPoll(
@@ -4633,6 +4452,7 @@ export const testing = {
   runWhatsAppApprovalScenario,
   runWhatsAppStructuredInboundChecks,
   waitForScenarioObservedMessage,
+  waitForWhatsAppChannelStable,
   redactWhatsAppQaScenarioResults,
   resolveWhatsAppQaMessageTargets,
   resolveWhatsAppQaRuntimeEnv,

@@ -1,19 +1,23 @@
 // Control UI HTTP tests cover static asset serving, bootstrap config, avatar and
 // assistant media routes, pairing helpers, and session-generation metadata.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { normalizeAssistantIdentity } from "../../ui/src/lib/assistant-identity.ts";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   approveDevicePairing,
   ensureDeviceToken,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
@@ -25,7 +29,39 @@ import {
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
+// Keeps bootstrap payload tests deterministic: the real resolver reports the
+// git branch of this checkout, which varies across CI and dev machines.
+const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
+vi.mock("../infra/dev-install-branch.js", () => ({
+  resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
+}));
+
+const REAL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
+const avatarTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("handleControlUiHttpRequest", () => {
+  function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
+    return {
+      agents: {
+        defaults: { workspace },
+        list: [{ id: "main", workspace, identity: { avatar } }],
+      },
+    };
+  }
+
+  function growAvatarAfterPinnedOpen(avatarPath: string) {
+    const fstatSync = fsSync.fstatSync;
+    return vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
+      const stat = fstatSync(fd);
+      fsSync.appendFileSync(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
+      return stat;
+    });
+  }
+
   async function withControlUiRoot<T>(params: {
     indexHtml?: string;
     fn: (tmp: string) => Promise<T>;
@@ -44,11 +80,16 @@ describe("handleControlUiHttpRequest", () => {
       basePath: string;
       assistantName: string;
       assistantAvatar: string;
+      assistantAvatarSource?: string | null;
+      assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+      assistantAvatarReason?: string | null;
       assistantAgentId: string;
+      devGitBranch?: string;
       localMediaPreviewRoots?: string[];
       chatMessageMaxWidth?: string;
       seamColor?: string;
       timeFormat?: "auto" | "12" | "24";
+      terminalEnabled: boolean;
     };
   }
 
@@ -98,6 +139,7 @@ describe("handleControlUiHttpRequest", () => {
     basePath?: string;
     auth?: ResolvedGatewayAuth;
     headers?: IncomingMessage["headers"];
+    config?: OpenClawConfig;
   }) {
     const { res, end } = makeMockHttpResponse();
     const url = params.basePath
@@ -114,6 +156,7 @@ describe("handleControlUiHttpRequest", () => {
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
         ...(params.auth ? { auth: params.auth } : {}),
+        ...(params.config ? { config: params.config } : {}),
         root: { kind: "resolved", path: params.rootPath },
       },
     );
@@ -123,7 +166,7 @@ describe("handleControlUiHttpRequest", () => {
   async function runAvatarRequest(params: {
     url: string;
     method: "GET" | "HEAD" | "POST";
-    resolveAvatar: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
+    config: OpenClawConfig;
     basePath?: string;
     auth?: ResolvedGatewayAuth;
     headers?: IncomingMessage["headers"];
@@ -143,7 +186,7 @@ describe("handleControlUiHttpRequest", () => {
         ...(params.basePath ? { basePath: params.basePath } : {}),
         ...(params.auth ? { auth: params.auth } : {}),
         ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
-        resolveAvatar: params.resolveAvatar,
+        config: params.config,
       },
     );
     return { res, end, handled };
@@ -216,7 +259,7 @@ describe("handleControlUiHttpRequest", () => {
     agentId?: string;
     meta?: boolean;
     headers?: IncomingMessage["headers"];
-    resolveAvatar?: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
+    config?: OpenClawConfig;
   }) {
     return await runAvatarRequest({
       url: `/avatar/${params.agentId ?? "main"}${params.meta ? "?meta=1" : ""}`,
@@ -225,8 +268,7 @@ describe("handleControlUiHttpRequest", () => {
       trustedProxies: ["10.0.0.1"],
       remoteAddress: "10.0.0.1",
       headers: createTrustedProxyHeaders(params.headers),
-      resolveAvatar:
-        params.resolveAvatar ?? (() => ({ kind: "remote", url: "https://example.com/avatar.png" })),
+      config: params.config ?? createAvatarConfig(os.tmpdir(), "https://example.com/avatar.png"),
     });
   }
 
@@ -340,7 +382,7 @@ describe("handleControlUiHttpRequest", () => {
   it("sets security headers for Control UI responses", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { res, setHeader } = makeMockHttpResponse();
+        const { res, end, setHeader } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
           { url: "/", method: "GET" } as IncomingMessage,
           res,
@@ -350,7 +392,9 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         expect(setHeader).toHaveBeenCalledWith("X-Frame-Options", "DENY");
-        const csp = setHeader.mock.calls.find((call) => call[0] === "Content-Security-Policy")?.[1];
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
         expect(typeof csp).toBe("string");
         expect(String(csp)).toContain("frame-ancestors 'none'");
         expect(String(csp)).toContain("script-src 'self'");
@@ -359,6 +403,59 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
+      },
+    });
+  });
+
+  it("marks terminal-enabled documents and allows the terminal WASM runtime", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end, setHeader } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: "/", method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { gateway: { terminal: { enabled: true } } },
+          },
+        );
+        expect(handled).toBe(true);
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
+        expect(String(csp)).toContain("script-src 'self' 'wasm-unsafe-eval'");
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="true"');
+      },
+    });
+  });
+
+  it("uses effective terminal availability instead of raw restart-pending config", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end, setHeader } = makeMockHttpResponse();
+        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
+          root: { kind: "resolved", path: tmp },
+          config: { gateway: { terminal: { enabled: true } } },
+          terminalEnabled: false,
+        });
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
+        expect(String(csp)).not.toContain("'wasm-unsafe-eval'");
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
+
+        const bootstrap = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          bootstrap.res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { gateway: { terminal: { enabled: false } } },
+            terminalEnabled: true,
+          },
+        );
+        expect(parseBootstrapPayload(bootstrap.end).terminalEnabled).toBe(true);
       },
     });
   });
@@ -376,13 +473,69 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `inline; filename="photo.png"; filename*=UTF-8''photo.png`,
+        );
+      },
+    });
+  });
+
+  it.each([
+    { filename: "voice.ogg", disposition: "inline" },
+    { filename: "clip.mp4", disposition: "inline" },
+    { filename: "report.pdf", disposition: "attachment" },
+    {
+      filename: "invoice---123e4567-e89b-12d3-a456-426614174000.pdf",
+      disposition: "attachment",
+    },
+    { filename: "archive.bin", disposition: "attachment" },
+  ])("serves $filename with $disposition disposition", async ({ filename, disposition }) => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-disposition-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `${disposition}; filename="${filename}"; filename*=UTF-8''${filename}`,
+        );
+      },
+    });
+  });
+
+  it("encodes Unicode and RFC 8187 delimiter characters in assistant media filenames", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-filename-",
+      fn: async (tmpRoot) => {
+        const filename = `测试 100% 'draft' (1).pdf`;
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `attachment; filename="__ 100_ 'draft' (1).pdf"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%20100%25%20%27draft%27%20%281%29.pdf`,
+        );
       },
     });
   });
 
   it("serves assistant media from canonical inbound media refs", async () => {
     const stateDir = resolveStateDir();
-    const id = `ui-media-ref-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const id = `report---${randomUUID()}.pdf`;
     const filePath = path.join(stateDir, "media", "inbound", id);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
@@ -395,6 +548,10 @@ describe("handleControlUiHttpRequest", () => {
       });
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
+      expect(res["setHeader"]).toHaveBeenCalledWith(
+        "Content-Disposition",
+        `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`,
+      );
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -783,7 +940,9 @@ describe("handleControlUiHttpRequest", () => {
           },
         );
         expect(handled).toBe(true);
-        expect(end).toHaveBeenCalledWith(html);
+        expect(end).toHaveBeenCalledWith(
+          html.replace("<html", '<html data-openclaw-terminal-enabled="false"'),
+        );
       },
     });
   });
@@ -805,6 +964,7 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         const body = String(end.mock.calls[0]?.[0] ?? "");
+        expect(body).toContain('data-openclaw-control-ui-base-path="/openclaw"');
         expect(body).toContain('href="/openclaw/manifest.webmanifest"');
         expect(body).toContain('href="/openclaw/favicon.svg"');
         expect(body).not.toContain('href="/manifest.webmanifest"');
@@ -835,19 +995,279 @@ describe("handleControlUiHttpRequest", () => {
         const parsed = parseBootstrapPayload(end);
         expect(parsed.basePath).toBe("");
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
-        expect(parsed.assistantAvatar).toBe("/avatar/main");
+        expect(parsed.assistantAvatar).toBe("A");
+        expect(parsed.assistantAvatarStatus).toBe("none");
+        expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
         expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("24");
+        expect(parsed.terminalEnabled).toBe(false);
+        expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });
 
+  it("includes the dev checkout branch in bootstrap config", async () => {
+    devInstallBranchMock.branch = "feat/dev-branch-badge";
+    try {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp }, config: {} },
+          );
+          expect(handled).toBe(true);
+          expect(parseBootstrapPayload(end).devGitBranch).toBe("feat/dev-branch-badge");
+        },
+      });
+    } finally {
+      devInstallBranchMock.branch = null;
+    }
+  });
+
+  it("inlines a workspace-local assistant avatar in bootstrap config (#97602)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await fs.writeFile(path.join(tmp, "avatar.png"), REAL_PNG);
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", workspace: tmp, identity: { avatar: "avatar.png" } }],
+              },
+            },
+          },
+        );
+
+        expect(handled).toBe(true);
+        expect(parseBootstrapPayload(end)).toMatchObject({
+          assistantAvatar: REAL_PNG_DATA_URL,
+          assistantAvatarSource: "avatar.png",
+          assistantAvatarStatus: "local",
+        });
+      },
+    });
+  });
+
+  it("round-trips a maximum-size local avatar through bootstrap and UI normalization", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const avatar = Buffer.alloc(AVATAR_MAX_BYTES);
+        const expected = `data:image/svg+xml;base64,${avatar.toString("base64")}`;
+        expect(expected).toHaveLength(AVATAR_MAX_DATA_URL_CHARS);
+        await fs.writeFile(path.join(tmp, "avatar.svg"), avatar);
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: createAvatarConfig(tmp, "avatar.svg"),
+          },
+        );
+
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.assistantAvatar).toBe(expected);
+        expect(
+          normalizeAssistantIdentity({
+            agentId: parsed.assistantAgentId,
+            name: parsed.assistantName,
+            avatar: parsed.assistantAvatar,
+            avatarSource: parsed.assistantAvatarSource,
+            avatarStatus: parsed.assistantAvatarStatus,
+            avatarReason: parsed.assistantAvatarReason,
+          }).avatar,
+        ).toBe(expected);
+      },
+    });
+  });
+
+  it("preserves an exact-cap IDENTITY.md data URL in bootstrap", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const dataUrl = `data:image/svg+xml;base64,${Buffer.alloc(AVATAR_MAX_BYTES).toString("base64")}`;
+        expect(dataUrl).toHaveLength(AVATAR_MAX_DATA_URL_CHARS);
+        await fs.writeFile(path.join(tmp, "IDENTITY.md"), `- Avatar: ${dataUrl}\n`);
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { agents: { defaults: { workspace: tmp } } },
+          },
+        );
+
+        expect(handled).toBe(true);
+        expect(parseBootstrapPayload(end)).toMatchObject({
+          assistantAvatar: dataUrl,
+          assistantAvatarStatus: "data",
+        });
+      },
+    });
+  });
+
+  it("rejects an over-cap IDENTITY.md data URL in bootstrap without truncating it", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const exact = `data:image/svg+xml;base64,${Buffer.alloc(AVATAR_MAX_BYTES).toString("base64")}`;
+        const oversized = `${exact}A`;
+        expect(oversized).toHaveLength(AVATAR_MAX_DATA_URL_CHARS + 1);
+        await fs.writeFile(path.join(tmp, "IDENTITY.md"), `- Avatar: ${oversized}\n- Emoji: 🦞\n`);
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { agents: { defaults: { workspace: tmp } } },
+          },
+        );
+
+        expect(handled).toBe(true);
+        expect(parseBootstrapPayload(end)).toMatchObject({
+          assistantAvatar: "🦞",
+          assistantAvatarSource: null,
+          assistantAvatarStatus: null,
+          assistantAvatarReason: null,
+        });
+      },
+    });
+  });
+
+  it("preserves a configured emoji over a lower-priority IDENTITY.md avatar", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await fs.writeFile(path.join(tmp, "identity.png"), REAL_PNG);
+        await fs.writeFile(path.join(tmp, "IDENTITY.md"), "- Avatar: identity.png\n");
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: {
+                defaults: { workspace: tmp },
+                list: [{ id: "main", workspace: tmp, identity: { emoji: "🦞" } }],
+              },
+            },
+          },
+        );
+
+        expect(handled).toBe(true);
+        expect(parseBootstrapPayload(end)).toMatchObject({
+          assistantAvatar: "🦞",
+          assistantAvatarSource: null,
+          assistantAvatarStatus: null,
+          assistantAvatarReason: null,
+        });
+      },
+    });
+  });
+
+  it("reports a hardlinked bootstrap avatar as unreadable", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await fs.writeFile(path.join(tmp, "original.png"), REAL_PNG);
+        await fs.link(path.join(tmp, "original.png"), path.join(tmp, "avatar.png"));
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: createAvatarConfig(tmp, "avatar.png"),
+          },
+        );
+
+        expect(handled).toBe(true);
+        expect(parseBootstrapPayload(end)).toMatchObject({
+          assistantAvatar: "A",
+          assistantAvatarSource: "avatar.png",
+          assistantAvatarStatus: "none",
+          assistantAvatarReason: "unreadable",
+        });
+      },
+    });
+  });
+
+  it("bounds a bootstrap avatar that grows after its descriptor is pinned", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const avatarPath = path.join(tmp, "avatar.png");
+        await fs.writeFile(avatarPath, REAL_PNG);
+        const fstatSync = growAvatarAfterPinnedOpen(avatarPath);
+        try {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: createAvatarConfig(tmp, "avatar.png"),
+            },
+          );
+
+          expect(handled).toBe(true);
+          expect(parseBootstrapPayload(end)).toMatchObject({
+            assistantAvatar: "A",
+            assistantAvatarSource: "avatar.png",
+            assistantAvatarStatus: "none",
+            assistantAvatarReason: "unreadable",
+          });
+        } finally {
+          fstatSync.mockRestore();
+        }
+      },
+    });
+  });
+
+  it("does not read assistant avatar bytes for bootstrap HEAD", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await fs.writeFile(path.join(tmp, "avatar.png"), REAL_PNG);
+        const readSync = vi.spyOn(fsSync, "readSync");
+        try {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "HEAD" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: {
+                agents: {
+                  defaults: { workspace: tmp },
+                  list: [{ id: "main", workspace: tmp, identity: { avatar: "avatar.png" } }],
+                },
+              },
+            },
+          );
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(end).toHaveBeenCalledWith();
+          expect(readSync).not.toHaveBeenCalled();
+        } finally {
+          readSync.mockRestore();
+        }
+      },
+    });
+  });
   it("rejects bootstrap config requests without a valid auth token when auth is enabled", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
+        await fs.writeFile(path.join(tmp, "avatar.png"), "avatar-bytes\n");
         const { res, handled, end } = await runBootstrapConfigRequest({
           rootPath: tmp,
           auth: { mode: "token", token: "test-token", allowTailscale: false },
@@ -862,17 +1282,26 @@ describe("handleControlUiHttpRequest", () => {
   it("serves bootstrap config JSON when auth is enabled and the token is valid", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
+        await fs.writeFile(path.join(tmp, "avatar.png"), "avatar-bytes\n");
         const { res, handled, end } = await runBootstrapConfigRequest({
           rootPath: tmp,
           auth: { mode: "token", token: "test-token", allowTailscale: false },
           headers: {
             authorization: "Bearer test-token",
           },
+          config: {
+            agents: { defaults: { workspace: tmp } },
+            ui: { assistant: { avatar: "avatar.png" } },
+          },
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         const parsed = parseBootstrapPayload(end);
-        expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed).toMatchObject({
+          assistantAgentId: "main",
+          assistantAvatar: `data:image/png;base64,${Buffer.from("avatar-bytes\n").toString("base64")}`,
+          assistantAvatarStatus: "local",
+        });
       },
     });
   });
@@ -919,7 +1348,9 @@ describe("handleControlUiHttpRequest", () => {
         const parsed = parseBootstrapPayload(end);
         expect(parsed.basePath).toBe("/openclaw");
         expect(parsed.assistantName).toBe("Ops");
-        expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
+        expect(parsed.assistantAvatar).toBe("A");
+        expect(parsed.assistantAvatarStatus).toBe("none");
+        expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
@@ -1090,7 +1521,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("serves local avatar bytes through hardened avatar handler", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-"));
+    const tmp = avatarTempDirs.make("openclaw-avatar-http-");
     try {
       const avatarPath = path.join(tmp, "main.png");
       await fs.writeFile(avatarPath, "avatar-bytes\n");
@@ -1098,12 +1529,91 @@ describe("handleControlUiHttpRequest", () => {
       const { res, end, handled } = await runAvatarRequest({
         url: "/avatar/main",
         method: "GET",
-        resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
+        config: createAvatarConfig(tmp, "main.png"),
       });
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
       expect(responseBody(end)).toBe("avatar-bytes\n");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["metadata", "/avatar/main?meta=1", "GET"],
+    ["HEAD", "/avatar/main", "HEAD"],
+  ] as const)(
+    "validates %s avatar requests without reading bytes and closes the descriptor",
+    async (_name, url, method) => {
+      const tmp = avatarTempDirs.make("openclaw-avatar-no-read-");
+      const read = vi.spyOn(fsSync, "read");
+      const closeSync = vi.spyOn(fsSync, "closeSync");
+      try {
+        await fs.writeFile(path.join(tmp, "main.png"), REAL_PNG);
+        const { res, handled } = await runAvatarRequest({
+          url,
+          method,
+          config: createAvatarConfig(tmp, "main.png"),
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(read).not.toHaveBeenCalled();
+        expect(closeSync).toHaveBeenCalledTimes(1);
+      } finally {
+        read.mockRestore();
+        closeSync.mockRestore();
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects hardlinked avatar bytes and reports matching metadata", async () => {
+    const tmp = avatarTempDirs.make("openclaw-avatar-http-hardlink-");
+    try {
+      await fs.writeFile(path.join(tmp, "original.png"), REAL_PNG);
+      await fs.link(path.join(tmp, "original.png"), path.join(tmp, "avatar.png"));
+      const config = createAvatarConfig(tmp, "avatar.png");
+
+      expectNotFoundResponse(
+        await runAvatarRequest({ url: "/avatar/main", method: "GET", config }),
+      );
+      const meta = await runAvatarRequest({
+        url: "/avatar/main?meta=1",
+        method: "GET",
+        config,
+      });
+      expect(meta.handled).toBe(true);
+      expect(meta.res.statusCode).toBe(200);
+      expect(responseJson(meta.end)).toEqual({
+        avatarUrl: null,
+        avatarSource: "avatar.png",
+        avatarStatus: "none",
+        avatarReason: "unreadable",
+      });
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds an avatar route file that grows after its descriptor is pinned", async () => {
+    const tmp = avatarTempDirs.make("openclaw-avatar-http-growth-");
+    const avatarPath = path.join(tmp, "avatar.png");
+    try {
+      await fs.writeFile(avatarPath, REAL_PNG);
+      const fstatSync = growAvatarAfterPinnedOpen(avatarPath);
+      try {
+        expectNotFoundResponse(
+          await runAvatarRequest({
+            url: "/avatar/main",
+            method: "GET",
+            config: createAvatarConfig(tmp, "avatar.png"),
+          }),
+        );
+      } finally {
+        fstatSync.mockRestore();
+      }
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
@@ -1121,7 +1631,7 @@ describe("handleControlUiHttpRequest", () => {
       const { res, end, handled } = await runAvatarRequest({
         url: "/avatar/main",
         method: "GET",
-        resolveAvatar: () => ({ kind: "local", filePath: linkPath }),
+        config: createAvatarConfig(tmp, "avatar-link.png"),
       });
 
       expectNotFoundResponse({ handled, res, end });
@@ -1140,11 +1650,11 @@ describe("handleControlUiHttpRequest", () => {
       const { res, handled } = await runAvatarRequest({
         url: "/avatar/main",
         method: "GET",
+        config: createAvatarConfig(tmp, "main.png"),
         auth: { mode: "token", token: "test-token", allowTailscale: false },
         headers: {
           authorization: "Bearer test-token",
         },
-        resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
       });
 
       expect(handled).toBe(true);
@@ -1165,11 +1675,11 @@ describe("handleControlUiHttpRequest", () => {
           const { res, handled, end } = await runAvatarRequest({
             url: "/avatar/main",
             method: "GET",
+            config: createAvatarConfig(tmp, "main.png"),
             auth: { mode: "token", token: "shared-token", allowTailscale: false },
             headers: {
               authorization: `Bearer ${operatorToken}`,
             },
-            resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
           });
 
           expect(handled).toBe(true);
@@ -1186,15 +1696,11 @@ describe("handleControlUiHttpRequest", () => {
     const { res, end, handled } = await runAvatarRequest({
       url: "/avatar/main?meta=1",
       method: "GET",
+      config: createAvatarConfig(os.tmpdir(), "https://example.com/avatar.png"),
       auth: { mode: "token", token: "test-token", allowTailscale: false },
       headers: {
         authorization: "Bearer test-token",
       },
-      resolveAvatar: () => ({
-        kind: "remote",
-        url: "https://example.com/avatar.png",
-        source: "https://example.com/avatar.png",
-      }),
     });
 
     expect(handled).toBe(true);
@@ -1211,11 +1717,7 @@ describe("handleControlUiHttpRequest", () => {
     const { res, end, handled } = await runAvatarRequest({
       url: "/avatar/main?meta=1",
       method: "GET",
-      resolveAvatar: () => ({
-        kind: "none",
-        reason: "outside_workspace",
-        source: "/Users/test/private/avatar.png",
-      }),
+      config: createAvatarConfig("/tmp/workspace", "/Users/test/private/avatar.png"),
     });
 
     expect(handled).toBe(true);
@@ -1232,8 +1734,8 @@ describe("handleControlUiHttpRequest", () => {
     const { res, handled, end } = await runAvatarRequest({
       url: "/avatar/main",
       method: "GET",
+      config: createAvatarConfig(os.tmpdir(), "https://example.com/avatar.png"),
       auth: { mode: "token", token: "test-token", allowTailscale: false },
-      resolveAvatar: () => ({ kind: "remote", url: "https://example.com/avatar.png" }),
     });
 
     expect(handled).toBe(true);

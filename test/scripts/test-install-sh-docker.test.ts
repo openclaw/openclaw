@@ -1,10 +1,20 @@
 // Test Install Sh Docker tests cover test install sh docker script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
@@ -22,7 +32,9 @@ const NONROOT_DOCKERFILE_PATH = "scripts/docker/install-sh-nonroot/Dockerfile";
 const NONROOT_RUNNER_PATH = "scripts/docker/install-sh-nonroot/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
-const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
+const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
+const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke-reusable.yml";
+const INSTALL_SMOKE_WRAPPER_PATH = ".github/workflows/install-smoke.yml";
 const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
 const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const tempDirs = createTempDirTracker();
@@ -138,6 +150,45 @@ function normalizeInstallE2eAgentOutput(output: string) {
   }
 }
 
+function extractInstallSmokeUpdateJsonParser(): string {
+  const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+  const match = script.match(
+    /UPDATE_JSON="\$UPDATE_JSON" \\\n[\s\S]*?node - <<'NODE'\n([\s\S]*?)\nNODE\n\n  echo "==> Verify updated version"/u,
+  );
+  if (!match) {
+    throw new Error("install smoke update JSON parser was not found");
+  }
+  return match[1];
+}
+
+function validateInstallSmokeUpdateJson(doctorStep?: Record<string, unknown>) {
+  const updateUrl = "http://candidate.invalid/openclaw.tgz";
+  const payload = {
+    status: "ok",
+    before: { version: "2026.7.0" },
+    after: { version: "2026.7.1" },
+    steps: [
+      {
+        name: "global update",
+        exitCode: 0,
+        command: `npm install ${updateUrl}`,
+      },
+      ...(doctorStep ? [doctorStep] : []),
+    ],
+  };
+  return spawnSync(process.execPath, ["-"], {
+    encoding: "utf8",
+    input: extractInstallSmokeUpdateJsonParser(),
+    env: {
+      ...process.env,
+      UPDATE_JSON: JSON.stringify(payload),
+      UPDATE_EXPECT_VERSION: payload.after.version,
+      UPDATE_BASELINE_VERSION: payload.before.version,
+      UPDATE_TAG_URL: updateUrl,
+    },
+  });
+}
+
 function expectInstallDockerfileContract(
   dockerfilePath: string,
   runnerPath: string,
@@ -216,35 +267,113 @@ read_pack_tarball_filename "$pack_json_file"`,
   );
 }
 
-function extractResolvePackTarballPath(): string {
-  const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
-  const match = script.match(/(resolve_pack_tarball_path\(\) \{[\s\S]*?\n\})\n\nrestore_dist/u);
+function extractEnsureLocalUpdateDistImportClosure(): string {
+  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const match = script.match(
+    /(ensure_local_update_dist_import_closure\(\) \{[\s\S]*?\n\})\n\nread_candidate_version/u,
+  );
   if (!match) {
-    throw new Error("resolve_pack_tarball_path helper was not found");
+    throw new Error("ensure_local_update_dist_import_closure helper was not found");
   }
   return match[1];
 }
 
-function runResolvePackTarballPath(filename: string) {
+type RestorePathEscape = "packages" | "ai";
+
+function runRestoreLocalDistFixture(
+  options: { failAiSwap?: boolean; symlinkEscape?: RestorePathEscape } = {},
+) {
+  const fixtureRoot = tempDirs.make("openclaw-install-restore-root-");
+  const imageRoot = tempDirs.make("openclaw-install-restore-image-");
+  let externalSentinel = "";
+  for (const [relativePath, contents] of [
+    ["dist/root.txt", "old-root"],
+    ["packages/ai/dist/ai.txt", "old-ai"],
+    ["packages/ai/package.json", "{}"],
+  ]) {
+    const target = join(fixtureRoot, relativePath);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, contents);
+  }
+  for (const [relativePath, contents] of [
+    ["app/dist/root.txt", "new-root"],
+    ["app/node_modules/@openclaw/ai/dist/ai.txt", "new-ai"],
+  ]) {
+    const target = join(imageRoot, relativePath);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, contents);
+  }
+
+  if (options.symlinkEscape) {
+    const escapeRoot = tempDirs.make("openclaw-install-restore-escape-");
+    const externalAiRoot =
+      options.symlinkEscape === "packages" ? join(escapeRoot, "packages", "ai") : escapeRoot;
+    externalSentinel = join(externalAiRoot, "dist", "ai.txt");
+    mkdirSync(path.dirname(externalSentinel), { recursive: true });
+    writeFileSync(join(externalAiRoot, "package.json"), "{}");
+    writeFileSync(externalSentinel, "external-ai");
+    if (options.symlinkEscape === "packages") {
+      rmSync(join(fixtureRoot, "packages"), { force: true, recursive: true });
+      symlinkSync(join(escapeRoot, "packages"), join(fixtureRoot, "packages"), "dir");
+    } else {
+      rmSync(join(fixtureRoot, "packages", "ai"), { force: true, recursive: true });
+      symlinkSync(externalAiRoot, join(fixtureRoot, "packages", "ai"), "dir");
+    }
+  }
+
   return spawnSync(
     "bash",
     [
       "--noprofile",
       "--norc",
       "-c",
-      `${extractResolvePackTarballPath()}
-pack_dir="$(mktemp -d)"
-pack_json_file="$pack_dir/pack.json"
-trap 'rm -rf "$pack_dir"' EXIT
-printf '%s' "$PACK_JSON" >"$pack_json_file"
-resolve_pack_tarball_path "$pack_json_file" "$pack_dir"`,
+      `set -euo pipefail
+REPO_ROOT="$FIXTURE_REPO"
+ROOT_DIR="$FIXTURE_ROOT"
+IMAGE_ROOT="$FIXTURE_IMAGE"
+docker_e2e_docker_cmd() {
+  printf 'docker-call=%s\\n' "$1" >&2
+  case "$1" in
+    create)
+      printf "fixture"
+      ;;
+    cp)
+      local source="\${2#fixture:}"
+      cp -R "$IMAGE_ROOT$source" "$3"
+      ;;
+    rm)
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+mv() {
+  if [[ "$FAIL_AI_SWAP" == "1" && "$1" == */ai-dist && "$2" == */packages/ai/dist ]]; then
+    return 1
+  fi
+  command mv "$@"
+}
+source "$REPO_ROOT/${DOCKER_E2E_PACKAGE_HELPER_PATH}"
+status=0
+docker_e2e_restore_package_dist_from_image fixture-image || status=$?
+printf 'status=%s\\n' "$status"
+printf 'root=%s\\n' "$(cat "$ROOT_DIR/dist/root.txt")"
+printf 'ai=%s\\n' "$(cat "$ROOT_DIR/packages/ai/dist/ai.txt")"
+if [[ -n "$EXTERNAL_SENTINEL" ]]; then
+  printf 'external=%s\\n' "$(cat "$EXTERNAL_SENTINEL")"
+fi
+`,
     ],
     {
       encoding: "utf8",
       env: {
-        HOME: "/tmp",
-        PACK_JSON: JSON.stringify([{ filename }]),
-        PATH: process.env.PATH ?? "",
+        ...process.env,
+        FAIL_AI_SWAP: options.failAiSwap ? "1" : "0",
+        EXTERNAL_SENTINEL: externalSentinel,
+        FIXTURE_IMAGE: imageRoot,
+        FIXTURE_REPO: process.cwd(),
+        FIXTURE_ROOT: fixtureRoot,
       },
     },
   );
@@ -380,28 +509,109 @@ describe("test-install-sh-docker", () => {
 
   it("can reuse dist from the already-built root Docker smoke image", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
+    const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
     const dockerfile = readFileSync("Dockerfile", "utf8");
 
+    expect(script).toContain('ROOT_DIR="${OPENCLAW_INSTALL_SMOKE_SOURCE_DIR:-$HARNESS_ROOT}"');
     expect(script).toContain('UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"');
-    expect(script).toContain("restore_local_dist_from_image");
-    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
+    expect(script).toContain("docker_e2e_restore_package_dist_from_image");
+    expect(script).toContain('source "$HARNESS_ROOT/scripts/lib/docker-e2e-package.sh"');
     expect(script).toContain(
       'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_INSTALL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',
     );
-    expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
-    expect(script).toContain(
-      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"',
+    expect(packageHelper).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
+    expect(packageHelper).toContain(
+      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"',
     );
-    expect(script).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
+    expect(packageHelper).toContain('"${container_id}:/app/node_modules/@openclaw/ai/dist"');
+    expect(packageHelper).toContain('"$temp_dir/ai-dist"');
+    expect(packageHelper).toContain('mv "$temp_dir/ai-dist" "$ai_dist_dir"');
+    expect(packageHelper).toContain("cleanup_restore_package_dist() {");
+    expect(packageHelper).toContain('mv "$restore_root/dist" "$backup_dir"');
+    expect(packageHelper).toContain('mv "$temp_dir/dist" "$restore_root/dist"');
+    expect(packageHelper).toContain('rm -rf "$restore_root/dist" >/dev/null 2>&1 || true');
+    expect(packageHelper).toContain('mv "$backup_dir" "$restore_root/dist"');
+    expect(packageHelper).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
     expect(script).not.toContain('container_id="$(docker create "$image")"');
     expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
-    expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
+    expect(packageHelper).toContain(
+      'echo "==> Reuse package build artifacts from Docker image: $image"',
+    );
     expect(script).toContain("ensure_local_update_dist_import_closure");
-    expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
+    expect(script).toContain(
+      'node "$HARNESS_ROOT/scripts/check-package-dist-imports.mjs" "$ROOT_DIR"',
+    );
     expect(script).toContain("WARN: reused Docker image dist failed import-closure check");
     expect(script).toContain("pnpm build");
     expect(script).not.toContain("pnpm ui:build");
+    expect(script).toContain('-f "$HARNESS_ROOT/scripts/docker/install-sh-smoke/Dockerfile"');
+    expect(script).toContain('-f "$HARNESS_ROOT/scripts/docker/install-sh-nonroot/Dockerfile"');
     expect(dockerfile).toContain("node scripts/check-package-dist-imports.mjs /app");
+  });
+
+  it("restores root and AI build trees from one image", () => {
+    const result = runRestoreLocalDistFixture();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("status=0");
+    expect(result.stdout).toContain("root=new-root");
+    expect(result.stdout).toContain("ai=new-ai");
+  });
+
+  it("rolls both build trees back when the AI swap fails", () => {
+    const result = runRestoreLocalDistFixture({ failAiSwap: true });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("status=1");
+    expect(result.stdout).toContain("root=old-root");
+    expect(result.stdout).toContain("ai=old-ai");
+  });
+
+  it.each(["packages", "ai"] as const)(
+    "rejects a symlinked %s path before restoring artifacts",
+    (symlinkEscape) => {
+      const result = runRestoreLocalDistFixture({ symlinkEscape });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("status=1");
+      expect(result.stdout).toContain("root=old-root");
+      expect(result.stdout).toContain("ai=external-ai");
+      expect(result.stdout).toContain("external=external-ai");
+      expect(result.stderr).not.toContain("docker-call=");
+      expect(result.stderr).toContain("refusing package artifact restore through a symlinked");
+    },
+  );
+
+  it("fails closed when exact image artifacts fail import closure", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        `set -euo pipefail
+HARNESS_ROOT=/trusted
+ROOT_DIR=/candidate
+UPDATE_SKIP_LOCAL_BUILD=1
+node() {
+  return 1
+}
+pnpm() {
+  printf 'pnpm-called\\n'
+}
+${extractEnsureLocalUpdateDistImportClosure()}
+status=0
+ensure_local_update_dist_import_closure || status=$?
+printf 'status=%s\\n' "$status"
+`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("status=1");
+    expect(result.stdout).not.toContain("pnpm-called");
+    expect(result.stderr).toContain("exact-image mode forbids a local rebuild");
   });
 
   it("bounds installer smoke container runs", () => {
@@ -546,6 +756,19 @@ describe("test-install-sh-docker", () => {
     expect(podmanSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
   });
 
+  it("passes one source identity into local Docker and Podman builds", () => {
+    const dockerSetup = readFileSync(DOCKER_SETUP_PATH, "utf8");
+    const podmanSetup = readFileSync(PODMAN_SETUP_PATH, "utf8");
+
+    for (const setupScript of [dockerSetup, podmanSetup]) {
+      expect(setupScript).toContain("scripts/lib/build-metadata.sh");
+      expect(setupScript).toContain("openclaw_resolve_git_commit");
+      expect(setupScript).toContain("openclaw_resolve_build_timestamp");
+      expect(setupScript).toContain("OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}");
+      expect(setupScript).toContain("GIT_COMMIT=${BUILD_GIT_COMMIT}");
+    }
+  });
+
   it("keeps the Podman Quadlet template aligned with setup substitutions", () => {
     const setupScript = readFileSync(PODMAN_SETUP_PATH, "utf8");
     const template = readFileSync(PODMAN_QUADLET_TEMPLATE_PATH, "utf8");
@@ -612,6 +835,7 @@ describe("test-install-sh-docker", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain("read_pack_tarball_filename()");
+    expect(script).toContain('UPDATE_TGZ_FILE="$(basename "$package_tgz")"');
     expect(script).toContain('UPDATE_TGZ_FILE="$(read_pack_tarball_filename "$pack_json_file")"');
     expect(script).toContain(
       'BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"',
@@ -644,13 +868,23 @@ describe("test-install-sh-docker", () => {
     }
   });
 
-  it("writes the package dist inventory before packing ignore-scripts tarballs", () => {
+  it("uses the package artifact helper for local update tarballs", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
-    expect(script).toContain("node --import tsx scripts/write-package-dist-inventory.ts");
-    expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
-    expect(script).toContain("quiet_npm pack --ignore-scripts");
-    expect(script).toContain("node scripts/check-openclaw-package-tarball.mjs");
+    expect(script).toContain('node "$HARNESS_ROOT/scripts/package-openclaw-for-docker.mjs"');
+    expect(script).toContain("--allow-unreleased-changelog");
+    expect(script).toContain("OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG");
+    expect(script).toContain(
+      'if [[ "${OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]',
+    );
+    expect(script).toContain("package_args+=(--allow-unreleased-changelog)");
+    expect(script).toContain('--source-dir "$ROOT_DIR"');
+    expect(script).toContain('--pack-json "$pack_json_file"');
+    expect(script).toContain("--skip-build");
+    expect(script).not.toContain("node --import tsx scripts/write-package-dist-inventory.ts");
+    expect(script).not.toContain("quiet_npm pack --ignore-scripts --json");
+    expect(script).toContain('node "$HARNESS_ROOT/scripts/check-openclaw-package-tarball.mjs"');
+    expect(script).toContain("--require-bundled-workspace-deps");
   });
 
   it("runs candidate tarballs through the installer script instead of direct npm", () => {
@@ -822,6 +1056,49 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain("legacy updater process exited after self-swap");
     expect(script).toContain("parseFirstJsonObject");
     expect(script).toContain("unterminated update JSON object");
+    expect(script).toContain("verify_candidate_ai_runtime");
+    expect(script).toContain("openclaw infer image providers --json");
+  });
+
+  it.each([
+    ["successful", { name: "openclaw doctor", exitCode: 0 }],
+    [
+      "recoverable advisory",
+      {
+        name: "openclaw doctor",
+        exitCode: 86,
+        advisory: { kind: "package-post-install-doctor", message: "repair deferred" },
+      },
+    ],
+  ])("accepts a %s package post-install doctor result", (_label, doctorStep) => {
+    const result = validateInstallSmokeUpdateJson(doctorStep);
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each([
+    ["missing", undefined, "missing openclaw doctor step"],
+    ["fatal", { name: "openclaw doctor", exitCode: 1 }, "openclaw doctor step failed"],
+    ["untyped advisory", { name: "openclaw doctor", exitCode: 86 }, "openclaw doctor step failed"],
+    [
+      "wrong advisory kind",
+      { name: "openclaw doctor", exitCode: 86, advisory: { kind: "other" } },
+      "openclaw doctor step failed",
+    ],
+    [
+      "wrong advisory exit",
+      {
+        name: "openclaw doctor",
+        exitCode: 1,
+        advisory: { kind: "package-post-install-doctor" },
+      },
+      "openclaw doctor step failed",
+    ],
+  ])("rejects a %s package post-install doctor result", (_label, doctorStep, error) => {
+    const result = validateInstallSmokeUpdateJson(doctorStep);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(error);
   });
 
   it.each([
@@ -897,33 +1174,45 @@ describe("bun global install smoke", () => {
   it("packs the current tree and verifies image-provider discovery through Bun", () => {
     const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
     const assertions = readFileSync(BUN_GLOBAL_ASSERTIONS_PATH, "utf8");
+    const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
 
-    expect(script).toContain("npm pack --ignore-scripts --json --pack-destination");
+    expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
+    expect(script).toContain("--allow-unreleased-changelog");
+    expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG");
+    expect(script).toContain(
+      'if [[ "${OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]',
+    );
+    expect(script).toContain("package_args+=(--allow-unreleased-changelog)");
+    expect(script).toContain("--skip-build");
+    expect(script).toContain("--output-name openclaw-current.tgz");
+    expect(script).not.toContain("npm pack --ignore-scripts --json --pack-destination");
     expect(script).toContain('"$bun_path" install -g "$PACKAGE_TGZ" --no-progress');
     expect(script).toContain("infer image providers --json");
     expect(script).toContain("assert-image-providers");
     expect(assertions).toContain("image providers output is missing bundled provider");
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
-    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"');
+    expect(script).toContain("docker_e2e_restore_package_dist_from_image");
     expect(script).toContain(
       'COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"',
     );
     expect(script).toContain(
       'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',
     );
-    expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
-    expect(script).toContain(
+    expect(packageHelper).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
+    expect(packageHelper).toContain(
       'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"',
     );
-    expect(script).toContain("cleanup_restore_dist() {");
-    expect(script).toContain('mv "$ROOT_DIR/dist" "$backup_dir"');
-    expect(script).toContain('mv "$temp_dir/dist" "$ROOT_DIR/dist"');
-    expect(script).toContain('mktemp -d "$ROOT_DIR/.bun-dist.XXXXXX"');
-    expect(script).toContain('rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true');
-    expect(script).toContain('&& mv "$backup_dir" "$ROOT_DIR/dist"');
-    expect(script).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
-    expect(script).toContain("cleanup_restore_dist\n    return 1");
-    expect(script).not.toContain("trap cleanup_restore_dist RETURN");
+    expect(packageHelper).toContain('"${container_id}:/app/node_modules/@openclaw/ai/dist"');
+    expect(packageHelper).toContain('"$temp_dir/ai-dist"');
+    expect(packageHelper).toContain('mv "$temp_dir/ai-dist" "$ai_dist_dir"');
+    expect(packageHelper).toContain("cleanup_restore_package_dist() {");
+    expect(packageHelper).toContain('mv "$restore_root/dist" "$backup_dir"');
+    expect(packageHelper).toContain('mv "$temp_dir/dist" "$restore_root/dist"');
+    expect(packageHelper).toContain('mktemp -d "$restore_root/.package-dist.XXXXXX"');
+    expect(packageHelper).toContain('rm -rf "$restore_root/dist" >/dev/null 2>&1 || true');
+    expect(packageHelper).toContain('mv "$backup_dir" "$restore_root/dist"');
+    expect(packageHelper).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
     expect(script).not.toContain('container_id="$(docker create "$image")"');
     expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
     expect(script).not.toContain('\n  rm -rf "$ROOT_DIR/dist"\n');
@@ -943,40 +1232,134 @@ describe("bun global install smoke", () => {
     expect(result.stderr).not.toContain("Bun is required");
   });
 
-  it("keeps npm pack tarball paths inside the Bun smoke pack directory", () => {
+  it("uses the canonical package builder for bundled workspace dependencies", () => {
     const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
 
-    expect(script).toContain("resolve_pack_tarball_path()");
-    expect(script).toContain(
-      'PACKAGE_TGZ="$(resolve_pack_tarball_path "$pack_json_file" "$PACK_DIR")"',
+    expect(script).toContain('PACK_DIR="$(mktemp -d');
+    expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
+    expect(script).toContain('--output-dir "$PACK_DIR"');
+    expect(script).toContain("--output-name openclaw-current.tgz");
+  });
+
+  it("resolves the matching candidate AI package without changing the public registry", () => {
+    const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
+
+    expect(script).toContain("assert-release-versions");
+    expect(script).toContain('"$BUN_INSTALL/install/global/package.json"');
+    expect(script).toContain("package/node_modules/@openclaw/ai");
+    expect(script).toContain("--strip-components=4");
+    expect(script).toContain('npm pack --ignore-scripts --silent --pack-destination "$PACK_DIR"');
+    expect(script).toContain('overrides: { "@openclaw/ai": `file:${aiPackageTarball}` }');
+    expect(script).not.toContain("--registry");
+    expect(script).not.toContain("@openclaw:registry");
+  });
+
+  it("requires root and AI candidate versions to match", () => {
+    const tempDir = tempDirs.make("openclaw-bun-candidate-versions-");
+    const rootManifestPath = join(tempDir, "openclaw.json");
+    const aiManifestPath = join(tempDir, "ai.json");
+    writeFileSync(
+      rootManifestPath,
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.6.17",
+        dependencies: { "@openclaw/ai": "2026.6.17" },
+      }),
     );
-    expect(script).toContain("filename !== path.basename(filename)");
-    expect(script).toContain("filename !== path.win32.basename(filename)");
-    expect(script).toContain("npm pack reported unsafe tarball filename");
+    writeFileSync(aiManifestPath, JSON.stringify({ name: "@openclaw/ai", version: "2026.6.17" }));
+
+    const matching = spawnSync(
+      process.execPath,
+      [BUN_GLOBAL_ASSERTIONS_PATH, "assert-release-versions", rootManifestPath, aiManifestPath],
+      { encoding: "utf8" },
+    );
+    expect(matching).toMatchObject({ status: 0, stdout: "2026.6.17" });
+
+    writeFileSync(aiManifestPath, JSON.stringify({ name: "@openclaw/ai", version: "2026.6.18" }));
+    const mismatched = spawnSync(
+      process.execPath,
+      [BUN_GLOBAL_ASSERTIONS_PATH, "assert-release-versions", rootManifestPath, aiManifestPath],
+      { encoding: "utf8" },
+    );
+    expect(mismatched.status).not.toBe(0);
+    expect(mismatched.stderr).toContain(
+      "candidate version mismatch: openclaw=2026.6.17, dependency=2026.6.17, @openclaw/ai=2026.6.18",
+    );
   });
 
-  it("rejects path-like npm pack tarball filenames in Bun smoke metadata", () => {
-    const safeResult = runResolvePackTarballPath("openclaw-2026.6.17.tgz");
+  it.runIf(process.platform !== "win32")(
+    "uses bundled AI bytes when a prebuilt tarball is provided",
+    () => {
+      const tempDir = tempDirs.make("openclaw-bun-prebuilt-");
+      const packageDir = join(tempDir, "fixture", "package");
+      const aiDir = join(packageDir, "node_modules", "@openclaw", "ai");
+      const packageTgz = join(tempDir, "openclaw-prebuilt.tgz");
+      const bunPath = join(tempDir, "bun");
+      mkdirSync(aiDir, { recursive: true });
+      writeFileSync(
+        join(packageDir, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version: "2026.6.17",
+          dependencies: { "@openclaw/ai": "2026.6.17" },
+          bundleDependencies: ["@openclaw/ai"],
+        }),
+      );
+      writeFileSync(
+        join(aiDir, "package.json"),
+        JSON.stringify({ name: "@openclaw/ai", version: "2026.6.17" }),
+      );
+      const packed = spawnSync(
+        "tar",
+        ["-czf", packageTgz, "-C", join(tempDir, "fixture"), "package"],
+        {
+          encoding: "utf8",
+        },
+      );
+      expect(packed.status, packed.stderr).toBe(0);
+      writeFileSync(
+        bunPath,
+        `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "--version" ]; then
+  echo "1.3.14"
+  exit 0
+fi
+override="$(node -e 'const p=require(process.argv[1]);process.stdout.write(p.overrides["@openclaw/ai"])' "$BUN_INSTALL/install/global/package.json")"
+case "\${override#file:}" in
+  *.tgz) ;;
+  *) exit 1 ;;
+esac
+test -f "\${override#file:}"
+mkdir -p "$BUN_INSTALL/bin"
+cat >"$BUN_INSTALL/bin/openclaw" <<'OPENCLAW'
+#!/usr/bin/env bash
+if [ "\${1:-}" = "--version" ]; then
+  echo "OpenClaw 2026.6.17"
+else
+  printf '[{"id":"google"},{"id":"openai"},{"id":"xai"}]\n'
+fi
+OPENCLAW
+chmod +x "$BUN_INSTALL/bin/openclaw"
+`,
+      );
+      chmodSync(bunPath, 0o755);
 
-    expect(safeResult.status).toBe(0);
-    expect(safeResult.stdout).toMatch(/\/openclaw-2026\.6\.17\.tgz$/u);
+      const result = spawnSync("bash", [BUN_GLOBAL_SMOKE_PATH], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BUN_BIN: bunPath,
+          OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0",
+          OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ: packageTgz,
+          OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS: "10000",
+        },
+      });
 
-    const unsafeFilenames = [
-      "../openclaw.tgz",
-      "nested/openclaw.tgz",
-      "nested\\openclaw.tgz",
-      "/tmp/openclaw.tgz",
-      "C:\\temp\\openclaw.tgz",
-      "openclaw.tar.gz",
-    ];
-
-    for (const filename of unsafeFilenames) {
-      const result = runResolvePackTarballPath(filename);
-
-      expect(result.status, filename).not.toBe(0);
-      expect(result.stderr, filename).toContain("npm pack reported unsafe tarball filename");
-    }
-  });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("bun-global-install-smoke: image providers OK (3 providers)");
+    },
+  );
 
   it.runIf(process.platform !== "win32" && existsSync("/usr/bin/time"))(
     "preserves Bun global timeout kill grace after the leader exits",
@@ -1100,12 +1483,20 @@ describe("bun global install smoke", () => {
 
   it("gates workflow Bun install smoke to scheduled and release-check runs", () => {
     const workflow = readFileSync(INSTALL_SMOKE_WORKFLOW_PATH, "utf8");
+    const wrapper = readFileSync(INSTALL_SMOKE_WRAPPER_PATH, "utf8");
     const releaseChecks = readFileSync(RELEASE_CHECKS_WORKFLOW_PATH, "utf8");
 
     expect(workflow).not.toContain("pull_request:");
     expect(workflow).not.toContain("branches: [main]");
     expect(workflow).toContain("workflow_call:");
-    expect(workflow).toContain('cron: "17 3 * * *"');
+    expect(workflow).not.toContain("workflow_dispatch:");
+    expect(workflow).not.toContain("schedule:");
+    expect(wrapper).toContain('cron: "17 3 * * *"');
+    expect(wrapper).toContain("workflow_dispatch:");
+    expect(wrapper).toContain("uses: ./.github/workflows/install-smoke-reusable.yml");
+    expect(wrapper).toContain(
+      "github.event_name == 'schedule' || inputs.run_bun_global_install_smoke",
+    );
     expect(workflow).toContain("run_bun_global_install_smoke:");
     expect(workflow).toContain(
       "if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'",
@@ -1119,20 +1510,17 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}",
     );
-    expect(workflow).toContain(
-      "github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'",
-    );
-    expect(workflow).toContain(
-      "format('{0}-{1}-{2}', github.workflow, github.event_name, github.run_id)",
-    );
-    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name != 'workflow_call' }}");
+    expect(workflow).toContain("group: ${{ github.workflow }}-workflow-call-${{ github.run_id }}");
+    expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).not.toContain(
       "github.event_name == 'workflow_call' || github.event_name == 'push'",
     );
     expect(workflow).not.toContain("github.event_name == 'pull_request'");
     expect(workflow).not.toContain("node scripts/ci-changed-scope.mjs");
     expect(workflow).toContain("OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE");
-    expect(workflow).toContain('if [ "$event_name" = "schedule" ]; then');
+    expect(workflow).toContain('run_bun_global_install_smoke="$workflow_bun_global_install_smoke"');
+    expect(workflow).not.toContain("OPENCLAW_CI_EVENT_NAME");
+    expect(workflow).not.toContain('if [ "$event_name"');
     expect(workflow).toContain('echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"');
     expect(workflow).toContain("run_fast_install_smoke=true");
     expect(workflow).toContain("run_full_install_smoke=true");
@@ -1141,7 +1529,9 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("run_fast_install_smoke");
     expect(workflow).toContain("run_full_install_smoke");
     expect(workflow).toContain("timeout --kill-after=30s 45m docker buildx build");
-    expect(workflow).toContain('timeout --kill-after=30s 600s docker pull "$IMAGE_REF"');
+    expect(workflow).not.toContain('docker pull "$IMAGE_REF"');
+    expect(workflow).not.toContain("packages: write");
+    expect(workflow).not.toContain("--push");
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
     expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(6);
     expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm --entrypoint sh/u);
@@ -1165,8 +1555,51 @@ describe("bun global install smoke", () => {
     expect(workflow).not.toContain("type=gha");
     expect(workflow).toContain('OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"');
     expect(releaseChecks).toContain("install_smoke_release_checks:");
-    expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke.yml");
+    expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke-reusable.yml");
     expect(releaseChecks).toContain("run_bun_global_install_smoke: true");
+  });
+
+  it("runs installer packaging from the trusted workflow revision against a nested candidate", () => {
+    const workflow = parse(readFileSync(INSTALL_SMOKE_WORKFLOW_PATH, "utf8"));
+    const steps = workflow.jobs.installer_smoke.steps as Array<{
+      name?: string;
+      uses?: string;
+      with?: Record<string, unknown>;
+      env?: Record<string, unknown>;
+      run?: string;
+    }>;
+    const step = (name: string) => {
+      const found = steps.find((entry) => entry.name === name);
+      expect(found, name).toBeDefined();
+      return found!;
+    };
+
+    expect(step("Checkout trusted installer harness").with).toMatchObject({
+      repository: "${{ needs.preflight.outputs.workflow_repository }}",
+      ref: "${{ needs.preflight.outputs.workflow_sha }}",
+      "persist-credentials": false,
+    });
+    expect(step("Checkout candidate CLI").with).toMatchObject({
+      ref: "${{ needs.preflight.outputs.target_sha }}",
+      path: "candidate",
+      "persist-credentials": false,
+    });
+    expect(step("Setup Node environment for installer smoke").uses).toBe(
+      "./.github/actions/setup-node-env",
+    );
+    expect(step("Run installer docker tests").env).toMatchObject({
+      OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: "${{ inputs.allow_unreleased_changelog }}",
+      OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: "${{ github.workspace }}/candidate",
+    });
+    expect(step("Run installer docker tests").run).toBe("bash scripts/test-install-sh-docker.sh");
+    expect(step("Build installer smoke image").run).toContain(
+      "./scripts/docker/install-sh-smoke/Dockerfile",
+    );
+    expect(step("Build installer smoke image").run).not.toContain("candidate/scripts/docker");
+    expect(step("Build installer non-root image").run).not.toContain("candidate/scripts/docker");
+    expect(step("Run Rocky Linux installer smoke").run).toContain(
+      "$PWD/candidate/scripts/install.sh",
+    );
   });
 
   it("kills Bun global install smoke commands that ignore TERM after timeout", () => {

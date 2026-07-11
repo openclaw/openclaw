@@ -93,38 +93,43 @@ export async function resolveSshConfig(
       stdio: ["ignore", "pipe", "ignore"],
     });
     let stdout = "";
-    let outputTooLarge = false;
+    let settled = false;
+    const settle = (result: SshResolvedConfig | null, options?: { terminate?: boolean }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (options?.terminate) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // A failed best-effort kill must not strand gateway discovery.
+        }
+      }
+      resolve(result);
+    };
+
+    const timeoutMs = Math.max(200, opts.timeoutMs ?? 800);
+    const timer = setTimeout(() => settle(null, { terminate: true }), timeoutMs);
+
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk) => {
       const appended = appendSshConfigOutput(stdout, chunk);
       if (!appended.ok) {
-        outputTooLarge = true;
-        child.kill("SIGKILL");
+        settle(null, { terminate: true });
         return;
       }
       stdout = appended.value;
     });
-
-    const timeoutMs = Math.max(200, opts.timeoutMs ?? 800);
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } finally {
-        resolve(null);
-      }
-    }, timeoutMs);
-
-    child.once("error", () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
+    child.stdout?.on("error", () => settle(null, { terminate: true }));
+    child.once("error", () => settle(null));
     child.once("exit", (code) => {
-      clearTimeout(timer);
-      if (outputTooLarge || code !== 0 || !stdout.trim()) {
-        resolve(null);
+      if (code !== 0 || !stdout.trim()) {
+        settle(null);
         return;
       }
-      resolve(parseSshConfigOutput(stdout));
+      settle(parseSshConfigOutput(stdout));
     });
   });
 }

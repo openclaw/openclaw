@@ -3,6 +3,7 @@
  * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
  * and removes background exec sessions.
  */
+import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
@@ -149,9 +150,7 @@ function createAbortError(reason: unknown): Error {
   if (reason instanceof Error) {
     return reason;
   }
-  const error = new Error(typeof reason === "string" ? reason : "Aborted");
-  error.name = "AbortError";
-  return error;
+  return createNamedAbortError(typeof reason === "string" ? reason : "Aborted");
 }
 
 async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
@@ -356,6 +355,12 @@ export function createProcessTool(
           return {
             ok: false as const,
             result: failedResult(`Session ${params.sessionId} is not backgrounded.`),
+          };
+        }
+        if (scopedSession.finalizing) {
+          return {
+            ok: false as const,
+            result: failedResult(`Session ${params.sessionId} is finalizing.`),
           };
         }
         const stdin = resolveSessionStdin(scopedSession);
@@ -658,6 +663,9 @@ export function createProcessTool(
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
+          if (scopedSession.finalizing) {
+            return failText(`Session ${params.sessionId} is finalizing.`);
+          }
           const canceled = cancelManagedSession(scopedSession.id);
           if (!canceled) {
             const terminated = terminateSessionFallback(scopedSession);
@@ -707,6 +715,9 @@ export function createProcessTool(
 
         case "remove": {
           if (scopedSession) {
+            if (scopedSession.finalizing) {
+              return failText(`Session ${params.sessionId} is finalizing.`);
+            }
             const canceled = cancelManagedSession(scopedSession.id);
             if (canceled) {
               // Keep remove semantics deterministic: drop from process registry now.

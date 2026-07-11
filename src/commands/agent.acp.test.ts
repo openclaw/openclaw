@@ -78,6 +78,11 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
   };
 
   return {
+    createAcpToolLifecycleTracker: () => ({
+      active: new Map(),
+      terminalToolCallIds: new Set(),
+      saturated: false,
+    }),
     createAcpVisibleTextAccumulator,
     emitAcpLifecycleStart: attemptExecutionMocks.emitAcpLifecycleStart,
     emitAcpLifecycleEnd: attemptExecutionMocks.emitAcpLifecycleEnd,

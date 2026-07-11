@@ -1,12 +1,17 @@
 // Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { __testing, writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
+
+// These subprocess tests use explicit ready/close signals; timeout only catches broken fixtures.
+const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 function writeFixtureFile(rootDir: string, relativePath: string, contents: string): void {
   const filePath = path.join(rootDir, relativePath);
@@ -67,7 +72,18 @@ function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
-async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void> {
+function createSpawnTextChild() {
+  return Object.assign(new EventEmitter(), {
+    kill: vi.fn(() => true),
+    stderr: new PassThrough(),
+    stdout: new PassThrough(),
+  });
+}
+
+async function waitForProcessExit(
+  pid: number,
+  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!processIsAlive(pid)) {
@@ -82,7 +98,7 @@ async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void>
 
 async function waitForChildClose(
   child: ReturnType<typeof spawn>,
-  timeoutMs = 2_000,
+  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -127,6 +143,54 @@ describe("write-cli-startup-metadata", () => {
         timeoutMs: 5_000,
       }),
     ).rejects.toThrow("render failed: output exceeded 1024 bytes");
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "fails command help rendering when %s emits a stream error",
+    async (streamName) => {
+      const child = createSpawnTextChild();
+      const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
+      const streamError = new Error(`${streamName} pipe failed`);
+
+      const render = __testing.spawnText(["--help"], {
+        cwd: process.cwd(),
+        env: process.env,
+        failureMessage: "render failed",
+        killGraceMs: 25,
+        maxOutputBytes: 1024,
+        spawnProcess: spawnProcess as typeof spawn,
+        timeoutMs: 5_000,
+      });
+
+      child[streamName].emit("error", streamError);
+      child.emit("close", null, "SIGTERM");
+
+      await expect(render).rejects.toMatchObject({
+        message: `render failed: ${streamName} read error: ${streamName} pipe failed`,
+        cause: streamError,
+      });
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    },
+  );
+
+  it("preserves an output-limit failure when shutdown also errors a stream", async () => {
+    const child = createSpawnTextChild();
+    const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
+    const render = __testing.spawnText(["--help"], {
+      cwd: process.cwd(),
+      env: process.env,
+      failureMessage: "render failed",
+      killGraceMs: 25,
+      maxOutputBytes: 5,
+      spawnProcess: spawnProcess as typeof spawn,
+      timeoutMs: 5_000,
+    });
+
+    child.stdout.emit("data", "123456");
+    child.stdout.emit("error", new Error("pipe closed during shutdown"));
+    child.emit("close", null, "SIGTERM");
+
+    await expect(render).rejects.toThrow("render failed: output exceeded 5 bytes");
   });
 
   it("signals Windows command help render process trees with taskkill", () => {
@@ -292,7 +356,7 @@ describe("write-cli-startup-metadata", () => {
       let grandchildPid = 0;
 
       try {
-        const deadline = Date.now() + 1_000;
+        const deadline = Date.now() + LOAD_SENSITIVE_PROCESS_TIMEOUT_MS;
         while (Date.now() < deadline) {
           try {
             grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
@@ -318,7 +382,7 @@ describe("write-cli-startup-metadata", () => {
           code: null,
           signal: "SIGTERM",
         });
-        await waitForProcessExit(grandchildPid, 2_000);
+        await waitForProcessExit(grandchildPid);
       } finally {
         if (runner.pid && processIsAlive(runner.pid)) {
           runner.kill("SIGKILL");

@@ -72,6 +72,7 @@ type SpeechProviderPlugin = import("./types.js").SpeechProviderPlugin;
 type VideoGenerationProviderPlugin = import("./types.js").VideoGenerationProviderPlugin;
 type WebFetchProviderPlugin = import("./types.js").WebFetchProviderPlugin;
 type WebSearchProviderPlugin = import("./types.js").WebSearchProviderPlugin;
+type WorkerProvider = import("./types.js").WorkerProvider;
 type UnifiedModelCatalogProviderPlugin = import("./types.js").UnifiedModelCatalogProviderPlugin;
 
 /** Agent tool factory registered by one plugin runtime. */
@@ -82,6 +83,8 @@ export type PluginToolRegistration = {
   names: string[];
   declaredNames?: string[];
   optional: boolean;
+  /** Loader-owned provenance. Missing values are conservative legacy registrations. */
+  origin?: PluginOrigin;
   source: string;
   rootDir?: string;
 };
@@ -126,6 +129,8 @@ export type PluginChannelRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
+  /** Loader-owned provenance. Missing values are conservative legacy registrations. */
+  origin?: PluginOrigin;
   source: string;
   rootDir?: string;
 };
@@ -134,6 +139,8 @@ export type PluginChannelSetupRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
+  /** Loader-owned provenance. Missing values are conservative legacy registrations. */
+  origin?: PluginOrigin;
   source: string;
   enabled: boolean;
   rootDir?: string;
@@ -201,6 +208,7 @@ export type PluginWebFetchProviderRegistration =
   PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
+export type PluginWorkerProviderRegistration = PluginOwnedProviderRegistration<WorkerProvider>;
 export type PluginMigrationProviderRegistration =
   PluginOwnedProviderRegistration<MigrationProviderPlugin>;
 export type PluginMemoryEmbeddingProviderRegistration =
@@ -448,7 +456,7 @@ export type PluginRegistry = {
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
   modelCatalogProviders: PluginModelCatalogProviderRegistration[];
-  cliBackends?: PluginCliBackendRegistration[];
+  cliBackends: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
   embeddingProviders: PluginEmbeddingProviderRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
@@ -461,6 +469,7 @@ export type PluginRegistry = {
   musicGenerationProviders: PluginMusicGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
+  workerProviders: Map<string, PluginWorkerProviderRegistration>;
   migrationProviders: PluginMigrationProviderRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
@@ -468,26 +477,26 @@ export type PluginRegistry = {
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
-  coreGatewayMethodNames?: string[];
+  coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
-  hostedMediaResolvers?: PluginHostedMediaResolverRegistration[];
+  hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
-  reloads?: PluginReloadRegistration[];
-  nodeHostCommands?: PluginNodeHostCommandRegistration[];
-  nodeInvokePolicies?: PluginNodeInvokePolicyRegistration[];
-  securityAuditCollectors?: PluginSecurityAuditCollectorRegistration[];
+  reloads: PluginReloadRegistration[];
+  nodeHostCommands: PluginNodeHostCommandRegistration[];
+  nodeInvokePolicies: PluginNodeInvokePolicyRegistration[];
+  securityAuditCollectors: PluginSecurityAuditCollectorRegistration[];
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
-  interactiveHandlers?: PluginInteractiveHandlerRegistryRegistration[];
-  sessionExtensions?: PluginSessionExtensionRegistryRegistration[];
-  trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
-  toolMetadata?: PluginToolMetadataRegistryRegistration[];
-  controlUiDescriptors?: PluginControlUiDescriptorRegistryRegistration[];
-  runtimeLifecycles?: PluginRuntimeLifecycleRegistryRegistration[];
-  agentEventSubscriptions?: PluginAgentEventSubscriptionRegistryRegistration[];
-  sessionSchedulerJobs?: PluginSessionSchedulerJobRegistryRegistration[];
-  sessionActions?: PluginSessionActionRegistryRegistration[];
+  interactiveHandlers: PluginInteractiveHandlerRegistryRegistration[];
+  sessionExtensions: PluginSessionExtensionRegistryRegistration[];
+  trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
+  toolMetadata: PluginToolMetadataRegistryRegistration[];
+  controlUiDescriptors: PluginControlUiDescriptorRegistryRegistration[];
+  runtimeLifecycles: PluginRuntimeLifecycleRegistryRegistration[];
+  agentEventSubscriptions: PluginAgentEventSubscriptionRegistryRegistration[];
+  sessionSchedulerJobs: PluginSessionSchedulerJobRegistryRegistration[];
+  sessionActions: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };

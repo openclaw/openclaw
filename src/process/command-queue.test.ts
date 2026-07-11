@@ -2,6 +2,10 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
@@ -329,6 +333,26 @@ describe("command queue", () => {
         message.includes("lane task interrupted: lane=nested"),
       ),
     ).toBe(true);
+  });
+
+  it.each([
+    "session:probe-setup-inference:openai",
+    "session:temp:setup-inference:probe-setup-inference-test-uuid",
+  ])("keeps setup-inference probe lane failures quiet: %s", async (lane) => {
+    const error = new Error("Authentication failed");
+
+    await expect(
+      enqueueCommandInLane(lane, async () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+
+    expect(diagnosticMocks.diag.error).not.toHaveBeenCalled();
+    expect(
+      diagnosticDebugMessages().some((message) =>
+        message.includes(`lane task interrupted: lane=${lane}`),
+      ),
+    ).toBe(false);
   });
 
   it("getActiveTaskCount returns count of currently executing tasks", async () => {
@@ -830,6 +854,62 @@ describe("command queue", () => {
     markGatewayDraining();
     release();
     await expect(task).resolves.toBe("ok");
+  });
+
+  it("reversibly fences new enqueues without disturbing an active task", async () => {
+    const { task, release } = enqueueBlockedMainTask(async () => "active-finished");
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    await expect(
+      enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
+    ).rejects.toBeInstanceOf(GatewayDrainingError);
+
+    release();
+    await expect(task).resolves.toBe("active-finished");
+    expect(suspension?.release()).toBe(true);
+    await expect(enqueueCommandInLane(CommandLane.Main, async () => "resumed")).resolves.toBe(
+      "resumed",
+    );
+  });
+
+  it("lets an admitted root enqueue while suspension preparation refuses new work", async () => {
+    const continueRoot = createDeferred();
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+    const result = root?.run(async () => {
+      await continueRoot.promise;
+      return await enqueueCommandInLane(CommandLane.Main, async () => "continued");
+    });
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+
+    try {
+      continueRoot.resolve();
+      await expect(result).resolves.toBe("continued");
+      await expect(
+        enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
+      ).rejects.toBeInstanceOf(GatewayDrainingError);
+    } finally {
+      suspension?.rollback();
+      root?.release();
+    }
+  });
+
+  it("rejects subordinate enqueues from an admitted root after restart drain", async () => {
+    const continueRoot = createDeferred();
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+    const result = root?.run(async () => {
+      await continueRoot.promise;
+      return await enqueueCommandInLane(CommandLane.Main, async () => "blocked");
+    });
+
+    try {
+      markGatewayDraining();
+      continueRoot.resolve();
+      await expect(result).rejects.toBeInstanceOf(GatewayDrainingError);
+    } finally {
+      root?.release();
+    }
   });
 
   it("resetAllLanes clears gateway draining flag and re-allows enqueue", async () => {

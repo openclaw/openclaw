@@ -5,6 +5,8 @@ import {
   ErrorCodes,
   errorShape,
   validateSkillsBinsParams,
+  validateSkillsCuratorActionParams,
+  validateSkillsCuratorStatusParams,
   validateSkillsDetailParams,
   validateSkillsInstallParams,
   validateSkillsProposalActionParams,
@@ -25,7 +27,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { canExecRequestNode } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
@@ -48,6 +50,12 @@ import {
   collectClawHubVerdictTargets,
   fetchOpenClawSkillSecurityVerdicts,
 } from "../../skills/security/clawhub-verdicts.js";
+import {
+  getSkillCuratorStatus,
+  pinCuratedSkill,
+  restoreCuratedSkill,
+  unpinCuratedSkill,
+} from "../../skills/workshop/curator.js";
 import {
   applySkillProposal,
   inspectSkillProposal,
@@ -101,16 +109,16 @@ type ResolvedSkillsWorkspace = Extract<
 function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace) {
   // Remote skill availability depends on the agent's executable-node surface,
   // not only the workspace contents, so status reports include live eligibility.
+  const nodeSkills = resolveNodeExecEligibility({
+    cfg: resolved.cfg,
+    agentId: resolved.agentId,
+  });
   return buildWorkspaceSkillStatus(resolved.workspaceDir, {
     config: resolved.cfg,
     agentId: resolved.agentId,
     eligibility: {
-      remote: getRemoteSkillEligibility({
-        advertiseExecNode: canExecRequestNode({
-          cfg: resolved.cfg,
-          agentId: resolved.agentId,
-        }),
-      }),
+      nodeSkills,
+      remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
     },
   });
 }
@@ -331,6 +339,60 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond(true, detail, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
+  },
+  "skills.curator.status": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsCuratorStatusParams,
+        "skills.curator.status",
+        respond,
+      )
+    ) {
+      return;
+    }
+    respond(true, getSkillCuratorStatus(), undefined);
+  },
+  "skills.curator.pin": async ({ params, respond }) => {
+    if (
+      !assertValidParams(params, validateSkillsCuratorActionParams, "skills.curator.pin", respond)
+    ) {
+      return;
+    }
+    try {
+      respond(true, pinCuratedSkill(params.skill), undefined);
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.curator.unpin": async ({ params, respond }) => {
+    if (
+      !assertValidParams(params, validateSkillsCuratorActionParams, "skills.curator.unpin", respond)
+    ) {
+      return;
+    }
+    try {
+      respond(true, unpinCuratedSkill(params.skill), undefined);
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.curator.restore": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsCuratorActionParams,
+        "skills.curator.restore",
+        respond,
+      )
+    ) {
+      return;
+    }
+    try {
+      respond(true, restoreCuratedSkill(params.skill), undefined);
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
     }
   },
   "skills.proposals.list": async ({ params, respond, context }) => {

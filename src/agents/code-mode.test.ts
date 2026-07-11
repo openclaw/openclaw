@@ -269,6 +269,38 @@ describe("Code Mode", () => {
     expect(compacted.catalogToolCount).toBe(2);
   });
 
+  it("keeps direct-only tools model-visible and out of the guest catalog", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const computer = {
+      ...fakeTool("computer", "Control a desktop"),
+      catalogMode: "direct-only" as const,
+    };
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, computer, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      CODE_MODE_EXEC_TOOL_NAME,
+      CODE_MODE_WAIT_TOOL_NAME,
+      "computer",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_create_ticket"]);
+  });
+
+  it("marks only the internal wait control as hidden from channel progress", () => {
+    const { tools } = createCodeModeHarness();
+
+    expect(tools[0].hideFromChannelProgress).toBeUndefined();
+    expect(tools[1].hideFromChannelProgress).toBe(true);
+  });
+
   it("tells models to return the final code value", () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
@@ -854,7 +886,7 @@ describe("Code Mode", () => {
         type: "object",
         properties: {
           owner: { type: "string" },
-          repo: { type: "string", description: "Repository name" },
+          repo: { type: "string", description: "Repository 名称" },
           title: { type: "string", description: "Issue title\nShown in tracker" },
           body: { type: "string", default: "" },
         },
@@ -907,6 +939,9 @@ describe("Code Mode", () => {
         return {
           apiHeader: api.header,
           apiFilePaths: apiFiles.files.map((file) => file.path),
+          listedServerFileBytes: apiFiles.files.find((file) => file.path === "mcp/github.d.ts").bytes,
+          serverFileBytes: serverFile.bytes,
+          serverFileContent: serverFile.content,
           rootFileHasReference: rootFile.content.includes('./github.d.ts'),
           serverFileHasCreateIssue: serverFile.content.includes('function createIssue('),
           serverFileHasTitleDoc: serverFile.content.includes('@param title Issue title Shown in tracker'),
@@ -955,12 +990,23 @@ describe("Code Mode", () => {
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),
       apiFilePaths: ["mcp/index.d.ts", "mcp/github.d.ts"],
+      listedServerFileBytes: expect.any(Number),
+      serverFileBytes: expect.any(Number),
+      serverFileContent: expect.stringContaining("Repository 名称"),
       rootFileHasReference: true,
       serverFileHasCreateIssue: true,
       serverFileHasTitleDoc: true,
       rootServers: [{ identifier: "github", serverName: "github", toolCount: 1 }],
     });
-    const value = details.value as { apiHeader: string };
+    const value = details.value as {
+      apiHeader: string;
+      listedServerFileBytes: number;
+      serverFileBytes: number;
+      serverFileContent: string;
+    };
+    expect(value.listedServerFileBytes).toBe(value.serverFileBytes);
+    expect(value.serverFileBytes).toBe(Buffer.byteLength(value.serverFileContent, "utf8"));
+    expect(value.serverFileBytes).toBeGreaterThan(value.serverFileContent.length);
     expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
     expect(value.apiHeader).not.toContain("@param title Issue title\n");
     expect(value.apiHeader).toContain("title: string;");

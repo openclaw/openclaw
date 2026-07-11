@@ -42,6 +42,7 @@ describe("OpenAI provider Codex transport hooks", () => {
   it("stores device-code logins as OpenAI OAuth profiles", async () => {
     const provider = buildOpenAIProvider();
     const deviceCodeMethod = provider.auth?.find((method) => method.id === "device-code");
+    const controller = new AbortController();
     loginOpenAICodexDeviceCodeMock.mockResolvedValueOnce({
       access: "access-token",
       refresh: "refresh-token",
@@ -58,7 +59,12 @@ describe("OpenAI provider Codex transport hooks", () => {
       runtime: { log: vi.fn(), error: vi.fn() },
       config: {},
       oauth: {},
+      signal: controller.signal,
     } as never);
+
+    expect(loginOpenAICodexDeviceCodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
 
     expect(result?.profiles?.[0]).toMatchObject({
       profileId: "openai:default",
@@ -68,6 +74,10 @@ describe("OpenAI provider Codex transport hooks", () => {
         access: "access-token",
         refresh: "refresh-token",
       },
+    });
+    expect(result?.defaultModel).toBe("openai/gpt-5.6-sol");
+    expect(result?.configPatch?.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": {},
     });
   });
 
@@ -114,6 +124,19 @@ describe("OpenAI provider Codex transport hooks", () => {
       });
     },
   );
+
+  it("does not invent a bare GPT-5.6 alias for the Codex transport", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.6",
+      authProfileMode: "oauth",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(model).toBeUndefined();
+  });
 
   it.each([
     { name: "fills a missing map", thinkingLevelMap: undefined, expectedOff: null },

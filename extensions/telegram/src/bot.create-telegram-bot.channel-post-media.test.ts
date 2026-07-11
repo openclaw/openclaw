@@ -67,8 +67,11 @@ const {
 } = harness;
 const { createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
   await import("./bot-core.js");
-const { runWithTelegramUpdateProcessingFrame, withTelegramSpooledReplayUpdate } =
-  await import("./bot-processing-outcome.js");
+const {
+  runWithTelegramSpooledReplayUpdate,
+  runWithTelegramUpdateProcessingFrame,
+  withTelegramSpooledReplayUpdate,
+} = await import("./bot-processing-outcome.js");
 const { MediaFetchError } = await import("./telegram-media.runtime.js");
 
 let createTelegramBot: (
@@ -453,6 +456,84 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
+  it("warns instead of dispatching a placeholder when Telegram getFile fails (#100000)", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        message_id: 100000,
+        date: 1736380800,
+        document: { file_id: "doc-100000", file_name: "report.pdf" },
+        from: { id: 55, is_bot: false, first_name: "u" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => {
+        throw new Error("Network request for 'getFile' failed!");
+      },
+    });
+
+    await waitForMockCalls(sendMessageSpy, 1);
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "⚠️ Failed to download media. Please try again.",
+      expect.objectContaining({
+        reply_parameters: expect.objectContaining({ message_id: 100000 }),
+      }),
+    );
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { mediaMaxMb: 100, expectedLimitMb: 20 },
+    { mediaMaxMb: 10, expectedLimitMb: 10 },
+  ])(
+    "reports the effective $expectedLimitMb MB limit for Telegram Bot API failures (#100000)",
+    async ({ mediaMaxMb, expectedLimitMb }) => {
+      loadConfig.mockReturnValue({
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"], mediaMaxMb } },
+      });
+      sendMessageSpy.mockClear();
+      replySpy.mockClear();
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 100001,
+          date: 1736380800,
+          document: { file_id: "doc-100001", file_name: "large.bin" },
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => {
+          throw new Error("Bad Request: file is too big");
+        },
+      });
+
+      await waitForMockCalls(sendMessageSpy, 1);
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        1234,
+        `⚠️ File too large. Maximum size is ${expectedLimitMb}MB.`,
+        expect.objectContaining({
+          reply_parameters: expect.objectContaining({ message_id: 100001 }),
+        }),
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(saveRemoteMedia).not.toHaveBeenCalled();
+    },
+  );
+
   it("durably retries a spooled-replay shutdown-abort document fetch without warning (#98076)", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
@@ -789,6 +870,123 @@ describe("createTelegramBot channel_post media", () => {
     } finally {
       setTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();
+    }
+  });
+
+  it("durably retries every spooled album update when shutdown aborts a download", async () => {
+    setOpenChannelPostConfig();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    const shutdown = new AbortController();
+    saveRemoteMedia.mockImplementationOnce(async () => {
+      shutdown.abort();
+      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({
+        token: "tok",
+        testTimings: TELEGRAM_TEST_TIMINGS,
+        fetchAbortSignal: shutdown.signal,
+      });
+      const handler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      const firstUpdate = { update_id: 98079 };
+      const secondUpdate = { update_id: 98080 };
+      const first = await runWithTelegramSpooledReplayUpdate(firstUpdate, () =>
+        handler({
+          ...createChannelPostContext({
+            messageId: 98079,
+            caption: "shutdown album",
+            date: 1736380800,
+            mediaGroupId: "shutdown-album-1",
+            photoFileId: "p1",
+          }),
+          update: firstUpdate,
+        }),
+      );
+      const second = await runWithTelegramSpooledReplayUpdate(secondUpdate, () =>
+        handler({
+          ...createChannelPostContext({
+            messageId: 98080,
+            date: 1736380801,
+            mediaGroupId: "shutdown-album-1",
+            photoFileId: "p2",
+          }),
+          update: secondUpdate,
+        }),
+      );
+
+      expect(first.deferredWork).toBeDefined();
+      expect(second.deferredWork).toBeDefined();
+      if (!first.deferredWork || !second.deferredWork) {
+        throw new Error("Expected both album updates to register durable replay work");
+      }
+      await flushChannelPostMediaGroup(setTimeoutSpy);
+
+      const [firstResult, secondResult] = await Promise.all([
+        first.deferredWork.task,
+        second.deferredWork.task,
+      ]);
+      expect(firstResult).toEqual({
+        kind: "failed-retryable",
+        error: expect.any(MediaFetchError),
+      });
+      expect(secondResult).toEqual({
+        kind: "failed-retryable",
+        error: expect.any(MediaFetchError),
+      });
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("keeps live album delivery when classic polling aborts a download", async () => {
+    setOpenChannelPostConfig();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    const shutdown = new AbortController();
+    saveRemoteMedia
+      .mockImplementationOnce(async () => ({
+        path: "/tmp/classic-restart-first.jpg",
+        contentType: "image/jpeg",
+      }))
+      .mockImplementationOnce(async () => {
+        shutdown.abort();
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({
+        token: "tok",
+        testTimings: TELEGRAM_TEST_TIMINGS,
+        fetchAbortSignal: shutdown.signal,
+      });
+      const handler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      await queueChannelPostAlbum(handler, {
+        caption: "classic restart album",
+        mediaGroupId: "classic-restart-album-1",
+        firstMessageId: 98081,
+        secondMessageId: 98082,
+      });
+      await flushChannelPostMediaGroup(setTimeoutSpy);
+      await waitForMockCalls(replySpy, 1);
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replyPayload()).toMatchObject({
+        Body: expect.stringContaining("classic restart album"),
+        MediaPaths: ["/tmp/classic-restart-first.jpg"],
+      });
+    } finally {
+      setTimeoutSpy.mockRestore();
     }
   });
 

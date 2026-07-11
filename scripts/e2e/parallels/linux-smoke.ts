@@ -130,6 +130,7 @@ const defaultOptions = (): LinuxOptions => ({
   latestVersion: "",
   mode: "both",
   modelId: undefined,
+  npmRegistry: undefined,
   provider: "openai",
   snapshotHint: "fresh",
   targetPackageSpec: "",
@@ -157,6 +158,7 @@ Options:
   --install-version <ver>    Pin site-installer version/dist-tag for the baseline lane.
   --target-package-spec <npm-spec>
                              Install this npm package tarball instead of packing current main.
+  --npm-registry <url>       Registry used for target package installs.
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
@@ -220,6 +222,10 @@ export function parseArgs(argv: string[]): LinuxOptions {
         break;
       case "--target-package-spec":
         options.targetPackageSpec = ensureValue(args, i, arg);
+        i++;
+        break;
+      case "--npm-registry":
+        options.npmRegistry = ensureValue(args, i, arg);
         i++;
         break;
       case "--keep-server":
@@ -331,7 +337,7 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 90, () => this.verifyTargetVersion());
-    await this.phase("fresh.onboard-ref", 180, () => this.runRefOnboard());
+    await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("fresh.inject-bad-plugin", 90, () =>
       this.maybeInjectBadPluginFixture("fresh"),
     );
@@ -366,7 +372,7 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     await this.phase("upgrade.inject-bad-plugin", 90, () =>
       this.maybeInjectBadPluginFixture("upgrade"),
     );
-    await this.phase("upgrade.onboard-ref", 180, () => this.runRefOnboard());
+    await this.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("upgrade.gateway-start", 240, () => this.startGatewayBackground());
     await this.phase("upgrade.bad-plugin-diagnostic", 90, () =>
       this.maybeVerifyBadPluginDiagnostic("upgrade"),
@@ -514,9 +520,7 @@ if command -v curl >/dev/null 2>&1; then
     url,
   )} -o ${shellQuote(outputPath)}
 else
-  wget -q --timeout=10 --read-timeout=120 --tries=3 -O ${shellQuote(outputPath)} ${shellQuote(
-    url,
-  )}
+  wget -q --timeout=10 --read-timeout=120 --tries=3 -O ${shellQuote(outputPath)} ${shellQuote(url)}
 fi`);
   }
 
@@ -526,7 +530,17 @@ fi`);
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
     this.downloadGuestFile(tgzUrl, `/tmp/${tempName}`);
-    this.guestExec(["npm", "install", "-g", `/tmp/${tempName}`, "--no-fund", "--no-audit"]);
+    const npmArgs = ["npm", "install", "-g", `/tmp/${tempName}`, "--no-fund", "--no-audit"];
+    this.guestExec(
+      this.options.npmRegistry
+        ? [
+            "/usr/bin/env",
+            `NPM_CONFIG_REGISTRY=${this.options.npmRegistry}`,
+            `npm_config_registry=${this.options.npmRegistry}`,
+            ...npmArgs,
+          ]
+        : npmArgs,
+    );
     this.guestExec(["openclaw", "--version"]);
   }
 

@@ -383,6 +383,24 @@ function broadcastChatClassEvents(
 }
 
 describe("gateway broadcaster", () => {
+  it("keeps workers outside all generic and targeted gateway broadcasts", () => {
+    const workerSocket = makeRecordingSocket();
+    const worker = makeGatewayWsClient("c-worker", workerSocket, {
+      role: "worker",
+      scopes: [],
+    } as unknown as GatewayWsClient["connect"]);
+    worker.connectionKind = "worker";
+    const clients = new Set<GatewayWsClient>([worker]);
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+
+    for (const event of ["heartbeat", "presence", "health", "tick", "shutdown", "chat"]) {
+      broadcast(event, { value: event });
+    }
+    broadcastToConnIds("tick", { ts: 1 }, new Set([worker.connId]));
+
+    expect(workerSocket.send).not.toHaveBeenCalled();
+  });
+
   it("filters approval and pairing events by scope", () => {
     const approvalsSocket: TestSocket = {
       bufferedAmount: 0,
@@ -439,6 +457,19 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, expectedEvents);
   });
 
+  it("requires operator.read for task ledger broadcast events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcast("task", { action: "deleted", taskId: "task-1" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["task"]);
+    expectSentEvents(writeSocket, ["task"]);
+    expectSentEvents(adminSocket, ["task"]);
+  });
+
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();
@@ -469,7 +500,13 @@ describe("gateway broadcaster", () => {
     broadcast("health", { ok: true });
     broadcast("tick", { ts: 2 });
     broadcast("shutdown", { reason: "restart" });
-    broadcast("update.available", { updateAvailable: { version: "2026.4.20" } });
+    broadcast("update.available", {
+      updateAvailable: {
+        currentVersion: "2026.4.19",
+        latestVersion: "2026.4.20",
+        channel: "stable",
+      },
+    });
     broadcast("unknown.future.event", { hidden: true });
 
     expectSentEvents(pairingSocket, [
@@ -930,6 +967,11 @@ describe("normalizeVoiceWakeTriggers", () => {
   test("trims and limits entries", () => {
     const result = normalizeVoiceWakeTriggers(["  hello  ", "", "world"]);
     expect(result).toEqual(["hello", "world"]);
+  });
+
+  test("does not split surrogate pairs at the length limit", () => {
+    const prefix = "x".repeat(63);
+    expect(normalizeVoiceWakeTriggers([`${prefix}\u{1f600}`])).toEqual([prefix]);
   });
 });
 

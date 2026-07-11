@@ -262,12 +262,9 @@ const TARGETS_CFG = makeTargetsCfg([{ channel: "slack", to: "U123" }]);
 function createForwarder(params: {
   cfg: OpenClawConfig;
   deliver?: ReturnType<typeof vi.fn>;
-  resolveSessionTarget?: () => {
-    channel: string;
-    to: string;
-    accountId?: string;
-    threadId?: string | number;
-  } | null;
+  resolveSessionTarget?: NonNullable<
+    NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["resolveSessionTarget"]
+  >;
 }) {
   const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
   const deps: NonNullable<Parameters<typeof createExecApprovalForwarder>[0]> = {
@@ -528,6 +525,39 @@ describe("exec approval forwarder", () => {
 
     expect(deliver).not.toHaveBeenCalled();
   });
+
+  it.each(["webchat", "tui"])(
+    "preserves configured session fallback for %s-originated exec approvals",
+    async (turnSourceChannel) => {
+      const resolveSessionTarget = vi.fn(async ({ request }) =>
+        request.request.turnSourceChannel
+          ? null
+          : { channel: "telegram" as const, to: "123", accountId: "default" },
+      );
+      const cfg = {
+        approvals: { exec: { enabled: true, mode: "session" } },
+      } as OpenClawConfig;
+      const { deliver, forwarder } = createForwarder({ cfg, resolveSessionTarget });
+
+      await expect(
+        forwarder.handleRequested({
+          ...baseRequest,
+          request: {
+            ...baseRequest.request,
+            turnSourceChannel,
+          },
+        }),
+      ).resolves.toBe(true);
+      expect(resolveSessionTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            request: expect.objectContaining({ turnSourceChannel: null }),
+          }),
+        }),
+      );
+      expect(deliver).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("attaches shared presentation approval buttons in forwarded fallback payloads", async () => {
     vi.useFakeTimers();

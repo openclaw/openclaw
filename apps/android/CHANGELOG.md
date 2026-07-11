@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Shows the localized app version, Git commit, and build date together on the About screen, with real provenance in repository-backed debug builds.
+
+## 2026.7.1 - 2026-07-08
+
+Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.
+
+Upgrades chat with offline recovery, session search and groups, model and agent pickers, voice notes, actions, link previews, code and math rendering.
+
+Adds workspace files, Cron details, terminal access, and Listen playback.
+
+Improves onboarding, reconnects, keyboards, notification filtering, location, canvas safety, and voice reliability.
+
+Thanks @IWhatsskill, @ioridev, and @narcissus0702.
+
 ## 2026.6.11 - 2026-07-01
 
 Improves Android gateway setup with localized onboarding, QR pairing fixes, and support for local mDNS gateway hosts.
