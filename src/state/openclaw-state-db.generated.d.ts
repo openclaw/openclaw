@@ -135,6 +135,51 @@ export interface AuthProfileStores {
   updated_at: number;
 }
 
+export interface AuthorizationDomainMemberships {
+  added_by_principal_id: string;
+  added_by_role: string;
+  created_at: number;
+  domain_id: string;
+  principal_id: string;
+  role: string;
+}
+
+export interface AuthorizationDomains {
+  created_at: number;
+  domain_id: string;
+  updated_at: number;
+}
+
+export interface AuthorizationGrants {
+  created_at: number;
+  domain_id: string;
+  granted_by_principal_id: string;
+  granted_by_role: string;
+  namespace: string;
+  permission: string;
+  principal_id: string;
+  resource_id: string;
+  resource_type: string;
+}
+
+export interface AuthorizationPrincipals {
+  created_at: number;
+  issuer: string;
+  kind: string;
+  principal_id: string;
+  subject: string;
+  updated_at: number;
+}
+
+export interface AuthorizationResources {
+  created_at: number;
+  domain_id: string;
+  namespace: string;
+  owner_principal_id: string;
+  resource_id: string;
+  resource_type: string;
+}
+
 export interface BackupRuns {
   archive_path: string;
   created_at: number;
@@ -1204,6 +1249,11 @@ export interface DB {
   audit_identity_keys: AuditIdentityKeys;
   auth_profile_state: AuthProfileState;
   auth_profile_stores: AuthProfileStores;
+  authorization_domain_memberships: AuthorizationDomainMemberships;
+  authorization_domains: AuthorizationDomains;
+  authorization_grants: AuthorizationGrants;
+  authorization_principals: AuthorizationPrincipals;
+  authorization_resources: AuthorizationResources;
   backup_runs: BackupRuns;
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;
