@@ -401,8 +401,7 @@ CREATE TABLE IF NOT EXISTS authorization_resources (
   retired_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  PRIMARY KEY (namespace, resource_type, resource_id),
-  UNIQUE (domain_id, namespace, resource_type, resource_id),
+  PRIMARY KEY (domain_id, namespace, resource_type, resource_id),
   CHECK (
     (
       parent_namespace IS NULL

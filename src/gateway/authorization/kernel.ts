@@ -2,6 +2,7 @@ import type { GatewayPrincipal } from "../../../packages/gateway-protocol/src/sc
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   GatewayAuthorizationRuntime,
+  GatewayAuthorizationContext,
   GatewayMethodAccessPolicy,
   GatewayRbacDenialReason,
   IsolationDomainRef,
@@ -28,17 +29,22 @@ function isGatewayRbacDenialReason(value: unknown): value is GatewayRbacDenialRe
 export type GatewayAuthorizationOutcome =
   | Readonly<{
       allowed: true;
-      security?: Readonly<{ principalId: string; domain: IsolationDomainRef }>;
+      security?: GatewayAuthorizationContext;
     }>
   | Readonly<{
       allowed: false;
-      reason: GatewayRbacDenialReason | "unauthenticated" | "unclassified-method";
+      reason:
+        | GatewayRbacDenialReason
+        | "unauthenticated"
+        | "unclassified-method"
+        | "unscoped-domain";
     }>;
 
 export async function authorizeGatewayAccess(_input: {
   runtime: GatewayAuthorizationRuntime;
   policy?: GatewayMethodAccessPolicy;
   principal?: GatewayPrincipal;
+  domain?: IsolationDomainRef;
   method: string;
   params: unknown;
   getConfig: () => OpenClawConfig;
@@ -57,6 +63,9 @@ export async function authorizeGatewayAccess(_input: {
   }
   if (!_input.principal) {
     return { allowed: false, reason: "unauthenticated" };
+  }
+  if (!_input.domain || !isNonEmptyString(_input.domain.id)) {
+    return { allowed: false, reason: "unscoped-domain" };
   }
 
   let resources;
@@ -86,6 +95,7 @@ export async function authorizeGatewayAccess(_input: {
   try {
     const decision = await _input.runtime.authorize({
       principal: _input.principal,
+      domain: _input.domain,
       method: _input.method,
       permission: _input.policy.permission,
       resources,
@@ -98,12 +108,19 @@ export async function authorizeGatewayAccess(_input: {
     if (decision.allowed !== true) {
       return { allowed: false, reason: "indeterminate" };
     }
-    if (!isNonEmptyString(decision.principalId) || !isNonEmptyString(decision.domain.id)) {
+    if (
+      !isNonEmptyString(decision.principalId) ||
+      !isNonEmptyString(decision.domain.id) ||
+      decision.domain.id !== _input.domain.id
+    ) {
       return { allowed: false, reason: "indeterminate" };
     }
     return {
       allowed: true,
-      security: { principalId: decision.principalId, domain: decision.domain },
+      security: Object.freeze({
+        principalId: decision.principalId,
+        domain: Object.freeze({ id: decision.domain.id }),
+      }),
     };
   } catch {
     return { allowed: false, reason: "indeterminate" };

@@ -7,7 +7,7 @@ import type {
   GatewayResourceRef,
   GatewayResourceResolutionInput,
 } from "./contracts.js";
-import { authorizeGatewayAccess } from "./kernel.js";
+import { authorizeGatewayAccess as authorizeGatewayAccessKernel } from "./kernel.js";
 
 const config = {} as OpenClawConfig;
 const principal = {
@@ -15,6 +15,7 @@ const principal = {
   subject: "member@example.com",
   kind: "human",
 } as const;
+const domain = { id: "domain-1" } as const;
 const resource: GatewayResourceRef = {
   namespace: "core",
   type: "session",
@@ -33,7 +34,30 @@ function resourcePolicy(
   };
 }
 
+function authorizeGatewayAccess(
+  input: Omit<Parameters<typeof authorizeGatewayAccessKernel>[0], "domain">,
+) {
+  return authorizeGatewayAccessKernel({ ...input, domain });
+}
+
 describe("gateway authorization kernel", () => {
+  it("fails closed before resource resolution without a trusted domain", async () => {
+    const resolveResources = vi.fn(() => [resource]);
+    const authorize = vi.fn();
+
+    const result = await authorizeGatewayAccessKernel({
+      runtime: { mode: "isolated", authorize },
+      policy: resourcePolicy(resolveResources),
+      principal,
+      method: "sessions.get",
+      params: {},
+      getConfig: () => config,
+    });
+
+    expect(result).toEqual({ allowed: false, reason: "unscoped-domain" });
+    expect(resolveResources).not.toHaveBeenCalled();
+    expect(authorize).not.toHaveBeenCalled();
+  });
   it("preserves legacy behavior without resolving resources or calling a provider", async () => {
     const resolveResources = vi.fn(() => [resource]);
     const authorize = vi.fn(async () => ({ allowed: false, reason: "forbidden" }) as const);
@@ -175,6 +199,7 @@ describe("gateway authorization kernel", () => {
 
     expect(authorize).toHaveBeenCalledWith({
       principal,
+      domain,
       method: "sessions.get",
       permission: "session.read",
       resources: [resource],
@@ -193,6 +218,26 @@ describe("gateway authorization kernel", () => {
       runtime: {
         mode: "isolated",
         authorize: async () => ({ allowed: true, ...decision }),
+      },
+      policy: resourcePolicy(() => [resource]),
+      principal,
+      method: "sessions.get",
+      params: {},
+      getConfig: () => config,
+    });
+
+    expect(result).toEqual({ allowed: false, reason: "indeterminate" });
+  });
+
+  it("fails closed when a provider returns a different domain", async () => {
+    const result = await authorizeGatewayAccess({
+      runtime: {
+        mode: "isolated",
+        authorize: async () => ({
+          allowed: true,
+          principalId: "principal-1",
+          domain: { id: "domain-2" },
+        }),
       },
       policy: resourcePolicy(() => [resource]),
       principal,

@@ -238,6 +238,14 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
   return row?.ok === 1;
 }
 
+function hasCanonicalAuthorizationResourcesPrimaryKey(db: DatabaseSync): boolean {
+  return (
+    !tableExists(db, "authorization_resources") ||
+    JSON.stringify(tablePrimaryKeyColumns(db, "authorization_resources")) ===
+      JSON.stringify(["domain_id", "namespace", "resource_type", "resource_id"])
+  );
+}
+
 function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): boolean {
   const columnName = columnSql.trim().split(/\s+/, 1)[0];
   if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
@@ -782,6 +790,11 @@ function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): vo
     }
     throw new Error(
       `OpenClaw state database ${pathname} has a noncanonical audit event schema that cannot be repaired automatically; restore the canonical audit_events shape before retrying.`,
+    );
+  }
+  if (!hasCanonicalAuthorizationResourcesPrimaryKey(db)) {
+    throw new Error(
+      `OpenClaw state database ${pathname} has a noncanonical authorization resource schema; rebuild the unpublished Teams authorization state before enabling isolated mode.`,
     );
   }
 }

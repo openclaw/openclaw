@@ -27,6 +27,7 @@ import type { PluginRuntime, RuntimeGatewayRequestOptions } from "../plugins/run
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { inheritGatewayClientAuthorizationDomain } from "./authorization/client-domain.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
@@ -271,13 +272,15 @@ function mergeGatewayClientInternal(
   if (!client || !internal) {
     return client ?? null;
   }
-  return {
+  const merged = {
     ...client,
     internal: {
       ...client.internal,
       ...internal,
     },
   };
+  inheritGatewayClientAuthorizationDomain(client, merged);
+  return merged;
 }
 
 type DispatchGatewayMethodInProcessOptions = {
