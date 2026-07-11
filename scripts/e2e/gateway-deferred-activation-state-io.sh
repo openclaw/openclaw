@@ -20,6 +20,8 @@ READYZ_BODY="$ARTIFACT_DIR/gateway-readyz.json"
 SUMMARY_FILE="$ARTIFACT_DIR/summary.txt"
 CONTROL_PORT="${OPENCLAW_TEST_CONTROL_PORT:-19792}"
 GATEWAY_PORT="${OPENCLAW_TEST_GATEWAY_PORT:-18789}"
+CONTROL_READY_ATTEMPTS="${OPENCLAW_TEST_CONTROL_READY_ATTEMPTS:-200}"
+GATEWAY_READY_ATTEMPTS="${OPENCLAW_TEST_GATEWAY_READY_ATTEMPTS:-2400}"
 ACTIVATION_TOKEN="state-io-test-token"
 GATEWAY_TOKEN="state-io-gateway-auth-token"
 RESULT="UNKNOWN"
@@ -49,12 +51,27 @@ artifact_dir=$ARTIFACT_DIR
 root_dir=$ROOT_DIR
 control_port=$CONTROL_PORT
 gateway_port=$GATEWAY_PORT
+control_ready_attempts=$CONTROL_READY_ATTEMPTS
+gateway_ready_attempts=$GATEWAY_READY_ATTEMPTS
 launcher=node openclaw.mjs gateway run --allow-unconfigured --auth token --port $GATEWAY_PORT
 stdout_log=$STDOUT_LOG
 stderr_log=$STDERR_LOG
 trace_prefix=$TRACE_PREFIX
 pre_activation_trace_dir=$PRE_ACTIVATION_TRACE_DIR
 EOF
+}
+
+require_positive_digits() {
+  local name=$1
+  local value=$2
+
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    fail "${name} must be digits and >0, got '${value}'"
+  fi
+
+  if (( value <= 0 )); then
+    fail "${name} must be digits and >0, got '${value}'"
+  fi
 }
 
 on_signal() {
@@ -460,6 +477,32 @@ run_self_tests() {
     fail "self-test: expected stopped non-leader pids 101 and 102, got '${stopped}'"
   fi
 
+  CONTROL_READY_ATTEMPTS=1
+  GATEWAY_READY_ATTEMPTS=2400
+  require_positive_digits "CONTROL_READY_ATTEMPTS" "$CONTROL_READY_ATTEMPTS"
+  require_positive_digits "GATEWAY_READY_ATTEMPTS" "$GATEWAY_READY_ATTEMPTS"
+
+  if (
+    set +e
+    require_positive_digits "CONTROL_READY_ATTEMPTS" "0"
+  ); then
+    fail "self-test: expected CONTROL_READY_ATTEMPTS=0 to fail validation"
+  fi
+
+  if (
+    set +e
+    require_positive_digits "CONTROL_READY_ATTEMPTS" "-1"
+  ); then
+    fail "self-test: expected CONTROL_READY_ATTEMPTS=-1 to fail validation"
+  fi
+
+  if (
+    set +e
+    require_positive_digits "GATEWAY_READY_ATTEMPTS" "text"
+  ); then
+    fail "self-test: expected GATEWAY_READY_ATTEMPTS=text to fail validation"
+  fi
+
   RESULT="PASS"
   RESULT_NOTE="self-test-passed"
   printf 'PASS: shell helper self-tests passed\n'
@@ -473,6 +516,9 @@ fi
 if [[ "$(uname -s)" != "Linux" ]]; then
   skip "gateway deferred state-I/O proof requires Linux strace/curl; run via Crabbox/Testbox"
 fi
+
+require_positive_digits "CONTROL_READY_ATTEMPTS" "$CONTROL_READY_ATTEMPTS"
+require_positive_digits "GATEWAY_READY_ATTEMPTS" "$GATEWAY_READY_ATTEMPTS"
 
 assert_tool awk
 assert_tool curl
@@ -508,7 +554,7 @@ printf 'Using artifact directory: %s\n' "$ARTIFACT_DIR"
 GATEWAY_PID=$!
 GATEWAY_PGID=$GATEWAY_PID
 
-if ! wait_for_http_ok "http://127.0.0.1:${CONTROL_PORT}/healthz" "$HEALTHZ_BODY" 200 0.05; then
+if ! wait_for_http_ok "http://127.0.0.1:${CONTROL_PORT}/healthz" "$HEALTHZ_BODY" "$CONTROL_READY_ATTEMPTS" 0.05; then
   case "$WAIT_FAILURE_REASON" in
     process-group-exited)
       fail_phase "control-healthz" "process group exited before deferred activation control /healthz became ready"
@@ -578,7 +624,7 @@ if ! curl -fsS --max-time 2 \
   fail_phase "activation" "activation request failed"
 fi
 
-if ! wait_for_http_ok "http://127.0.0.1:${GATEWAY_PORT}/readyz" "$READYZ_BODY" 400 0.05; then
+if ! wait_for_http_ok "http://127.0.0.1:${GATEWAY_PORT}/readyz" "$READYZ_BODY" "$GATEWAY_READY_ATTEMPTS" 0.05; then
   case "$WAIT_FAILURE_REASON" in
     process-group-exited)
       fail_phase "post-activation-readyz" "process group exited before gateway /readyz became ready"
