@@ -3375,7 +3375,16 @@ async function runEmbeddedAgentInternal(
               fallbackConfigured,
               aborted,
             });
-            if (promptFailoverReason === "rate_limit") {
+            // Codex subscription usage limits are account/window scoped. Rotating
+            // another profile for the same ChatGPT account rarely recovers, and
+            // holding the throw-driven model-fallback path blocks configured
+            // cross-provider fallbacks (see #103734).
+            const isCodexSubscriptionUsageLimit =
+              promptFailoverReason === "rate_limit" &&
+              /you.?ve reached your codex subscription usage limit|codex usage limit reached/i.test(
+                errorText,
+              );
+            if (promptFailoverReason === "rate_limit" && !isCodexSubscriptionUsageLimit) {
               maybeEscalateRateLimitProfileFallback({
                 failoverProvider: provider,
                 failoverModel: modelId,
@@ -3392,7 +3401,8 @@ async function runEmbeddedAgentInternal(
               harnessOwnsTransport: pluginHarnessOwnsTransport,
               promptTimeoutFallbackSafe,
               timedOutByRunBudget,
-              profileRotated: false,
+              // Skip rotate_profile so fallback_model can fire when configured.
+              profileRotated: isCodexSubscriptionUsageLimit,
             });
             if (
               promptFailoverDecision.action === "rotate_profile" &&

@@ -95,6 +95,41 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("escalates Codex-style usage limits when profile rotation is skipped (#103734)", () => {
+    // Host marks Codex subscription usage-limit prompt errors as already
+    // profile-rotated so cross-provider model fallback can run immediately.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "rate_limit",
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "rate_limit",
+    });
+  });
+
+  it("surfaces Codex usage limits when no model fallback is configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: false,
+        failoverFailure: true,
+        failoverReason: "rate_limit",
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "rate_limit",
+    });
+  });
   it("surfaces prompt run-budget timeouts instead of model fallback (#60388)", () => {
     expect(
       resolveRunFailoverDecision({
