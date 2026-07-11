@@ -1,15 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const runModelsAuthLoginFlowMock = vi.hoisted(() => vi.fn());
+const updateSessionStoreEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/models/auth.js", () => ({
   runModelsAuthLoginFlow: (opts: unknown) => runModelsAuthLoginFlowMock(opts),
 }));
+vi.mock("../../config/sessions.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
+    "../../config/sessions.js",
+  );
+  return {
+    ...actual,
+    updateSessionStoreEntry: (params: unknown) => updateSessionStoreEntryMock(params),
+  };
+});
 
 const { handleLoginCommand, testing } = await import("./commands-login.js");
 const { loadCommandHandlers } = await import("./commands-handlers.runtime.js");
@@ -23,6 +34,8 @@ function buildLoginParams(
     opts?: HandleCommandsParams["opts"];
     sessionKey?: string;
     sessionEntry?: HandleCommandsParams["sessionEntry"];
+    sessionStore?: HandleCommandsParams["sessionStore"];
+    storePath?: string;
     agentId?: string;
   } = {},
 ): HandleCommandsParams {
@@ -62,11 +75,15 @@ function buildLoginParams(
   params.opts = overrides.opts;
   if (overrides.sessionEntry !== undefined) {
     params.sessionEntry = overrides.sessionEntry;
+    params.sessionStore = overrides.sessionStore ?? {
+      [params.sessionKey]: overrides.sessionEntry,
+    };
   }
+  params.storePath = overrides.storePath;
   return params;
 }
 
-function mockSuccessfulLoginFlow(): void {
+function mockSuccessfulLoginFlow(profileId = "openai:owner"): void {
   runModelsAuthLoginFlowMock.mockImplementation(async (opts: ModelsAuthLoginFlowOptions) => {
     await opts.prompter.note?.(
       "Open https://auth.openai.com/device and enter code ABCD-EFGH. Never share this code.",
@@ -75,7 +92,7 @@ function mockSuccessfulLoginFlow(): void {
     return {
       providerId: "openai",
       methodId: "device-code",
-      profiles: [{ profileId: "openai:owner", provider: "openai", mode: "oauth" }],
+      profiles: [{ profileId, provider: "openai", mode: "oauth" }],
     };
   });
 }
@@ -140,25 +157,41 @@ describe("handleLoginCommand", () => {
     async (surface) => {
       const onBlockReply = vi.fn(async () => {});
       mockSuccessfulLoginFlow();
+      const targetSessionKey = `agent:main:${surface}:direct:owner`;
+      const targetSessionEntry = {
+        authProfileOverride: "openai:old-owner",
+        sessionId: `sess-${surface}`,
+        updatedAt: 1,
+      };
+      const otherSessionEntry = {
+        authProfileOverride: "openai:other-owner",
+        sessionId: "sess-other",
+        updatedAt: 2,
+      };
+      const sessionStore = {
+        [targetSessionKey]: targetSessionEntry,
+        "agent:main:other-session": otherSessionEntry,
+      };
 
-      const result = await handleLoginCommand(
-        buildLoginParams("/login codex", {
-          ctx: {
-            Provider: surface,
-            Surface: surface,
-            OriginatingChannel: surface,
-            OriginatingTo: "direct:conversation-1",
-            ChatType: "direct",
-          },
-          command: {
-            channel: surface,
-            channelId: surface,
-            to: "direct:conversation-1",
-          },
-          opts: { onBlockReply },
-        }),
-        true,
-      );
+      const params = buildLoginParams("/login codex", {
+        ctx: {
+          Provider: surface,
+          Surface: surface,
+          OriginatingChannel: surface,
+          OriginatingTo: "direct:conversation-1",
+          ChatType: "direct",
+        },
+        command: {
+          channel: surface,
+          channelId: surface,
+          to: "direct:conversation-1",
+        },
+        opts: { onBlockReply },
+        sessionKey: targetSessionKey,
+        sessionEntry: targetSessionEntry,
+        sessionStore,
+      });
+      const result = await handleLoginCommand(params, true);
 
       expect(result?.reply?.text).toBe("Codex login complete. Try your request again now.");
       expect(onBlockReply).toHaveBeenCalledWith(
@@ -166,6 +199,14 @@ describe("handleLoginCommand", () => {
           text: expect.stringContaining("https://auth.openai.com/device"),
         }),
       );
+      expect(runModelsAuthLoginFlowMock).toHaveBeenCalledWith(
+        expect.not.objectContaining({ profileId: expect.any(String) }),
+      );
+      expect(params.sessionEntry).toMatchObject({
+        authProfileOverride: "openai:owner",
+        authProfileOverrideSource: "user",
+      });
+      expect(sessionStore["agent:main:other-session"]).toEqual(otherSessionEntry);
     },
   );
 
@@ -211,27 +252,123 @@ describe("handleLoginCommand", () => {
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
   });
 
-  it("reauths the active OpenAI profile when the session is pinned", async () => {
-    mockSuccessfulLoginFlow();
+  it("moves a pinned session to the canonical profile returned by login", async () => {
+    mockSuccessfulLoginFlow("openai:new-owner@example.com");
+    const previousEntry = {
+      authProfileOverride: "openai:owner@example.com",
+      sessionId: "sess-owner",
+      updatedAt: 1,
+    };
+    updateSessionStoreEntryMock.mockImplementationOnce(
+      async (params: {
+        update: (
+          entry: SessionEntry,
+        ) => Partial<SessionEntry> | null | Promise<Partial<SessionEntry> | null>;
+      }) => {
+        const patch = await params.update({ ...previousEntry });
+        return patch ? { ...previousEntry, ...patch } : previousEntry;
+      },
+    );
+    const params = buildLoginParams("/login codex", {
+      opts: blockReplyOpts(),
+      sessionEntry: previousEntry,
+      storePath: "/tmp/openclaw-login-sessions.json",
+    });
 
-    await handleLoginCommand(
-      buildLoginParams("/login codex", {
-        opts: blockReplyOpts(),
-        sessionEntry: {
-          authProfileOverride: "openai:owner@example.com",
-          sessionId: "sess-owner",
-          updatedAt: 1,
-        },
+    await handleLoginCommand(params, true);
+
+    expect(runModelsAuthLoginFlowMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ profileId: expect.any(String) }),
+    );
+    expect(params.sessionEntry).toMatchObject({
+      authProfileOverride: "openai:new-owner@example.com",
+      authProfileOverrideSource: "user",
+    });
+    expect(updateSessionStoreEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:slack:channel:C123",
+        storePath: "/tmp/openclaw-login-sessions.json",
+        requireWriteSuccess: true,
       }),
+    );
+  });
+
+  it("reports partial success when login returns no requested-provider profile", async () => {
+    runModelsAuthLoginFlowMock.mockResolvedValue({
+      providerId: "openai",
+      methodId: "device-code",
+      profiles: [],
+    });
+
+    const result = await handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
       true,
     );
 
-    expect(runModelsAuthLoginFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        profileId: "openai:owner@example.com",
-      }),
+    expect(result?.reply?.text).toBe(
+      "Codex login completed, but this session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
     );
+  });
+
+  it("rejects empty profile identifiers returned by login", async () => {
+    runModelsAuthLoginFlowMock.mockResolvedValue({
+      providerId: "openai",
+      methodId: "device-code",
+      profiles: [{ profileId: " ", provider: "openai", mode: "oauth" }],
+    });
+
+    const result = await handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
+      true,
+    );
+
+    expect(result?.reply?.text).toBe(
+      "Codex login did not complete. Send `/login codex` to request a new code.",
+    );
+  });
+
+  it("normalizes returned login identifiers before switching profiles", async () => {
+    runModelsAuthLoginFlowMock.mockResolvedValue({
+      providerId: " openai ",
+      methodId: " device-code ",
+      defaultModel: " openai/gpt-5.4 ",
+      profiles: [{ profileId: " openai:owner@example.com ", provider: " openai ", mode: "oauth" }],
+    });
+    const params = buildLoginParams("/login codex", {
+      opts: blockReplyOpts(),
+      sessionEntry: {
+        authProfileOverride: "openai:old-owner@example.com",
+        sessionId: "sess-owner",
+        updatedAt: 1,
+      },
+    });
+
+    const result = await handleLoginCommand(params, true);
+
+    expect(result?.reply?.text).toBe("Codex login complete. Try your request again now.");
+    expect(params.sessionEntry?.authProfileOverride).toBe("openai:owner@example.com");
+  });
+
+  it("marks a same-profile explicit login as user-selected", async () => {
+    mockSuccessfulLoginFlow("openai:owner@example.com");
+    const params = buildLoginParams("/login codex", {
+      opts: blockReplyOpts(),
+      sessionEntry: {
+        authProfileOverride: "openai:owner@example.com",
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 3,
+        sessionId: "sess-owner",
+        updatedAt: 1,
+      },
+    });
+
+    await handleLoginCommand(params, true);
+
+    expect(params.sessionEntry).toMatchObject({
+      authProfileOverride: "openai:owner@example.com",
+      authProfileOverrideSource: "user",
+    });
+    expect(params.sessionEntry?.authProfileOverrideCompactionCount).toBeUndefined();
   });
 
   it("does not pass unrelated pinned profiles into OpenAI login", async () => {
@@ -254,6 +391,113 @@ describe("handleLoginCommand", () => {
         profileId: expect.any(String),
       }),
     );
+  });
+
+  it("reports partial success and restores the session when profile persistence fails", async () => {
+    mockSuccessfulLoginFlow("openai:new-owner@example.com");
+    updateSessionStoreEntryMock.mockRejectedValueOnce(new Error("write failed"));
+    const previousEntry = {
+      authProfileOverride: "openai:old-owner@example.com",
+      authProfileOverrideSource: "user" as const,
+      sessionId: "sess-owner",
+      updatedAt: 1,
+    };
+    const sessionStore = {
+      "agent:main:slack:channel:C123": previousEntry,
+      "agent:main:other-session": {
+        authProfileOverride: "openai:other-owner@example.com",
+        sessionId: "sess-other",
+        updatedAt: 2,
+      },
+    };
+    const params = buildLoginParams("/login codex", {
+      opts: blockReplyOpts(),
+      sessionEntry: previousEntry,
+      sessionStore,
+      storePath: "/tmp/openclaw-login-sessions.json",
+    });
+
+    const result = await handleLoginCommand(params, true);
+
+    expect(result?.reply?.text).toBe(
+      "Codex login completed, but this session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+    );
+    expect(params.sessionEntry).toBe(previousEntry);
+    expect(sessionStore["agent:main:slack:channel:C123"]).toBe(previousEntry);
+    expect(sessionStore["agent:main:other-session"]?.authProfileOverride).toBe(
+      "openai:other-owner@example.com",
+    );
+  });
+
+  it("does not overwrite a profile selected while device login is in progress", async () => {
+    mockSuccessfulLoginFlow("openai:new-owner@example.com");
+    const previousEntry = {
+      authProfileOverride: "openai:old-owner@example.com",
+      authProfileOverrideSource: "user" as const,
+      sessionId: "sess-owner",
+      updatedAt: 1,
+    };
+    const concurrentlySelectedEntry = {
+      ...previousEntry,
+      authProfileOverride: "openai:concurrent-owner@example.com",
+      updatedAt: 2,
+    };
+    updateSessionStoreEntryMock.mockImplementationOnce(
+      async (params: { update: (entry: SessionEntry) => Partial<SessionEntry> | null }) => {
+        const patch = await params.update({ ...concurrentlySelectedEntry });
+        return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
+      },
+    );
+    const sessionStore = {
+      "agent:main:slack:channel:C123": previousEntry,
+    };
+    const params = buildLoginParams("/login codex", {
+      opts: blockReplyOpts(),
+      sessionEntry: previousEntry,
+      sessionStore,
+      storePath: "/tmp/openclaw-login-sessions.json",
+    });
+
+    const result = await handleLoginCommand(params, true);
+
+    expect(result?.reply?.text).toBe(
+      "Codex login completed, but this session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+    );
+    expect(params.sessionEntry).toBe(previousEntry);
+    expect(sessionStore["agent:main:slack:channel:C123"]).toBe(previousEntry);
+  });
+
+  it("revalidates an unchanged profile after device login", async () => {
+    mockSuccessfulLoginFlow("openai:owner@example.com");
+    const previousEntry = {
+      authProfileOverride: "openai:owner@example.com",
+      authProfileOverrideSource: "user" as const,
+      sessionId: "sess-owner",
+      updatedAt: 1,
+    };
+    const concurrentlySelectedEntry = {
+      ...previousEntry,
+      authProfileOverride: "openai:concurrent-owner@example.com",
+      updatedAt: 2,
+    };
+    updateSessionStoreEntryMock.mockImplementationOnce(
+      async (params: { update: (entry: SessionEntry) => Partial<SessionEntry> | null }) => {
+        const patch = await params.update({ ...concurrentlySelectedEntry });
+        return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
+      },
+    );
+    const params = buildLoginParams("/login codex", {
+      opts: blockReplyOpts(),
+      sessionEntry: previousEntry,
+      storePath: "/tmp/openclaw-login-sessions.json",
+    });
+
+    const result = await handleLoginCommand(params, true);
+
+    expect(result?.reply?.text).toBe(
+      "Codex login completed, but this session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+    );
+    expect(params.sessionEntry).toBe(previousEntry);
   });
 
   it("dedupes an active flow for the same channel thread and provider", async () => {
