@@ -534,6 +534,9 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain("runtime_stage=verify-runtime-privileges");
     expect(source).toContain("runtime_stage=verify-parent-proc-hidden");
     expect(source).toContain("runtime_stage=verify-proc-visibility");
+    expect(source).toMatch(
+      /kill "\$control_pid" >\/dev\/null 2>&1 \|\| true\n\s+wait "\$control_pid" \|\| true/u,
+    );
     expect(source).toContain("runtime_stage=verify-secret-env-hidden");
     expect(source).toContain("runtime_stage=verify-runner-fds-hidden");
     expect(source).toContain("runtime_stage=verify-runtime-files");
