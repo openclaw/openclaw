@@ -538,14 +538,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/matrix-migration
 - Headings:
   - H2: What the migration does automatically
-  - H2: What the migration cannot do automatically
+  - H2: Upgrading from OpenClaw releases older than 2026.4
   - H2: Recommended upgrade flow
-  - H2: How encrypted migration works
   - H2: Common messages and what they mean
-  - H3: Upgrade and detection messages
-  - H3: Encrypted-state recovery messages
   - H3: Manual recovery messages
-  - H3: Custom plugin install messages
   - H2: If encrypted history still does not come back
   - H2: If you want to start fresh for future messages
   - H2: Related
@@ -1510,6 +1506,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Create options
   - H2: fleet list
   - H2: fleet status
+  - H2: fleet logs
   - H2: fleet start, fleet stop, and fleet restart
   - H2: fleet upgrade
   - H2: fleet rm
@@ -2718,13 +2715,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Producers (where presence comes from)
   - H3: 1) Gateway self entry
   - H3: 2) WebSocket connect
-  - H4: Why one-off CLI commands do not show up
+  - H4: Why ephemeral control-plane connections do not show up
   - H3: 3) system-event beacons
   - H3: 4) Node connects (role: node)
   - H2: Merge + dedupe rules (why instanceId matters)
   - H2: TTL and bounded size
   - H2: Remote/tunnel caveat (loopback IPs)
   - H2: Consumers
+  - H3: Control UI Devices page
   - H3: macOS Instances tab
   - H2: Debugging tips
   - H2: Related
@@ -2859,6 +2857,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Listing and reading sessions
   - H2: Sending cross-session messages
   - H2: Status and orchestration helpers
+  - H2: Session state changes
   - H2: Spawning sub-agents
   - H2: Visibility
   - H2: Further reading
@@ -3025,6 +3024,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Where logs go
   - H2: Extract logs
   - H2: Notes
+  - H2: Related
+
+## gateway/audit.md
+
+- Route: /gateway/audit
+- Headings:
+  - H1: Audit history
+  - H2: Record families
+  - H2: Message lifecycle events
+  - H3: Conversation-kind classification
+  - H2: Privacy model
+  - H2: Coverage and proof limits
+  - H2: Storage, retention, and migration
+  - H2: Querying
   - H2: Related
 
 ## gateway/authentication.md
@@ -3654,6 +3667,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Transport and framing
   - H2: Handshake
+  - H3: Worker role and closed protocol
   - H3: Client capabilities
   - H3: Node connect example
   - H2: Roles and scopes
@@ -7103,6 +7117,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-channel-outbound
 - Headings:
   - H2: Adapter
+  - H2: Plain-text sanitization
   - H2: Delivery Evidence
   - H2: Existing outbound adapters
   - H2: Durable sends

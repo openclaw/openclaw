@@ -1,4 +1,9 @@
+<<<<<<< HEAD
 5413945ee67dba01006b1eeeab6c7bdc71ee90949d36aeca36119bc2cb862cc1  config-baseline.json
 20ea49c5a539fbc5ab764fbb01a51836289cf8a22d9931fa07cfae4335d32a9b  config-baseline.core.json
+=======
+d2eded996abf00045c50ad400648f6e36565a7f158fc2000e15b805052436004  config-baseline.json
+2179eacdae1e28fccf05beb4f89c24d3822e93897dd343a0ca2373f20e55ed85  config-baseline.core.json
+>>>>>>> origin/main
 82596aeb4c8d4cd18fefae554ff4d0c9e2cd82895b53d460db8f8ceb819f0ef6  config-baseline.channel.json
 168e3c52da484c235fbc451dead71af16c3bee0c0186c460e5b4b4af70a496df  config-baseline.plugin.json

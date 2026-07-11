@@ -1330,6 +1330,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         channel: "discord",
         accountId: "acct-1",
         to: "dm:U123",
+        conversationType: "direct",
         content: "child completion output",
         idempotencyKey: "announce-dm-fallback-empty:text-direct",
       }),
