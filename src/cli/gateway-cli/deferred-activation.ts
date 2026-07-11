@@ -6,6 +6,7 @@ import {
   type ServerResponse,
   validateHeaderValue,
 } from "node:http";
+import type { Socket } from "node:net";
 
 const CONTROL_PORT_ENV = "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT";
 const CONTROL_TOKEN_ENV = "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN";
@@ -144,6 +145,7 @@ async function waitForDeferredGatewayActivationOnce(
   return await new Promise<DeferredActivationResult>((resolve, reject) => {
     let state: "open" | "closing" | "accepted" | "settled" = "open";
     const signalHandlers = new Map<ShutdownSignal, () => void>();
+    const trackedSockets = new Set<Socket>();
 
     const settleResolve = (result: DeferredActivationResult) => {
       if (state === "settled") {
@@ -169,6 +171,16 @@ async function waitForDeferredGatewayActivationOnce(
       signalHandlers.clear();
     };
 
+    const destroyTrackedSockets = (preservedSocket?: Socket) => {
+      for (const socket of trackedSockets) {
+        if (socket === preservedSocket) {
+          continue;
+        }
+        trackedSockets.delete(socket);
+        socket.destroy();
+      }
+    };
+
     const server = createServer((request, response) => {
       void handleRequest(request, response).catch((error: unknown) => {
         const reason = error instanceof Error ? error : new Error(String(error));
@@ -180,9 +192,15 @@ async function waitForDeferredGatewayActivationOnce(
         closeServerAndReject(reason);
       });
     });
+    server.on("connection", (socket) => {
+      trackedSockets.add(socket);
+      socket.once("close", () => {
+        trackedSockets.delete(socket);
+      });
+    });
     activeServer = server;
 
-    const closeServer = (onClosed: (error: Error | null) => void) => {
+    const closeServer = (onClosed: (error: Error | null) => void, preservedSocket?: Socket) => {
       // server.listen(...) is already issued before any parked signal/request path can
       // reach this helper, but Node may not flip server.listening yet. Always close so
       // shutdown cancels a pending bind instead of leaving the control port reserved.
@@ -192,10 +210,12 @@ async function waitForDeferredGatewayActivationOnce(
         }
         onClosed(normalizeServerCloseError(closeError ?? null));
       });
-      server.closeAllConnections();
+      // server.close(...) stops new accepts; destroy parked peers immediately,
+      // but let the accepted 202 socket flush and close itself to EOF.
+      destroyTrackedSockets(preservedSocket);
     };
 
-    const closeServerAndResolve = (result: DeferredActivationResult) => {
+    const closeServerAndResolve = (result: DeferredActivationResult, preservedSocket?: Socket) => {
       if (state !== "accepted") {
         return;
       }
@@ -207,7 +227,7 @@ async function waitForDeferredGatewayActivationOnce(
         } else {
           settleResolve(result);
         }
-      });
+      }, preservedSocket);
     };
 
     const closeServerAndReject = (error: Error, resignal?: ShutdownSignal) => {
@@ -257,6 +277,7 @@ async function waitForDeferredGatewayActivationOnce(
       if (activeServer === server) {
         activeServer = null;
       }
+      destroyTrackedSockets();
       cleanupSignalHandlers();
       settleReject(error);
     });
@@ -332,6 +353,7 @@ async function waitForDeferredGatewayActivationOnce(
           return;
         }
 
+        const acceptedSocket = request.socket;
         const acceptedResult: DeferredActivationResult = { mode: "activated", activationId };
         let activationCommitted = false;
         const commitAcceptedActivation = () => {
@@ -341,7 +363,7 @@ async function waitForDeferredGatewayActivationOnce(
           activationCommitted = true;
           response.removeListener("finish", commitAcceptedActivation);
           response.removeListener("close", commitAcceptedActivation);
-          closeServerAndResolve(acceptedResult);
+          closeServerAndResolve(acceptedResult, acceptedSocket);
         };
 
         state = "accepted";
@@ -357,8 +379,7 @@ async function waitForDeferredGatewayActivationOnce(
           return;
         }
 
-        response.writeHead(202, { "content-type": "application/json" });
-        response.end(JSON.stringify({ status: "accepted", activationId }));
+        writeJson(response, 202, { status: "accepted", activationId }, { Connection: "close" });
       } catch (error) {
         const message = error instanceof Error ? error.message : "invalid activation request";
         const statusCode = message === "activation body too large" ? 413 : 400;

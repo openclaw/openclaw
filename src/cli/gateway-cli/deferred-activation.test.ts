@@ -233,6 +233,50 @@ async function sendRawHttpRequest(
   };
 }
 
+async function openRawHttpRequest(
+  port: number,
+  request: string,
+): Promise<{
+  destroy: () => void;
+  result: Promise<{
+    closedWithError: boolean;
+    responseText: string;
+  }>;
+}> {
+  const socket = createConnection({ host: "127.0.0.1", port });
+  const responseChunks: Buffer[] = [];
+  socket.on("data", (chunk) => {
+    responseChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  });
+  socket.on("error", () => {});
+  const connected = new Promise<void>((resolve, reject) => {
+    socket.once("connect", () => resolve());
+    socket.once("error", reject);
+  });
+  const closed = new Promise<boolean>((resolve) => {
+    socket.once("close", (hadError) => resolve(hadError));
+  });
+
+  await connected;
+  await new Promise<void>((resolve, reject) => {
+    socket.write(request, (error?: Error) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
+  });
+
+  return {
+    destroy: () => socket.destroy(),
+    result: closed.then((closedWithError) => ({
+      closedWithError,
+      responseText: Buffer.concat(responseChunks).toString("utf8"),
+    })),
+  };
+}
+
 function captureSignalListeners() {
   return Object.fromEntries(
     SIGNALS.map((signal) => [signal, new Set(process.listeners(signal))]),
@@ -397,6 +441,44 @@ describe("waitForDeferredGatewayActivation", () => {
     });
     await expectLoopbackListenerClosed(port);
     await expectFreshProcessEquivalentCanReuseControlPort(port, "restart-after-client-abort");
+  });
+
+  it("delivers the full 202 activation acknowledgement over a raw socket before resolving", async () => {
+    const port = await reserveLoopbackPort();
+    const { waiting } = await waitForParkedGateway(port);
+    const activationId = "activation-raw-socket";
+    const body = JSON.stringify({ activationId });
+    const rawClient = await openRawHttpRequest(
+      port,
+      [
+        "POST /activate HTTP/1.1",
+        "Host: 127.0.0.1",
+        "Connection: keep-alive",
+        "content-type: application/json",
+        `content-length: ${Buffer.byteLength(body)}`,
+        `x-openclaw-activation-token: ${TOKEN}`,
+        "",
+        body,
+      ].join("\r\n"),
+    );
+
+    try {
+      const response = await expectSettlesWithin(rawClient.result, 1_000);
+      expect(response.closedWithError).toBe(false);
+      expect(response.responseText).toContain("HTTP/1.1 202 Accepted");
+      expect(response.responseText).toContain("Connection: close");
+      expect(response.responseText).toContain(
+        `{"status":"accepted","activationId":"${activationId}"}`,
+      );
+      await expect(expectSettlesWithin(waiting, 1_000)).resolves.toEqual({
+        mode: "activated",
+        activationId,
+      });
+      await expectLoopbackListenerClosed(port);
+      await expectFreshProcessEquivalentCanReuseControlPort(port, "restart-after-raw-socket");
+    } finally {
+      rawClient.destroy();
+    }
   });
 
   it.each([
