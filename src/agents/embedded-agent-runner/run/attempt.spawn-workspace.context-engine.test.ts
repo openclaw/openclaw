@@ -1621,22 +1621,32 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       type: "message",
       message: { role: "user", content: olderPrompt, timestamp: 1 },
     });
-    const seen: { prompt?: string; messages?: AgentMessage[] } = {};
+    const seen: {
+      prompt?: string;
+      assembledPrompt?: string;
+      assembledMessages?: AgentMessage[];
+      messages?: AgentMessage[];
+    } = {};
 
     await createContextEngineAttemptRunner({
       contextEngine: createTestContextEngine({
         bootstrap: async () => ({ bootstrapped: true }),
-        assemble: async ({ messages }: { messages: AgentMessage[] }) => ({
-          messages: [
-            ...messages,
-            { role: "user", content: latestPrompt, timestamp: 2 } as AgentMessage,
-          ],
-          estimatedTokens: 1,
-        }),
+        assemble: async ({ messages, prompt }: { messages: AgentMessage[]; prompt?: string }) => {
+          seen.assembledPrompt = prompt;
+          seen.assembledMessages = [...messages];
+          return {
+            messages: [
+              ...messages,
+              { role: "user", content: latestPrompt, timestamp: 2 } as AgentMessage,
+            ],
+            estimatedTokens: 1,
+          };
+        },
       }),
       sessionKey,
       tempPaths,
       sessionMessages: [{ role: "user", content: olderPrompt, timestamp: 1 } as AgentMessage],
+      sessionMessagesAfterRepair: [],
       attemptOverrides: {
         prompt: latestPrompt,
       },
@@ -1651,6 +1661,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(seen.prompt).toBe(`${marker}\n${olderPrompt}\n\n${latestPrompt}`);
+    expect(seen.assembledPrompt).toBe(seen.prompt);
+    expect(JSON.stringify(seen.assembledMessages)).not.toContain(olderPrompt);
     expect(JSON.stringify(seen.messages)).not.toContain(olderPrompt);
     expect(JSON.stringify(seen.messages)).toContain(latestPrompt);
     expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");

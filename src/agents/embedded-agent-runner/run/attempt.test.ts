@@ -362,6 +362,42 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
   });
 
+  it("drops stale internal orphan context when a fresh prompt is present", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: "NO_REPLY stale subagent completion",
+          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+        },
+      }),
+    ).toEqual({
+      merged: false,
+      removeLeaf: true,
+      prompt: "newest inbound message",
+    });
+  });
+
+  it("preserves user-directed inter-session orphan context", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: "forwarded user request",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      }),
+    ).toEqual({
+      merged: true,
+      removeLeaf: true,
+      prompt:
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
+        "forwarded user request\n\nnewest inbound message",
+    });
+  });
+
   it("does not duplicate orphaned user text already present in the next prompt", () => {
     expect(
       mergeOrphanedTrailingUserPrompt({

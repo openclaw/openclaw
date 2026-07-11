@@ -1259,6 +1259,7 @@ export async function createContextEngineAttemptRunner(params: {
   attemptOverrides?: Partial<Parameters<Awaited<ReturnType<typeof loadRunEmbeddedAttempt>>>[0]>;
   createSession?: () => MutableSession;
   sessionMessages?: AgentMessage[];
+  sessionMessagesAfterRepair?: AgentMessage[];
   sessionPrompt?: SessionPromptOverride;
   sessionKey: string;
   tempPaths: string[];
@@ -1289,7 +1290,7 @@ export async function createContextEngineAttemptRunner(params: {
 
   hoisted.sessionManager.buildSessionContext
     .mockReset()
-    .mockReturnValue({ messages: seedMessages });
+    .mockReturnValue({ messages: params.sessionMessagesAfterRepair ?? seedMessages });
 
   hoisted.createAgentSessionMock.mockImplementation(async () => ({
     session:

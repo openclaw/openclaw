@@ -17,7 +17,9 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
@@ -30,7 +32,6 @@ import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../vid
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { truncateUtf16Safe } from "../../../utils.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -498,6 +499,16 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+function shouldDropStaleInternalOrphanedUserPrompt(params: {
+  prompt: string;
+  leafMessage: { provenance?: unknown };
+}): boolean {
+  return (
+    params.prompt.trim().length > 0 &&
+    shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance)
+  );
+}
+
 /**
  * Merges a trailing user message that was queued in transcript history but not
  * present in the active prompt. The leaf is removed whether merged or already
@@ -506,13 +517,21 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
-  leafMessage: { content?: unknown };
+  leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
   if (!orphanText) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
   if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
+    return { prompt: params.prompt, merged: false, removeLeaf: true };
+  }
+  if (
+    shouldDropStaleInternalOrphanedUserPrompt({
+      prompt: params.prompt,
+      leafMessage: params.leafMessage,
+    })
+  ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
 
