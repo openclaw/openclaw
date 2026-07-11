@@ -651,8 +651,8 @@ async function processDiscordMessageInner(
     lastCommentaryNoteText = "";
     windowReasoningOpen = false;
   };
-  const handleAssistantMessageBoundary = async () => {
-    if (await draftPreview.handleAssistantMessageBoundary()) {
+  const handleAssistantMessageBoundary = () => {
+    if (draftPreview.handleAssistantMessageBoundary()) {
       resetProgressTurnState();
     }
   };
@@ -1086,9 +1086,9 @@ async function processDiscordMessageInner(
           ? handleAssistantMessageBoundary
           : undefined,
         onReasoningEnd: draftPreview.draftStream
-          ? async () => {
+          ? () => {
               closePendingWindowThought();
-              await handleAssistantMessageBoundary();
+              handleAssistantMessageBoundary();
             }
           : undefined,
         onModelSelected,

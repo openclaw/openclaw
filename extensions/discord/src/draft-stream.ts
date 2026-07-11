@@ -24,7 +24,7 @@ type DiscordDraftStream = {
   seal: () => Promise<void>;
   stop: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
-  forceNewMessage: () => Promise<void>;
+  forceNewMessage: () => void;
 };
 
 export function createDiscordDraftStream(params: {
@@ -53,8 +53,10 @@ export function createDiscordDraftStream(params: {
   const streamState = { stopped: false, final: false };
   let streamMessageId: string | undefined;
   let lastSentText = "";
+  let streamGeneration = 0;
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
+    const generation = streamGeneration;
     // Allow final flush even if stopped (e.g., after clear()).
     if (streamState.stopped && !streamState.final) {
       return false;
@@ -108,6 +110,18 @@ export function createDiscordDraftStream(params: {
         },
       });
       const sentMessageId = sent?.id;
+      if (generation !== streamGeneration) {
+        if (typeof sentMessageId === "string" && sentMessageId) {
+          try {
+            await deleteChannelMessage(rest, channelId, sentMessageId);
+          } catch (err) {
+            params.warn?.(
+              `discord stale stream preview cleanup failed: ${formatErrorMessage(err)}`,
+            );
+          }
+        }
+        return true;
+      }
       if (typeof sentMessageId !== "string" || !sentMessageId) {
         streamState.stopped = true;
         params.warn?.("discord stream preview stopped (missing message id from send)");
@@ -116,6 +130,9 @@ export function createDiscordDraftStream(params: {
       streamMessageId = sentMessageId;
       return true;
     } catch (err) {
+      if (generation !== streamGeneration) {
+        return true;
+      }
       streamState.stopped = true;
       params.warn?.(`discord stream preview failed: ${formatErrorMessage(err)}`);
       return false;
@@ -143,16 +160,15 @@ export function createDiscordDraftStream(params: {
     warnPrefix: "discord stream preview cleanup failed",
   });
 
-  const forceNewMessage = async () => {
-    // Rotation is a barrier: queued-turn updates must not overtake an older
-    // create and adopt its message id after we clear the prior identity.
-    streamState.stopped = true;
-    loop.stop();
-    await loop.waitForInFlight();
+  const forceNewMessage = () => {
+    // In-flight REST calls may finish after a turn boundary. Advance identity
+    // synchronously so their result cannot overwrite the next turn's state.
+    streamGeneration += 1;
     streamState.stopped = false;
     streamState.final = false;
     streamMessageId = undefined;
     lastSentText = "";
+    loop.resetPending();
     loop.resetThrottleWindow();
   };
   const deleteCurrentMessage = async () => {
