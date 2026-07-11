@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readJsonBodyWithLimit,
@@ -81,6 +82,16 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 function sendError(res: ServerResponse, status: number, error: { type: string; message: string }) {
   sendJson(res, status, { ok: false, error });
+}
+
+function declaredContentLengthExceeds(req: IncomingMessage, maxBytes: number): boolean {
+  const header = req.headers["content-length"];
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (typeof raw !== "string") {
+    return false;
+  }
+  const declaredLength = parseStrictNonNegativeInteger(raw);
+  return declaredLength !== undefined && declaredLength > maxBytes;
 }
 
 async function readJsonBody(
@@ -206,6 +217,15 @@ export async function handleAdminHttpRpcRequest(
     sendError(res, 405, {
       type: "method_not_allowed",
       message: "Method Not Allowed",
+    });
+    return true;
+  }
+
+  if (declaredContentLengthExceeds(req, DEFAULT_RPC_BODY_BYTES)) {
+    res.setHeader("Connection", "close");
+    sendError(res, 413, {
+      type: "invalid_request",
+      message: "Payload too large",
     });
     return true;
   }

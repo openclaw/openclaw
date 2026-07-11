@@ -1,4 +1,6 @@
 // Admin Http Rpc tests cover handler plugin behavior.
+import { createServer, request } from "node:http";
+import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAdminHttpRpcRequest } from "./handler.js";
@@ -62,6 +64,45 @@ async function invoke(body: unknown, method = "POST", headers?: Record<string, s
     captured,
     json: captured.body ? (JSON.parse(captured.body) as unknown) : undefined,
   };
+}
+
+function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function requestRealAdminRpc(port: number, contentLength: number): Promise<CapturedResponse> {
+  return await new Promise((resolve, reject) => {
+    const clientReq = request(
+      {
+        host: "127.0.0.1",
+        port,
+        method: "POST",
+        path: "/api/v1/admin/rpc",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(contentLength),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          resolve({
+            statusCode: res.statusCode ?? 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    clientReq.setTimeout(2_000, () => {
+      clientReq.destroy(new Error("timed out waiting for Admin RPC response"));
+    });
+    clientReq.on("error", reject);
+    clientReq.end();
+  });
 }
 
 describe("admin-http-rpc plugin handler", () => {
@@ -214,6 +255,30 @@ describe("admin-http-rpc plugin handler", () => {
       },
     });
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("delivers 413 to a real HTTP client for declared oversized request bodies", async () => {
+    const server = createServer((req, res) => {
+      void handleAdminHttpRpcRequest(req, res);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const address = server.address() as AddressInfo;
+      const result = await requestRealAdminRpc(address.port, 1024 * 1024 + 1);
+
+      expect(result.statusCode).toBe(413);
+      expect(JSON.parse(result.body) as unknown).toEqual({
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message: "Payload too large",
+        },
+      });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
+    }
   });
 
   it("only accepts POST", async () => {
