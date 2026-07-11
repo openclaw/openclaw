@@ -826,6 +826,13 @@ describe("resolveMaintenanceConfigFromInput", () => {
     expect(maintenance.highWaterBytes).toBeNull();
   });
 
+  it("disables the disk budget when an explicit maxDiskBytes fails to parse", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: "lots" });
+
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
   it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {
     const defaultMaintenance = resolveMaintenanceConfigFromInput({ maxEntries: 50 });
     expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);

@@ -104,7 +104,9 @@ function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | n
   try {
     return parseByteSize(normalized, { defaultUnit: "b" });
   } catch {
-    return DEFAULT_SESSION_MAX_DISK_BYTES;
+    // A malformed explicit value must not opt the user into destructive
+    // budget cleanup they never chose; disable the budget instead.
+    return null;
   }
 }
 
