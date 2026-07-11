@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **macOS node approval timeouts:** close an interactive execution-approval dialog when its node invoke expires so stale requests cannot block later commands. (#104282)
 - **iOS Share Extension drafts:** preserve legitimate shared text beginning with scaffold-like prefixes, remove only exact legacy scaffold lines, avoid treating scheme-like prose as a URL, and deduplicate host-mirrored content. (#103453) Thanks @lin-hongkuan.
 - **Telegram reasoning previews:** reposition split reasoning previews through deferred deletion so prior preview messages do not remain stale while preserving client scroll position. (#97828) Thanks @ly-wang19.
 - **Feishu native-card threading:** normalize whitespace reply targets once and reuse the shared reply mode for card and media parts so native-card topic replies stay in their thread. (#102804) Thanks @sunlit-deng.
