@@ -39,7 +39,7 @@ import {
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
-import { formatCompactTokenCount, formatRelativeTimestamp } from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
@@ -136,7 +136,9 @@ export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date
   }
   const ageMs = nowMs - date.getTime();
   if (ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS) {
-    return formatRelativeTimestamp(timestamp);
+    // Derive from ageMs so the injected clock stays the single time source;
+    // clamp keeps slightly future (clock-skewed) messages at "just now".
+    return formatTimeAgo(Math.max(0, ageMs));
   }
   return date.toLocaleDateString([], {
     month: "short",
