@@ -81,6 +81,12 @@ function hasConfiguredSearchCredentialCandidate(
     );
   }
   return Object.entries(searchConfig).some(([candidateProviderId, value]) => {
+    if (
+      policy !== undefined &&
+      !policy.enabledProviderIds.has(normalizeProviderId(candidateProviderId))
+    ) {
+      return false;
+    }
     if (isProviderDisabled(candidateProviderId)) {
       return false;
     }

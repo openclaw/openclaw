@@ -158,6 +158,16 @@ describe("hasConfiguredWebSearchCredential", () => {
   });
 
   it("treats non-env SecretRefs and nested provider apiKeys as configured credentials", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["google"] },
+        },
+      ],
+    });
+
     expect(
       hasConfiguredWebSearchCredential({
         config: {
@@ -479,6 +489,24 @@ describe("hasConfiguredWebSearchCredential", () => {
         config: {
           plugins: { allow: ["telegram"] },
           tools: { web: { search: { apiKey: "search-key" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: {
+            web: {
+              search: {
+                "missing-search": {
+                  apiKey: "search-key",
+                },
+              },
+            },
+          },
         } as OpenClawConfig,
         env: {},
         origin: "bundled",
