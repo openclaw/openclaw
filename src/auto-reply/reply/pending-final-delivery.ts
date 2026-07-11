@@ -1,4 +1,5 @@
 /** Sanitizes pending final delivery text before channel-visible output. */
+import type { ReplyPayload } from "../types.js";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -8,6 +9,16 @@ import {
   stripSilentToken,
 } from "../tokens.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
+
+/** Build the restart-recovery text represented by one or more final payloads. */
+export function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
+  const text = payloads
+    .filter((payload) => payload.isReasoning !== true)
+    .map((payload) => payload.text)
+    .filter((textLocal): textLocal is string => Boolean(textLocal))
+    .join("\n\n");
+  return sanitizePendingFinalDeliveryText(text);
+}
 
 /** Sanitizes final pending-delivery text and removes silent control tokens. */
 export function sanitizePendingFinalDeliveryText(text: string): string {

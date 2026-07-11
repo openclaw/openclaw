@@ -2,7 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
-import { createReplyDispatcher, waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import {
+  composeReplyDispatchBeforeDeliver,
+  createReplyDispatcher,
+  waitForReplyDispatcherIdle,
+} from "./reply-dispatcher.js";
 import { createReplyToModeFilter } from "./reply-threading.js";
 
 type DeliverPayload = Parameters<Parameters<typeof createReplyDispatcher>[0]["deliver"]>[0];
@@ -299,6 +303,46 @@ describe("createReplyDispatcher", () => {
       expect(delivered).toEqual(["final:constructor:appended"]);
       expect(errors).toEqual([]);
       expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not turn a composed stage budget into a whole-chain deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: string[] = [];
+      const beforeDeliver = composeReplyDispatchBeforeDeliver(
+        {
+          hook: async (payload) => {
+            await new Promise((resolve) => setTimeout(resolve, 16_000));
+            return { ...payload, text: `${payload.text}:owner` };
+          },
+          options: { timeoutMs: 20_000 },
+        },
+        async (payload) => {
+          await new Promise((resolve) => setTimeout(resolve, 10_000));
+          return { ...payload, text: `${payload.text}:plugin` };
+        },
+      );
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+        beforeDeliver,
+        beforeDeliverOptions: { timeoutMs: 20_000 },
+      });
+
+      dispatcher.sendFinalReply({ text: "final" });
+      dispatcher.markComplete();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(delivered).toEqual([]);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual(["final:owner:plugin"]);
+      expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

@@ -142,7 +142,9 @@ function resolveReplyDispatchBeforeDeliverStages(
     );
   }
   const existingStages = beforeDeliverStagesByHook.get(input.hook);
-  if (input.options === undefined && existingStages) {
+  // Internal composition already assigned each real stage its owner budget.
+  // Wrapping that chain again would turn one stage budget into an aggregate deadline.
+  if (existingStages) {
     return existingStages;
   }
   return [

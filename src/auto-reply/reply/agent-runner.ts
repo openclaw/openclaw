@@ -108,7 +108,10 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  buildPendingFinalDeliveryText,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import {
@@ -998,15 +1001,6 @@ function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
     .filter((text): text is string => Boolean(text))
     .join("\n")
     .trim();
-}
-
-function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
-  const text = payloads
-    .filter((payload) => payload.isReasoning !== true)
-    .map((payload) => payload.text)
-    .filter((textLocal): textLocal is string => Boolean(textLocal))
-    .join("\n\n");
-  return sanitizePendingFinalDeliveryText(text);
 }
 
 function normalizeAssistantFinalDeliveryText(text: string): string {

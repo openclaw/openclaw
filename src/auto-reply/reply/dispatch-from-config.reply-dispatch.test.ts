@@ -380,7 +380,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(result.queuedFinal).toBe(true);
       expect(deliver).not.toHaveBeenCalled();
       expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-      expect(sessionStoreMocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+      expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
       expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
       expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toEqual({
@@ -443,6 +443,111 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
       expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves the durable final when an earlier auxiliary final succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      sessionStoreMocks.currentEntry = {
+        sessionKey: "agent:test:session",
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "durable reply",
+        pendingFinalDeliveryCreatedAt: 1,
+      };
+      sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+        existing: sessionStoreMocks.currentEntry,
+      });
+      const hookStarted = createDeferred<void>();
+      const deliver = vi.fn().mockResolvedValue(undefined);
+      let hookCalls = 0;
+      const dispatcher = createReplyDispatcher({
+        deliver,
+        beforeDeliver: (payload) => {
+          hookCalls += 1;
+          if (hookCalls === 2) {
+            hookStarted.resolve();
+            return new Promise<never>(() => {});
+          }
+          return payload;
+        },
+      });
+
+      const resultPromise = withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            ctx: createHookCtx(),
+            cfg: emptyConfig,
+            dispatcher,
+            replyResolver: async () => [{ text: "auxiliary" }, { text: "durable reply" }],
+          }),
+      });
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await resultPromise;
+
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "auxiliary" }),
+        expect.objectContaining({ kind: "final" }),
+      );
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("narrows combined retry text to finals that failed before transport", async () => {
+    vi.useFakeTimers();
+    try {
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      sessionStoreMocks.currentEntry = {
+        sessionKey: "agent:test:session",
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "auxiliary\n\ndurable reply",
+        pendingFinalDeliveryCreatedAt: 1,
+      };
+      sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+        existing: sessionStoreMocks.currentEntry,
+      });
+      const hookStarted = createDeferred<void>();
+      let hookCalls = 0;
+      const dispatcher = createReplyDispatcher({
+        deliver: vi.fn().mockResolvedValue(undefined),
+        beforeDeliver: (payload) => {
+          hookCalls += 1;
+          if (hookCalls === 2) {
+            hookStarted.resolve();
+            return new Promise<never>(() => {});
+          }
+          return payload;
+        },
+      });
+
+      const resultPromise = withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            ctx: createHookCtx(),
+            cfg: emptyConfig,
+            dispatcher,
+            replyResolver: async () => [{ text: "auxiliary" }, { text: "durable reply" }],
+          }),
+      });
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await resultPromise;
+
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

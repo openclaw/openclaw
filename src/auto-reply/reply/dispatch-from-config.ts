@@ -156,6 +156,7 @@ import type { ReplySessionBinding } from "./get-reply.types.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { buildPendingFinalDeliveryText } from "./pending-final-delivery.js";
 import {
   appendReplyDispatcherBeforeDeliverCancelled,
   captureReplyDispatchDeliveryOutcome,
@@ -1067,6 +1068,92 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
     update: async (entry) => {
       if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
         return null;
+      }
+      return {
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        pendingFinalDeliveryLastAttemptAt: undefined,
+        pendingFinalDeliveryAttemptCount: undefined,
+        pendingFinalDeliveryLastError: undefined,
+        pendingFinalDeliveryContext: undefined,
+        pendingFinalDeliveryIntentId: undefined,
+        updatedAt: Date.now(),
+      };
+    },
+  });
+}
+
+type SettledFinalDelivery = {
+  outcome: ReplyDispatchDeliveryOutcome;
+  payload: ReplyPayload;
+};
+
+function resolvePendingFinalDeliveryPayloads(params: {
+  pendingText: string;
+  replies: ReplyPayload[];
+}): ReplyPayload[] | undefined {
+  const contributingReplies = params.replies.filter(
+    (reply) => buildPendingFinalDeliveryText([reply]) !== "",
+  );
+  if (buildPendingFinalDeliveryText(contributingReplies) === params.pendingText) {
+    return contributingReplies;
+  }
+  const exactMatches = contributingReplies.filter(
+    (reply) => buildPendingFinalDeliveryText([reply]) === params.pendingText,
+  );
+  return exactMatches.length === 1 ? exactMatches : undefined;
+}
+
+async function reconcilePendingFinalDeliveryAfterSettlement(params: {
+  deliveries: SettledFinalDelivery[];
+  replies: ReplyPayload[];
+  storePath?: string;
+  sessionKey?: string;
+}): Promise<void> {
+  if (!params.storePath || !params.sessionKey) {
+    return;
+  }
+  await updateSessionStoreEntry({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    skipMaintenance: true,
+    takeCacheOwnership: true,
+    update: async (entry) => {
+      const pendingText = normalizeOptionalString(entry.pendingFinalDeliveryText);
+      if (!entry.pendingFinalDelivery && !pendingText) {
+        return null;
+      }
+      const pendingPayloads = pendingText
+        ? resolvePendingFinalDeliveryPayloads({ pendingText, replies: params.replies })
+        : undefined;
+      const pendingPayloadSet = pendingPayloads ? new Set(pendingPayloads) : undefined;
+      const relevantDeliveries = pendingPayloadSet
+        ? params.deliveries.filter((delivery) => pendingPayloadSet.has(delivery.payload))
+        : params.deliveries;
+      const ownsEveryPendingPayload =
+        !pendingPayloadSet || relevantDeliveries.length === pendingPayloadSet.size;
+      const failedBeforeDeliver = relevantDeliveries.filter(
+        (delivery) => delivery.outcome === "failed-before-deliver",
+      );
+
+      if (
+        relevantDeliveries.length > 0 &&
+        failedBeforeDeliver.length === relevantDeliveries.length
+      ) {
+        return null;
+      }
+      if (pendingPayloadSet && ownsEveryPendingPayload && failedBeforeDeliver.length > 0) {
+        const retryText = buildPendingFinalDeliveryText(
+          failedBeforeDeliver.map((delivery) => delivery.payload),
+        );
+        if (retryText) {
+          return {
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: retryText,
+            updatedAt: Date.now(),
+          };
+        }
       }
       return {
         pendingFinalDelivery: undefined,
@@ -4164,7 +4251,10 @@ async function dispatchReplyFromConfigInner(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
-    const finalDeliveryOutcomes: Array<Promise<ReplyDispatchDeliveryOutcome>> = [];
+    const finalDeliveries: Array<{
+      outcome: Promise<ReplyDispatchDeliveryOutcome>;
+      payload: ReplyPayload;
+    }> = [];
     let allQueuedFinalsObserved = true;
     // Explicit command turns (native or authorized text-slash like /compact) are
     // user-initiated, so a marked terminal reply for the command bypasses
@@ -4216,7 +4306,7 @@ async function dispatchReplyFromConfigInner(
       routedFinalCount += finalReply.routedFinalCount;
       if (finalReply.queuedFinal) {
         if (finalReply.dispatcherOutcome) {
-          finalDeliveryOutcomes.push(finalReply.dispatcherOutcome);
+          finalDeliveries.push({ outcome: finalReply.dispatcherOutcome, payload: reply });
         } else {
           allQueuedFinalsObserved = false;
         }
@@ -4234,12 +4324,18 @@ async function dispatchReplyFromConfigInner(
       if (queuedFinal && allQueuedFinalsObserved) {
         // Delivery observers run from the queue itself, so direct low-level callers
         // reconcile too; the settle task only makes lifecycle owners await it.
-        const reconcilePendingFinal = Promise.all(finalDeliveryOutcomes)
-          .then(async (outcomes) => {
-            if (outcomes.every((outcome) => outcome === "failed-before-deliver")) {
-              return;
-            }
-            await clearPendingFinalDeliveryAfterSuccess(pendingFinalDelivery);
+        const reconcilePendingFinal = Promise.all(
+          finalDeliveries.map(async (delivery) => ({
+            outcome: await delivery.outcome,
+            payload: delivery.payload,
+          })),
+        )
+          .then(async (deliveries) => {
+            await reconcilePendingFinalDeliveryAfterSettlement({
+              ...pendingFinalDelivery,
+              deliveries,
+              replies,
+            });
           })
           .catch((error: unknown) => {
             logVerbose(
