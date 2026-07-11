@@ -227,7 +227,9 @@ describe("perplexity web search provider", () => {
           { signal: controller.signal },
         );
         // Yield so the mock fetch runs and captures the signal.
-        await new Promise((r) => setTimeout(r, 10));
+        await new Promise((r) => {
+          setTimeout(r, 10);
+        });
 
         // Fails if the provider drops the signal.
         expect(capturedSignal).toBeDefined();
