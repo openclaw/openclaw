@@ -4,6 +4,12 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  hasWebProviderEntryCredential,
+  providerRequiresCredential,
+  readWebProviderEnvValue,
+  resolveWebProviderConfig,
+} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
@@ -22,12 +28,6 @@ import {
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import {
-  hasWebProviderEntryCredential,
-  providerRequiresCredential,
-  readWebProviderEnvValue,
-  resolveWebProviderConfig,
-} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import type {
   ResolveWebSearchDefinitionParams,
   RunWebSearchParams,
@@ -179,7 +179,9 @@ export function resolveWebSearchProviderId(params: {
       }),
   );
   const raw =
-    search && "provider" in search ? normalizeLowercaseStringOrEmpty(search.provider) : "";
+    search && Object.hasOwn(search, "provider")
+      ? normalizeLowercaseStringOrEmpty(search.provider)
+      : "";
 
   if (raw) {
     const explicit = providers.find((provider) => provider.id === raw);
@@ -218,7 +220,7 @@ function resolveRuntimePreferredWebSearchProviderId(params: {
     return undefined;
   }
   const configuredProviderId =
-    params.search && "provider" in params.search
+    params.search && Object.hasOwn(params.search, "provider")
       ? normalizeOptionalLowercaseString(params.search.provider)
       : undefined;
   if (configuredProviderId) {
@@ -256,7 +258,7 @@ function resolveExplicitWebSearchProviderId(params: {
   }
 
   const configuredProviderId =
-    params.search && "provider" in params.search
+    params.search && Object.hasOwn(params.search, "provider")
       ? normalizeOptionalLowercaseString(params.search.provider)
       : undefined;
   if (configuredProviderId) {
@@ -418,7 +420,9 @@ function hasExplicitWebSearchSelection(params: {
     (params.providers ?? []).map((provider) => normalizeLowercaseStringOrEmpty(provider.id)),
   );
   const configuredProviderId =
-    params.search && "provider" in params.search && typeof params.search.provider === "string"
+    params.search &&
+    Object.hasOwn(params.search, "provider") &&
+    typeof params.search.provider === "string"
       ? normalizeLowercaseStringOrEmpty(params.search.provider)
       : "";
   if (configuredProviderId && availableProviderIds.has(configuredProviderId)) {

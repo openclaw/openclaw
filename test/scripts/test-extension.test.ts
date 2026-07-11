@@ -479,7 +479,7 @@ describe("scripts/test-extension.mjs", () => {
     expect(batch.extensionCount).toBe(2);
     expect(batch.noTestExtensionIds).toEqual([extensionId]);
     expect(batch.hasTests).toBe(true);
-    expect(batch.testFileCount).toBe(2);
+    expect(batch.testFileCount).toBe(3);
     expect(batch.planGroups.flatMap((group) => group.extensionIds)).toEqual(["firecrawl"]);
   });
 
@@ -840,6 +840,8 @@ describe("scripts/test-extension.mjs", () => {
           bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts"),
           "--exclude",
           bundledPluginFile("firecrawl", "src/firecrawl-client.test.ts"),
+          "--exclude",
+          bundledPluginFile("firecrawl", "src/config.own-entries.test.ts"),
         ],
       },
     );
@@ -859,6 +861,8 @@ describe("scripts/test-extension.mjs", () => {
           "firecrawl/src/firecrawl-tools.test.ts",
           "--exclude",
           "firecrawl/src/firecrawl-client.test.ts",
+          "--exclude",
+          "firecrawl/src/config.own-entries.test.ts",
         ],
       },
     );
@@ -879,6 +883,8 @@ describe("scripts/test-extension.mjs", () => {
           bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts"),
           "--exclude",
           bundledPluginFile("firecrawl", "src/firecrawl-client.test.ts"),
+          "--exclude",
+          bundledPluginFile("firecrawl", "src/config.own-entries.test.ts"),
         ],
       },
     );

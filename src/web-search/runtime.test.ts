@@ -165,13 +165,14 @@ function createDuckDuckGoSearchProvider(
 
 describe("web search runtime", () => {
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
+  let resolveWebSearchProviderId: typeof import("./runtime.js").resolveWebSearchProviderId;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
   let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
   const tempDirs: string[] = [];
 
   beforeAll(async () => {
-    ({ runWebSearch } = await import("./runtime.js"));
+    ({ runWebSearch, resolveWebSearchProviderId } = await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
     ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
@@ -1162,5 +1163,40 @@ describe("web search runtime", () => {
         args: { query: "all-null-tools" },
       }),
     ).rejects.toThrow("web_search is enabled but no provider is currently available.");
+  });
+
+  // ── Own-property checks: Object.hasOwn() on search config objects ──
+
+  it("ignores proto-inherited 'provider' in search config resolution", () => {
+    const search = Object.create({ provider: "brave" });
+    // The search object has no own "provider" — inherited from prototype.
+    // resolveWebSearchProviderId must not treat it as user-configured.
+    expect(
+      resolveWebSearchProviderId({
+        search,
+        providers: [],
+      }),
+    ).toBe("");
+  });
+
+  it("resolves own 'provider' in search config", () => {
+    const firecrawlProvider = createWebSearchTestProvider({
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
+      autoDetectOrder: 10,
+      createTool: () => ({
+        description: "firecrawl search",
+        parameters: {},
+        execute: async () => ({ results: [] }),
+      }),
+    });
+
+    expect(
+      resolveWebSearchProviderId({
+        search: { provider: "firecrawl" },
+        providers: [firecrawlProvider],
+      }),
+    ).toBe("firecrawl");
   });
 });

@@ -147,7 +147,7 @@ function resolveWebFetchProviderId(params: {
       }),
   );
   const raw =
-    params.fetch && "provider" in params.fetch
+    params.fetch && Object.hasOwn(params.fetch, "provider")
       ? normalizeLowercaseStringOrEmpty(params.fetch.provider)
       : "";
 
@@ -185,7 +185,7 @@ function resolveConfiguredWebFetchProviderId(params: {
   providers: PluginWebFetchProviderEntry[];
 }): string | undefined {
   const raw =
-    params.fetch && "provider" in params.fetch
+    params.fetch && Object.hasOwn(params.fetch, "provider")
       ? normalizeLowercaseStringOrEmpty(params.fetch.provider)
       : "";
   if (!raw) {

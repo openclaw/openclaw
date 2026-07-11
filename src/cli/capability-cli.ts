@@ -1856,7 +1856,7 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function ttsProviderConfigHasApiKey(value: unknown): boolean {
-  return isObjectRecord(value) && "apiKey" in value;
+  return isObjectRecord(value) && Object.hasOwn(value, "apiKey");
 }
 
 function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string): boolean {
