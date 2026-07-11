@@ -1149,20 +1149,48 @@ describe("editMessageFeishu", () => {
     expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
   });
 
-  it("rejects text edits whose materialized post markdown exceeds the send limit", async () => {
+  it("does not cap text edits with the configured send chunk limit", async () => {
     mockResolveFeishuAccount.mockReturnValue({
       accountId: "default",
       configured: true,
       config: { textChunkLimit: 6 },
     });
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
 
+    const result = await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_edit",
+      text: "abcd\nefgh",
+    });
+
+    expect(mockClientPatch).toHaveBeenCalledWith({
+      path: { message_id: "om_edit" },
+      data: {
+        content: JSON.stringify({
+          zh_cn: {
+            content: [
+              [
+                {
+                  tag: "md",
+                  text: "abcd\n\nefgh",
+                },
+              ],
+            ],
+          },
+        }),
+      },
+    });
+    expect(result).toEqual({ messageId: "om_edit", contentType: "post" });
+  });
+
+  it("rejects text edits whose materialized post markdown exceeds the Feishu edit limit", async () => {
     await expect(
       editMessageFeishu({
         cfg: {} as ClawdbotConfig,
         messageId: "om_edit",
-        text: "abcd\nefgh",
+        text: "x".repeat(4001),
       }),
-    ).rejects.toThrow(/textChunkLimit/);
+    ).rejects.toThrow(/Feishu post edit limit/);
 
     expect(mockClientPatch).not.toHaveBeenCalled();
   });

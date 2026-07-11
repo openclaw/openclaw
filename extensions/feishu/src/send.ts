@@ -31,6 +31,9 @@ const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
 const FEISHU_TEXT_CHUNK_LIMIT = 4000;
+// Edits cannot be split into follow-up posts, so keep their validation tied to
+// the provider single-post ceiling rather than the user's chunking preference.
+const FEISHU_POST_EDIT_MARKDOWN_LIMIT = FEISHU_TEXT_CHUNK_LIMIT;
 
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
@@ -641,7 +644,7 @@ function buildFeishuPostMessageEditPayload(params: {
   const materializedText = materializeFeishuPostMarkdownLineBreaks(params.messageText);
   if (materializedText.length > params.maxMarkdownTextLength) {
     throw new Error(
-      `Feishu edit text expands past the configured textChunkLimit (${materializedText.length} > ${params.maxMarkdownTextLength}); send a new message instead.`,
+      `Feishu edit text exceeds the Feishu post edit limit (${materializedText.length} > ${params.maxMarkdownTextLength}); send a new message instead.`,
     );
   }
   return buildFeishuPostMessagePayloadFromText({ postText: materializedText });
@@ -794,7 +797,7 @@ export async function editMessageFeishu(params: {
   const messageText = convertMarkdownTables(text!, tableMode);
   const payload = buildFeishuPostMessageEditPayload({
     messageText,
-    maxMarkdownTextLength: resolveFeishuPostTextChunkLimit({ account }),
+    maxMarkdownTextLength: FEISHU_POST_EDIT_MARKDOWN_LIMIT,
   });
   const response = await client.im.message.patch({
     path: { message_id: messageId },
