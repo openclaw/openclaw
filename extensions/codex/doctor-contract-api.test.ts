@@ -21,6 +21,7 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
   createStoredCodexAppServerBinding,
+  hashCodexAppServerBindingFingerprint,
   type StoredCodexAppServerBinding,
 } from "./src/app-server/session-binding.js";
 import { legacyCodexConversationBindingId } from "./src/conversation-binding-data.js";
@@ -279,6 +280,74 @@ describe("codex doctor contract", () => {
       fs.readFile(path.join(fixture.sessionsDir, "sessions.json"), "utf8").then(JSON.parse),
     ).resolves.toMatchObject({
       "agent:main:session-1": { sessionId: "session-current", agentHarnessId: "codex" },
+    });
+
+    await fs.rm(fixture.stateDir, { recursive: true, force: true });
+  });
+
+  it("bounds oversized legacy fingerprints before plugin-state import", async () => {
+    const rawDynamicToolsFingerprint = JSON.stringify([
+      { name: "legacy_large_tool", inputSchema: { description: "dynamic-marker".repeat(8_000) } },
+    ]);
+    const rawUserMcpServersFingerprint = JSON.stringify({
+      mcp_servers: {
+        legacy: {
+          command: "node",
+          args: ["user-mcp-marker".repeat(8_000)],
+          http_headers: { authorization: "Bearer legacy-secret" },
+        },
+      },
+    });
+    const sessionKey = "agent:main:oversized";
+    const fixture = await createBindingMigrationFixture({
+      name: "oversized",
+      sessionIndex: {
+        [sessionKey]: {
+          sessionId: "oversized",
+          sessionFile: "oversized.jsonl",
+        },
+      },
+      threadId: "thread-oversized",
+      binding: {
+        dynamicToolsFingerprint: rawDynamicToolsFingerprint,
+        userMcpServersFingerprint: rawUserMcpServersFingerprint,
+      },
+    });
+    expect((await fs.stat(fixture.sidecarPath)).size).toBeGreaterThan(65_536);
+
+    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
+      changes: [
+        "Migrated 1 Codex app-server binding sidecar(s) to plugin state and archived the legacy sources",
+      ],
+      warnings: [],
+    });
+
+    const stored = await openBindingStore(fixture.env).lookup(
+      bindingStoreKey({
+        kind: "session",
+        agentId: "main",
+        sessionId: "oversized",
+        sessionKey,
+      }),
+    );
+    expect(stored).toMatchObject({
+      state: "active",
+      binding: {
+        dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint(rawDynamicToolsFingerprint),
+        userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(
+          rawUserMcpServersFingerprint,
+        ),
+      },
+    });
+    expect(Buffer.byteLength(JSON.stringify(stored))).toBeLessThan(65_536);
+    expect(JSON.stringify(stored)).not.toContain("dynamic-marker");
+    expect(JSON.stringify(stored)).not.toContain("user-mcp-marker");
+    expect(JSON.stringify(stored)).not.toContain("legacy-secret");
+    await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
+    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
     });
 
     await fs.rm(fixture.stateDir, { recursive: true, force: true });
