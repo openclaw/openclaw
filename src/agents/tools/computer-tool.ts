@@ -28,7 +28,12 @@ import {
 } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { sleep } from "../utils/sleep.js";
-import { type AnyAgentTool, readStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  readFiniteNumberParam,
+  readPositiveIntegerParam,
+  readStringParam,
+} from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
 import { listNodes, type NodeListNode, resolveNodeIdFromList } from "./nodes-utils.js";
@@ -46,6 +51,10 @@ const SCREENSHOT_QUALITY = 0.85;
 const AFTER_ACTION_SCREENSHOT_DELAY_MS = 500;
 const MAX_WAIT_SECONDS = 100;
 const MAX_HOLD_SECONDS = 10;
+
+const defaultWaitForPostActionSettle = (signal?: AbortSignal) =>
+  sleep(AFTER_ACTION_SCREENSHOT_DELAY_MS, signal);
+let waitForPostActionSettle = defaultWaitForPostActionSettle;
 
 export const COMPUTER_TOOL_ACTIONS = [
   "screenshot",
@@ -272,11 +281,8 @@ export function buildComputerActParams(params: {
         throw new Error("scrollDirection up|down|left|right required for scroll");
       }
       wire.scrollDirection = direction;
-      const amount = Number(input.scrollAmount ?? 3);
-      if (!Number.isFinite(amount) || amount <= 0) {
-        throw new Error("scrollAmount must be a positive number");
-      }
-      wire.scrollAmount = Math.min(100, Math.round(amount));
+      const amount = readPositiveIntegerParam(input, "scrollAmount") ?? 3;
+      wire.scrollAmount = Math.min(100, amount);
       break;
     }
     case "type": {
@@ -292,10 +298,13 @@ export function buildComputerActParams(params: {
       const keys = readStringParam(input, "text", { required: true });
       wire.keys = keys;
       if (action === "hold_key") {
-        const seconds = Number(input.duration ?? 1);
-        if (!Number.isFinite(seconds) || seconds <= 0 || seconds > MAX_HOLD_SECONDS) {
-          throw new Error(`duration must be >0 and <=${MAX_HOLD_SECONDS} seconds for hold_key`);
-        }
+        const seconds =
+          readFiniteNumberParam(input, "duration", {
+            min: 0,
+            minExclusive: true,
+            max: MAX_HOLD_SECONDS,
+            message: `duration must be >0 and <=${MAX_HOLD_SECONDS} seconds for hold_key`,
+          }) ?? 1;
         wire.durationMs = Math.round(seconds * 1000);
       }
       break;
@@ -844,10 +853,12 @@ export function createComputerTool(options?: {
             return await screenshotResult(capture, []);
           }
           case "wait": {
-            const seconds = Number(params.duration ?? 1);
-            if (!Number.isFinite(seconds) || seconds < 0 || seconds > MAX_WAIT_SECONDS) {
-              throw new Error(`duration must be 0-${MAX_WAIT_SECONDS} seconds for wait`);
-            }
+            const seconds =
+              readFiniteNumberParam(params, "duration", {
+                min: 0,
+                max: MAX_WAIT_SECONDS,
+                message: `duration must be 0-${MAX_WAIT_SECONDS} seconds for wait`,
+              }) ?? 1;
             setComputerState({ kind: "target", target });
             await sleep(Math.round(seconds * 1000), signal);
             const capture = await captureScreenshot({
@@ -916,7 +927,7 @@ export function createComputerTool(options?: {
         if (action === "left_mouse_up") {
           heldButtonTarget = undefined;
         }
-        await sleep(AFTER_ACTION_SCREENSHOT_DELAY_MS, signal);
+        await waitForPostActionSettle(signal);
         try {
           const capture = await captureScreenshot({
             gatewayOpts,
@@ -942,3 +953,11 @@ export function createComputerTool(options?: {
       }),
   };
 }
+
+/** Test-only dependency override for the post-action UI settle delay. */
+export const testing = {
+  setWaitForPostActionSettleForTest(override?: typeof waitForPostActionSettle) {
+    waitForPostActionSettle = override ?? defaultWaitForPostActionSettle;
+  },
+};
+export { testing as __testing };

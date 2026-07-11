@@ -551,9 +551,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://first.example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -574,9 +572,7 @@ struct GatewayNodeSessionTests {
         #expect(await (invalidations.values()).isEmpty)
         try await gateway.connect(
             url: #require(URL(string: "ws://second.example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -798,6 +794,72 @@ struct GatewayNodeSessionTests {
 
         #expect(await invocations.values() == [])
         #expect(firstTask.sentRequestCount(method: "node.invoke.result") == 0)
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `route switch cancels an in flight push to talk start`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invokeStarted = AsyncGate()
+        let cancellations = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["talk"],
+            commands: ["talk.ptt.start"],
+            permissions: [:],
+            clientId: "openclaw-ios",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
+        let route = try #require(await gateway.currentRoute())
+        let invoking = Task {
+            await gateway.invokeIfCurrentRoute(
+                BridgeInvokeRequest(id: "stale-ptt", command: "talk.ptt.start", paramsJSON: nil),
+                expectedRoute: route,
+                onInvoke: { request in
+                    await invokeStarted.wait()
+                    do {
+                        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                    } catch {
+                        await cancellations.record(request.id)
+                    }
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: route changed"))
+                })
+        }
+        try await waitUntil("push to talk invoke started") {
+            await invokeStarted.hasStarted()
+        }
+        await invokeStarted.release()
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://replacement.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
+
+        #expect(await (invoking.value).ok == false)
+        #expect(await cancellations.values() == ["stale-ptt"])
         await gateway.disconnect()
     }
 
@@ -1229,9 +1291,7 @@ struct GatewayNodeSessionTests {
         let connectOnce: () async throws -> Void = {
             try await gateway.connect(
                 url: url,
-                token: nil,
-                bootstrapToken: nil,
-                password: nil,
+                credentials: .init(),
                 connectOptions: options,
                 sessionBox: WebSocketSessionBox(session: session),
                 extraHeadersProvider: provider,
@@ -1277,9 +1337,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://gateway.example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             extraHeadersProvider: { [secret] in ["Authorization": secret.get()] },
@@ -1313,9 +1371,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://first.example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -1332,9 +1388,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://second.example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -1385,9 +1439,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://first.example.invalid")),
-            token: "first-token",
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(token: "first-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -1397,9 +1449,7 @@ struct GatewayNodeSessionTests {
         let replacement = Task {
             try await gateway.connect(
                 url: #require(URL(string: "ws://stale.example.invalid")),
-                token: "stale-token",
-                bootstrapToken: nil,
-                password: nil,
+                credentials: .init(token: "stale-token"),
                 connectOptions: options,
                 sessionBox: WebSocketSessionBox(session: session),
                 onConnected: {},
@@ -1451,9 +1501,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://first.example.invalid")),
-            token: "first-token",
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(token: "first-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -1475,9 +1523,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://replacement.example.invalid")),
-            token: "replacement-token",
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(token: "replacement-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -1516,9 +1562,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -1806,9 +1850,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            bootstrapToken: "fresh-bootstrap-token",
-            password: nil,
+            credentials: .init(bootstrapToken: "fresh-bootstrap-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -1849,9 +1891,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://new-gateway.example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -1897,9 +1937,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://gateway-b.example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -1947,9 +1985,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: "shared-password",
+            credentials: .init(password: "shared-password"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -1989,9 +2025,9 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            bootstrapToken: "stale-bootstrap-token",
-            password: "shared-password",
+            credentials: .init(
+                bootstrapToken: "stale-bootstrap-token",
+                password: "shared-password"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -2036,9 +2072,7 @@ struct GatewayNodeSessionTests {
         do {
             try await gateway.connect(
                 url: #require(URL(string: "ws://example.invalid")),
-                token: "shared-token",
-                bootstrapToken: nil,
-                password: nil,
+                credentials: .init(token: "shared-token"),
                 connectOptions: options,
                 sessionBox: WebSocketSessionBox(session: session),
                 onConnected: {},
@@ -2086,9 +2120,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "wss://example.invalid")),
-            token: "shared-token",
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(token: "shared-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: firstSession),
             onConnected: {},
@@ -2099,9 +2131,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "wss://example.invalid")),
-            token: "shared-token",
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(token: "shared-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: secondSession),
             onConnected: {},
@@ -2155,9 +2185,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "wss://example.invalid")),
-            token: nil,
-            bootstrapToken: "fresh-bootstrap-token",
-            password: nil,
+            credentials: .init(bootstrapToken: "fresh-bootstrap-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -2213,9 +2241,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "wss://example.invalid")),
-            token: nil,
-            bootstrapToken: "fresh-bootstrap-token",
-            password: nil,
+            credentials: .init(bootstrapToken: "fresh-bootstrap-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -2257,9 +2283,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "wss://example.invalid")),
-            token: "shared-token",
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(token: "shared-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -2308,9 +2332,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            bootstrapToken: "fresh-bootstrap-token",
-            password: nil,
+            credentials: .init(bootstrapToken: "fresh-bootstrap-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -2358,9 +2380,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: url,
-            token: nil,
-            bootstrapToken: "fresh-bootstrap-token",
-            password: nil,
+            credentials: .init(bootstrapToken: "fresh-bootstrap-token"),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: bootstrapSession),
             onConnected: {},
@@ -2383,9 +2403,7 @@ struct GatewayNodeSessionTests {
         let reconnectSession = FakeGatewayWebSocketSession()
         try await gateway.connect(
             url: url,
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: reconnectSession),
             onConnected: {},
@@ -2438,9 +2456,7 @@ struct GatewayNodeSessionTests {
                 do {
                     try await gateway.connect(
                         url: url,
-                        token: "shared-gateway-token",
-                        bootstrapToken: nil,
-                        password: nil,
+                        credentials: .init(token: "shared-gateway-token"),
                         connectOptions: options,
                         sessionBox: WebSocketSessionBox(session: session),
                         onConnected: {},
@@ -2481,19 +2497,19 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `normalize canvas host url preserves explicit secure canvas port`() throws {
-        let normalized = try canonicalizeCanvasHostUrl(
+    func `normalize canvas host url preserves explicit secure canvas port`() {
+        let normalized = canonicalizeCanvasHostUrl(
             raw: "https://canvas.example.com:9443/__openclaw__/cap/token",
-            activeURL: #require(URL(string: "wss://gateway.example.com")))
+            activeURL: URL(string: "wss://gateway.example.com"))
 
         #expect(normalized == "https://canvas.example.com:9443/__openclaw__/cap/token")
     }
 
     @Test
-    func `normalize canvas host url backfills gateway host for loopback canvas`() throws {
-        let normalized = try canonicalizeCanvasHostUrl(
+    func `normalize canvas host url backfills gateway host for loopback canvas`() {
+        let normalized = canonicalizeCanvasHostUrl(
             raw: "http://127.0.0.1:18789/__openclaw__/cap/token",
-            activeURL: #require(URL(string: "wss://gateway.example.com:7443")))
+            activeURL: URL(string: "wss://gateway.example.com:7443"))
 
         #expect(normalized == "https://gateway.example.com:7443/__openclaw__/cap/token")
     }
@@ -2580,6 +2596,24 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `server event subscription filters before buffering`() async {
+        let gateway = GatewayNodeSession()
+        let subscription = await gateway.makeServerEventSubscription(
+            bufferingNewest: 1,
+            matching: { $0.event == "target" })
+        defer { subscription.cancel() }
+        let stream = subscription.events
+
+        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "target"))
+        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+
+        var iterator = stream.makeAsyncIterator()
+        let event = await iterator.next()
+        #expect(event?.event == "target")
+    }
+
+    @Test
     func `emits synthetic seq gap after reconnect snapshot`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -2607,9 +2641,7 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
+            credentials: .init(),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},

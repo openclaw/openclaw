@@ -219,11 +219,34 @@ describe("attachProgressNarratorToReplyOptions", () => {
     );
   });
 
-  it("returns options unchanged without a configured utility model", () => {
+  it("returns options unchanged without a resolvable utility model", () => {
+    // Bare config: no explicit utilityModel and no plugin metadata snapshot to
+    // derive a provider default from.
     const opts: GetReplyOptions = { onNarrationUpdate: vi.fn(), onToolStart: vi.fn() };
     expect(attachProgressNarratorToReplyOptions({ cfg, agentId: "main", opts })).toBe(opts);
   });
 
+  it("returns options unchanged when utility routing is explicitly disabled", () => {
+    const disabledCfg = {
+      agents: { defaults: { utilityModel: "" } },
+    } as OpenClawConfig;
+    const opts: GetReplyOptions = { onNarrationUpdate: vi.fn(), onToolStart: vi.fn() };
+    expect(attachProgressNarratorToReplyOptions({ cfg: disabledCfg, agentId: "main", opts })).toBe(
+      opts,
+    );
+  });
+
+  it("returns options unchanged for model-locked native sessions", () => {
+    const opts: GetReplyOptions = { onNarrationUpdate: vi.fn(), onToolStart: vi.fn() };
+    expect(
+      attachProgressNarratorToReplyOptions({
+        cfg: utilityCfg,
+        agentId: "main",
+        opts,
+        disabled: true,
+      }),
+    ).toBe(opts);
+  });
   it("tees tool events while preserving the channel callback results", async () => {
     const onToolStart = vi.fn(async () => {});
     const onItemEvent = vi.fn(() => false as const);

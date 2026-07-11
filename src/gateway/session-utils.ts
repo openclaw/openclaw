@@ -1,7 +1,5 @@
 // Gateway session listing and projection helpers.
 // Normalizes persisted session stores into UI/RPC rows without mutating state.
-import fs from "node:fs";
-import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -26,6 +24,7 @@ import {
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
+import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import {
   findModelCatalogEntry,
   modelSupportsInput,
@@ -44,6 +43,7 @@ import {
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
 } from "../agents/session-model-ref.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   buildSubagentRunReadIndex,
   countActiveDescendantRuns,
@@ -58,12 +58,22 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
+import {
+  concretizeAgentRuntime,
+  resolveEffectiveAgentRuntime,
+} from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
-import { listThinkingLevelOptions, resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
+import {
+  listThinkingLevelOptions,
+  normalizeThinkLevel,
+  resolveEffectiveResponseUsage,
+  resolveSupportedThinkingLevel,
+} from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
   buildGroupDisplayName,
+  buildGroupDisplayTitle,
   getSessionStoreCacheVersion,
   isTerminalSessionStatus,
   resolveAllAgentSessionStoreTargetsSync,
@@ -77,7 +87,6 @@ import {
 } from "../config/sessions.js";
 import { listSessionEntries as listAccessorSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
@@ -87,14 +96,6 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import {
-  AVATAR_MAX_BYTES,
-  isAvatarDataUrl,
-  isAvatarHttpUrl,
-  isPathWithinRoot,
-  isWorkspaceRelativeAvatarPath,
-  resolveAvatarMime,
-} from "../shared/avatar-policy.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -164,64 +165,6 @@ export {
 } from "../agents/session-model-ref.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
-
-function tryResolveExistingPath(value: string): string | null {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return null;
-  }
-}
-
-function resolveIdentityAvatarUrl(
-  cfg: OpenClawConfig,
-  agentId: string,
-  avatar: string | undefined,
-): string | undefined {
-  if (!avatar) {
-    return undefined;
-  }
-  const trimmed = normalizeOptionalString(avatar) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  if (isAvatarDataUrl(trimmed) || isAvatarHttpUrl(trimmed)) {
-    return trimmed;
-  }
-  if (!isWorkspaceRelativeAvatarPath(trimmed)) {
-    return undefined;
-  }
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const workspaceRoot = tryResolveExistingPath(workspaceDir) ?? path.resolve(workspaceDir);
-  const resolvedCandidate = path.resolve(workspaceRoot, trimmed);
-  if (!isPathWithinRoot(workspaceRoot, resolvedCandidate)) {
-    return undefined;
-  }
-  try {
-    // Avatars can be workspace-relative, but projection must keep the file
-    // read inside the agent workspace and cap bytes before encoding.
-    const opened = openRootFileSync({
-      absolutePath: resolvedCandidate,
-      rootPath: workspaceRoot,
-      rootRealPath: workspaceRoot,
-      boundaryLabel: "workspace root",
-      maxBytes: AVATAR_MAX_BYTES,
-      skipLexicalRootCheck: true,
-    });
-    if (!opened.ok) {
-      return undefined;
-    }
-    try {
-      const buffer = fs.readFileSync(opened.fd);
-      const mime = resolveAvatarMime(resolvedCandidate);
-      return `data:${mime};base64,${buffer.toString("base64")}`;
-    } finally {
-      fs.closeSync(opened.fd);
-    }
-  } catch {
-    return undefined;
-  }
-}
 
 function formatSessionIdPrefix(sessionId: string, updatedAt?: number | null): string {
   const prefix = sessionId.slice(0, 8);
@@ -808,6 +751,7 @@ function resolveSessionRowThinkingMetadata(params: {
   agentId: string;
   provider: string;
   model: string;
+  agentRuntime: string;
   modelCatalog?: ModelCatalogEntry[];
   rowContext?: SessionListRowContext;
 }): {
@@ -816,17 +760,23 @@ function resolveSessionRowThinkingMetadata(params: {
 } {
   if (!params.rowContext) {
     return {
-      levels: listThinkingLevelOptions(params.provider, params.model, params.modelCatalog),
+      levels: listThinkingLevelOptions(
+        params.provider,
+        params.model,
+        params.modelCatalog,
+        params.agentRuntime,
+      ),
       defaultLevel: resolveGatewaySessionThinkingDefault({
         cfg: params.cfg,
         provider: params.provider,
         model: params.model,
         agentId: params.agentId,
         modelCatalog: params.modelCatalog,
+        agentRuntime: params.agentRuntime,
       }),
     };
   }
-  const key = `${normalizeAgentId(params.agentId)}\0${createSessionRowModelCacheKey(
+  const key = `${normalizeAgentId(params.agentId)}\0${params.agentRuntime}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
@@ -835,13 +785,19 @@ function resolveSessionRowThinkingMetadata(params: {
     return cached;
   }
   const metadata = {
-    levels: listThinkingLevelOptions(params.provider, params.model, params.modelCatalog),
+    levels: listThinkingLevelOptions(
+      params.provider,
+      params.model,
+      params.modelCatalog,
+      params.agentRuntime,
+    ),
     defaultLevel: resolveGatewaySessionThinkingDefault({
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
       agentId: params.agentId,
       modelCatalog: params.modelCatalog,
+      agentRuntime: params.agentRuntime,
     }),
   };
   params.rowContext.thinkingMetadataByModelRef.set(key, metadata);
@@ -1263,21 +1219,20 @@ export function listAgentsForGateway(
     if (!entry?.id) {
       continue;
     }
+    const agentId = normalizeAgentId(entry.id);
     const configuredName = normalizeOptionalString(entry.name);
+    const avatar = normalizeOptionalString(entry.identity?.avatar);
+    const avatarUrl = resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),
           theme: normalizeOptionalString(entry.identity.theme),
           emoji: normalizeOptionalString(entry.identity.emoji),
-          avatar: normalizeOptionalString(entry.identity.avatar),
-          avatarUrl: resolveIdentityAvatarUrl(
-            cfg,
-            normalizeAgentId(entry.id),
-            normalizeOptionalString(entry.identity.avatar),
-          ),
+          avatar,
+          avatarUrl,
         }
       : undefined;
-    configuredById.set(normalizeAgentId(entry.id), {
+    configuredById.set(agentId, {
       name: configuredName ?? identity?.name,
       identity,
     });
@@ -1296,10 +1251,27 @@ export function listAgentsForGateway(
     const meta = configuredById.get(id);
     const model = resolveGatewayAgentModel(cfg, id);
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+    const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: id });
+    const agentRuntime = resolveModelAgentRuntimeMetadata({
+      cfg,
+      agentId: id,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model,
+      sessionKey,
+      acpRuntime: false,
+    });
+    const thinkingRuntime = resolveEffectiveAgentRuntime({
+      cfg,
+      provider: resolvedModel.provider,
+      modelId: resolvedModel.model,
+      agentId: id,
+      sessionKey,
+    });
     const thinkingLevels = listThinkingLevelOptions(
       resolvedModel.provider,
       resolvedModel.model,
       modelCatalog,
+      thinkingRuntime,
     );
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
@@ -1312,14 +1284,7 @@ export function listAgentsForGateway(
         identity: meta?.identity,
         workspace,
         workspaceGit,
-        agentRuntime: resolveModelAgentRuntimeMetadata({
-          cfg,
-          agentId: id,
-          provider: resolvedModel.provider,
-          model: resolvedModel.model,
-          sessionKey: resolveAgentMainSessionKey({ cfg, agentId: id }),
-          acpRuntime: false,
-        }),
+        agentRuntime,
         thinkingLevels,
         thinkingOptions: thinkingLevels.map((level) => level.label),
         thinkingDefault: resolveGatewaySessionThinkingDefault({
@@ -1328,6 +1293,7 @@ export function listAgentsForGateway(
           model: resolvedModel.model,
           agentId: id,
           modelCatalog,
+          agentRuntime: thinkingRuntime,
         }),
       },
       model ? { model } : {},
@@ -1578,25 +1544,151 @@ export function resolveGatewaySessionStoreTarget(params: {
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
+function resolveGatewaySessionThinkingLevel(params: {
+  provider: string;
+  model: string;
+  level: NonNullable<ReturnType<typeof normalizeThinkLevel>>;
+  modelCatalog?: ModelCatalogEntry[];
+  agentRuntime: string;
+}) {
+  const catalogEntry = params.modelCatalog
+    ? findModelCatalogEntry(params.modelCatalog, {
+        provider: params.provider,
+        modelId: params.model,
+      })
+    : undefined;
+  // Lightweight sessions.changed projections intentionally omit the catalog.
+  // Runtime/model patches normalize persisted state with authoritative metadata;
+  // projections must not reinterpret an already-validated level without it.
+  if (!catalogEntry) {
+    return params.level;
+  }
+  return resolveSupportedThinkingLevel({
+    provider: params.provider,
+    model: params.model,
+    level: params.level,
+    catalog: params.modelCatalog,
+    agentRuntime: params.agentRuntime,
+  });
+}
+
 function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
   agentId?: string;
   modelCatalog?: ModelCatalogEntry[];
+  agentRuntime: string;
 }) {
   const agentThinkingDefault = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
     : undefined;
-  return (
+  const defaultLevel =
     agentThinkingDefault ??
     resolveThinkingDefault({
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
       catalog: params.modelCatalog,
-    })
-  );
+      agentRuntime: params.agentRuntime,
+    });
+  return resolveGatewaySessionThinkingLevel({
+    provider: params.provider,
+    model: params.model,
+    level: defaultLevel,
+    modelCatalog: params.modelCatalog,
+    agentRuntime: params.agentRuntime,
+  });
+}
+
+type GatewaySessionThinkingProjectionParams = {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentId: string;
+  sessionKey: string;
+  entry?: SessionEntry;
+  modelCatalog?: ModelCatalogEntry[];
+  rowContext?: SessionListRowContext;
+};
+
+function resolveGatewaySessionThinkingProjectionInternal(
+  params: GatewaySessionThinkingProjectionParams,
+) {
+  const acpMeta = readAcpSessionMeta({ sessionKey: params.sessionKey });
+  const configuredAgentRuntime = resolveModelAgentRuntimeMetadata({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    provider: params.provider,
+    model: params.model,
+    sessionKey: params.sessionKey,
+    acpRuntime: acpMeta != null,
+    acpBackend: acpMeta?.backend,
+  });
+  const persistedAgentRuntime = resolveSessionRuntimeOverrideForProvider({
+    provider: params.provider,
+    entry: params.entry,
+    cfg: params.cfg,
+  });
+  const persistedAgentRuntimeSource: "session" | "session-key" =
+    params.entry?.modelSelectionLocked === true ? "session" : "session-key";
+  const agentRuntime =
+    acpMeta || !persistedAgentRuntime
+      ? configuredAgentRuntime
+      : {
+          id: persistedAgentRuntime,
+          source: persistedAgentRuntimeSource,
+        };
+  const thinkingRuntime = acpMeta
+    ? concretizeAgentRuntime(acpMeta.backend ?? agentRuntime.id)
+    : resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider: params.provider,
+        modelId: params.model,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionEntry: params.entry,
+      });
+  const metadata = resolveSessionRowThinkingMetadata({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    provider: params.provider,
+    model: params.model,
+    agentRuntime: thinkingRuntime,
+    modelCatalog: params.modelCatalog,
+    rowContext: params.rowContext,
+  });
+  const storedThinkingLevel = normalizeThinkLevel(params.entry?.thinkingLevel);
+  const thinkingLevel = storedThinkingLevel
+    ? resolveGatewaySessionThinkingLevel({
+        provider: params.provider,
+        model: params.model,
+        level: storedThinkingLevel,
+        modelCatalog: params.modelCatalog,
+        agentRuntime: thinkingRuntime,
+      })
+    : undefined;
+  return {
+    agentRuntime,
+    thinkingLevel,
+    effectiveThinkingLevel: thinkingLevel ?? metadata.defaultLevel,
+    thinkingLevels: metadata.levels,
+    thinkingOptions: metadata.levels.map((level) => level.label),
+    thinkingDefault: metadata.defaultLevel,
+  };
+}
+
+/** Resolve the canonical runtime, selected level, and picker metadata for a session. */
+export function resolveGatewaySessionThinkingProjection(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentId: string;
+  sessionKey: string;
+  entry?: SessionEntry;
+  modelCatalog?: ModelCatalogEntry[];
+}) {
+  return resolveGatewaySessionThinkingProjectionInternal(params);
 }
 
 export function getSessionDefaults(
@@ -1614,11 +1706,34 @@ export function getSessionDefaults(
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
-  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model, modelCatalog);
+  const agentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
+  const agentRuntime = resolveModelAgentRuntimeMetadata({
+    cfg,
+    agentId,
+    provider: resolved.provider,
+    model: resolved.model,
+    sessionKey,
+    acpRuntime: false,
+  });
+  const thinkingRuntime = resolveEffectiveAgentRuntime({
+    cfg,
+    provider: resolved.provider,
+    modelId: resolved.model,
+    agentId,
+    sessionKey,
+  });
+  const thinkingLevels = listThinkingLevelOptions(
+    resolved.provider,
+    resolved.model,
+    modelCatalog,
+    thinkingRuntime,
+  );
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
+    agentRuntime,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
     thinkingDefault: resolveGatewaySessionThinkingDefault({
@@ -1626,6 +1741,7 @@ export function getSessionDefaults(
       provider: resolved.provider,
       model: resolved.model,
       modelCatalog,
+      agentRuntime: thinkingRuntime,
     }),
   };
 }
@@ -1799,8 +1915,11 @@ export function buildGatewaySessionRow(params: {
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
   // A user-assigned label is an explicit rename; it must win over stored
   // channel-derived display names or renames silently vanish on refresh.
+  // Group sessions prefer the human chat title (subject/#channel) over the
+  // stored compact token displayName (e.g. "slack:g-general").
   const displayName =
     entry?.label ??
+    (isGroupSession ? buildGroupDisplayTitle({ subject, groupChannel, space }) : undefined) ??
     entry?.displayName ??
     (isGroupSession && channel
       ? buildGroupDisplayName({
@@ -1981,16 +2100,6 @@ export function buildGatewaySessionRow(params: {
     agentId: sessionAgentId,
     sessionKey: key,
   });
-  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
-  const agentRuntime = resolveModelAgentRuntimeMetadata({
-    cfg,
-    agentId: sessionAgentId,
-    provider: rowModelProvider,
-    model: rowModel,
-    sessionKey: acpSessionKey,
-    acpRuntime: acpMeta != null,
-    acpBackend: acpMeta?.backend,
-  });
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({
@@ -2041,16 +2150,16 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingMetadata = resolveSessionRowThinkingMetadata({
+  const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,
     provider: thinkingProvider,
     model: thinkingModel,
+    sessionKey: acpSessionKey,
+    entry,
     modelCatalog: params.modelCatalog,
     rowContext,
   });
-  const thinkingLevels = thinkingMetadata.levels;
-  const thinkingDefault = thinkingMetadata.defaultLevel;
   const fastModeState = resolveFastModeState({
     cfg,
     provider: selectedOrRuntimeModelProvider ?? DEFAULT_PROVIDER,
@@ -2071,6 +2180,8 @@ export function buildGatewaySessionRow(params: {
     spawnedBy: subagentOwner || entry?.spawnedBy,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
+    worktree: entry?.worktree,
+    execNode: entry?.execNode,
     forkedFromParent: entry?.forkedFromParent,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
@@ -2098,10 +2209,10 @@ export function buildGatewaySessionRow(params: {
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
-    thinkingLevel: entry?.thinkingLevel,
-    thinkingLevels,
-    thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault,
+    thinkingLevel: thinkingProjection.thinkingLevel,
+    thinkingLevels: thinkingProjection.thinkingLevels,
+    thinkingOptions: thinkingProjection.thinkingOptions,
+    thinkingDefault: thinkingProjection.thinkingDefault,
     fastMode: entry?.fastMode,
     effectiveFastMode: fastModeState.mode,
     effectiveFastModeSource: fastModeState.source,
@@ -2133,7 +2244,8 @@ export function buildGatewaySessionRow(params: {
     ),
     modelProvider: rowModelProvider,
     model: rowModel,
-    agentRuntime,
+    modelSelectionLocked: entry?.modelSelectionLocked,
+    agentRuntime: thinkingProjection.agentRuntime,
     contextTokens,
     contextBudgetStatus: entry?.contextBudgetStatus,
     deliveryContext: deliveryFields.deliveryContext,
