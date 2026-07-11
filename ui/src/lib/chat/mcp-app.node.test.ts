@@ -4,10 +4,10 @@ import { extractToolCards } from "./tool-cards.ts";
 
 const appDetails = {
   mcpApp: {
-    serverName: "excalidraw",
+    serverName: "diagrams",
     toolName: "create_view",
     resource: {
-      uri: "ui://excalidraw/mcp-app.html",
+      uri: "ui://diagrams/app.html",
       mimeType: "text/html;profile=mcp-app",
       html: "<!doctype html><html><body>app</body></html>",
       csp: { connectDomains: ["https://esm.sh"] },
@@ -29,7 +29,7 @@ describe("extractMcpAppPreview", () => {
     expect(preview).toMatchObject({
       kind: "mcp-app",
       title: "create_view",
-      resourceUri: "ui://excalidraw/mcp-app.html",
+      resourceUri: "ui://diagrams/app.html",
       csp: { connectDomains: ["https://esm.sh"] },
       permissions: ["clipboardWrite"],
       prefersBorder: true,
@@ -65,10 +65,10 @@ describe("extractToolCards mcp-app preview", () => {
     const cards = extractToolCards({
       role: "assistant",
       content: [
-        { type: "toolCall", name: "excalidraw_create_view", id: "call-1", arguments: {} },
+        { type: "toolCall", name: "diagrams_create_view", id: "call-1", arguments: {} },
         {
           type: "toolResult",
-          name: "excalidraw_create_view",
+          name: "diagrams_create_view",
           toolCallId: "call-1",
           content: [{ type: "text", text: "rendered" }],
           details: appDetails,

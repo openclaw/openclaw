@@ -823,6 +823,23 @@ Notes:
 - the page does not start MCP transports by itself
 - active runtimes may need `openclaw mcp reload`, Gateway config publish, or process restart depending on which process owns the MCP clients
 
+## MCP Apps (interactive tool UIs)
+
+OpenClaw's bundle MCP client declares the [MCP Apps extension](https://modelcontextprotocol.io/extensions/apps/overview) capability (`io.modelcontextprotocol/ui`, `text/html;profile=mcp-app`). Servers that bind tools to `ui://` resources via `_meta.ui.resourceUri` work with any transport configured under `mcp.servers.<name>` — no server-specific integration is needed. The official [Excalidraw MCP App server](https://github.com/excalidraw/excalidraw-mcp) is a good conformance target.
+
+Behavior:
+
+- After a ui-bearing tool call succeeds, OpenClaw reads the app document (up to 5MB) and attaches it to the tool result for UI-capable surfaces. Every other surface receives the tool's normal text/structured result, so apps degrade gracefully everywhere.
+- Tools a server marks app-only (`_meta.ui.visibility` without `"model"`, including an explicitly empty list) are never exposed to the agent.
+- The Control UI renders the document inside the tool card in a sandboxed iframe (`allow-scripts`, never `allow-same-origin`) with the app-declared CSP (`_meta.ui.csp`) enforced, and answers the app's `ui/initialize` handshake, tool-input/tool-result notifications, and sizing.
+
+Plugins can attach MCP App servers declaratively with the `mcpServers` manifest field — see the [plugin manifest reference](/plugins/manifest).
+
+Current MCP Apps limits:
+
+- the host is view-only for app→host calls: app-initiated `tools/call`, `ui/open-link`, and similar requests receive a JSON-RPC method-not-found error until the full host bridge lands
+- gateway-served Control UI deployments enforce a strict page CSP that srcdoc iframes inherit, which currently blocks inline app scripts; the dedicated app-document route with per-app CSP headers is the tracked follow-up (text results are unaffected)
+
 ## Current limits
 
 This page documents the bridge as shipped today.

@@ -1646,6 +1646,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: OAuth workflow
   - H3: Streamable HTTP transport
   - H2: Control UI
+  - H2: MCP Apps (interactive tool UIs)
   - H2: Current limits
   - H2: Related
 
@@ -6197,16 +6198,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
-
-## plugins/reference/excalidraw.md
-
-- Route: /plugins/reference/excalidraw
-- Headings:
-  - H1: Excalidraw plugin
-  - H2: Distribution
-  - H2: Surface
-  - H2: Enable
-  - H2: Notes
 
 ## plugins/reference/fal.md
 

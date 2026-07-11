@@ -167,13 +167,13 @@ describe("loadEnabledBundleMcpConfig", () => {
     const workspaceDir = await tempHarness.createTempDir("openclaw-native-mcp-workspace-");
     const pluginRoot = await tempHarness.createTempDir("openclaw-native-mcp-plugin-");
     const nativeRecord = {
-      id: "excalidraw",
+      id: "diagram-apps",
       origin: "bundled" as const,
       format: "openclaw" as const,
       mcpServers: {
-        excalidraw: {
+        diagrams: {
           transport: "streamable-http",
-          url: "https://mcp.excalidraw.com/mcp",
+          url: "https://mcp.example.com/mcp",
         },
       },
       channels: [],
@@ -188,22 +188,22 @@ describe("loadEnabledBundleMcpConfig", () => {
 
     const loaded = loadEnabledBundleMcpConfig({
       workspaceDir,
-      cfg: createEnabledBundleConfig(["excalidraw"]),
+      cfg: createEnabledBundleConfig(["diagram-apps"]),
       manifestRegistry: { plugins: [nativeRecord] },
     });
 
     expectNoDiagnostics(loaded.diagnostics);
-    expect(loaded.config.mcpServers.excalidraw).toMatchObject({
+    expect(loaded.config.mcpServers.diagrams).toMatchObject({
       transport: "streamable-http",
-      url: "https://mcp.excalidraw.com/mcp",
+      url: "https://mcp.example.com/mcp",
     });
 
     const disabled = loadEnabledBundleMcpConfig({
       workspaceDir,
-      cfg: { plugins: { entries: { excalidraw: { enabled: false } } } },
+      cfg: { plugins: { entries: { "diagram-apps": { enabled: false } } } },
       manifestRegistry: { plugins: [nativeRecord] },
     });
-    expect(disabled.config.mcpServers.excalidraw).toBe(undefined);
+    expect(disabled.config.mcpServers.diagrams).toBe(undefined);
   });
 
   it("merges inline bundle MCP servers and skips disabled bundles", async () => {

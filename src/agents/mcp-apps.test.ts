@@ -8,8 +8,8 @@ import {
 
 describe("parseMcpToolUiMeta", () => {
   it("parses nested _meta.ui.resourceUri", () => {
-    expect(parseMcpToolUiMeta({ ui: { resourceUri: "ui://excalidraw/mcp-app.html" } })).toEqual({
-      resourceUri: "ui://excalidraw/mcp-app.html",
+    expect(parseMcpToolUiMeta({ ui: { resourceUri: "ui://diagrams/app.html" } })).toEqual({
+      resourceUri: "ui://diagrams/app.html",
     });
   });
 

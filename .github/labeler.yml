@@ -57,11 +57,6 @@
       - any-glob-to-any-file:
           - "extensions/workspaces/**"
           - "docs/web/workspaces.md"
-"plugin: excalidraw":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/excalidraw/**"
-          - "docs/plugins/reference/excalidraw.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
