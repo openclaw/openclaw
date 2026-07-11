@@ -39,6 +39,9 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import { isModelNotFoundErrorMessage } from "../embedded-agent-helpers.js";
+import { resolveRateLimitRetryDelaySeconds } from "../embedded-agent-runner/run/assistant-failover.js";
+import { formatFailoverOutcomeToModelId } from "../failover-error.js";
 import type {
   Agent,
   AgentEvent,
@@ -2673,21 +2676,16 @@ export class AgentSession {
     }
 
     let delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
-    if (message.retryAfterSeconds !== undefined) {
-      let providerDelayMs = message.retryAfterSeconds * 1000;
+    const providerSettings = this.settingsManager.getProviderRetrySettings();
 
-      const providerSettings = this.settingsManager.getProviderRetrySettings();
-      const maxProviderDelayMs = providerSettings.maxRetryDelayMs;
+    const cooldownSeconds = resolveRateLimitRetryDelaySeconds(
+      message.errorMessage,
+      message.retryAfterSeconds,
+      providerSettings.maxRetryDelayMs,
+    );
 
-      if (maxProviderDelayMs > 0) {
-        if (!Number.isFinite(providerDelayMs)) {
-          providerDelayMs = maxProviderDelayMs;
-        } else {
-          providerDelayMs = Math.min(providerDelayMs, maxProviderDelayMs);
-        }
-      }
-
-      delayMs = Math.max(delayMs, providerDelayMs);
+    if (cooldownSeconds !== null) {
+      delayMs = Math.max(delayMs, cooldownSeconds * 1000);
     }
 
     this.emit({

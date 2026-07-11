@@ -82,30 +82,48 @@ function parseRetryAfterSeconds(message: string): number | null {
   return Math.max(0, (retryAtMs - Date.now()) / 1000);
 }
 
-function resolveShortWindowRateLimitRetry(
+export function resolveRateLimitRetryDelaySeconds(
+  errorMessage: string | undefined,
+  retryAfterSeconds: number | undefined,
+  maxRetryDelayMs: number | undefined,
+): number | null {
+  const raw = errorMessage?.trim();
+  let delay = retryAfterSeconds;
+
+  if (delay === undefined && raw) {
+    const parsed = parseRetryAfterSeconds(raw);
+    if (parsed !== null) {
+      delay = parsed;
+    }
+  }
+
+  if (delay !== undefined && delay !== null) {
+    if (maxRetryDelayMs !== undefined && maxRetryDelayMs > 0) {
+      if (!Number.isFinite(delay)) {
+        delay = maxRetryDelayMs / 1000;
+      } else {
+        delay = Math.min(delay, maxRetryDelayMs / 1000);
+      }
+    }
+    return delay;
+  }
+  return null;
+}
+
+export function resolveShortWindowRateLimitRetry(
   message: string | undefined,
   structuredRetryAfterSeconds?: number,
-  maxRetryDelayMs?: number,
 ): ShortWindowRateLimitRetry | null {
   const raw = message?.trim();
   if (!raw && structuredRetryAfterSeconds === undefined) {
     return null;
   }
 
-  let retryAfterSeconds: number | null = null;
-  if (structuredRetryAfterSeconds !== undefined) {
-    retryAfterSeconds = structuredRetryAfterSeconds;
-  } else if (raw) {
-    retryAfterSeconds = parseRetryAfterSeconds(raw);
-  }
-
-  if (retryAfterSeconds !== null && maxRetryDelayMs !== undefined && maxRetryDelayMs > 0) {
-    if (!Number.isFinite(retryAfterSeconds)) {
-      retryAfterSeconds = maxRetryDelayMs / 1000;
-    } else {
-      retryAfterSeconds = Math.min(retryAfterSeconds, maxRetryDelayMs / 1000);
-    }
-  }
+  const retryAfterSeconds = resolveRateLimitRetryDelaySeconds(
+    raw,
+    structuredRetryAfterSeconds,
+    undefined,
+  );
 
   if (retryAfterSeconds !== null && retryAfterSeconds > MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS) {
     return null;
@@ -281,7 +299,6 @@ export async function handleAssistantFailover(params: {
       const shortWindowRetry = resolveShortWindowRateLimitRetry(
         params.lastAssistant?.errorMessage,
         params.lastAssistant?.retryAfterSeconds,
-        params.config?.retry?.provider?.maxRetryDelayMs,
       );
       if (
         params.allowSameModelRateLimitRetry &&
