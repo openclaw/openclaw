@@ -347,7 +347,14 @@ export function hasRuntimeAvailableProviderAuth(params: {
   if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
     return true;
   }
-  if (resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })) {
+  if (
+    resolveSyntheticLocalProviderAuth({
+      cfg: params.cfg,
+      provider,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    })
+  ) {
     return true;
   }
   return false;
@@ -361,6 +368,8 @@ type SyntheticProviderAuthResolution = {
 function resolveProviderSyntheticRuntimeAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): SyntheticProviderAuthResolution {
   const resolveFromConfig = (
     config: OpenClawConfig | undefined,
@@ -370,6 +379,8 @@ function resolveProviderSyntheticRuntimeAuth(params: {
       resolveProviderSyntheticAuthWithPlugin({
         provider: params.provider,
         config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
         context: {
           config,
           provider: params.provider,
@@ -405,6 +416,8 @@ function resolveProviderSyntheticRuntimeAuth(params: {
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): ResolvedProviderAuth | null {
   const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
   if (syntheticProviderAuth.auth) {
