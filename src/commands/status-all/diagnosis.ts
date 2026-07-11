@@ -397,16 +397,17 @@ export async function appendStatusAllDiagnosis(params: {
   if (logPaths) {
     params.progress.setLabel("Reading logs…");
     const restartLogPath = resolveGatewayRestartLogPath(process.env);
-    const readStderr = process.platform !== "darwin";
+    // launchd now routes the supervised gateway's stderr to gateway.err.log
+    // (no longer /dev/null), so every platform has a real stderr tail.
     const [stderrTail, stdoutTail, restartTail] = await Promise.all([
-      readStderr ? readFileTailLines(logPaths.stderrPath, 40).catch(() => []) : [],
+      readFileTailLines(logPaths.stderrPath, 40).catch(() => []),
       readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
       readFileTailLines(restartLogPath, 30).catch(() => []),
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
       lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));
-      if (readStderr) {
+      if (stderrTail.length > 0) {
         lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
         for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactSecrets)) {
           lines.push(`  ${muted(line)}`);

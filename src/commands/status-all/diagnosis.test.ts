@@ -375,7 +375,7 @@ describe("status-all diagnosis port checks", () => {
     expect(output).not.toContain("Inbound delivery telemetry: unavailable");
   });
 
-  it("does not read or display stale stderr tails on Darwin", async () => {
+  it("summarizes the launchd stderr tail on Darwin now that stderr is a real log file", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
@@ -392,7 +392,7 @@ describe("status-all diagnosis port checks", () => {
           return ["gateway stdout current"];
         }
         if (filePath.endsWith("gateway.err.log")) {
-          return ["failed to bind gateway socket stale"];
+          return ["refusing to bind gateway to 0.0.0.0:8080 without auth"];
         }
         return [];
       });
@@ -401,14 +401,41 @@ describe("status-all diagnosis port checks", () => {
       await appendStatusAllDiagnosis(params);
 
       const output = params.lines.join("\n");
-      expect(gatewayMocks.readFileTailLines).not.toHaveBeenCalledWith(
+      expect(gatewayMocks.readFileTailLines).toHaveBeenCalledWith(
         "/Users/test/Library/Logs/openclaw/gateway.err.log",
         40,
       );
+      expect(output).toContain("# stderr: /Users/test/Library/Logs/openclaw/gateway.err.log");
+      expect(output).toContain("refusing to bind gateway to 0.0.0.0:8080 without auth");
       expect(output).toContain("# stdout: /Users/test/Library/Logs/openclaw/gateway.log");
       expect(output).toContain("gateway stdout current");
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("omits the stderr section when the stderr log is empty", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      restartLogMocks.resolveGatewaySupervisorLogPaths.mockReturnValue({
+        logDir: "/Users/test/Library/Logs/openclaw",
+        stdoutPath: "/Users/test/Library/Logs/openclaw/gateway.log",
+        stderrPath: "/Users/test/Library/Logs/openclaw/gateway.err.log",
+      });
+      restartLogMocks.resolveGatewayRestartLogPath.mockReturnValue(
+        "/tmp/openclaw/logs/gateway-restart.log",
+      );
+      gatewayMocks.readFileTailLines.mockImplementation(async (filePath: string) =>
+        filePath.endsWith("gateway.log") ? ["gateway stdout current"] : [],
+      );
+      const params = createBaseParams([]);
+
+      await appendStatusAllDiagnosis(params);
+
+      const output = params.lines.join("\n");
+      expect(output).toContain("# stdout: /Users/test/Library/Logs/openclaw/gateway.log");
       expect(output).not.toContain("# stderr:");
-      expect(output).not.toContain("failed to bind gateway socket stale");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
