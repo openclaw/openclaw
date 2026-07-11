@@ -117,6 +117,38 @@ describe("video-generation runtime", () => {
     ]);
   });
 
+  it("strips the provider prefix from google-prefixed video generation model refs", async () => {
+    let seenModel: string | undefined;
+    providers = [
+      {
+        id: "google",
+        capabilities: {},
+        async generateVideo(req: { model: string }) {
+          seenModel = req.model;
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: req.model,
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "google/veo-3.1-fast-generate-preview" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+    });
+
+    expect(result.provider).toBe("google");
+    expect(result.model).toBe("veo-3.1-fast-generate-preview");
+    expect(seenModel).toBe("veo-3.1-fast-generate-preview");
+  });
+
   it("uses configured video-generation timeout when call omits timeoutMs", async () => {
     let seenTimeoutMs: number | undefined;
     providers = [
