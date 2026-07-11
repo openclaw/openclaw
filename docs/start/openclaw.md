@@ -36,7 +36,7 @@ If you link your personal WhatsApp to OpenClaw, every message to you becomes "ag
 
 ## 5-minute quick start
 
-1. Pair WhatsApp Web (scan the QR, or use `--phone-number +1555...` to enter a pairing code on the assistant phone):
+1. Pair WhatsApp Web (choose QR scanning or phone-number linking when prompted):
 
 ```bash
 openclaw channels login

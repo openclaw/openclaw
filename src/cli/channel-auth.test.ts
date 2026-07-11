@@ -122,7 +122,7 @@ describe("channel-auth", () => {
   const login = () => runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
   const plugin = {
     id: "whatsapp",
-    auth: { login: mocks.login, supportedLoginMethodKinds: [] as string[] },
+    auth: { login: mocks.login },
     gateway: { startAccount: vi.fn(), logoutAccount: mocks.logoutAccount },
     config: {
       listAccountIds: vi.fn().mockReturnValue(["default"]),
@@ -195,29 +195,6 @@ describe("channel-auth", () => {
     await runChannelLogout({}, runtime);
 
     expectCall(mocks.logoutAccount, { account });
-  });
-
-  it("passes phone-number login as a typed channel login method", async () => {
-    plugin.auth.supportedLoginMethodKinds = ["phone-number"];
-
-    await runChannelLogin(
-      { channel: "wa", account: "acct-1", phoneNumber: " +1 555 123 4567 " },
-      runtime,
-    );
-
-    expectCall(mocks.login, {
-      accountId: "acct-1",
-      channelInput: "wa",
-      loginMethod: { kind: "phone-number", phoneNumber: "+1 555 123 4567" },
-    });
-  });
-
-  it("rejects phone-number login before unsupported channel adapters can ignore it", async () => {
-    await expect(
-      runChannelLogin({ channel: "wa", account: "acct-1", phoneNumber: "+15551234567" }, runtime),
-    ).rejects.toThrow('Channel "whatsapp" does not support --phone-number login.');
-
-    expect(mocks.login).not.toHaveBeenCalled();
   });
 
   it("skips gateway runtime reconcile in remote mode and warns without failing login", async () => {

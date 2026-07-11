@@ -26,7 +26,6 @@ import type {
   ChannelApprovalNativeAdapter,
   ChannelApprovalNativeAdapterAsync,
 } from "./approval-native.types.js";
-import type { ChannelLoginMethod } from "./channel-login-method.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 import type {
@@ -279,14 +278,12 @@ export type ChannelGatewayAdapterV2<ResolvedAccount = unknown> = Omit<
 };
 
 export type ChannelAuthAdapter = {
-  supportedLoginMethodKinds?: readonly ChannelLoginMethod["kind"][];
   login?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     runtime: RuntimeEnv;
     verbose?: boolean;
     channelInput?: string | null;
-    loginMethod?: ChannelLoginMethod;
   }) => Promise<void>;
 };
 

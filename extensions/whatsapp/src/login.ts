@@ -38,7 +38,7 @@ export function normalizeWhatsAppPairingPhoneNumber(phoneNumber: string): string
   const digits = normalized?.replace(/\D/g, "") ?? "";
   if (digits.length < MIN_PAIRING_PHONE_DIGITS || digits.length > MAX_PAIRING_PHONE_DIGITS) {
     throw new Error(
-      "WhatsApp phone-code login requires --phone-number with country code and 6-15 digits.",
+      "WhatsApp phone-code login requires a phone number with country code and 6-15 digits.",
     );
   }
   return digits;
@@ -396,7 +396,7 @@ export async function loginWebWithPhoneCode(
     if (result.outcome === "logged-out") {
       runtime.error(
         danger(
-          `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("openclaw channels login --channel whatsapp --phone-number <number>")} and link again.`,
+          `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("openclaw channels login --channel whatsapp")}, choose phone-number linking, and link again.`,
         ),
       );
       throw new Error("Session logged out; cache cleared. Re-run login.", {

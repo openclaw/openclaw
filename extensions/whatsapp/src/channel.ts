@@ -253,24 +253,19 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       approvalCapability: whatsappApprovalCapability,
       auth: {
-        supportedLoginMethodKinds: ["phone-number"],
-        login: async ({ cfg, accountId, runtime, verbose, loginMethod }) => {
+        login: async ({ cfg, accountId, runtime, verbose }) => {
           const resolvedAccountId =
             accountId?.trim() ||
             whatsappPlugin.config.defaultAccountId?.(cfg) ||
             DEFAULT_ACCOUNT_ID;
+          const { createClackPrompter } = await import("openclaw/plugin-sdk/setup-runtime");
           const runtimeApi = await loadWhatsAppChannelRuntime();
-          if (loginMethod?.kind === "phone-number") {
-            await runtimeApi.loginWebWithPhoneCode(
-              Boolean(verbose),
-              loginMethod.phoneNumber,
-              undefined,
-              runtime,
-              resolvedAccountId,
-            );
-            return;
-          }
-          await runtimeApi.loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
+          await runtimeApi.runWhatsAppLogin({
+            accountId: resolvedAccountId,
+            prompter: createClackPrompter(),
+            runtime,
+            verbose: Boolean(verbose),
+          });
         },
       },
       heartbeat: {
