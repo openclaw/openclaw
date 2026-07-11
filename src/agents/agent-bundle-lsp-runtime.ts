@@ -602,7 +602,7 @@ export async function createBundleLspToolRuntime(params: {
   const reservedNames = new Set(
     Array.from(params.reservedToolNames ?? [], (name) =>
       normalizeOptionalLowercaseString(name),
-    ).filter(Boolean),
+    ).filter((name): name is string => Boolean(name)),
   );
   const sessions: LspSession[] = [];
   const tools: AnyAgentTool[] = [];
