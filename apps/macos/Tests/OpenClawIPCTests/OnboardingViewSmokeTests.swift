@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
@@ -15,6 +16,19 @@ struct OnboardingViewSmokeTests {
             permissionMonitor: PermissionMonitor.shared,
             discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
         _ = view.body
+    }
+
+    @Test func `onboarding window resizes vertically and gives the page the extra height`() {
+        #expect(OnboardingController.windowStyleMask.contains(.resizable))
+
+        let baseline = OnboardingView.contentHeight(
+            for: OnboardingView.windowHeight,
+            usesCompactHero: false)
+        let taller = OnboardingView.contentHeight(
+            for: OnboardingView.windowHeight + 200,
+            usesCompactHero: false)
+
+        #expect(taller - baseline == 200)
     }
 
     @Test func `page order omits workspace and identity steps`() {
