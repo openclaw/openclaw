@@ -340,33 +340,32 @@ async function shouldProcessLineEvent(
   });
   const peerId = (groupId ?? roomId ?? senderId) || "unknown";
   const { route } = lookupLineInboundRoute({ source: event.source, cfg, account });
-  const identity = resolveConversationIdentityMode({
-    config: cfg,
-    agentId: route.agentId,
-    routeMatchedBy: route.matchedBy,
-    chatType: isGroup ? "group" : "direct",
-    groupId: isGroup ? peerId : undefined,
-    groupSpace: isGroup ? peerId : undefined,
-    senderIsOwner:
-      !isGroup &&
-      resolveStableSenderIsOwner({
-        senderId,
-        commandOwnerAllowFrom: cfg.commands?.ownerAllowFrom,
-        providerAllowFrom: account.config.allowFrom,
-        normalizeEntry: normalizeLineAllowEntry,
-      }),
-  });
-  if (!identity.allowed) {
-    logVerbose(`line: denied inbound identity before pairing or history (${identity.reason})`);
-    return null;
-  }
-
   if (
     access.senderAccess.decision === "allow" &&
     (access.ingress.admission === "dispatch" ||
       access.ingress.admission === "observe" ||
       access.ingress.admission === "skip")
   ) {
+    const identity = resolveConversationIdentityMode({
+      config: cfg,
+      agentId: route.agentId,
+      routeMatchedBy: route.matchedBy,
+      chatType: isGroup ? "group" : "direct",
+      groupId: isGroup ? peerId : undefined,
+      groupSpace: isGroup ? peerId : undefined,
+      senderIsOwner:
+        !isGroup &&
+        resolveStableSenderIsOwner({
+          senderId,
+          commandOwnerAllowFrom: cfg.commands?.ownerAllowFrom,
+          providerAllowFrom: access.senderAccess.effectiveAllowFrom,
+          normalizeEntry: normalizeLineAllowEntry,
+        }),
+    });
+    if (!identity.allowed) {
+      logVerbose(`line: denied inbound identity before history (${identity.reason})`);
+      return null;
+    }
     return access;
   }
 
@@ -499,6 +498,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     cfg,
     account,
     commandAuthorized: decision.commandAccess.authorized,
+    ownerAllowFrom: !isGroup ? decision.senderAccess.effectiveAllowFrom : undefined,
   });
 
   const allMedia: MediaRef[] = [];
@@ -530,6 +530,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     cfg,
     account,
     commandAuthorized: decision.commandAccess.authorized,
+    ownerAllowFrom: !isGroup ? decision.senderAccess.effectiveAllowFrom : undefined,
     groupHistories: context.groupHistories,
     historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
     preparedRoute,
@@ -593,6 +594,9 @@ async function handlePostbackEvent(
     cfg: context.cfg,
     account: context.account,
     commandAuthorized: decision.commandAccess.authorized,
+    ownerAllowFrom: !getLineSourceInfo(event.source).isGroup
+      ? decision.senderAccess.effectiveAllowFrom
+      : undefined,
   });
   if (!postbackContext) {
     return;

@@ -355,6 +355,74 @@ describe("irc inbound behavior", () => {
     ).toBe(1);
   });
 
+  it("preserves IPv6 host colons in a stable IRC owner identity", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    const runtime = createRuntimeEnv();
+    vi.mocked(coreRuntime.channel.routing.resolveAgentRoute).mockReturnValue({
+      agentId: "personal",
+      channel: "irc",
+      accountId: "default",
+      sessionKey: "agent:personal:irc:direct:alice",
+      mainSessionKey: "agent:personal:main",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    });
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage({ senderHost: "2001:db8::1" }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["alice!ident@2001:db8::1"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: createServiceConfig(),
+      runtime,
+      sendReply: vi.fn(async () => {}),
+    });
+
+    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not promote an unsafe hostless nickname allowlist to personal-owner identity", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    const runtime = createRuntimeEnv();
+    vi.mocked(coreRuntime.channel.routing.resolveAgentRoute).mockReturnValue({
+      agentId: "personal",
+      channel: "irc",
+      accountId: "default",
+      sessionKey: "agent:personal:irc:direct:alice",
+      mainSessionKey: "agent:personal:main",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    });
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage({ senderHost: undefined }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["alice"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+          dangerouslyAllowNameMatching: true,
+        },
+      }),
+      config: createServiceConfig(),
+      runtime,
+      sendReply: vi.fn(async () => {}),
+    });
+
+    expect(coreRuntime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "irc: drop DM sender alice (identity=untrusted_direct)",
+    );
+  });
+
   it("denies an unbound shared route before reading session state", async () => {
     const coreRuntime = createPluginRuntimeMock();
     const runtime = createRuntimeEnv();

@@ -170,6 +170,7 @@ type ZaloImageMessageParams = ZaloProcessingContext & {
 type ZaloMessageAuthorizationResult = {
   chatId: string;
   commandAuthorized: boolean | undefined;
+  ownerAllowFrom: string[] | undefined;
   isGroup: boolean;
   rawBody: string;
   senderId: string;
@@ -441,30 +442,6 @@ async function authorizeZaloMessage(
     accountId: account.accountId,
     peer: { kind: isGroup ? "group" : "direct", id: chatId },
   });
-  const identity = resolveConversationIdentityMode({
-    config,
-    agentId: route.agentId,
-    routeMatchedBy: route.matchedBy,
-    chatType: isGroup ? "group" : "direct",
-    groupId: isGroup ? chatId : undefined,
-    groupSpace: isGroup ? chatId : undefined,
-    senderIsOwner:
-      !isGroup &&
-      resolveStableSenderIsOwner({
-        senderId,
-        commandOwnerAllowFrom: config.commands?.ownerAllowFrom,
-        providerAllowFrom: account.config.allowFrom,
-        normalizeEntry: normalizeZaloAllowEntry,
-      }),
-  });
-  if (!identity.allowed) {
-    logVerbose(
-      core,
-      runtime,
-      `zalo: drop message before pairing or provider preparation (${identity.reason})`,
-    );
-    return undefined;
-  }
   if (isGroup) {
     warnMissingProviderGroupPolicyFallbackOnce({
       providerMissingFallbackApplied: senderAccess.providerMissingFallbackApplied,
@@ -530,9 +507,36 @@ async function authorizeZaloMessage(
     return undefined;
   }
 
+  const senderIsOwner =
+    !isGroup &&
+    resolveStableSenderIsOwner({
+      senderId,
+      commandOwnerAllowFrom: config.commands?.ownerAllowFrom,
+      providerAllowFrom: senderAccess.effectiveAllowFrom,
+      normalizeEntry: normalizeZaloAllowEntry,
+    });
+  const identity = resolveConversationIdentityMode({
+    config,
+    agentId: route.agentId,
+    routeMatchedBy: route.matchedBy,
+    chatType: isGroup ? "group" : "direct",
+    groupId: isGroup ? chatId : undefined,
+    groupSpace: isGroup ? chatId : undefined,
+    senderIsOwner,
+  });
+  if (!identity.allowed) {
+    logVerbose(
+      core,
+      runtime,
+      `zalo: drop message before provider preparation (${identity.reason})`,
+    );
+    return undefined;
+  }
+
   return {
     chatId,
     commandAuthorized: access.commandAccess.requested ? access.commandAccess.authorized : undefined,
+    ownerAllowFrom: !isGroup ? senderAccess.effectiveAllowFrom : undefined,
     isGroup,
     rawBody,
     senderId,
@@ -564,7 +568,8 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   if (!authorization) {
     return;
   }
-  const { isGroup, chatId, senderId, senderName, rawBody, commandAuthorized } = authorization;
+  const { isGroup, chatId, senderId, senderName, rawBody, commandAuthorized, ownerAllowFrom } =
+    authorization;
 
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
@@ -590,6 +595,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       Provider: "zalo",
       Surface: "zalo",
       CommandAuthorized: commandAuthorized,
+      OwnerAllowFrom: ownerAllowFrom,
     },
   });
   if (!identityDecision.allowed) {
@@ -675,6 +681,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
         : undefined,
     extra: {
       CommandAuthorized: commandAuthorized,
+      OwnerAllowFrom: ownerAllowFrom,
       GroupSubject: undefined,
     },
   });

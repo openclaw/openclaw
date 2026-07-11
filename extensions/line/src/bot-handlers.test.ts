@@ -720,7 +720,7 @@ describe("handleLineWebhookEvents", () => {
     expect(pairingRequest?.accountId).toBe("default");
   });
 
-  it("does not pair a DM when conversation identity denies the personal route", async () => {
+  it("issues a pairing challenge before conversation identity admission", async () => {
     resolveLineIdentityModeMock.mockReturnValue({
       mode: "external",
       allowed: false,
@@ -756,7 +756,13 @@ describe("handleLineWebhookEvents", () => {
       processMessage,
     });
 
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalledWith({
+      channel: "line",
+      accountId: "default",
+      id: "guest",
+      meta: {},
+    });
+    expect(resolveLineIdentityModeMock).not.toHaveBeenCalled();
     expect(processMessage).not.toHaveBeenCalled();
   });
 

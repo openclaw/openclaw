@@ -13,7 +13,10 @@ import {
   deliverFormattedTextWithAttachments,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { resolveConversationIdentityAdmission } from "openclaw/plugin-sdk/routing";
+import {
+  resolveConversationIdentityMode,
+  resolveStableSenderIsOwner,
+} from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -92,6 +95,19 @@ function normalizeIrcStableEntry(value: string): string | null {
     return null;
   }
   return normalized;
+}
+
+function normalizeIrcOwnerEntry(value: string): string | null {
+  const trimmed = value.trim();
+  const providerSeparator = trimmed.indexOf(":");
+  const hostSeparator = trimmed.indexOf("@");
+  if (providerSeparator > 0 && (hostSeparator < 0 || providerSeparator < hostSeparator)) {
+    if (trimmed.slice(0, providerSeparator).toLowerCase() !== CHANNEL_ID) {
+      return null;
+    }
+    return normalizeIrcStableEntry(trimmed.slice(providerSeparator + 1));
+  }
+  return normalizeIrcStableEntry(trimmed);
 }
 
 function normalizeIrcNickUserEntry(value: string): string | null {
@@ -330,28 +346,7 @@ export async function handleIrcInbound(params: {
   });
   const fromAddress = message.isGroup ? `channel:${channelTarget}` : `irc:${senderDisplay}`;
   const toAddress = message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`;
-  const identityDecision = resolveConversationIdentityAdmission({
-    cfg: config as OpenClawConfig,
-    ctx: {
-      AgentId: route.agentId,
-      AgentRouteMatchedBy: route.matchedBy,
-      SessionKey: route.sessionKey,
-      AccountId: route.accountId,
-      ChatType: message.isGroup ? "group" : "direct",
-      GroupChannel: message.isGroup ? channelTarget : undefined,
-      SenderId: senderDisplay,
-      From: fromAddress,
-      To: toAddress,
-      Provider: CHANNEL_ID,
-      Surface: CHANNEL_ID,
-      CommandAuthorized: commandAuthorized,
-    },
-  });
   if (access.ingress.admission === "pairing-required") {
-    if (!identityDecision.allowed) {
-      runtime.log?.(`irc: drop DM sender ${senderDisplay} (identity=${identityDecision.reason})`);
-      return;
-    }
     await pairing.issueChallenge({
       senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
       senderIdLine: `Your IRC id: ${senderDisplay}`,
@@ -373,6 +368,28 @@ export async function handleIrcInbound(params: {
     runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
     return;
   }
+
+  const stableOwnerAllowFrom = !message.isGroup
+    ? access.senderAccess.effectiveAllowFrom.flatMap((entry) => {
+        const normalized = normalizeIrcStableEntry(String(entry));
+        return normalized ? [normalized] : [];
+      })
+    : undefined;
+  const senderIsOwner =
+    !message.isGroup &&
+    resolveStableSenderIsOwner({
+      senderId: senderDisplay,
+      commandOwnerAllowFrom: (config as OpenClawConfig).commands?.ownerAllowFrom,
+      providerAllowFrom: stableOwnerAllowFrom,
+      normalizeEntry: normalizeIrcOwnerEntry,
+    });
+  const identityDecision = resolveConversationIdentityMode({
+    config: config as OpenClawConfig,
+    agentId: route.agentId,
+    routeMatchedBy: route.matchedBy,
+    chatType: message.isGroup ? "group" : "direct",
+    senderIsOwner,
+  });
   if (access.ingress.admission === "skip") {
     runtime.log?.(`irc: drop channel ${message.target} (missing-mention)`);
     return;
@@ -456,6 +473,7 @@ export async function handleIrcInbound(params: {
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
     CommandAuthorized: commandAuthorized,
+    OwnerAllowFrom: stableOwnerAllowFrom,
   });
 
   await core.channel.inbound.dispatchReply({

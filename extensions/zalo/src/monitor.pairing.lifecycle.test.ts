@@ -112,7 +112,7 @@ describe("Zalo pairing lifecycle", () => {
     }
   });
 
-  it("does not pair an unknown sender onto the default personal route", async () => {
+  it("pairs an unknown sender before admitting the default personal route", async () => {
     setLifecycleRuntimeCore({
       pairing: {
         readAllowFromStore: readAllowFromStoreMock,
@@ -160,8 +160,13 @@ describe("Zalo pairing lifecycle", () => {
         },
       );
 
-      expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-      expect(sendMessageMock).not.toHaveBeenCalled();
+      expect(upsertPairingRequestMock).toHaveBeenCalledWith({
+        channel: "zalo",
+        accountId: "acct-zalo-pairing",
+        id: "guest",
+        meta: { name: "Guest" },
+      });
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
     } finally {
       await monitor.stop();
     }

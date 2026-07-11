@@ -905,7 +905,7 @@ describe("zalouser monitor group mention gating", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
-  it("does not pair a DM onto the default personal route", async () => {
+  it("pairs a DM before admitting the default personal route", async () => {
     const { upsertPairingRequest, dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
       routeAgentId: "personal",
@@ -923,8 +923,13 @@ describe("zalouser monitor group mention gating", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(upsertPairingRequest).not.toHaveBeenCalled();
-    expect(sendMessageZalouserMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequest).toHaveBeenCalledWith({
+      channel: "zalouser",
+      accountId: "default",
+      id: "guest",
+      meta: { name: "Bob" },
+    });
+    expect(sendMessageZalouserMock).toHaveBeenCalledTimes(1);
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 

@@ -20,10 +20,7 @@ import {
   resolveSendableOutboundReplyParts,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import {
-  resolveConversationIdentityAdmission,
-  resolveConversationIdentityMode,
-} from "openclaw/plugin-sdk/routing";
+import { resolveConversationIdentityAdmission } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   resolveDefaultGroupPolicy,
@@ -383,21 +380,6 @@ async function processMessage(
 
   if (!isGroup && accessDecision.senderAccess.decision !== "allow") {
     if (accessDecision.senderAccess.decision === "pairing") {
-      const pairingIdentity = resolveConversationIdentityMode({
-        config,
-        agentId: route.agentId,
-        routeMatchedBy: route.matchedBy,
-        chatType: "direct",
-        senderIsOwner: false,
-      });
-      if (!pairingIdentity.allowed) {
-        logVerbose(
-          core,
-          runtime,
-          `zalouser: drop inbound identity before pairing (${pairingIdentity.reason})`,
-        );
-        return;
-      }
       await pairing.issueChallenge({
         senderId,
         senderIdLine: `Your Zalo user id: ${senderId}`,
@@ -440,6 +422,7 @@ async function processMessage(
     );
     return;
   }
+  const ownerAllowFrom = !isGroup ? accessDecision.senderAccess.effectiveAllowFrom : undefined;
   const identityDecision = resolveConversationIdentityAdmission({
     cfg: config,
     ctx: {
@@ -454,6 +437,7 @@ async function processMessage(
       Provider: "zalouser",
       Surface: "zalouser",
       CommandAuthorized: commandAuthorized,
+      OwnerAllowFrom: ownerAllowFrom,
     },
   });
   if (!identityDecision.allowed) {
@@ -703,6 +687,7 @@ async function processMessage(
       GroupMembers: isGroup ? groupMembers : undefined,
       WasMentioned: isGroup ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
+      OwnerAllowFrom: ownerAllowFrom,
       ReplyToId: message.quotedGlobalMsgId || undefined,
       ReplyToBody: message.quotedBody || undefined,
       ReplyToIsQuote: message.quotedGlobalMsgId ? true : undefined,

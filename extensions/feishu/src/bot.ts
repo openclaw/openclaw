@@ -855,47 +855,11 @@ export async function handleFeishuMessage(params: {
         );
       }
     };
-    const resolveDirectIdentityDecision = (identityCfg: ClawdbotConfig) => {
-      const baseRoute = core.channel.routing.resolveAgentRoute({
-        cfg: identityCfg,
-        channel: "feishu",
-        accountId: account.accountId,
-        peer: { kind: "direct", id: ctx.senderOpenId },
-      });
-      const conversation = {
-        channel: "feishu",
-        accountId: account.accountId,
-        conversationId: ctx.senderOpenId,
-      };
-      const configuredRoute = resolveConfiguredBindingRoute({
-        cfg: identityCfg,
-        route: baseRoute,
-        conversation,
-      });
-      const route = lookupRuntimeConversationBindingRoute({
-        route: configuredRoute.route,
-        conversation,
-      }).route;
-      return resolveConversationIdentityMode({
-        config: identityCfg,
-        agentId: route.agentId,
-        routeMatchedBy: route.matchedBy,
-        chatType: "direct",
-        senderIsOwner: false,
-      });
-    };
     const directAuthorization = isDirect
       ? await resolveDirectAuthorization(cfg, true, shouldComputeCommandAuthorized)
       : null;
     const dmIngress = directAuthorization?.ingress ?? null;
     if (isDirect && dmIngress?.ingress.admission !== "dispatch") {
-      const preliminaryIdentity = resolveDirectIdentityDecision(cfg);
-      if (!preliminaryIdentity.allowed) {
-        log(
-          `feishu[${account.accountId}]: conversation identity denied before pairing (${preliminaryIdentity.reason})`,
-        );
-        return;
-      }
       if (directAuthorization) {
         await rejectDirectAuthorization(directAuthorization);
       }
@@ -912,13 +876,6 @@ export async function handleFeishuMessage(params: {
       if (currentCfg !== effectiveCfg) {
         const currentAuthorization = await resolveDirectAuthorization(currentCfg, true);
         if (currentAuthorization.ingress.ingress.admission !== "dispatch") {
-          const currentIdentity = resolveDirectIdentityDecision(currentCfg);
-          if (!currentIdentity.allowed) {
-            log(
-              `feishu[${account.accountId}]: conversation identity denied before pairing (${currentIdentity.reason})`,
-            );
-            return;
-          }
           await rejectDirectAuthorization(currentAuthorization);
           return;
         }
@@ -979,7 +936,7 @@ export async function handleFeishuMessage(params: {
           authorization.ingress.ingress.admission === "dispatch" &&
           resolveFeishuStableSenderIsOwner({
             cfg: candidateCfg,
-            providerAllowFrom: authorization.configAllowFrom,
+            providerAllowFrom: authorization.ingress.senderAccess.effectiveAllowFrom,
             senderId: ctx.senderOpenId,
           })
         );
@@ -1082,7 +1039,8 @@ export async function handleFeishuMessage(params: {
       !isGroup &&
       resolveFeishuStableSenderIsOwner({
         cfg: effectiveCfg,
-        providerAllowFrom: effectiveConfigAllowFrom,
+        providerAllowFrom:
+          effectiveDmIngress?.senderAccess.effectiveAllowFrom ?? effectiveConfigAllowFrom,
         senderId: ctx.senderOpenId,
       });
     const identityTargets =
@@ -1647,6 +1605,9 @@ export async function handleFeishuMessage(params: {
           RootMessageId: ctx.rootId,
           Transcript: audioTranscript,
           GroupSubject: isGroup ? groupName || ctx.chatId : undefined,
+          OwnerAllowFrom: !isGroup
+            ? (effectiveDmIngress?.senderAccess.effectiveAllowFrom ?? effectiveConfigAllowFrom)
+            : undefined,
         },
       });
     };

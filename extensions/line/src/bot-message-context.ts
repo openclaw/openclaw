@@ -47,6 +47,7 @@ interface BuildLineMessageContextParams {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
+  ownerAllowFrom?: Array<string | number>;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
   preparedRoute?: LineInboundRoute;
@@ -163,6 +164,7 @@ export async function prepareLineInboundRoute(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
+  ownerAllowFrom?: Array<string | number>;
 }): Promise<LineInboundRoute> {
   const state = lookupLineInboundRoute(params);
   const { userId, isGroup, peerId, route } = state;
@@ -181,6 +183,7 @@ export async function prepareLineInboundRoute(params: {
       Provider: "line",
       Surface: "line",
       CommandAuthorized: params.commandAuthorized,
+      OwnerAllowFrom: params.ownerAllowFrom,
     },
   });
   if (!identityDecision.allowed) {
@@ -334,6 +337,7 @@ async function finalizeLineInboundContext(params: {
   timestamp: number;
   messageSid: string;
   commandAuthorized: boolean;
+  ownerAllowFrom?: Array<string | number>;
   media: {
     firstPath: string | undefined;
     firstContentType?: string;
@@ -408,6 +412,7 @@ async function finalizeLineInboundContext(params: {
     MediaTypes: params.media.types,
     ...params.locationContext,
     CommandAuthorized: params.commandAuthorized,
+    OwnerAllowFrom: params.ownerAllowFrom,
     OriginatingChannel: "line" as const,
     OriginatingTo: originatingTo,
     GroupSystemPrompt: params.source.isGroup
@@ -487,12 +492,21 @@ async function finalizeLineInboundContext(params: {
 }
 
 export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
-  const { event, allMedia, cfg, account, commandAuthorized, groupHistories, historyLimit } = params;
+  const {
+    event,
+    allMedia,
+    cfg,
+    account,
+    commandAuthorized,
+    ownerAllowFrom,
+    groupHistories,
+    historyLimit,
+  } = params;
 
   const source = event.source;
   const { userId, groupId, roomId, isGroup, peerId, route } =
     params.preparedRoute ??
-    (await prepareLineInboundRoute({ source, cfg, account, commandAuthorized }));
+    (await prepareLineInboundRoute({ source, cfg, account, commandAuthorized, ownerAllowFrom }));
 
   const message = event.message;
   const messageId = message.id;
@@ -540,6 +554,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     timestamp,
     messageSid: messageId,
     commandAuthorized,
+    ownerAllowFrom,
     media: {
       firstPath: allMedia[0]?.path,
       firstContentType: allMedia[0]?.contentType,
@@ -573,8 +588,9 @@ export async function buildLinePostbackContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
+  ownerAllowFrom?: Array<string | number>;
 }) {
-  const { event, cfg, account, commandAuthorized } = params;
+  const { event, cfg, account, commandAuthorized, ownerAllowFrom } = params;
 
   const source = event.source;
   const { userId, groupId, roomId, isGroup, peerId, route } = await prepareLineInboundRoute({
@@ -582,6 +598,7 @@ export async function buildLinePostbackContext(params: {
     cfg,
     account,
     commandAuthorized,
+    ownerAllowFrom,
   });
 
   const timestamp = event.timestamp;
@@ -608,6 +625,7 @@ export async function buildLinePostbackContext(params: {
     timestamp,
     messageSid,
     commandAuthorized,
+    ownerAllowFrom,
     media: {
       firstPath: "",
       firstContentType: undefined,

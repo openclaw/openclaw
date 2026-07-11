@@ -1576,7 +1576,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
-  it("denies refreshed pairing when the current service binding was removed", async () => {
+  it("keeps refreshed pairing reachable when the current service binding was removed", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockReadAllowFromStore.mockResolvedValue([]);
     mockResolveAgentRoute.mockReturnValue({
@@ -1625,8 +1625,8 @@ describe("handleFeishuMessage command authorization", () => {
       },
     });
 
-    expect(mockUpsertPairingRequest).not.toHaveBeenCalled();
-    expect(mockSendMessageFeishu).not.toHaveBeenCalled();
+    expect(mockUpsertPairingRequest).toHaveBeenCalledTimes(1);
+    expect(mockSendMessageFeishu).toHaveBeenCalledTimes(1);
     expect(mockMaybeCreateDynamicAgent).not.toHaveBeenCalled();
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
