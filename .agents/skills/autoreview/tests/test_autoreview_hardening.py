@@ -139,6 +139,45 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "refusing binary changes"):
                 self.helper["branch_bundle"](repo, base)
 
+    def test_gitlink_changes_are_blocked_in_all_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            tracked = repo / "tracked.txt"
+            tracked.write_text("base\n", encoding="utf-8")
+            git(repo, "add", "tracked.txt")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+
+            git(
+                repo,
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"160000,{base},vendor/dependency",
+            )
+            with self.assertRaisesRegex(SystemExit, "gitlink/submodule changes"):
+                self.helper["local_bundle"](repo)
+
+            git(repo, "commit", "-q", "-m", "add gitlink")
+            with self.assertRaisesRegex(SystemExit, "gitlink/submodule changes"):
+                self.helper["commit_bundle"](repo, "HEAD")
+            with self.assertRaisesRegex(SystemExit, "gitlink/submodule changes"):
+                self.helper["branch_bundle"](repo, base)
+
+    def test_gitlink_guard_parses_combined_raw_modes(self) -> None:
+        raw_diff = (
+            "::100644 100644 160000 "
+            + ("a" * 40)
+            + " "
+            + ("b" * 40)
+            + " "
+            + ("c" * 40)
+            + " MM\0vendor/dependency\0"
+        )
+
+        with self.assertRaisesRegex(SystemExit, "gitlink/submodule changes"):
+            self.helper["require_no_gitlink_diff"]("merge diff", raw_diff)
+
     def test_codex_config_rejects_capability_bearing_overrides(self) -> None:
         for override in (
             'mcp_servers.review.command="touch /tmp/owned"',
@@ -479,11 +518,24 @@ class AutoreviewHardeningTests(unittest.TestCase):
             'token = "$GITHUB_TOKEN"',
             'token = "$env:GITHUB_TOKEN"',
             'token = "${{ secrets.GITHUB_TOKEN }}"',
+            'token = "op://Vault/Item/token"',
+            'token = "op://Development/AWS/Access Keys/access_key_id"',
             'token_endpoint = "https://accounts.example.com/oauth2/token"',
             'password_policy = "minimum-twelve-characters"',
         ):
             with self.subTest(content=content):
                 self.assertFalse(self.helper["secret_text_risk"](content))
+
+    def test_fallback_self_test_ignores_ambient_model_overrides(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "AUTOREVIEW_MODEL": "ambient-global-model",
+                "AUTOREVIEW_CODEX_MODEL": "ambient-codex-model",
+            },
+            clear=False,
+        ):
+            self.helper["self_test_fallback_scope"]()
 
     def test_secret_detector_handles_bare_call_keyword_values(self) -> None:
         content = "client(api_" + "key=" + realistic_secret_value() + ")"
