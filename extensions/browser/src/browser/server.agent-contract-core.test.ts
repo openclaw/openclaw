@@ -126,15 +126,18 @@ describe("browser control server", () => {
     "returns ACT_INVALID_REQUEST for malformed coordinate clicks",
     async () => {
       const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {
-        kind: "clickCoords",
-        x: -1,
-        y: 20,
-      });
+      for (const body of [
+        { kind: "clickCoords", x: -1, y: 20 },
+        { kind: "clickCoords", x: "0x10", y: 20 },
+        { kind: "clickCoords", x: 10.5, y: "1e3" },
+      ]) {
+        const response = await postActAndReadError(base, body);
 
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe("ACT_INVALID_REQUEST");
-      expect(response.body.error).toContain("clickCoords requires non-negative x and y");
+        expect(response.status).toBe(400);
+        expect(response.body.code).toBe("ACT_INVALID_REQUEST");
+        expect(response.body.error).toContain("clickCoords requires non-negative x and y");
+      }
+      expect(pwMocks.clickCoordsViaPlaywright).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
   );

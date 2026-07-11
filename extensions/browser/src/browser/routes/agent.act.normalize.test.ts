@@ -96,13 +96,13 @@ describe("normalizeActRequest numeric fields", () => {
     expect(
       normalizeActRequest({
         kind: "clickCoords",
-        x: "10",
-        y: "20",
+        x: "10.5",
+        y: ".25",
       }),
     ).toMatchObject({
       kind: "clickCoords",
-      x: 10,
-      y: 20,
+      x: 10.5,
+      y: 0.25,
     });
   });
 
