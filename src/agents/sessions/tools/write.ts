@@ -375,7 +375,7 @@ async function recoverSuccessfulWrite(params: {
     content: [
       {
         type: "text" as const,
-        text: `Successfully wrote ${params.content.length} bytes to ${params.path}`,
+        text: `Successfully wrote ${Buffer.byteLength(params.content, "utf8")} bytes to ${params.path}`,
       },
     ],
     details: undefined,
@@ -435,7 +435,7 @@ export function createWriteToolDefinition(
             content: [
               {
                 type: "text" as const,
-                text: `Successfully wrote ${content.length} bytes to ${path}`,
+                text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${path}`,
               },
             ],
             details: undefined,
