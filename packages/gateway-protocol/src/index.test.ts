@@ -14,6 +14,11 @@ import {
   validateConnectParams,
   validateDurableCoordinationGetParams,
   validateDurableCoordinationGetResult,
+  validateDurableLimitParams,
+  validateDurableWakeControlParams,
+  validateDurableWakeInspectResult,
+  validateDurableWakeMarkParams,
+  validateDurableWakeSupersedeParams,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePairRequestParams,
@@ -978,6 +983,91 @@ describe("validateDurableCoordinationGet", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("validates durable wake read and control params", () => {
+    expect(validateDurableLimitParams({ limit: 25 })).toBe(true);
+    expect(validateDurableLimitParams({ limit: 0 })).toBe(false);
+    expect(
+      validateDurableWakeControlParams({
+        wakeId: "wake_1",
+        actorKind: "operator",
+        actorRef: "operator:oncall",
+        reason: "reviewed",
+        idempotencyKey: "ack:1",
+        evidence: { ticket: "T-1" },
+      }),
+    ).toBe(true);
+    expect(
+      validateDurableWakeControlParams({
+        wakeId: "wake_1",
+        actorKind: "operator",
+        actorRef: "operator:oncall",
+        reason: "reviewed",
+      }),
+    ).toBe(false);
+    expect(
+      validateDurableWakeSupersedeParams({
+        wakeId: "wake_1",
+        actorKind: "external",
+        actorRef: "ticket:T-2",
+        reason: "stale",
+        idempotencyKey: "supersede:1",
+        supersededByRef: "wake_2",
+      }),
+    ).toBe(true);
+    expect(
+      validateDurableWakeMarkParams({
+        wakeId: "wake_1",
+        actorKind: "operator",
+        actorRef: "operator:oncall",
+        reason: "needs decision",
+        idempotencyKey: "mark:1",
+        decisionKind: "requires_operator_decision",
+        retry: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts durable wake inspection result shape with attempts and diagnostics", () => {
+    expect(
+      validateDurableWakeInspectResult({
+        inspection: {
+          wake: {
+            wakeId: "wake_1",
+            reason: "delivery_unknown",
+            dedupeKey: "wake:1",
+            attemptCount: 1,
+            status: "pending",
+            createdAt: 100,
+            updatedAt: 120,
+          },
+          targetResolution: {
+            status: "resolved",
+            targetKind: "operator",
+            targetRef: "operator:oncall",
+            diagnostics: { route: "operator" },
+            evidence: { source: "test" },
+          },
+          deliveryAttempts: [
+            {
+              deliveryAttemptId: "attempt_1",
+              wakeId: "wake_1",
+              dedupeKey: "attempt:1",
+              status: "failed",
+              error: "route unavailable",
+              scheduledAt: 110,
+              createdAt: 110,
+              updatedAt: 111,
+            },
+          ],
+          unresolvedUncertaintyFacts: [],
+          sourceRefs: {
+            dedupeKey: "wake:1",
+          },
+        },
+      }),
+    ).toBe(true);
   });
 });
 

@@ -145,7 +145,29 @@ export type DurableWakeDeliveryAttemptStatus =
   | "attempted"
   | "delivered"
   | "failed"
-  | "unknown";
+  | "unknown"
+  | "superseded";
+
+export type DurableWakeControlActorKind = "external" | "parent" | "operator";
+
+export type DurableWakeControlDecisionKind =
+  | "acknowledged"
+  | "superseded"
+  | "inspected"
+  | "requires_human_decision"
+  | "requires_operator_decision";
+
+export type DurableWakeControlDecision = {
+  kind: DurableWakeControlDecisionKind;
+  actorKind: DurableWakeControlActorKind;
+  actorRef: string;
+  reason?: string;
+  decisionRef?: string;
+  idempotencyKey?: string;
+  evidence?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  decidedAt: number;
+};
 
 export type DurableRuntimeRun = {
   runtimeRunId: string;
@@ -375,6 +397,34 @@ export type DurableWakeDeliveryAttempt = {
   metadata?: Record<string, unknown>;
 };
 
+export type DurableWakeTargetResolutionInspection = {
+  status?: DurableWakeTargetResolutionStatus;
+  reason?: string;
+  targetKind?: DurableWakeTargetKind;
+  targetRef?: string;
+  ownerKind?: DurableWakeOwnerKind;
+  ownerRef?: string;
+  reportRouteRef?: string;
+  factsRef?: string;
+  sourceRunId?: string;
+  diagnostics?: Record<string, unknown>;
+  evidence?: Record<string, unknown>;
+};
+
+export type DurableWakeInspection = {
+  wake: DurableWake;
+  targetResolution: DurableWakeTargetResolutionInspection;
+  deliveryAttempts: DurableWakeDeliveryAttempt[];
+  unresolvedUncertaintyFacts: DurableSideEffectUncertaintyFact[];
+  sourceRefs: {
+    factsRef?: string;
+    sourceRunId?: string;
+    dedupeKey: string;
+    parentRunId?: string;
+    parentSessionKey?: string;
+  };
+};
+
 export type DurableUnresolvedObligationKind =
   | "pending_wake"
   | "unresolved_uncertainty"
@@ -590,6 +640,34 @@ export type UpdateDurableParentWakeInput = {
 
 export type UpdateDurableWakeInput = UpdateDurableParentWakeInput;
 
+export type DurableWakeControlInput = {
+  wakeId: string;
+  actorKind: DurableWakeControlActorKind;
+  actorRef: string;
+  reason?: string;
+  decisionRef?: string;
+  evidence?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  idempotencyKey?: string;
+  now?: number;
+};
+
+export type SupersedeDurableWakeInput = DurableWakeControlInput & {
+  supersededByRef?: string;
+};
+
+export type MarkDurableWakeDecisionRequiredInput = DurableWakeControlInput & {
+  decisionKind: Extract<
+    DurableWakeControlDecisionKind,
+    "inspected" | "requires_human_decision" | "requires_operator_decision"
+  >;
+};
+
+export type SupersedeDurableWakeDeliveryAttemptInput = DurableWakeControlInput & {
+  deliveryAttemptId: string;
+  supersededByRef?: string;
+};
+
 export type CreateDurableSideEffectUncertaintyFactInput = {
   factId?: string;
   kind: DurableSideEffectUncertaintyKind;
@@ -779,7 +857,13 @@ export type DurableRuntimeStore = {
   listSignals(runtimeRunId: string): DurableRuntimeSignal[];
   createDurableWake(input: CreateDurableWakeInput): DurableWake;
   updateDurableWake(input: UpdateDurableWakeInput): DurableWake | undefined;
+  acknowledgeDurableWake(input: DurableWakeControlInput): DurableWake | undefined;
+  supersedeDurableWake(input: SupersedeDurableWakeInput): DurableWake | undefined;
+  markDurableWakeDecisionRequired(
+    input: MarkDurableWakeDecisionRequiredInput,
+  ): DurableWake | undefined;
   getDurableWake(wakeId: string): DurableWake | undefined;
+  getDurableWakeInspection(wakeId: string): DurableWakeInspection | undefined;
   listDurableWakes(options?: {
     parentRunId?: string;
     parentSessionKey?: string;
@@ -841,6 +925,9 @@ export type DurableRuntimeStore = {
   finalizeWakeDeliveryAttempt(
     input: FinalizeDurableWakeDeliveryAttemptInput,
   ): DurableWakeDeliveryAttempt | undefined;
+  supersedeWakeDeliveryAttempt(
+    input: SupersedeDurableWakeDeliveryAttemptInput,
+  ): DurableWakeDeliveryAttempt | undefined;
   getWakeDeliveryAttempt(deliveryAttemptId: string): DurableWakeDeliveryAttempt | undefined;
   listWakeDeliveryAttempts(options?: {
     wakeId?: string;
@@ -848,6 +935,11 @@ export type DurableRuntimeStore = {
     status?: DurableWakeDeliveryAttemptStatus;
     limit?: number;
   }): DurableWakeDeliveryAttempt[];
+  listPendingWakeObligations(options?: { limit?: number }): DurableWake[];
+  listUnresolvedUncertaintyFacts(options?: {
+    sourceRunId?: string;
+    limit?: number;
+  }): DurableSideEffectUncertaintyFact[];
   listUnresolvedObligations(options?: {
     now?: number;
     limit?: number;

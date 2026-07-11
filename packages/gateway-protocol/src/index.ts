@@ -229,6 +229,28 @@ import {
   DurableCoordinationGetResultSchema,
   type DurableCoordinationProjection,
   DurableCoordinationProjectionSchema,
+  type DurableLimitParams,
+  DurableLimitParamsSchema,
+  type DurableObligationsListResult,
+  DurableObligationsListResultSchema,
+  type DurableWakeControlParams,
+  DurableWakeControlParamsSchema,
+  type DurableWakeControlResult,
+  DurableWakeControlResultSchema,
+  type DurableWakeDeliveryAttemptsListParams,
+  DurableWakeDeliveryAttemptsListParamsSchema,
+  type DurableWakeDeliveryAttemptsListResult,
+  DurableWakeDeliveryAttemptsListResultSchema,
+  type DurableWakeIdParams,
+  DurableWakeIdParamsSchema,
+  type DurableWakeInspectResult,
+  DurableWakeInspectResultSchema,
+  type DurableWakeListResult,
+  DurableWakeListResultSchema,
+  type DurableWakeMarkParams,
+  DurableWakeMarkParamsSchema,
+  type DurableWakeSupersedeParams,
+  DurableWakeSupersedeParamsSchema,
   type ExecApprovalsGetParams,
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
@@ -847,6 +869,34 @@ export const validateDurableCoordinationGetParams = lazyCompile<DurableCoordinat
 export const validateDurableCoordinationGetResult = lazyCompile<DurableCoordinationGetResult>(
   DurableCoordinationGetResultSchema,
 );
+export const validateDurableLimitParams = lazyCompile<DurableLimitParams>(DurableLimitParamsSchema);
+export const validateDurableWakeIdParams =
+  lazyCompile<DurableWakeIdParams>(DurableWakeIdParamsSchema);
+export const validateDurableWakeDeliveryAttemptsListParams =
+  lazyCompile<DurableWakeDeliveryAttemptsListParams>(DurableWakeDeliveryAttemptsListParamsSchema);
+export const validateDurableWakeControlParams = lazyCompile<DurableWakeControlParams>(
+  DurableWakeControlParamsSchema,
+);
+export const validateDurableWakeSupersedeParams = lazyCompile<DurableWakeSupersedeParams>(
+  DurableWakeSupersedeParamsSchema,
+);
+export const validateDurableWakeMarkParams = lazyCompile<DurableWakeMarkParams>(
+  DurableWakeMarkParamsSchema,
+);
+export const validateDurableWakeListResult = lazyCompile<DurableWakeListResult>(
+  DurableWakeListResultSchema,
+);
+export const validateDurableObligationsListResult = lazyCompile<DurableObligationsListResult>(
+  DurableObligationsListResultSchema,
+);
+export const validateDurableWakeInspectResult = lazyCompile<DurableWakeInspectResult>(
+  DurableWakeInspectResultSchema,
+);
+export const validateDurableWakeDeliveryAttemptsListResult =
+  lazyCompile<DurableWakeDeliveryAttemptsListResult>(DurableWakeDeliveryAttemptsListResultSchema);
+export const validateDurableWakeControlResult = lazyCompile<DurableWakeControlResult>(
+  DurableWakeControlResultSchema,
+);
 export const validateConfigGetParams = lazyCompile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = lazyCompile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = lazyCompile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -1264,6 +1314,17 @@ export {
   DurableCoordinationGetParamsSchema,
   DurableCoordinationProjectionSchema,
   DurableCoordinationGetResultSchema,
+  DurableLimitParamsSchema,
+  DurableWakeIdParamsSchema,
+  DurableWakeDeliveryAttemptsListParamsSchema,
+  DurableWakeControlParamsSchema,
+  DurableWakeSupersedeParamsSchema,
+  DurableWakeMarkParamsSchema,
+  DurableWakeListResultSchema,
+  DurableObligationsListResultSchema,
+  DurableWakeInspectResultSchema,
+  DurableWakeDeliveryAttemptsListResultSchema,
+  DurableWakeControlResultSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -1656,6 +1717,17 @@ export type {
   DurableCoordinationGetParams,
   DurableCoordinationProjection,
   DurableCoordinationGetResult,
+  DurableLimitParams,
+  DurableWakeIdParams,
+  DurableWakeDeliveryAttemptsListParams,
+  DurableWakeControlParams,
+  DurableWakeSupersedeParams,
+  DurableWakeMarkParams,
+  DurableWakeListResult,
+  DurableObligationsListResult,
+  DurableWakeInspectResult,
+  DurableWakeDeliveryAttemptsListResult,
+  DurableWakeControlResult,
   CronJob,
   CronListParams,
   CronStatusParams,

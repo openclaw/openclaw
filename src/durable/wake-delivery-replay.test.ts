@@ -488,7 +488,7 @@ describe("durable wake delivery replay", () => {
       createPendingWake(store, "unknown", 102);
       const statuses = new Map<
         string,
-        Exclude<DurableWakeDeliveryAttemptStatus, "pending">
+        Exclude<DurableWakeDeliveryAttemptStatus, "pending" | "superseded">
       >([
         ["discord:thread:delivered", "delivered"],
         ["discord:thread:failed", "failed"],

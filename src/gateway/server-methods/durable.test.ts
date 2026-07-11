@@ -219,4 +219,206 @@ describe("durable gateway methods", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("lists, inspects, and controls durable wake obligations", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-gateway-wakes-"));
+    const dbPath = path.join(dir, "state", "openclaw.sqlite");
+    const previousEnabled = process.env.OPENCLAW_DURABLE_RUNTIME;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_DURABLE_RUNTIME = "1";
+    process.env.OPENCLAW_STATE_DIR = dir;
+    const store = openDurableRuntimeSqliteStore({ path: dbPath });
+    let storeClosed = false;
+    try {
+      store.createDurableWake({
+        wakeId: "wake_gateway_ack",
+        targetKind: "operator",
+        targetRef: "operator:oncall",
+        ownerKind: "operator",
+        ownerRef: "operator:oncall",
+        targetResolutionStatus: "resolved",
+        reason: "delivery_unknown",
+        factsRef: "facts:gateway",
+        sourceRunId: "run_gateway_source",
+        dedupeKey: "wake:gateway:ack",
+        metadata: { diagnostics: { route: "operator" }, evidence: { source: "test" } },
+        now: 100,
+      });
+      store.recordWakeDeliveryAttempt({
+        deliveryAttemptId: "attempt_gateway_ack",
+        wakeId: "wake_gateway_ack",
+        dedupeKey: "attempt:gateway:ack",
+        routeKind: "operator",
+        routeRef: "operator:oncall",
+        status: "failed",
+        error: "route unavailable",
+        now: 110,
+      });
+      store.recordSideEffectUncertaintyFact({
+        factId: "fact_gateway_ack",
+        kind: "delivery_unknown",
+        sourceRunId: "run_gateway_source",
+        factsRef: "facts:gateway",
+        dedupeKey: "fact:gateway:ack",
+        now: 120,
+      });
+      store.createDurableWake({
+        wakeId: "wake_gateway_supersede",
+        targetKind: "operator",
+        targetRef: "operator:oncall",
+        ownerKind: "operator",
+        ownerRef: "operator:oncall",
+        reportRouteRef: "operator:oncall",
+        targetResolutionStatus: "resolved",
+        targetResolutionReason: "operator_route",
+        reason: "operator_requested",
+        dedupeKey: "wake:gateway:supersede",
+        now: 130,
+      });
+      store.createDurableWake({
+        wakeId: "wake_gateway_mark",
+        targetKind: "operator",
+        targetRef: "operator:oncall",
+        ownerKind: "operator",
+        ownerRef: "operator:oncall",
+        reportRouteRef: "operator:oncall",
+        targetResolutionStatus: "resolved",
+        targetResolutionReason: "operator_route",
+        reason: "operator_requested",
+        dedupeKey: "wake:gateway:mark",
+        now: 140,
+      });
+      store.close();
+      storeClosed = true;
+
+      const calls: unknown[][] = [];
+      const call = (method: string, params: Record<string, unknown>) => {
+        durableHandlers[method]?.({
+          params,
+          respond: (...args: unknown[]) => calls.push([method, ...args]),
+        } as never);
+      };
+
+      call("durable.wake.list", { limit: 10 });
+      expect(calls.at(-1)?.[1]).toBe(true);
+      expect(calls.at(-1)?.[2]).toMatchObject({
+        wakes: [
+          { wakeId: "wake_gateway_mark" },
+          { wakeId: "wake_gateway_supersede" },
+          { wakeId: "wake_gateway_ack" },
+        ],
+      });
+
+      call("durable.wake.inspect", { wakeId: "wake_gateway_ack" });
+      expect(calls.at(-1)?.[1]).toBe(true);
+      expect(calls.at(-1)?.[2]).toMatchObject({
+        inspection: {
+          targetResolution: {
+            diagnostics: { route: "operator" },
+            evidence: { source: "test" },
+          },
+          deliveryAttempts: [{ deliveryAttemptId: "attempt_gateway_ack", status: "failed" }],
+          unresolvedUncertaintyFacts: [{ factId: "fact_gateway_ack", status: "open" }],
+        },
+      });
+
+      call("durable.wake.acknowledge", {
+        wakeId: "wake_gateway_ack",
+        actorKind: "operator",
+        actorRef: "operator:oncall",
+        reason: "operator reviewed failed attempt",
+        idempotencyKey: "gateway:ack:1",
+        evidence: { ticket: "GW-1" },
+      });
+      expect(calls.at(-1)?.[1]).toBe(true);
+      expect(calls.at(-1)?.[2]).toMatchObject({
+        wake: {
+          wakeId: "wake_gateway_ack",
+          status: "acked",
+          metadata: { durableWakeControls: [{ kind: "acknowledged" }] },
+        },
+      });
+
+      call("durable.wake.supersede", {
+        wakeId: "wake_gateway_supersede",
+        actorKind: "external",
+        actorRef: "ticket:GW-2",
+        reason: "stale route replaced",
+        idempotencyKey: "gateway:supersede:1",
+        supersededByRef: "wake:replacement",
+      });
+      expect(calls.at(-1)?.[1]).toBe(true);
+      expect(calls.at(-1)?.[2]).toMatchObject({
+        wake: { wakeId: "wake_gateway_supersede", status: "superseded" },
+      });
+
+      call("durable.wake.mark", {
+        wakeId: "wake_gateway_mark",
+        actorKind: "operator",
+        actorRef: "operator:oncall",
+        reason: "requires explicit owner decision",
+        idempotencyKey: "gateway:mark:1",
+        decisionKind: "requires_human_decision",
+      });
+      expect(calls.at(-1)?.[1]).toBe(true);
+      expect(calls.at(-1)?.[2]).toMatchObject({
+        wake: {
+          wakeId: "wake_gateway_mark",
+          status: "pending",
+          metadata: { durableWakeControls: [{ kind: "requires_human_decision" }] },
+        },
+      });
+    } finally {
+      if (!storeClosed) {
+        store.close();
+      }
+      if (previousEnabled === undefined) {
+        delete process.env.OPENCLAW_DURABLE_RUNTIME;
+      } else {
+        process.env.OPENCLAW_DURABLE_RUNTIME = previousEnabled;
+      }
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid durable wake control params before opening durable state", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-invalid-wake-control-"));
+    const previousEnabled = process.env.OPENCLAW_DURABLE_RUNTIME;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_DURABLE_RUNTIME = "1";
+    process.env.OPENCLAW_STATE_DIR = dir;
+    try {
+      const calls: unknown[][] = [];
+      durableHandlers["durable.wake.acknowledge"]?.({
+        params: {
+          wakeId: "wake_invalid",
+          actorKind: "operator",
+          actorRef: "operator:test",
+          reason: "missing idempotency",
+        },
+        respond: (...args: unknown[]) => calls.push(args),
+      } as never);
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toBe(false);
+      expect(fs.existsSync(path.join(dir, "state", "openclaw.sqlite"))).toBe(false);
+    } finally {
+      if (previousEnabled === undefined) {
+        delete process.env.OPENCLAW_DURABLE_RUNTIME;
+      } else {
+        process.env.OPENCLAW_DURABLE_RUNTIME = previousEnabled;
+      }
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

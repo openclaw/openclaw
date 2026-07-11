@@ -335,4 +335,186 @@ describe("durableCommand", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("lists and inspects durable wake obligations with delivery attempts and diagnostics", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-cli-wakes-"));
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_DURABLE_RUNTIME: "1",
+    };
+    const wakeId = (() => {
+      const store = openDurableRuntimeStore({ env });
+      try {
+        const wake = store.createDurableWake({
+          wakeId: "wake_cli_inspect",
+          targetKind: "agent_session",
+          targetRef: "agent:main:session",
+          ownerKind: "agent_session",
+          ownerRef: "agent:main:session",
+          targetResolutionStatus: "resolved",
+          reason: "delivery_unknown",
+          factsRef: "facts:cli",
+          sourceRunId: "run_cli_source",
+          dedupeKey: "wake:cli:inspect",
+          metadata: {
+            diagnostics: { route: "owner-route" },
+            evidence: { source: "unit-test" },
+          },
+          now: 100,
+        });
+        store.recordWakeDeliveryAttempt({
+          deliveryAttemptId: "attempt_cli_inspect",
+          wakeId: wake.wakeId,
+          dedupeKey: "attempt:cli:inspect",
+          routeKind: "agent_session",
+          routeRef: "agent:main:session",
+          status: "unknown",
+          evidence: { delivery: "unknown" },
+          now: 120,
+        });
+        store.recordSideEffectUncertaintyFact({
+          factId: "fact_cli_inspect",
+          kind: "delivery_unknown",
+          sourceRunId: "run_cli_source",
+          factsRef: "facts:cli",
+          dedupeKey: "fact:cli:inspect",
+          facts: { delivery: "unknown" },
+          now: 130,
+        });
+        return wake.wakeId;
+      } finally {
+        store.close();
+      }
+    })();
+
+    try {
+      const listCapture = createRuntimeCapture();
+      await durableCommand({ action: "wakes", env, json: true }, listCapture.runtime);
+      expect(JSON.parse(listCapture.logs[0] ?? "[]")).toMatchObject([
+        { wakeId, status: "pending", targetResolutionStatus: "resolved" },
+      ]);
+
+      const inspectCapture = createRuntimeCapture();
+      await durableCommand({ action: "wake", wakeId, env, json: true }, inspectCapture.runtime);
+      expect(JSON.parse(inspectCapture.logs[0] ?? "{}")).toMatchObject({
+        wake: { wakeId },
+        targetResolution: {
+          diagnostics: { route: "owner-route" },
+          evidence: { source: "unit-test" },
+        },
+        deliveryAttempts: [{ deliveryAttemptId: "attempt_cli_inspect", status: "unknown" }],
+        unresolvedUncertaintyFacts: [{ factId: "fact_cli_inspect", status: "open" }],
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records audited durable wake controls and rejects missing control args", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-cli-controls-"));
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_DURABLE_RUNTIME: "1",
+    };
+    const store = openDurableRuntimeStore({ env });
+    try {
+      store.createDurableWake({
+        wakeId: "wake_cli_ack",
+        targetKind: "operator",
+        targetRef: "operator:cli-controls",
+        ownerKind: "operator",
+        ownerRef: "operator:cli-controls",
+        reportRouteRef: "operator:cli-controls",
+        targetResolutionStatus: "resolved",
+        targetResolutionReason: "operator_route",
+        reason: "operator_requested",
+        dedupeKey: "wake:cli:ack",
+        now: 100,
+      });
+      store.createDurableWake({
+        wakeId: "wake_cli_mark",
+        targetKind: "operator",
+        targetRef: "operator:cli-controls",
+        ownerKind: "operator",
+        ownerRef: "operator:cli-controls",
+        reportRouteRef: "operator:cli-controls",
+        targetResolutionStatus: "resolved",
+        targetResolutionReason: "operator_route",
+        reason: "operator_requested",
+        dedupeKey: "wake:cli:mark",
+        now: 100,
+      });
+      store.close();
+
+      const ackCapture = createRuntimeCapture();
+      await durableCommand(
+        {
+          action: "wake-ack",
+          wakeId: "wake_cli_ack",
+          actorKind: "operator",
+          actorRef: "operator:test",
+          reason: "operator confirmed delivery",
+          idempotencyKey: "ack:cli:1",
+          evidence: { ticket: "T-1" },
+          env,
+          json: true,
+        },
+        ackCapture.runtime,
+      );
+      expect(JSON.parse(ackCapture.logs[0] ?? "{}")).toMatchObject({
+        wakeId: "wake_cli_ack",
+        status: "acked",
+        metadata: {
+          durableWakeControls: [
+            {
+              kind: "acknowledged",
+              actorKind: "operator",
+              actorRef: "operator:test",
+              idempotencyKey: "ack:cli:1",
+            },
+          ],
+        },
+      });
+
+      const markCapture = createRuntimeCapture();
+      await durableCommand(
+        {
+          action: "wake-mark",
+          wakeId: "wake_cli_mark",
+          actorKind: "external",
+          actorRef: "ticket:T-2",
+          reason: "needs owner choice",
+          idempotencyKey: "mark:cli:1",
+          decisionKind: "requires_operator_decision",
+          env,
+          json: true,
+        },
+        markCapture.runtime,
+      );
+      expect(JSON.parse(markCapture.logs[0] ?? "{}")).toMatchObject({
+        wakeId: "wake_cli_mark",
+        status: "pending",
+        metadata: {
+          durableWakeControls: [{ kind: "requires_operator_decision" }],
+        },
+      });
+
+      const invalidCapture = createRuntimeCapture();
+      await durableCommand(
+        {
+          action: "wake-supersede",
+          wakeId: "wake_cli_mark",
+          actorKind: "operator",
+          actorRef: "operator:test",
+          reason: "missing idempotency key",
+          env,
+        },
+        invalidCapture.runtime,
+      );
+      expect(invalidCapture.runtime.exit).toHaveBeenCalledWith(1);
+      expect(invalidCapture.errors).toContain("--idempotency-key is required.");
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 });
