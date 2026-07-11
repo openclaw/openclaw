@@ -624,8 +624,10 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
     const browserUrl = deviceCode.verificationUriComplete ?? deviceCode.verificationUri;
+    let openedBrowser = false;
     try {
       await ctx.openUrl(browserUrl);
+      openedBrowser = true;
     } catch {
       ctx.runtime.log(`Open manually: ${deviceCode.verificationUri}`);
     }
@@ -633,7 +635,7 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
     const logUrl = deviceCode.verificationUri;
     if (ctx.isRemote) {
       ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${logUrl}\n`);
-    } else {
+    } else if (openedBrowser) {
       ctx.runtime.log(`Open: ${logUrl}`);
     }
 
