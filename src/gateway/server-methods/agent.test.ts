@@ -3979,8 +3979,10 @@ describe("gateway agent handler", () => {
 
   it("stops continuation release recovery after gateway generation rotation", async () => {
     vi.useFakeTimers();
+    resetGatewayWorkAdmission();
     try {
       const { sessionKey, store } = setupCronContinuationReleaseFixture();
+      const context = makeContext();
       let releaseAttempts = 0;
       mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
         if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
@@ -4001,11 +4003,20 @@ describe("gateway agent handler", () => {
         {
           reqId: "cron-media-release-rotates",
           client: cronContinuationGatewayClient(),
+          context,
           flushDispatch: false,
         },
       );
       await vi.advanceTimersByTimeAsync(10);
       expect(releaseAttempts).toBe(3);
+      const busyPrepare = await invokeGatewaySuspendPrepare(context, "cron-media-release-rotating");
+      expect(busyPrepare).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          status: "busy",
+          blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request" })]),
+        }),
+      );
 
       mocks.lifecycleGeneration = "post-restart-generation";
       await vi.advanceTimersByTimeAsync(250);
@@ -4015,7 +4026,21 @@ describe("gateway agent handler", () => {
         phase: "continuing",
         ownerRunId: "cron-media-release-rotates",
       });
+      const readyPrepare = await invokeGatewaySuspendPrepare(
+        context,
+        "cron-media-release-rotation-complete",
+      );
+      const readyPayload = readyPrepare.mock.calls.at(-1)?.[1] as
+        | { status?: string; suspensionId?: string }
+        | undefined;
+      expect(readyPayload).toMatchObject({ status: "ready" });
+      expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({
+        ok: true,
+        status: "running",
+      });
     } finally {
+      resetGatewaySuspendCoordinatorForTest();
+      resetGatewayWorkAdmission();
       vi.useRealTimers();
     }
   });
