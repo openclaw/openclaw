@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
@@ -150,7 +151,9 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         pendingFinalDeliveryIntentId: "intent-silenced-operational",
       });
 
-      replySpy.mockResolvedValue({ text: operationalText, isError: true });
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({ text: operationalText, isError: true }),
+      );
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
       const result = await runHeartbeatOnce({
