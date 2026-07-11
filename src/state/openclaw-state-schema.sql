@@ -1179,6 +1179,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
   ended_at INTEGER,
   last_event_at INTEGER,
   cleanup_after INTEGER,
+  tool_use_count INTEGER,
+  last_tool_name TEXT,
   error TEXT,
   progress_summary TEXT,
   terminal_summary TEXT,

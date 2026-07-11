@@ -2330,6 +2330,8 @@ export const en: TranslationMap = {
       finished: "Finished ({count})",
       stopTask: "Stop {title}",
       viewTranscript: "View transcript",
+      toolUseOne: "{count} tool use",
+      toolUseMany: "{count} tool uses",
     },
     sessionDiff: {
       title: "Changes",

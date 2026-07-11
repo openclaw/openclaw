@@ -978,6 +978,7 @@ export interface TaskRuns {
   error: string | null;
   label: string | null;
   last_event_at: number | null;
+  last_tool_name: string | null;
   notify_policy: string;
   owner_key: string;
   parent_flow_id: string | null;
@@ -996,6 +997,7 @@ export interface TaskRuns {
   task_kind: string | null;
   terminal_outcome: string | null;
   terminal_summary: string | null;
+  tool_use_count: number | null;
 }
 
 export interface TuiLastSessions {

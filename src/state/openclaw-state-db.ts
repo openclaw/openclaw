@@ -1378,6 +1378,8 @@ function ensureAdditiveStateColumns(db: DatabaseSync, pathname: string): void {
       operationLabel: "state.schema.ensure-columns",
     },
   );
+  ensureColumn(db, "task_runs", "tool_use_count INTEGER");
+  ensureColumn(db, "task_runs", "last_tool_name TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
