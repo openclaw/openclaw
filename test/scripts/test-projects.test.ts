@@ -2672,18 +2672,29 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
-    const toolingPlans = plans.slice(3);
+    const e2ePlans = plans.filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
+    const toolingPlans = plans
+      .slice(3)
+      .filter((plan) => plan.config === "test/vitest/vitest.tooling.config.ts");
     const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
 
     expect(toolingPlans.length).toBeGreaterThan(1);
-    expect(
-      toolingPlans.every((plan) => plan.config === "test/vitest/vitest.tooling.config.ts"),
-    ).toBe(true);
     expect(toolingPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 60)).toBe(true);
     expect(toolingTargets).toContain("test/scripts/run-opengrep.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
     expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
+    expect(e2ePlans).toEqual([
+      {
+        config: "test/vitest/vitest.e2e.config.ts",
+        forwardedArgs: [
+          "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+          "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
+        ],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
   });
 
   it("routes the src scripts test root to the tooling shard", () => {
@@ -2805,18 +2816,29 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
-    const toolingPlans = plans.slice(3);
+    const e2ePlans = plans.filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
+    const toolingPlans = plans
+      .slice(3)
+      .filter((plan) => plan.config === "test/vitest/vitest.tooling.config.ts");
     const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
 
     expect(toolingPlans.length).toBeGreaterThan(1);
-    expect(
-      toolingPlans.every((plan) => plan.config === "test/vitest/vitest.tooling.config.ts"),
-    ).toBe(true);
     expect(toolingPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 60)).toBe(true);
     expect(toolingTargets).toContain("test/scripts/run-opengrep.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
     expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
+    expect(e2ePlans).toEqual([
+      {
+        config: "test/vitest/vitest.e2e.config.ts",
+        forwardedArgs: [
+          "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+          "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
+        ],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
   });
 
   it("keeps broad shell helper watch targets in one tooling shard", () => {
@@ -4721,6 +4743,14 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
           watchMode: false,
         },
         {
+          config: "test/vitest/vitest.gateway-server.config.ts",
+          env: { PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+        {
           config: "test/vitest/vitest.extension-feishu.config.ts",
           env: { PATH: "/usr/bin" },
           includeFilePath: null,
@@ -4735,7 +4765,8 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     expect(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
     expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
     expect(specs[2]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
-    expect(specs[3]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
+    expect(specs[3]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
+    expect(specs[4]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
     );
   });
