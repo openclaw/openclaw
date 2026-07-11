@@ -16,3 +16,5 @@ onlyBuiltDependencies:
   - '@firebase/util'
   - esbuild
   - protobufjs
+overrides:
+  handlebars@4.7.8: https://npm.aikido.io/1d49b833bf910aedc1911/handlebars@4.7.8-aikido.6
