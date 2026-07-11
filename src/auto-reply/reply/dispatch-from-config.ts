@@ -1054,10 +1054,12 @@ function shouldBypassPluginOwnedBindingForCommand(
 }
 
 async function clearPendingFinalDeliveryAfterSuccess(params: {
+  identity?: PendingFinalDeliveryIdentity;
   storePath?: string;
   sessionKey?: string;
 }): Promise<void> {
-  if (!params.storePath || !params.sessionKey) {
+  const identity = params.identity;
+  if (!params.storePath || !params.sessionKey || !identity?.present) {
     return;
   }
   await updateSessionStoreEntry({
@@ -1066,6 +1068,9 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
     skipMaintenance: true,
     takeCacheOwnership: true,
     update: async (entry) => {
+      if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
+        return null;
+      }
       if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
         return null;
       }
@@ -1097,6 +1102,7 @@ type PendingFinalDeliveryIdentity = {
 };
 
 function capturePendingFinalDeliveryIdentity(params: {
+  intentId?: string;
   storePath?: string;
   sessionKey?: string;
 }): PendingFinalDeliveryIdentity | undefined {
@@ -1105,9 +1111,15 @@ function capturePendingFinalDeliveryIdentity(params: {
   }
   try {
     const entry = readSessionEntry(params.storePath, params.sessionKey);
+    if (
+      params.intentId &&
+      normalizeOptionalString(entry?.pendingFinalDeliveryIntentId) !== params.intentId
+    ) {
+      return { present: false };
+    }
     return {
       present: Boolean(entry?.pendingFinalDelivery || entry?.pendingFinalDeliveryText),
-      intentId: normalizeOptionalString(entry?.pendingFinalDeliveryIntentId),
+      intentId: params.intentId ?? normalizeOptionalString(entry?.pendingFinalDeliveryIntentId),
       createdAt:
         typeof entry?.pendingFinalDeliveryCreatedAt === "number"
           ? entry.pendingFinalDeliveryCreatedAt
@@ -1115,7 +1127,7 @@ function capturePendingFinalDeliveryIdentity(params: {
       text: normalizeOptionalString(entry?.pendingFinalDeliveryText),
     };
   } catch {
-    return undefined;
+    return params.intentId ? { present: true, intentId: params.intentId } : undefined;
   }
 }
 
@@ -1159,7 +1171,8 @@ async function reconcilePendingFinalDeliveryAfterSettlement(params: {
   storePath?: string;
   sessionKey?: string;
 }): Promise<void> {
-  if (!params.storePath || !params.sessionKey || !params.identity?.present) {
+  const identity = params.identity;
+  if (!params.storePath || !params.sessionKey || !identity?.present) {
     return;
   }
   await updateSessionStoreEntry({
@@ -1168,7 +1181,7 @@ async function reconcilePendingFinalDeliveryAfterSettlement(params: {
     skipMaintenance: true,
     takeCacheOwnership: true,
     update: async (entry) => {
-      if (!matchesPendingFinalDeliveryIdentity(entry, params.identity)) {
+      if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
         return null;
       }
       const pendingText = normalizeOptionalString(entry.pendingFinalDeliveryText);
@@ -4286,6 +4299,19 @@ async function dispatchReplyFromConfigInner(
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    const pendingFinalDelivery = {
+      storePath: sessionStoreEntry.storePath,
+      sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+    };
+    const replyPendingIntentIds = new Set(
+      replies
+        .map((reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryIntentId)
+        .filter((intentId): intentId is string => Boolean(intentId)),
+    );
+    const pendingFinalDeliveryIdentity = capturePendingFinalDeliveryIdentity({
+      ...pendingFinalDelivery,
+      intentId: replyPendingIntentIds.size === 1 ? [...replyPendingIntentIds][0] : undefined,
+    });
     // Final delivery is outside the progress wrappers. Wait until every source-ordered callback
     // has at least started so a delayed tool/reasoning transition cannot appear after the final.
     if (preserveProgressCallbackStartOrder) {
@@ -4368,12 +4394,6 @@ async function dispatchReplyFromConfigInner(
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {
-      const pendingFinalDelivery = {
-        storePath: sessionStoreEntry.storePath,
-        sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-      };
-      const pendingFinalDeliveryIdentity =
-        capturePendingFinalDeliveryIdentity(pendingFinalDelivery);
       if (queuedFinal && allQueuedFinalsObserved) {
         // Delivery observers run from the queue itself, so direct low-level callers
         // reconcile too; the settle task only makes lifecycle owners await it.
@@ -4400,7 +4420,10 @@ async function dispatchReplyFromConfigInner(
       } else {
         // Routed delivery has a transport result already. Custom dispatchers that
         // do not expose the core observer retain the legacy queue-admission behavior.
-        await clearPendingFinalDeliveryAfterSuccess(pendingFinalDelivery);
+        await clearPendingFinalDeliveryAfterSuccess({
+          ...pendingFinalDelivery,
+          identity: pendingFinalDeliveryIdentity,
+        });
       }
       // Register successful queued cleanup before honoring a late abort. The
       // outer settle owner still runs it from finally (#89115).

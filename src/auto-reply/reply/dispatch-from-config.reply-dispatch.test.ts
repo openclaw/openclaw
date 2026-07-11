@@ -586,7 +586,11 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
             ctx: createHookCtx(),
             cfg: emptyConfig,
             dispatcher,
-            replyResolver: async () => ({ text: "older reply" }),
+            replyResolver: async () =>
+              setReplyPayloadMetadata(
+                { text: "older reply" },
+                { pendingFinalDeliveryIntentId: "older-intent" },
+              ),
           }),
       });
       await hookStarted.promise;

@@ -2703,6 +2703,9 @@ export async function runReplyAgent(params: {
         : pendingText;
       if (resolvedPendingText) {
         const pendingFinalDeliveryIntentId = crypto.randomUUID();
+        for (const payload of finalPayloads) {
+          setReplyPayloadMetadata(payload, { pendingFinalDeliveryIntentId });
+        }
         const pendingFinalDeliveryContext = resolveReplyRunDeliveryContext({
           cfg,
           sessionCtx,
