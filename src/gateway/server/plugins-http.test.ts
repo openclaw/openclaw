@@ -167,8 +167,19 @@ async function invokeImessageWebhook(params: {
   return { handled, res };
 }
 
-async function invokeCanvasGatewayUpgrade(params: { gatewayAuthSatisfied: boolean }) {
-  const routeUpgradeHandler = vi.fn(async () => true);
+async function invokeCanvasGatewayUpgrade(params: {
+  gatewayAuthSatisfied: boolean;
+  principal?: {
+    issuer: string;
+    subject: string;
+    kind: "human";
+  };
+}) {
+  let observedPrincipal: unknown;
+  const routeUpgradeHandler = vi.fn(async () => {
+    observedPrincipal = getPluginRuntimeGatewayRequestScope()?.client?.principal;
+    return true;
+  });
   const handler = createGatewayPluginUpgradeHandler({
     registry: createTestRegistry({
       httpRoutes: [
@@ -190,9 +201,18 @@ async function invokeCanvasGatewayUpgrade(params: { gatewayAuthSatisfied: boolea
     {
       gatewayAuthSatisfied: params.gatewayAuthSatisfied,
       ...(params.gatewayAuthSatisfied ? { gatewayRequestOperatorScopes: ["operator.read"] } : {}),
+      ...(params.principal
+        ? {
+            gatewayRequestAuth: {
+              authMethod: "trusted-proxy" as const,
+              principal: params.principal,
+              trustDeclaredOperatorScopes: true,
+            },
+          }
+        : {}),
     },
   );
-  return { handled, routeUpgradeHandler, socket };
+  return { handled, observedPrincipal, routeUpgradeHandler, socket };
 }
 
 describe("createGatewayPluginRequestHandler", () => {
@@ -574,6 +594,22 @@ describe("createGatewayPluginUpgradeHandler", () => {
     expect(routeUpgradeHandler).toHaveBeenCalledTimes(1);
     expect(socket.destroyed).toBe(false);
     expect(socket.chunks).toStrictEqual([]);
+  });
+
+  it("threads the authenticated principal through gateway upgrade runtime scope", async () => {
+    const principal = {
+      issuer: "trusted-proxy",
+      subject: "alice@example.com",
+      kind: "human" as const,
+    };
+    const { handled, observedPrincipal, routeUpgradeHandler } = await invokeCanvasGatewayUpgrade({
+      gatewayAuthSatisfied: true,
+      principal,
+    });
+
+    expect(handled).toBe(true);
+    expect(routeUpgradeHandler).toHaveBeenCalledTimes(1);
+    expect(observedPrincipal).toEqual(principal);
   });
 });
 

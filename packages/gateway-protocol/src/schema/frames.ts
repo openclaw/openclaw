@@ -87,6 +87,21 @@ export const ConnectParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Safe server-issued identity summary shared by Gateway clients and hello responses. */
+export const GatewayPrincipalSchema = Type.Object(
+  {
+    issuer: NonEmptyString,
+    subject: NonEmptyString,
+    kind: Type.Union([
+      Type.Literal("human"),
+      Type.Literal("device"),
+      Type.Literal("service"),
+      Type.Literal("shared"),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
 /** Successful gateway hello response with negotiated protocol and initial state. */
 export const HelloOkSchema = Type.Object(
   {
@@ -129,6 +144,7 @@ export const HelloOkSchema = Type.Object(
     pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
     auth: Type.Object(
       {
+        principal: Type.Optional(GatewayPrincipalSchema),
         deviceToken: Type.Optional(NonEmptyString),
         role: NonEmptyString,
         scopes: Type.Array(NonEmptyString),
@@ -219,6 +235,7 @@ export const GatewayFrameSchema = Type.Union(
 // Frame types are owner-local because they cross the public client/plugin SDK.
 // Keeping them off the aggregate registry avoids retaining every RPC schema.
 export type ConnectParams = Static<typeof ConnectParamsSchema>;
+export type GatewayPrincipal = Readonly<Static<typeof GatewayPrincipalSchema>>;
 export type HelloOk = Static<typeof HelloOkSchema>;
 export type ErrorShape = Static<typeof ErrorShapeSchema>;
 export type RequestFrame = Static<typeof RequestFrameSchema>;

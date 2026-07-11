@@ -114,6 +114,7 @@ export async function attachAuthenticatedGatewayConnect(
     role,
     scopes,
     device,
+    authResult,
     authMethod,
     pairingLocality,
     sessionUsesSharedGatewayAuth,
@@ -222,6 +223,7 @@ export async function attachAuthenticatedGatewayConnect(
   const nextClient: GatewayWsClient = {
     socket,
     connect: connectParams,
+    ...(authResult.principal ? { principal: authResult.principal } : {}),
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
