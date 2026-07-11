@@ -159,6 +159,23 @@ function createOversizedTablePresentation() {
   });
 }
 
+function createElementLimitedCommandPresentation(): MessagePresentation {
+  return {
+    blocks: [
+      ...Array.from({ length: 200 }, () => ({ type: "divider" as const })),
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Approve",
+            action: { type: "command", command: "/approve req_1" },
+          },
+        ],
+      },
+    ],
+  };
+}
+
 afterAll(() => {
   vi.doUnmock("./media.js");
   vi.doUnmock("./send.js");
@@ -724,6 +741,84 @@ describe("feishuOutbound.sendPayload native cards", () => {
     ).toBe(true);
     expect(deliveredText).toContain("account-0-");
     expect(deliveredText).toContain("account-399-");
+    expectFeishuResult(result, "text_msg");
+  });
+
+  it("preserves command guidance in core-rendered element-limit fallbacks for comments", async () => {
+    const presentation = createElementLimitedCommandPresentation();
+    const payload = { presentation };
+    const rendered = await feishuOutbound.renderPresentation?.({
+      payload,
+      presentation,
+      ctx: {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "",
+        accountId: "main",
+        payload,
+      },
+    });
+    if (!rendered) {
+      throw new Error("expected explicit Feishu fallback payload");
+    }
+    const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: coreRenderedPayload.text ?? "",
+      accountId: "main",
+      payload: coreRenderedPayload,
+    });
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(commentThreadParams()?.content).toBe(
+      "- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    );
+    expectFeishuResult(result, "reply_msg");
+  });
+
+  it("consumes a single-use reply once for short element-limit fallback media", async () => {
+    const presentation = createElementLimitedCommandPresentation();
+    const payload = { presentation, mediaUrl: "/tmp/pipeline.png" };
+    const rendered = await feishuOutbound.renderPresentation?.({
+      payload,
+      presentation,
+      ctx: {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "",
+        accountId: "main",
+        payload,
+      },
+    });
+    if (!rendered) {
+      throw new Error("expected explicit Feishu fallback payload");
+    }
+    const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: coreRenderedPayload.text ?? "",
+      accountId: "main",
+      replyToId: "om_reply",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      payload: coreRenderedPayload,
+    });
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaCall()).toMatchObject({
+      mediaUrl: "/tmp/pipeline.png",
+      replyToMessageId: "om_reply",
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageCall()).toMatchObject({
+      text: "- Approve: `/approve req_1`",
+      replyToMessageId: undefined,
+    });
     expectFeishuResult(result, "text_msg");
   });
 

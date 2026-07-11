@@ -131,12 +131,13 @@ type FeishuOutboundPayload = Parameters<
 >[0]["payload"];
 type FeishuSendPayloadContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
 
-function consumeFeishuPresentationFallbackMarker(
-  payload: FeishuOutboundPayload,
-): FeishuOutboundPayload {
+function consumeFeishuPresentationFallbackMarker(payload: FeishuOutboundPayload): {
+  payload: FeishuOutboundPayload;
+  presentationFallback: boolean;
+} {
   const feishuData = isRecord(payload.channelData?.feishu) ? payload.channelData.feishu : undefined;
   if (feishuData?.[FEISHU_PRESENTATION_FALLBACK_MARKER] !== true) {
-    return payload;
+    return { payload, presentationFallback: false };
   }
   const nextFeishuData = { ...feishuData };
   delete nextFeishuData[FEISHU_PRESENTATION_FALLBACK_MARKER];
@@ -147,8 +148,11 @@ function consumeFeishuPresentationFallbackMarker(
     delete nextChannelData.feishu;
   }
   return {
-    ...payload,
-    channelData: Object.keys(nextChannelData).length > 0 ? nextChannelData : undefined,
+    payload: {
+      ...payload,
+      channelData: Object.keys(nextChannelData).length > 0 ? nextChannelData : undefined,
+    },
+    presentationFallback: true,
   };
 }
 
@@ -259,6 +263,7 @@ function renderFeishuPresentationPayload({
   const existingFeishuData = isRecord(payload.channelData?.feishu)
     ? payload.channelData.feishu
     : undefined;
+  const fallbackHasCommand = hasVisibleFallbackCommand(presentation?.blocks);
   if (!card) {
     // The marker keeps core on sendPayload after it strips presentation; that path
     // consumes it and fans out text instead of using the whole fallback as a caption.
@@ -270,12 +275,12 @@ function renderFeishuPresentationPayload({
         feishu: {
           ...existingFeishuData,
           [FEISHU_PRESENTATION_FALLBACK_MARKER]: true,
+          ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
         },
       },
     };
   }
   // Core consumes presentation before sendPayload; carry the fallback fact.
-  const fallbackHasCommand = hasVisibleFallbackCommand(presentation?.blocks);
   return {
     ...payload,
     text: fallbackText,
@@ -482,7 +487,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   },
   renderPresentation: renderFeishuPresentationPayload,
   sendPayload: async (ctx) => {
-    const payload = consumeFeishuPresentationFallbackMarker(ctx.payload);
+    const { payload, presentationFallback } = consumeFeishuPresentationFallbackMarker(ctx.payload);
     if (parseFeishuCommentTarget(ctx.to)) {
       const interactive = normalizeInteractiveReply(payload.interactive);
       const normalizedPresentation =
@@ -549,7 +554,11 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             interactive: undefined,
           }
         : payload;
-      return await sendFeishuFallbackPayload({ ctx, payload: fallbackPayload });
+      return await sendFeishuFallbackPayload({
+        ctx,
+        payload: fallbackPayload,
+        separateMediaAndText: presentationFallback || presentation !== undefined,
+      });
     }
 
     const { normalizedReplyToId } = resolveFeishuReplyMode({
