@@ -526,7 +526,7 @@ async function acquireSharedCodexAppServerClient(
     );
     const client = await withCodexAppServerAcquireDeadline(
       startup.ready,
-      resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
+      timeoutMs,
       options?.abandonSignal,
       "codex app-server authentication timed out",
     );
