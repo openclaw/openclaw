@@ -328,6 +328,15 @@ describe("release Telegram QA workflow", () => {
     }
   });
 
+  it("allows the tracked-file index to exceed Node's default child-process buffer", () => {
+    const compareStep = workflowStep(
+      workflowJob("attest_candidate"),
+      "Compare candidate tracked source and tree",
+    );
+
+    expect(compareStep.run).toContain("maxBuffer: 16 * 1024 * 1024");
+  });
+
   it("emits the release-check terminal status contract and fails closed", () => {
     const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as {
       jobs?: Record<string, WorkflowJob>;

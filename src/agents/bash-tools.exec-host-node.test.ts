@@ -78,6 +78,13 @@ const preparedPlan = vi.hoisted(() => ({
   commandPreview: "bun ./script.ts",
   agentId: "prepared-agent",
   sessionKey: "prepared-session",
+  policySnapshot: {
+    security: "full" as const,
+    ask: "off" as const,
+    askFallback: "deny" as const,
+    autoAllowSkills: false,
+    allowlistRules: [{ pattern: "/usr/local/bin/bun" }],
+  },
   mutableFileOperand: {
     argvIndex: 1,
     path: "/tmp/work/script.ts",
