@@ -59,44 +59,6 @@ final class AppState {
         action()
     }
 
-    enum ConnectionMode: String {
-        case unconfigured
-        case local
-        case remote
-    }
-
-    enum RemoteTransport: String {
-        case ssh
-        case direct
-    }
-
-    struct RemoteGatewayConfigDraft {
-        var transport: RemoteTransport
-        var remoteUrl: String
-        var remoteHost: String?
-        var remoteTarget: String
-        var remoteIdentity: String
-        var remoteToken: String
-        var remoteTokenDirty: Bool
-    }
-
-    struct GatewayConfigSyncDraft {
-        var connectionMode: ConnectionMode
-        var remoteTransport: RemoteTransport
-        var remoteTarget: String
-        var remoteIdentity: String
-        var remoteUrl: String
-        var remoteToken: String
-        var remoteTokenDirty: Bool
-    }
-
-    private struct GatewaySelectionSnapshot: Equatable {
-        let connectionMode: ConnectionMode
-        let remoteTransport: RemoteTransport
-        let remoteUrl: String
-        let remoteTarget: String
-    }
-
     var isPaused: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
     }
@@ -1186,6 +1148,46 @@ extension AppState {
         state.remoteProjectRoot = "~/Projects/openclaw"
         state.remoteCliPath = ""
         return state
+    }
+}
+
+extension AppState {
+    enum ConnectionMode: String {
+        case unconfigured
+        case local
+        case remote
+    }
+
+    enum RemoteTransport: String {
+        case ssh
+        case direct
+    }
+
+    struct RemoteGatewayConfigDraft {
+        var transport: RemoteTransport
+        var remoteUrl: String
+        var remoteHost: String?
+        var remoteTarget: String
+        var remoteIdentity: String
+        var remoteToken: String
+        var remoteTokenDirty: Bool
+    }
+
+    struct GatewayConfigSyncDraft {
+        var connectionMode: ConnectionMode
+        var remoteTransport: RemoteTransport
+        var remoteTarget: String
+        var remoteIdentity: String
+        var remoteUrl: String
+        var remoteToken: String
+        var remoteTokenDirty: Bool
+    }
+
+    private struct GatewaySelectionSnapshot: Equatable {
+        let connectionMode: ConnectionMode
+        let remoteTransport: RemoteTransport
+        let remoteUrl: String
+        let remoteTarget: String
     }
 }
 
