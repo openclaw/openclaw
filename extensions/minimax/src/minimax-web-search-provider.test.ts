@@ -143,6 +143,45 @@ describe("minimax web search provider", () => {
       expect(resolveMiniMaxApiKey({ apiKey: "configured-key" })).toBe("configured-key");
     });
 
+    it("resolves configured env SecretRefs before MiniMax token-plan fallbacks", () => {
+      process.env.MINIMAX_CODE_PLAN_KEY = "token-plan-fallback";
+      process.env.MINIMAX_SECRETREF_API_KEY = "secretref-token-plan-key";
+      expect(
+        resolveMiniMaxApiKey({
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "MINIMAX_SECRETREF_API_KEY",
+          },
+        }),
+      ).toBe("secretref-token-plan-key");
+    });
+
+    it("does not use MiniMax token-plan fallbacks when configured SecretRefs are unavailable", () => {
+      process.env.MINIMAX_CODE_PLAN_KEY = "token-plan-fallback";
+      process.env.MINIMAX_API_KEY = "legacy-fallback";
+      process.env.MISSING_MINIMAX_SECRETREF_API_KEY = "";
+
+      expect(
+        resolveMiniMaxApiKey({
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "MISSING_MINIMAX_SECRETREF_API_KEY",
+          },
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveMiniMaxApiKey({
+          apiKey: {
+            source: "file",
+            provider: "vault",
+            id: "/minimax/api-key",
+          },
+        }),
+      ).toBeUndefined();
+    });
+
     it("accepts MINIMAX_CODING_API_KEY as a token-plan alias", () => {
       process.env.MINIMAX_CODING_API_KEY = "coding-key";
       expect(resolveMiniMaxApiKey()).toBe("coding-key");
