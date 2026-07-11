@@ -2023,13 +2023,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           options.showFallback && rows.length === 0 && section.id === "ungrouped",
         ),
       )}
-      ${this.renderSessionPagination(rows.length, visibleRows.length)}
+      ${this.renderSessionPagination(rows, visibleRows.length)}
     `;
   }
 
-  private renderSessionPagination(total: number, visible: number) {
-    const canShowMore = visible < total;
-    const canShowLess = visible > SIDEBAR_SESSION_SEE_LESS_THRESHOLD;
+  private renderSessionPagination(rows: SidebarRecentSession[], visible: number) {
+    const canShowMore = visible < rows.length;
+    const collapsedVisible = limitSidebarSessionRows(rows, SIDEBAR_SESSION_PAGE_SIZE).length;
+    const canShowLess = visible > SIDEBAR_SESSION_SEE_LESS_THRESHOLD && visible > collapsedVisible;
     if (!canShowMore && !canShowLess) {
       return nothing;
     }

@@ -326,7 +326,28 @@ describe("AppSidebar session pagination", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:session-9"]')).toBeNull();
   });
 
-  it("reveals sessions ten at a time and offers See less after thirty", async () => {
+  it("hides pagination when required sessions cannot be collapsed", async () => {
+    const keys = [
+      "agent:main:main",
+      ...Array.from({ length: 30 }, (_, index) => `agent:main:pinned-${index + 1}`),
+    ];
+    const sessions = createSessionsHarness("main", keys);
+    const result = sessions.sessions.state.result;
+    expect(result).not.toBeNull();
+    if (!result) {
+      return;
+    }
+    for (const row of result.sessions) {
+      row.pinned = true;
+    }
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(31);
+    expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
+  });
+
+  it("reveals sessions ten at a time and offers Collapse after thirty", async () => {
     const keys = [
       "agent:main:main",
       ...Array.from({ length: 40 }, (_, index) => `agent:main:session-${index + 1}`),
