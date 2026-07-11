@@ -135,11 +135,24 @@ function configuredProviderBaseUrlVariants(value: string): Set<string> {
   return new Set([normalized, withoutOpenAiPath, `${withoutOpenAiPath}/v1`]);
 }
 
+function isLoopbackProviderBaseUrl(value: string): boolean {
+  const normalized = normalizeProviderBaseUrl(value);
+  if (!normalized) {
+    return false;
+  }
+  const hostname = new URL(normalized).hostname.toLowerCase();
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
 function isConfiguredProviderBaseUrl(targetBaseUrl: string, configuredBaseUrl?: string): boolean {
   const target = normalizeProviderBaseUrl(targetBaseUrl);
-  return Boolean(
-    target && configuredBaseUrl && configuredProviderBaseUrlVariants(configuredBaseUrl).has(target),
-  );
+  if (!target) {
+    return false;
+  }
+  const configured = configuredBaseUrl?.trim();
+  return configured
+    ? configuredProviderBaseUrlVariants(configured).has(target)
+    : isLoopbackProviderBaseUrl(target);
 }
 
 /** Attach local-service startup metadata to a model without mutating the original object. */

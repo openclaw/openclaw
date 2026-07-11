@@ -153,6 +153,39 @@ describe("provider local service", () => {
     await waitForProbeFailure(healthUrl);
   });
 
+  it("allows a default loopback endpoint when provider baseUrl is omitted", async () => {
+    const port = await freePort();
+    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
+    const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
+      models: {
+        providers: {
+          "gpu-default": {
+            models: [],
+            localService: {
+              command: process.execPath,
+              args: [
+                "-e",
+                `const http=require("http");http.createServer((req,res)=>{res.writeHead(200);res.end("ok");}).listen(${port},"127.0.0.1");`,
+              ],
+              healthUrl,
+              readyTimeoutMs: 5_000,
+              idleStopMs: 1,
+            },
+          },
+        },
+      },
+    }));
+
+    const lease = await acquire({
+      providerId: "gpu-default",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+    });
+
+    expect(lease).toBeDefined();
+    lease?.release();
+    await waitForProbeFailure(healthUrl);
+  });
+
   it("rejects plugin-selected local service probe hosts", async () => {
     const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
       models: {
@@ -175,6 +208,29 @@ describe("provider local service", () => {
         baseUrl: "http://169.254.169.254/latest/meta-data",
       }),
     ).rejects.toThrow("must match models.providers.gpu-spark.baseUrl");
+  });
+
+  it("rejects a remote endpoint when provider baseUrl is omitted", async () => {
+    const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
+      models: {
+        providers: {
+          "gpu-default": {
+            models: [],
+            localService: {
+              command: process.execPath,
+              args: ["--version"],
+            },
+          },
+        },
+      },
+    }));
+
+    await expect(
+      acquire({
+        providerId: "gpu-default",
+        baseUrl: "http://memory.example/v1",
+      }),
+    ).rejects.toThrow("must match models.providers.gpu-default.baseUrl");
   });
 
   it("caps oversized local service idle stop timers", async () => {
