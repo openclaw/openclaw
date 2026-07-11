@@ -2859,6 +2859,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Listing and reading sessions
   - H2: Sending cross-session messages
   - H2: Status and orchestration helpers
+  - H2: Session state changes
   - H2: Spawning sub-agents
   - H2: Visibility
   - H2: Further reading

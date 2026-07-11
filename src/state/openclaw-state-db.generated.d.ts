@@ -801,6 +801,38 @@ export interface SessionGroups {
   position: number;
 }
 
+export interface SessionStateEvents {
+  actor_id: string | null;
+  actor_type: string;
+  agent_id: string;
+  dedupe_key: string | null;
+  kind: string;
+  occurred_at: number;
+  payload_json: string | null;
+  run_id: string | null;
+  sequence: Generated<number>;
+  session_id: string | null;
+  session_key: string;
+  summary: string;
+}
+
+export interface SessionStateHeads {
+  agent_id: string;
+  last_sequence: number;
+  pruned_max_sequence: Generated<number>;
+  session_key: string;
+  updated_at: number;
+}
+
+export interface SessionWatchCursors {
+  last_seen_sequence: Generated<number>;
+  material_sequence: Generated<number>;
+  notified_sequence: Generated<number>;
+  target_session_key: string;
+  updated_at: number;
+  watcher_session_key: string;
+}
+
 export interface SkillCuratorState {
   id: Generated<number>;
   last_attempt_at_ms: number;
@@ -1118,6 +1150,9 @@ export interface DB {
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   session_groups: SessionGroups;
+  session_state_events: SessionStateEvents;
+  session_state_heads: SessionStateHeads;
+  session_watch_cursors: SessionWatchCursors;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
   skill_uploads: SkillUploads;
