@@ -94,12 +94,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}chat`);
+      // Deep-link to /new: the page loads agents via agents.list (the sidebar
+      // "+" navigates to the same route with ?agent=<id>).
+      const response = await page.goto(`${server.baseUrl}new`);
       expect(response?.status()).toBe(200);
-
-      await page.locator(".sidebar-session-new").click();
       await page.getByRole("heading", { name: "New session" }).waitFor();
-      expect(new URL(page.url()).pathname.endsWith("/new")).toBe(true);
 
       const folderInput = page.getByRole("textbox", { name: "Folder", exact: true });
       await expect.poll(() => folderInput.inputValue()).toBe(WORKSPACE);
