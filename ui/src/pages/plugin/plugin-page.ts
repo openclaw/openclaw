@@ -37,12 +37,12 @@ type BundledPluginTabView = {
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  "dashboard/workspaces": async () => {
+  "workspaces/workspaces": async () => {
     const [view, controller] = await Promise.all([
-      import("./dashboard-view.ts"),
-      import("./dashboard-controller.ts"),
+      import("./workspace-view.ts"),
+      import("./workspace-controller.ts"),
     ]);
-    return { render: view.renderDashboard, stop: controller.stopDashboard };
+    return { render: view.renderWorkspace, stop: controller.stopWorkspace };
   },
   "codex/sessions": async () => {
     const [view, controller] = await Promise.all([
@@ -170,7 +170,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
-      // Config may be absent in unit harnesses; the dashboard view defaults the
+      // Config may be absent in unit harnesses; the Workspaces view defaults the
       // embed policy to strict when `embed` is omitted.
       const config = context.config?.current;
       return this.bundledView.render({

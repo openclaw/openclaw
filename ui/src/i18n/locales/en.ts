@@ -1055,7 +1055,7 @@ export const en: TranslationMap = {
       submit: "Ask",
     },
   },
-  dashboard: {
+  workspaces: {
     tabs: {
       label: "Workspaces",
       hidden: "Hidden ({count})",
@@ -1076,8 +1076,8 @@ export const en: TranslationMap = {
     empty: {
       onboardingTitle: "No workspaces yet",
       onboardingSubtitle:
-        "Ask your agent to build a dashboard, or create one from the command line.",
-      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+        "Ask your agent to build a workspace, or create one from the command line.",
+      onboardingCommand: "openclaw workspaces tabs create --title Main",
       tabTitle: "This workspace is empty",
       tabSubtitle: "Ask your agent to add a widget, or add one yourself.",
       noVisibleTabs: "Every workspace tab is hidden. Restore one from the hidden menu.",

@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **Agent-composable dashboard workspaces:** add an optional modular Control UI workspace plugin where agents can create tabs, arrange built-in widgets, and propose sandboxed custom widgets backed by guarded commands and SQLite state. (#101093) Thanks @100yenadmin.
+- **Agent-composable Workspaces:** add an optional bundled Control UI plugin where agents can create tabs, arrange built-in widgets, and propose sandboxed custom widgets backed by guarded commands and SQLite state. (#101093) Thanks @100yenadmin.
 - **GPT-5.6 Ultra and runtime switching:** support Sol, Terra, and Luna across OpenClaw and Codex engines; keep model, runtime, and thinking selection atomic through `/model` and fallback; and add live matrix coverage for both harnesses. (#98021) Thanks @anyech.
 - **OpenAI GPT-5.6 defaults:** use `openai/gpt-5.6` (Sol alias) for fresh API-key setup and exact `openai/gpt-5.6-sol` for fresh Codex/OAuth setup, while preserving existing primaries, fallbacks, aliases, and explicit GPT-5.5 selections. (#103234)
 - **Meta provider:** add bundled `muse-spark-1.1` model support with Responses API streaming, tool calls, encrypted reasoning replay, onboarding, and standalone npm/ClawHub distribution. (#102873) Thanks @HamidShojanazeri.

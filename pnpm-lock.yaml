@@ -578,7 +578,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/dashboard:
+  extensions/workspaces:
     dependencies:
       typebox:
         specifier: 1.3.3

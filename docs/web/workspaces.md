@@ -1,33 +1,33 @@
 ---
-summary: "Agent-composable dashboard workspaces in the Control UI"
+summary: "Agent-composable Workspaces in the Control UI"
 read_when:
-  - Building or rearranging dashboard tabs and widgets
-  - Letting an agent compose a dashboard
+  - Building or rearranging workspace tabs and widgets
+  - Letting an agent compose a workspace
   - Reviewing the custom-widget approval and sandbox model
 title: "Workspaces"
 ---
 
-The **Workspaces** tab in the [Control UI](/web/control-ui) is a dashboard you and your
+The **Workspaces** tab in the [Control UI](/web/control-ui) is a surface you and your
 agents arrange together. Tabs, widgets, their positions on a 12-column grid, and their
 data bindings all live in one document. Anything that can edit that document can compose
-the dashboard: you, the `openclaw workspaces` CLI, or an agent calling `dashboard_*` tools.
+the workspace: you, the `openclaw workspaces` CLI, or an agent calling `workspace_*` tools.
 
 Every write goes through the same validated path, so a human's layout and an agent's
 layout cannot diverge. Each accepted write bumps a version and broadcasts
-`plugin.dashboard.changed`, so an agent's edit appears in an already-open browser without
+`plugin.workspaces.changed`, so an agent's edit appears in an already-open browser without
 a reload.
 
 ## Enable Workspaces
 
-The bundled Dashboard plugin is disabled by default. In the Control UI, open **Plugins**,
-find **Dashboard**, and select **Enable**. You can also enable it from the CLI:
+The bundled Workspaces plugin is disabled by default. In the Control UI, open **Plugins**,
+find **Workspaces**, and select **Enable**. You can also enable it from the CLI:
 
 ```sh
-openclaw plugins enable dashboard
+openclaw plugins enable workspaces
 ```
 
 Enabling the plugin adds the **Workspaces** tab and makes the `openclaw workspaces` CLI
-and `dashboard_*` agent tools available. Disabling it removes those surfaces without
+and `workspace_*` agent tools available. Disabling it removes those surfaces without
 deleting the workspace database or widget assets.
 
 ## The default workspace
@@ -45,13 +45,13 @@ Nine trusted widgets ship with the plugin and render as first-party UI:
 
 Widgets declare data through **bindings**, they never fetch on their own:
 
-| Binding  | Resolves to                                                                                              |
-| -------- | -------------------------------------------------------------------------------------------------------- |
-| `static` | A literal value stored in the document (8 KB max).                                                       |
-| `file`   | A JSON, Markdown, or CSV file under `<stateDir>/dashboard/data/`, optionally narrowed by a JSON pointer. |
-| `rpc`    | One of a fixed allowlist of read-only gateway methods, resolved by the trusted Control UI.               |
+| Binding  | Resolves to                                                                                               |
+| -------- | --------------------------------------------------------------------------------------------------------- |
+| `static` | A literal value stored in the document (8 KB max).                                                        |
+| `file`   | A JSON, Markdown, or CSV file under `<stateDir>/workspaces/data/`, optionally narrowed by a JSON pointer. |
+| `rpc`    | One of a fixed allowlist of read-only gateway methods, resolved by the trusted Control UI.                |
 
-The `file` binding is the simplest way to put your own numbers on a dashboard: write a
+The `file` binding is the simplest way to put your own numbers in a workspace: write a
 JSON file into the data directory and point a `stat-card` at it.
 
 ## Provenance
@@ -62,12 +62,12 @@ work as yours, and the "AI" chip on an agent-authored widget always means what i
 
 ## Custom widgets
 
-An agent can author a real HTML widget with `dashboard_widget_scaffold` (or you can, with
+An agent can author a real HTML widget with `workspace_widget_scaffold` (or you can, with
 `openclaw workspaces widget-scaffold <name>`). Agent-authored code is treated as hostile:
 
 - A scaffolded widget enters the registry as **pending**. No iframe is created, and the
   asset route returns 404 for its files, until an operator approves it.
-- Approval is a separate decision from editing a layout: `dashboard.widget.approve`
+- Approval is a separate decision from editing a layout: `workspaces.widget.approve`
   requires the `operator.approvals` scope, the same scope that guards exec approvals.
 - An approved widget renders in an `<iframe sandbox="allow-scripts">` — never
   `allow-same-origin` — so its origin is opaque and it cannot reach the parent's DOM,
@@ -98,7 +98,7 @@ the Control UI does not, because the browser already holds it.
 ## Storage
 
 The workspace document, the custom-widget registry, and a 20-entry undo ring live in
-`<stateDir>/dashboard/dashboard.sqlite`. Agent-authored widget assets stay on disk under
-`<stateDir>/dashboard/widgets/<name>/`, and file-binding data under
-`<stateDir>/dashboard/data/`, because an agent authors those with ordinary file tools and
+`<stateDir>/workspaces/workspaces.sqlite`. Agent-authored widget assets stay on disk under
+`<stateDir>/workspaces/widgets/<name>/`, and file-binding data under
+`<stateDir>/workspaces/data/`, because an agent authors those with ordinary file tools and
 the widget route serves their bytes.
