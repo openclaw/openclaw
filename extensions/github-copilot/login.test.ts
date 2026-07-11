@@ -97,6 +97,57 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
     });
     expect(result).toEqual({ status: "expired" });
   });
+
+  it("persists GitHub slow_down intervals across later polls", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-10T00:00:00.000Z"));
+      const startedAt = Date.now();
+      const tokenPollTimes: number[] = [];
+      let observeFirstPoll: (() => void) | undefined;
+      const firstPollObserved = new Promise<void>((resolve) => {
+        observeFirstPoll = resolve;
+      });
+
+      setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => {
+        if (params.url === DEVICE_CODE_URL) {
+          return guardResponse({ ...VALID_DEVICE_CODE_BODY, interval: 1 });
+        }
+        tokenPollTimes.push(Date.now());
+        observeFirstPoll?.();
+        if (tokenPollTimes.length === 1) {
+          return guardResponse({ error: "slow_down", interval: 9 }, 200, ACCESS_TOKEN_URL);
+        }
+        if (tokenPollTimes.length === 2) {
+          return guardResponse({ error: "authorization_pending" }, 200, ACCESS_TOKEN_URL);
+        }
+        if (tokenPollTimes.length === 3) {
+          return guardResponse({ error: "slow_down" }, 200, ACCESS_TOKEN_URL);
+        }
+        return guardResponse(
+          { access_token: "ghu_tok_after_backoff", token_type: "bearer" },
+          200,
+          ACCESS_TOKEN_URL,
+        );
+      });
+
+      const flow = runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) });
+      await firstPollObserved;
+      await vi.advanceTimersByTimeAsync(32_000);
+      await expect(flow).resolves.toEqual({
+        status: "authorized",
+        accessToken: "ghu_tok_after_backoff",
+      });
+      expect(tokenPollTimes).toEqual([
+        startedAt,
+        startedAt + 9_000,
+        startedAt + 18_000,
+        startedAt + 32_000,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {

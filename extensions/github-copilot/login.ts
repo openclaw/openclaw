@@ -22,6 +22,7 @@ import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./doma
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
+const GITHUB_DEVICE_POLL_SLOW_DOWN_MS = 5_000;
 // Data-residency GitHub Enterprise support: the device flow, token exchange, and
 // completions endpoints all live under the tenant host (e.g. "acme.ghe.com")
 // instead of github.com. The host is threaded in from the selected auth flow so
@@ -52,6 +53,7 @@ type DeviceTokenResponse =
       error: string;
       error_description?: string;
       error_uri?: string;
+      interval?: unknown;
     };
 
 const GITHUB_DEVICE_ACCESS_DENIED = Symbol("github-device-access-denied");
@@ -135,6 +137,20 @@ function parseDeviceCodeResponse(
   };
 }
 
+function resolveSlowDownPollIntervalMs(
+  currentIntervalMs: number,
+  responseInterval: unknown,
+): number {
+  // RFC 8628 makes slow_down cumulative. A stale or smaller response interval
+  // must not undo the required five-second increase for later polls.
+  const requiredIntervalMs =
+    currentIntervalMs <= Number.MAX_SAFE_INTEGER - GITHUB_DEVICE_POLL_SLOW_DOWN_MS
+      ? currentIntervalMs + GITHUB_DEVICE_POLL_SLOW_DOWN_MS
+      : Number.MAX_SAFE_INTEGER;
+  const responseIntervalMs = positiveSecondsToSafeMilliseconds(responseInterval);
+  return Math.max(requiredIntervalMs, responseIntervalMs ?? 0);
+}
+
 async function postGitHubDeviceFlowForm(params: {
   url: string;
   body: URLSearchParams;
@@ -198,6 +214,7 @@ async function pollForAccessToken(params: {
     device_code: params.deviceCode,
     grant_type: "urn:ietf:params:oauth:grant-type:device_code",
   });
+  let pollIntervalMs = params.intervalMs;
 
   while (Date.now() < params.expiresAt) {
     const json = (await postGitHubDeviceFlowForm({
@@ -212,11 +229,15 @@ async function pollForAccessToken(params: {
 
     const err = "error" in json ? json.error : "unknown";
     if (err === "authorization_pending") {
-      await sleepGitHubDevicePollDelay(params.intervalMs, params.expiresAt);
+      await sleepGitHubDevicePollDelay(pollIntervalMs, params.expiresAt);
       continue;
     }
     if (err === "slow_down") {
-      await sleepGitHubDevicePollDelay(params.intervalMs + 2000, params.expiresAt);
+      pollIntervalMs = resolveSlowDownPollIntervalMs(
+        pollIntervalMs,
+        "interval" in json ? json.interval : undefined,
+      );
+      await sleepGitHubDevicePollDelay(pollIntervalMs, params.expiresAt);
       continue;
     }
     if (err === "expired_token") {
