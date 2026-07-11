@@ -1639,7 +1639,7 @@ jobs:
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
 
           launcher_stage=enter-mount-namespace
-          exec /usr/bin/unshare \
+          /usr/bin/unshare \
             --mount \
             --fork \
             --propagation private \
