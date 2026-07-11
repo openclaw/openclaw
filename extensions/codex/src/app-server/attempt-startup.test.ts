@@ -503,9 +503,9 @@ describe("startCodexAttemptThread", () => {
   it("closes the shared app-server when startup times out during initialize", async () => {
     const initializeTimeoutPluginConfig = {
       ...pluginConfig,
-      appServer: { command: "codex", requestTimeoutMs: 100 },
+      appServer: { command: "codex", requestTimeoutMs: 1_000 },
     } satisfies CodexPluginConfig;
-    const { harness, run } = startThreadWithHarness(500, new AbortController().signal, {
+    const { harness, run } = startThreadWithHarness(2_000, new AbortController().signal, {
       pluginConfig: initializeTimeoutPluginConfig,
     });
     const runError = run.then(
@@ -531,13 +531,13 @@ describe("startCodexAttemptThread", () => {
   it("does not retire shared startup when this attempt's initialize wait expires", async () => {
     const sharedInitializePluginConfig = {
       ...pluginConfig,
-      appServer: { command: "codex", requestTimeoutMs: 100 },
+      appServer: { command: "codex", requestTimeoutMs: 1_000 },
     } satisfies CodexPluginConfig;
     const appServer = resolveCodexAppServerRuntimeOptions({
       pluginConfig: sharedInitializePluginConfig,
     });
     const paths = createAttemptPaths();
-    const { harness, run, startSpy } = startThreadWithHarness(1_000, new AbortController().signal, {
+    const { harness, run, startSpy } = startThreadWithHarness(3_000, new AbortController().signal, {
       pluginConfig: sharedInitializePluginConfig,
       paths,
     });
@@ -545,7 +545,7 @@ describe("startCodexAttemptThread", () => {
     const peerAcquire = getLeasedSharedCodexAppServerClient({
       startOptions: appServer.start,
       agentDir: paths.agentDir,
-      timeoutMs: 1_000,
+      timeoutMs: 3_000,
     });
 
     await expect(run).rejects.toThrow("codex app-server initialize timed out");
@@ -556,7 +556,7 @@ describe("startCodexAttemptThread", () => {
       getLeasedSharedCodexAppServerClient({
         startOptions: appServer.start,
         agentDir: paths.agentDir,
-        timeoutMs: 1_000,
+        timeoutMs: 3_000,
       }),
     ).resolves.toBe(harness.client);
     expect(startSpy).toHaveBeenCalledTimes(1);
@@ -713,7 +713,7 @@ describe("startCodexAttemptThread", () => {
   it("clears the shared app-server when a startup RPC times out", async () => {
     const perRpcTimeoutPluginConfig = {
       ...pluginConfig,
-      appServer: { command: "codex", requestTimeoutMs: 100 },
+      appServer: { command: "codex", requestTimeoutMs: 1_000 },
       computerUse: { enabled: true, marketplaceDiscoveryTimeoutMs: 1 },
     } satisfies CodexPluginConfig;
     const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {

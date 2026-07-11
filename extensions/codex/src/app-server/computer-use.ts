@@ -4,7 +4,6 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import path from "node:path";
 import { promisify } from "node:util";
 import { describeControlFailure } from "./capabilities.js";
 import {
@@ -683,7 +682,6 @@ async function resolveMarketplaceRef(params: {
   if (
     candidates.length === 0 &&
     bundledMarketplacePath &&
-    existsSync(path.join(bundledMarketplacePath, "plugins", params.config.pluginName)) &&
     shouldAddBundledComputerUseMarketplace(params)
   ) {
     const added = await params.request<{ marketplaceName?: string }>("marketplace/add", {
