@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   deleteGoogleChatMessage,
+  isGoogleChatAttachmentUploadUnauthorized,
   sendGoogleChatMessage,
   updateGoogleChatMessage,
   uploadGoogleChatAttachment,
@@ -138,6 +139,28 @@ export async function deliverGoogleChatReply(params: {
         });
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
+        // App auth (chat.bot) cannot upload attachments (403). When the media is
+        // a remote URL, deliver it as a text link so the reply still reaches the
+        // user instead of silently dropping the message.
+        if (isGoogleChatAttachmentUploadUnauthorized(err) && /^https?:\/\//i.test(mediaUrl)) {
+          try {
+            const linkText = [caption, mediaUrl]
+              .map((part) => part?.trim())
+              .filter(Boolean)
+              .join("\n");
+            await sendGoogleChatMessage({
+              account,
+              space: spaceId,
+              text: linkText,
+              thread: payload.replyToId,
+            });
+            statusSink?.({ lastOutboundAt: Date.now() });
+            return;
+          } catch (linkErr) {
+            runtime.error?.(`Google Chat media link fallback failed: ${String(linkErr)}`);
+            return;
+          }
+        }
         runtime.error?.(`Google Chat attachment send failed: ${String(err)}`);
       }
     },
