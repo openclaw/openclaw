@@ -598,14 +598,15 @@ export const it: TranslationMap = {
       "L'ispezione degli elementi è disabilitata (browser.evaluateEnabled=false).",
     annotationSent: "Annotazione aggiunta al compositore della chat.",
     annotatePrompt: {
-      intro:
-        'Ho annotato la pagina all\'indirizzo {url} ("{title}") — lo screenshot allegato mostra il mio markup.',
+      introTitled:
+        'Ho annotato la pagina all\'indirizzo {url} (titolo riportato dalla pagina: "{title}") — lo screenshot allegato mostra le mie annotazioni.',
       introUntitled:
         "Ho annotato la pagina all'indirizzo {url} — lo screenshot allegato mostra il mio markup.",
       region:
         "Area contrassegnata {index}: centrata circa al {x}% in orizzontale / {y}% in verticale, estesa per circa il {width}% × {height}% della vista.",
       moreRegions: "…più altre {count} area/e contrassegnata/e, tutte visibili nello screenshot.",
-      element: "Elemento contrassegnato: {descriptor} — {width}×{height}px a ({x}, {y}).",
+      elementDetail:
+        "Elemento contrassegnato (riportato dalla pagina): {descriptor} — {width}×{height}px in ({x}, {y}).",
       outro: "Guarda l'area contrassegnata e dimmi cosa ne pensi.",
     },
   },

@@ -587,12 +587,14 @@ export const zh_TW: TranslationMap = {
     inspectUnavailable: "元素檢查已停用 (browser.evaluateEnabled=false)。",
     annotationSent: "註解已新增至聊天撰寫器。",
     annotatePrompt: {
-      intro: '我已在 {url} ("{title}") 註解頁面 — 附加的螢幕截圖顯示了我的標記。',
+      introTitled:
+        '我已在 {url} 的頁面上加上註記（頁面回報的標題："{title}"）— 附上的螢幕截圖顯示我的標記。',
       introUntitled: "我已在 {url} 註解頁面 — 附加的螢幕截圖顯示了我的標記。",
       region:
         "已標記區域 {index}：中心約在橫向 {x}% / 縱向 {y}% 的位置，範圍約佔檢視的 {width}% × {height}%。",
       moreRegions: "…另有 {count} 個已標記區域，全部都可在螢幕截圖中看到。",
-      element: "已標記元素：{descriptor} — 位於 ({x}, {y})，尺寸為 {width}×{height}px。",
+      elementDetail:
+        "標記的元素（頁面回報）：{descriptor} — 位於 ({x}, {y})，大小為 {width}×{height}px。",
       outro: "請查看標記區域，並告訴我你的看法。",
     },
   },

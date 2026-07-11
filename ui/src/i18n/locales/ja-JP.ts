@@ -596,15 +596,16 @@ export const ja_JP: TranslationMap = {
     inspectUnavailable: "要素の検査は無効になっています (browser.evaluateEnabled=false)。",
     annotationSent: "注釈がチャットの入力欄に追加されました。",
     annotatePrompt: {
-      intro:
-        '{url} ("{title}") のページに注釈を付けました — 添付のスクリーンショットにマークアップが表示されています。',
+      introTitled:
+        '{url} のページに注釈を付けました（ページが報告したタイトル: "{title}"）— 添付のスクリーンショットにマークアップが表示されています。',
       introUntitled:
         "{url} のページに注釈を付けました — 添付のスクリーンショットにマークアップが表示されています。",
       region:
         "マークした領域 {index}: ビューの横方向 {x}% / 縦方向 {y}% 付近を中心に、ビューの約 {width}% × {height}% の範囲です。",
       moreRegions:
         "…さらに {count} 個のマークした領域があり、すべてスクリーンショットに表示されています。",
-      element: "マークした要素: {descriptor} — ({x}, {y}) にある {width}×{height}px。",
+      elementDetail:
+        "マークされた要素（ページが報告）: {descriptor} — ({x}, {y}) の位置に {width}×{height}px。",
       outro: "マークされた領域を確認して、どう見えるか教えてください。",
     },
   },

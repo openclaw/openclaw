@@ -592,14 +592,15 @@ export const es: TranslationMap = {
       "La inspección de elementos está deshabilitada (browser.evaluateEnabled=false).",
     annotationSent: "Anotación añadida al redactor del chat.",
     annotatePrompt: {
-      intro:
-        'He anotado la página en {url} ("{title}") — la captura de pantalla adjunta muestra mi marcado.',
+      introTitled:
+        'Anoté la página en {url} (título informado por la página: "{title}") — la captura de pantalla adjunta muestra mis marcas.',
       introUntitled:
         "He anotado la página en {url} — la captura de pantalla adjunta muestra mi marcado.",
       region:
         "Región marcada {index}: centrada alrededor de {x}% horizontal / {y}% vertical, abarcando aproximadamente el {width}% × {height}% de la vista.",
       moreRegions: "…más {count} región(es) marcada(s), todas visibles en la captura de pantalla.",
-      element: "Elemento marcado: {descriptor} — {width}×{height}px en ({x}, {y}).",
+      elementDetail:
+        "Elemento marcado (informado por la página): {descriptor} — {width}×{height}px en ({x}, {y}).",
       outro: "Mira el área marcada y dime qué opinas.",
     },
   },

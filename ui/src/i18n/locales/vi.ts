@@ -590,15 +590,16 @@ export const vi: TranslationMap = {
     inspectUnavailable: "Tính năng kiểm tra phần tử đã bị tắt (browser.evaluateEnabled=false).",
     annotationSent: "Chú thích đã được thêm vào trình soạn tin nhắn.",
     annotatePrompt: {
-      intro:
-        'Tôi đã chú thích trang tại {url} ("{title}") — ảnh chụp màn hình đính kèm hiển thị phần đánh dấu của tôi.',
+      introTitled:
+        'Tôi đã chú thích trang tại {url} (tiêu đề do trang báo cáo: "{title}") — ảnh chụp màn hình đính kèm hiển thị phần đánh dấu của tôi.',
       introUntitled:
         "Tôi đã chú thích trang tại {url} — ảnh chụp màn hình đính kèm hiển thị phần đánh dấu của tôi.",
       region:
         "Vùng được đánh dấu {index}: có tâm khoảng {x}% theo chiều ngang / {y}% xuống dưới, chiếm khoảng {width}% × {height}% của chế độ xem.",
       moreRegions:
         "…cộng thêm {count} vùng được đánh dấu nữa, tất cả đều hiển thị trong ảnh chụp màn hình.",
-      element: "Phần tử được đánh dấu: {descriptor} — {width}×{height}px tại ({x}, {y}).",
+      elementDetail:
+        "Phần tử được đánh dấu (do trang báo cáo): {descriptor} — {width}×{height}px tại ({x}, {y}).",
       outro: "Vui lòng xem khu vực được đánh dấu và cho tôi biết bạn nhận xét gì về nó.",
     },
   },

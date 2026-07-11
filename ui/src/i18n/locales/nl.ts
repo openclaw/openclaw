@@ -594,14 +594,15 @@ export const nl: TranslationMap = {
     inspectUnavailable: "Elementinspectie is uitgeschakeld (browser.evaluateEnabled=false).",
     annotationSent: "Annotatie toegevoegd aan de chatcomponist.",
     annotatePrompt: {
-      intro:
-        'Ik heb de pagina op {url} ("{title}") geannoteerd — de bijgevoegde screenshot toont mijn markering.',
+      introTitled:
+        'Ik heb de pagina op {url} geannoteerd (door de pagina gerapporteerde titel: "{title}") — de bijgevoegde schermafbeelding toont mijn markering.',
       introUntitled:
         "Ik heb de pagina op {url} geannoteerd — de bijgevoegde screenshot toont mijn markering.",
       region:
         "Gemarkeerd gebied {index}: gecentreerd rond {x}% horizontaal / {y}% omlaag, beslaat ongeveer {width}% × {height}% van de weergave.",
       moreRegions: "…plus nog {count} gemarkeerde gebied(en), allemaal zichtbaar in de screenshot.",
-      element: "Gemarkeerd element: {descriptor} — {width}×{height}px op ({x}, {y}).",
+      elementDetail:
+        "Gemarkeerd element (door de pagina gerapporteerd): {descriptor} — {width}×{height}px op ({x}, {y}).",
       outro: "Bekijk het gemarkeerde gebied en vertel me wat je ervan vindt.",
     },
   },

@@ -597,15 +597,16 @@ export const fr: TranslationMap = {
     inspectUnavailable: "L’inspection des éléments est désactivée (browser.evaluateEnabled=false).",
     annotationSent: "Annotation ajoutée au compositeur de chat.",
     annotatePrompt: {
-      intro:
-        "J’ai annoté la page à l’adresse {url} (« {title} ») — la capture d’écran jointe montre mon annotation.",
+      introTitled:
+        "J’ai annoté la page à l’adresse {url} (titre indiqué par la page : « {title} ») — la capture d’écran jointe montre mon balisage.",
       introUntitled:
         "J’ai annoté la page à l’adresse {url} — la capture d’écran jointe montre mon annotation.",
       region:
         "Région marquée {index} : centrée environ à {x} % horizontalement / {y} % verticalement, couvrant environ {width} % × {height} % de la vue.",
       moreRegions:
         "…plus {count} autre(s) région(s) marquée(s), toutes visibles dans la capture d’écran.",
-      element: "Élément marqué : {descriptor} — {width}×{height}px à ({x}, {y}).",
+      elementDetail:
+        "Élément marqué (indiqué par la page) : {descriptor} — {width}×{height}px à ({x}, {y}).",
       outro: "Veuillez examiner la zone marquée et me dire ce que vous en pensez.",
     },
   },

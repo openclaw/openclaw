@@ -589,12 +589,14 @@ export const ar: TranslationMap = {
     inspectUnavailable: "فحص العناصر معطّل (browser.evaluateEnabled=false).",
     annotationSent: "تمت إضافة التعليق التوضيحي إلى محرر المحادثة.",
     annotatePrompt: {
-      intro: 'علّقتُ على الصفحة في {url} ("{title}") — تُظهر لقطة الشاشة المرفقة علاماتي.',
+      introTitled:
+        'أضفت تعليقات توضيحية على الصفحة في {url} (العنوان المُبلَّغ من الصفحة: "{title}") — تُظهر لقطة الشاشة المرفقة علاماتي.',
       introUntitled: "علّقتُ على الصفحة في {url} — تُظهر لقطة الشاشة المرفقة علاماتي.",
       region:
         "المنطقة المحددة {index}: متمركزة حول {x}% عرضًا / {y}% نزولًا، وتمتد على نحو {width}% × {height}% من العرض.",
       moreRegions: "…بالإضافة إلى {count} منطقة/مناطق محددة أخرى، كلها ظاهرة في لقطة الشاشة.",
-      element: "العنصر المحدد: {descriptor} — ‏{width}×{height}px عند ({x}, {y}).",
+      elementDetail:
+        "العنصر المحدد (كما أبلغت الصفحة): {descriptor} — {width}×{height}px عند ({x}, {y}).",
       outro: "يرجى النظر إلى المنطقة المحددة وإخباري بما تستنتجه منها.",
     },
   },

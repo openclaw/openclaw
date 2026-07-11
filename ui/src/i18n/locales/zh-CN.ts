@@ -587,12 +587,14 @@ export const zh_CN: TranslationMap = {
     inspectUnavailable: "元素检查已禁用 (browser.evaluateEnabled=false)。",
     annotationSent: "标注已添加到聊天编辑器。",
     annotatePrompt: {
-      intro: "我在 {url}（“{title}”）上标注了页面 — 附件截图显示了我的标注。",
+      introTitled:
+        '我已在 {url} 标注了页面（页面报告的标题："{title}"）— 附加的截图显示了我的标注。',
       introUntitled: "我在 {url} 上标注了页面 — 附件截图显示了我的标注。",
       region:
         "标记区域 {index}：中心约位于横向 {x}% / 纵向 {y}%，范围约占视图的 {width}% × {height}%。",
       moreRegions: "…另有 {count} 个标记区域，均在截图中可见。",
-      element: "标记元素：{descriptor} — 位于 ({x}, {y})，大小为 {width}×{height}px。",
+      elementDetail:
+        "标记的元素（页面报告）：{descriptor} — 位于 ({x}, {y})，尺寸为 {width}×{height}px。",
       outro: "请查看标记区域，并告诉我你的看法。",
     },
   },

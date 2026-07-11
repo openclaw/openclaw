@@ -594,14 +594,15 @@ export const tr: TranslationMap = {
     inspectUnavailable: "Öğe inceleme devre dışı (browser.evaluateEnabled=false).",
     annotationSent: "Açıklama sohbet oluşturucusuna eklendi.",
     annotatePrompt: {
-      intro:
-        '{url} ("{title}") adresindeki sayfaya açıklama ekledim — ekli ekran görüntüsü işaretlememi gösteriyor.',
+      introTitled:
+        '{url} adresindeki sayfaya açıklama ekledim (sayfanın bildirdiği başlık: "{title}") — ekli ekran görüntüsü işaretlememi gösteriyor.',
       introUntitled:
         "{url} adresindeki sayfaya açıklama ekledim — ekli ekran görüntüsü işaretlememi gösteriyor.",
       region:
         "İşaretli bölge {index}: görünümde yatayda {x}% / dikeyde {y}% civarında ortalanmış, görünümün yaklaşık {width}% × {height}% kadarını kaplıyor.",
       moreRegions: "…artı {count} işaretli bölge daha, tümü ekran görüntüsünde görünür.",
-      element: "İşaretli öğe: {descriptor} — ({x}, {y}) konumunda {width}×{height}px.",
+      elementDetail:
+        "İşaretlenen öğe (sayfanın bildirdiği): {descriptor} — ({x}, {y}) konumunda {width}×{height}px.",
       outro: "Lütfen işaretli alana bakın ve bundan ne anladığınızı söyleyin.",
     },
   },

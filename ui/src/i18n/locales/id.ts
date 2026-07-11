@@ -591,15 +591,16 @@ export const id: TranslationMap = {
     inspectUnavailable: "Pemeriksaan elemen dinonaktifkan (browser.evaluateEnabled=false).",
     annotationSent: "Anotasi ditambahkan ke penyusun chat.",
     annotatePrompt: {
-      intro:
-        'Saya memberi anotasi pada halaman di {url} ("{title}") — tangkapan layar terlampir menunjukkan markup saya.',
+      introTitled:
+        'Saya memberi anotasi pada halaman di {url} (judul yang dilaporkan halaman: "{title}") — tangkapan layar terlampir menunjukkan markup saya.',
       introUntitled:
         "Saya memberi anotasi pada halaman di {url} — tangkapan layar terlampir menunjukkan markup saya.",
       region:
         "Wilayah bertanda {index}: berpusat sekitar {x}% ke kanan / {y}% ke bawah, mencakup sekitar {width}% × {height}% dari tampilan.",
       moreRegions:
         "…ditambah {count} wilayah bertanda lainnya, semuanya terlihat di tangkapan layar.",
-      element: "Elemen bertanda: {descriptor} — {width}×{height}px di ({x}, {y}).",
+      elementDetail:
+        "Elemen yang ditandai (dilaporkan halaman): {descriptor} — {width}×{height}px pada ({x}, {y}).",
       outro: "Harap lihat area yang ditandai dan beri tahu saya pendapat Anda tentangnya.",
     },
   },

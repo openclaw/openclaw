@@ -592,15 +592,16 @@ export const pl: TranslationMap = {
     inspectUnavailable: "Inspekcja elementów jest wyłączona (browser.evaluateEnabled=false).",
     annotationSent: "Adnotacja dodana do pola tworzenia wiadomości czatu.",
     annotatePrompt: {
-      intro:
-        'Dodałem adnotacje na stronie pod adresem {url} ("{title}") — załączony zrzut ekranu pokazuje moje oznaczenia.',
+      introTitled:
+        "Dodałem adnotacje na stronie pod adresem {url} (tytuł zgłoszony przez stronę: „{title}”) — załączony zrzut ekranu pokazuje moje oznaczenia.",
       introUntitled:
         "Dodałem adnotacje na stronie pod adresem {url} — załączony zrzut ekranu pokazuje moje oznaczenia.",
       region:
         "Oznaczony obszar {index}: wyśrodkowany około {x}% w poziomie / {y}% w dół, obejmuje około {width}% × {height}% widoku.",
       moreRegions:
         "…oraz {count} dodatkowy(-e) oznaczony(-e) obszar(y), wszystkie widoczne na zrzucie ekranu.",
-      element: "Oznaczony element: {descriptor} — {width}×{height}px w pozycji ({x}, {y}).",
+      elementDetail:
+        "Oznaczony element (zgłoszony przez stronę): {descriptor} — {width}×{height}px w ({x}, {y}).",
       outro: "Spójrz na oznaczony obszar i powiedz mi, co o nim sądzisz.",
     },
   },

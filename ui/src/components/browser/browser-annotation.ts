@@ -110,7 +110,7 @@ export function buildAnnotationPrompt(params: {
   const title = sanitizePageText(params.title);
   const lines: string[] = [
     title
-      ? t("browser.annotatePrompt.intro", { url: params.url, title })
+      ? t("browser.annotatePrompt.introTitled", { url: params.url, title })
       : t("browser.annotatePrompt.introUntitled", { url: params.url }),
   ];
   const regions = params.strokes.flatMap((stroke) => strokeBoundingRegion(stroke) ?? []);
@@ -134,7 +134,7 @@ export function buildAnnotationPrompt(params: {
   }
   if (params.element) {
     lines.push(
-      t("browser.annotatePrompt.element", {
+      t("browser.annotatePrompt.elementDetail", {
         descriptor: describeInspectedNode(params.element),
         width: String(Math.round(params.element.rect.width)),
         height: String(Math.round(params.element.rect.height)),

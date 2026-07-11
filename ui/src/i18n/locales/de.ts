@@ -595,14 +595,15 @@ export const de: TranslationMap = {
     inspectUnavailable: "Elementprüfung ist deaktiviert (browser.evaluateEnabled=false).",
     annotationSent: "Annotation wurde dem Chat-Composer hinzugefügt.",
     annotatePrompt: {
-      intro:
-        'Ich habe die Seite unter {url} ("{title}") annotiert — der angehängte Screenshot zeigt meine Markierung.',
+      introTitled:
+        'Ich habe die Seite unter {url} mit Anmerkungen versehen (von der Seite gemeldeter Titel: "{title}") — der angehängte Screenshot zeigt meine Markierung.',
       introUntitled:
         "Ich habe die Seite unter {url} annotiert — der angehängte Screenshot zeigt meine Markierung.",
       region:
         "Markierter Bereich {index}: zentriert bei {x}% horizontal / {y}% vertikal, umfasst etwa {width}% × {height}% der Ansicht.",
       moreRegions: "…plus {count} weitere markierte Region(en), alle im Screenshot sichtbar.",
-      element: "Markiertes Element: {descriptor} — {width}×{height}px bei ({x}, {y}).",
+      elementDetail:
+        "Markiertes Element (von der Seite gemeldet): {descriptor} — {width}×{height}px bei ({x}, {y}).",
       outro:
         "Bitte sehen Sie sich den markierten Bereich an und sagen Sie mir, was Sie davon halten.",
     },
