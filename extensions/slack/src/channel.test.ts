@@ -1162,8 +1162,12 @@ describe("slackPlugin outbound", () => {
 
   it("forwards mediaLocalRoots for sendMedia", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media-local" });
-    const sendMedia = requireSlackSendMedia();
+    const sendMedia = slackOutbound.sendMedia;
+    if (!sendMedia) {
+      throw new Error("slack direct outbound.sendMedia unavailable");
+    }
     const mediaLocalRoots = ["/tmp/workspace"];
+    const onPlatformSendDispatch = vi.fn();
 
     const result = await sendMedia({
       cfg,
@@ -1172,6 +1176,7 @@ describe("slackPlugin outbound", () => {
       mediaUrl: "/tmp/workspace/image.png",
       mediaLocalRoots,
       accountId: "default",
+      onPlatformSendDispatch,
       deps: { sendSlack },
     });
 
@@ -1180,6 +1185,7 @@ describe("slackPlugin outbound", () => {
     expectRecordFields(requireMockCallArg(sendSlack, 0, 2), "send options", {
       mediaUrl: "/tmp/workspace/image.png",
       mediaLocalRoots,
+      onPlatformSendDispatch,
     });
     expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
   });
@@ -1256,7 +1262,7 @@ describe("slackPlugin outbound", () => {
       mediaLocalRoots: ["/tmp/media"],
     });
     expect(requireMockCallArgValue(sendSlack, 2, 0)).toBe("C999");
-    expect(requireMockCallArgValue(sendSlack, 2, 1)).toBe("hello");
+    expect(requireMockCallArgValue(sendSlack, 2, 1)).toBe("hello\n\nBlock body");
     expect(requireMockCallArg(sendSlack, 2, 2).blocks).toEqual([
       {
         type: "section",
@@ -1380,6 +1386,9 @@ describe("slackPlugin agentPrompt", () => {
       "- Slack plain text sends: write standard Markdown; OpenClaw converts it to Slack mrkdwn, including `**bold**`, headings, lists, and `[label](url)` links.",
     );
     expect(hints).toContain(
+      "- For row-and-column data, use an explicit `presentation` table block; Slack renders it as a native table and retains a linear text summary for accessibility. Markdown pipe tables are not auto-promoted.",
+    );
+    expect(hints).toContain(
       "- When mentioning Slack users, use the stable `<@USER_ID>` token from Slack context instead of plain `@name` text so Slack notifies and links the user.",
     );
     expect(hints).toContain(
@@ -1411,6 +1420,9 @@ describe("slackPlugin agentPrompt", () => {
     );
     expect(hints).toContain(
       "- Slack plain text sends: write standard Markdown; OpenClaw converts it to Slack mrkdwn, including `**bold**`, headings, lists, and `[label](url)` links.",
+    );
+    expect(hints).toContain(
+      "- For row-and-column data, use an explicit `presentation` table block; Slack renders it as a native table and retains a linear text summary for accessibility. Markdown pipe tables are not auto-promoted.",
     );
     expect(hints).toContain(
       "- When mentioning Slack users, use the stable `<@USER_ID>` token from Slack context instead of plain `@name` text so Slack notifies and links the user.",

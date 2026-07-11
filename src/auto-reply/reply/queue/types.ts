@@ -123,6 +123,8 @@ export type FollowupRun = {
     groupId?: string;
     groupChannel?: string;
     groupSpace?: string;
+    /** Parent session provenance used to validate inherited group policy. */
+    spawnedBy?: string;
     senderId?: string;
     channelContext?: PluginHookChannelContext;
     senderName?: string;
@@ -139,6 +141,8 @@ export type FollowupRun = {
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
+    /** Prevents the queued run from selecting configured fallback models. */
+    modelSelectionLocked?: boolean;
     hasSessionModelOverride?: boolean;
     modelOverrideSource?: "auto" | "user";
     hasAutoFallbackProvenance?: boolean;

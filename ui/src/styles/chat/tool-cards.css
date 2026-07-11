@@ -15,6 +15,16 @@
   margin-top: 0;
 }
 
+/* Flat top-level tool rows align their content with the assistant text edge:
+   the row's 8px inline inset bleeds left into the avatar gutter (never right,
+   which could overflow the thread on narrow panes) so the hover pill keeps
+   its inset without indenting the icon/label. Child combinator keeps shells
+   nested in .chat-activity-group__body on the boxed 12px inset. */
+.chat-group-messages > .chat-bubble--tool-shell .chat-tool-msg-summary {
+  width: calc(100% + 8px);
+  margin-left: -8px;
+}
+
 .chat-tool-msg-summary {
   display: flex;
   align-items: center;
@@ -125,6 +135,16 @@
   color: color-mix(in srgb, var(--ok) 70%, var(--muted) 30%);
 }
 
+.chat-tool-row__title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text);
+}
+
 .chat-tool-row__cmd {
   flex: 0 1 auto;
   min-width: 0;
@@ -139,16 +159,6 @@
 .chat-tool-row__cmd--secondary {
   flex: 0 100000 auto;
   color: color-mix(in srgb, var(--muted) 85%, var(--text) 15%);
-}
-
-.chat-tool-row__title {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-  color: var(--text);
 }
 
 .chat-tool-row__verb {
@@ -182,6 +192,54 @@
 
 .chat-tool-row--running .chat-tool-msg-summary__icon {
   color: var(--accent-2, #14b8a6);
+}
+
+/* Active-task text wave: a subtle left-to-right color sweep across the
+   running row's primary text (same shimmer language as the skeleton/usage
+   loaders, clipped to glyphs). The band fades text toward --bg so it stays
+   correct in both themes. Scoped to no-preference so reduced-motion users
+   keep plain static text and syntax colors. */
+@media (prefers-reduced-motion: no-preference) {
+  .chat-tool-row--running
+    :is(
+      .chat-tool-msg-summary__label,
+      .chat-tool-row__title,
+      .chat-tool-row__verb,
+      .chat-tool-row__target,
+      .chat-tool-row__cmd:not(.chat-tool-row__cmd--secondary)
+    ) {
+    background-image: linear-gradient(
+      90deg,
+      var(--text) 0%,
+      var(--text) 35%,
+      color-mix(in srgb, var(--text) 42%, var(--bg) 58%) 50%,
+      var(--text) 65%,
+      var(--text) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: chatToolRowTextWave 2.2s ease-in-out infinite;
+  }
+
+  /* Syntax-highlight tokens go transparent while running so the parent's
+     clipped gradient paints their glyphs; token colors return on completion. */
+  .chat-tool-row--running .chat-tool-row__cmd:not(.chat-tool-row__cmd--secondary) > span {
+    color: transparent;
+  }
+}
+
+/* Gradient is 2x element width with identical end stops, so one full period
+   per cycle wraps seamlessly and the band sweeps left to right. */
+@keyframes chatToolRowTextWave {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -100% 0;
+  }
 }
 
 .chat-tool-row__spinner {
@@ -279,6 +337,21 @@
 
 .chat-diff__row--del .chat-diff__sign {
   color: var(--destructive, #ef4444);
+}
+
+.chat-diff__row--file {
+  padding-block: 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--secondary) 85%, var(--bg) 15%);
+}
+
+.chat-diff__row--file:first-child {
+  border-top: 0;
+}
+
+.chat-diff__row--file .chat-diff__text {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted) 18%);
+  font-weight: 600;
 }
 
 .chat-diff__row--skip {
@@ -489,6 +562,12 @@
 .chat-tool-card--flush:hover > .chat-tool-card__actions,
 .chat-tool-card--flush:focus-within > .chat-tool-card__actions {
   opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .chat-tool-card--flush > .chat-tool-card__actions {
+    opacity: 1;
+  }
 }
 
 .chat-tool-card__actions {
@@ -863,10 +942,18 @@
 }
 
 .chat-activity-group__label {
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-activity-group__summary .collapse-chevron {
+  flex-shrink: 0;
 }
 
 /* Rows live in one bordered card with hairline separators. */

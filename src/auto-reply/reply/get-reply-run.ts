@@ -1505,6 +1505,8 @@ export async function runPreparedReply(
         normalizeOptionalString(sessionCtx.GroupChannel) ??
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
+      // Parent lineage authenticates inherited group policy for queued CLI/MCP runs.
+      spawnedBy: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
       channelContext: ctx.ChannelContext ?? sessionCtx.ChannelContext,
       senderName: normalizeOptionalString(sessionCtx.SenderName),
@@ -1523,6 +1525,7 @@ export async function runPreparedReply(
       skillsSnapshot,
       provider,
       model,
+      modelSelectionLocked: preparedSessionState.sessionEntry?.modelSelectionLocked === true,
       hasSessionModelOverride: runHasSessionModelOverride,
       modelOverrideSource: runModelOverrideSource,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,

@@ -8,6 +8,7 @@ import {
   resolveDefaultAgentDir,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,7 @@ import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
 import {
+  buildCodexSupervisionTestConnectionFingerprint,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
@@ -146,6 +148,38 @@ async function writeTestBinding(
   binding: CodexAppServerThreadBinding,
 ): Promise<void> {
   await testCodexAppServerBindingStore.mutate(identity, { kind: "set", binding });
+}
+
+function supervisedTestBinding(threadId = "thread-supervised"): CodexAppServerThreadBinding {
+  return {
+    threadId,
+    connectionScope: "supervision",
+    supervisionSourceThreadId: threadId,
+    appServerRuntimeFingerprint: buildCodexSupervisionTestConnectionFingerprint(),
+    cwd: "/repo",
+    model: "gpt-5.5",
+    modelProvider: "openai",
+    preserveNativeModel: true,
+    conversationSourceTransferComplete: true,
+  };
+}
+
+async function createLockedSessionContextOverrides(
+  sessionKey = "agent:main:test:locked",
+): Promise<Pick<PluginCommandContext, "config" | "sessionKey">> {
+  const storePath = path.join(tempDir, "locked-sessions.json");
+  await saveSessionStore(storePath, {
+    [sessionKey]: {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    },
+  });
+  return {
+    config: { session: { store: storePath } },
+    sessionKey,
+  };
 }
 
 function inMemoryCodexPluginsIO(
@@ -2229,6 +2263,27 @@ describe("codex command", () => {
     );
   });
 
+  it("starts supervised compact and review actions through the native user-home connection", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      supervisedTestBinding(),
+    );
+    const codexControlRequest = vi.fn(async () => undefined);
+    const pluginConfig = { supervision: { enabled: true } };
+    const deps = createDeps({ codexControlRequest });
+
+    await handleCodexCommand(createContext("compact"), { deps, pluginConfig });
+    await handleCodexCommand(createContext("review"), { deps, pluginConfig });
+
+    expect(codexControlRequest).toHaveBeenCalledTimes(2);
+    for (let callIndex = 0; callIndex < codexControlRequest.mock.calls.length; callIndex += 1) {
+      expect(mockArg(codexControlRequest, callIndex, 3)).toMatchObject({
+        authProfileId: null,
+        startOptions: { homeScope: "user" },
+      });
+    }
+  });
+
   it("rejects malformed compact and review commands before starting thread actions", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const codexControlRequest = vi.fn();
@@ -2522,6 +2577,91 @@ describe("codex command", () => {
 
     await expect(
       handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.",
+    });
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("sends supervised diagnostics through the native user-home connection", async () => {
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+    await writeTestBinding(identity, supervisedTestBinding("thread-supervised-diagnostics"));
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-supervised-diagnostics" },
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+    const pluginConfig = { supervision: { enabled: true } };
+    const request = await handleCodexCommand(createContext("diagnostics"), {
+      deps,
+      pluginConfig,
+    });
+    const token = readDiagnosticsConfirmationToken(request);
+
+    await handleCodexCommand(createContext(`diagnostics confirm ${token}`), {
+      deps,
+      pluginConfig,
+    });
+
+    expect(safeCodexControlRequest).toHaveBeenCalledWith(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.feedback,
+      expect.objectContaining({ threadId: "thread-supervised-diagnostics" }),
+      expect.objectContaining({
+        authProfileId: null,
+        startOptions: expect.objectContaining({ homeScope: "user" }),
+      }),
+    );
+  });
+
+  it("rejects diagnostics confirmation when private connection scope changes", async () => {
+    let binding: CodexAppServerThreadBinding = supervisedTestBinding("thread-scope-change");
+    const readBinding = vi.fn(async () => binding);
+    const safeCodexControlRequest = vi.fn();
+    const deps = createDeps({
+      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      safeCodexControlRequest,
+    });
+    const pluginConfig = { supervision: { enabled: true } };
+    const request = await handleCodexCommand(createContext("diagnostics"), {
+      deps,
+      pluginConfig,
+    });
+    const token = readDiagnosticsConfirmationToken(request);
+    binding = { threadId: "thread-scope-change", cwd: "/repo" };
+
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`), {
+        deps,
+        pluginConfig,
+      }),
+    ).resolves.toEqual({
+      text: "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.",
+    });
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects diagnostics confirmation when the supervised connection changes", async () => {
+    let binding: CodexAppServerThreadBinding = supervisedTestBinding("thread-connection-change");
+    const readBinding = vi.fn(async () => binding);
+    const safeCodexControlRequest = vi.fn();
+    const deps = createDeps({
+      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      safeCodexControlRequest,
+    });
+    const pluginConfig = { supervision: { enabled: true } };
+    const request = await handleCodexCommand(createContext("diagnostics"), {
+      deps,
+      pluginConfig,
+    });
+    const token = readDiagnosticsConfirmationToken(request);
+    binding = { ...binding, appServerRuntimeFingerprint: "changed-connection" };
+
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`), {
+        deps,
+        pluginConfig,
+      }),
     ).resolves.toEqual({
       text: "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.",
     });
@@ -3134,7 +3274,7 @@ describe("codex command", () => {
     });
   });
 
-  it("bounds diagnostics notes before upload", async () => {
+  it("keeps diagnostics notes UTF-16 safe at the upload boundary", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestBinding(
       { kind: "session", agentId: "main", sessionId: "session-1" },
@@ -3146,19 +3286,30 @@ describe("codex command", () => {
         value: { threadId: "thread-789" },
       }),
     );
-    const note = "x".repeat(2050);
+    // The emoji's surrogate pair straddles the 2048-unit feedback limit.
+    const expectedReason = "x".repeat(2047);
+    const note = `${expectedReason}😀tail`;
     const deps = createDeps({ safeCodexControlRequest });
 
     const request = await handleCodexCommand(createContext(`diagnostics ${note}`, sessionFile), {
       deps,
     });
+    expect(requireResultText(request).split("\n")).toContain(`Note: ${expectedReason}`);
     const token = readDiagnosticsConfirmationToken(request);
     await handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps });
 
     expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
     expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
-    const feedbackParams = requestParams(safeCodexControlRequest);
-    expect(feedbackParams.reason).toBe("x".repeat(2048));
+    expect(requestParams(safeCodexControlRequest)).toEqual({
+      classification: "bug",
+      reason: expectedReason,
+      threadId: "thread-789",
+      includeLogs: true,
+      tags: {
+        source: "openclaw-diagnostics",
+        channel: "test",
+      },
+    });
   });
 
   it("escapes diagnostics notes before showing approval text", async () => {
@@ -3441,6 +3592,35 @@ describe("codex command", () => {
     });
   });
 
+  it("keeps diagnostics upload errors UTF-16 safe at the display boundary", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-error-boundary", cwd: "/repo" },
+    );
+    // The emoji's surrogate pair straddles the 500-unit display limit.
+    const expectedError = "x".repeat(499);
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: false as const,
+      error: `${expectedError}😀tail`,
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+
+    const request = await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
+    const token = readDiagnosticsConfirmationToken(request);
+
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: [
+        "Could not send Codex diagnostics:",
+        `- channel test, OpenClaw session session-1, Codex thread thread-error-boundary: ${expectedError}`,
+        "Inspect locally:",
+        "- `codex resume thread-error-boundary`",
+      ].join("\n"),
+    });
+  });
+
   it("does not throttle diagnostics retries after upload failures", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestBinding(
@@ -3694,6 +3874,30 @@ describe("codex command", () => {
       CODEX_CONTROL_METHODS.rateLimits,
       undefined,
       expectedScope,
+    );
+  });
+
+  it("scopes supervised Codex reads to the native user-home connection", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      supervisedTestBinding(),
+    );
+    const codexControlRequest = vi.fn(async () => ({ data: [] }));
+    const pluginConfig = { supervision: { enabled: true } };
+
+    await handleCodexCommand(createContext("threads"), {
+      deps: createDeps({ codexControlRequest }),
+      pluginConfig,
+    });
+
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.listThreads,
+      { limit: 10 },
+      expect.objectContaining({
+        authProfileId: null,
+        startOptions: expect.objectContaining({ homeScope: "user" }),
+      }),
     );
   });
 
@@ -4429,6 +4633,107 @@ describe("codex command", () => {
       bindingStore: testCodexAppServerBindingStore,
       mode: "yolo",
     });
+  });
+
+  it("rejects model and binding replacement commands for a locked supervised session", async () => {
+    const locked = await createLockedSessionContextOverrides();
+    const requestConversationBinding = vi.fn<PluginCommandContext["requestConversationBinding"]>();
+    const detachConversationBinding = vi.fn<PluginCommandContext["detachConversationBinding"]>();
+    const getCurrentConversationBinding =
+      vi.fn<PluginCommandContext["getCurrentConversationBinding"]>();
+    const setCodexConversationModel = vi.fn();
+    const codexControlRequest = vi.fn();
+    const resolveCodexCliSessionForBindingOnNode = vi.fn();
+    const deps = createDeps({
+      codexControlRequest,
+      resolveCodexCliSessionForBindingOnNode,
+      setCodexConversationModel,
+    });
+
+    for (const args of [
+      "model gpt-5.4",
+      "bind thread-other",
+      "resume thread-other",
+      "resume cli-other --host node-1 --bind here",
+      "detach",
+      "unbind",
+    ]) {
+      await expect(
+        handleCodexCommand(
+          createContext(args, undefined, {
+            ...locked,
+            detachConversationBinding,
+            getCurrentConversationBinding,
+            requestConversationBinding,
+          }),
+          { deps },
+        ),
+      ).resolves.toEqual({ text: MODEL_SELECTION_LOCKED_MESSAGE });
+    }
+
+    expect(setCodexConversationModel).not.toHaveBeenCalled();
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    expect(resolveCodexCliSessionForBindingOnNode).not.toHaveBeenCalled();
+    expect(requestConversationBinding).not.toHaveBeenCalled();
+    expect(detachConversationBinding).not.toHaveBeenCalled();
+    expect(getCurrentConversationBinding).not.toHaveBeenCalled();
+  });
+
+  it("rejects bind and resume replacement from private supervision state without a public lock", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      supervisedTestBinding("thread-private-owner"),
+    );
+    const requestConversationBinding = vi.fn<PluginCommandContext["requestConversationBinding"]>();
+    const codexControlRequest = vi.fn();
+    const resolveCodexCliSessionForBindingOnNode = vi.fn();
+    const deps = createDeps({ codexControlRequest, resolveCodexCliSessionForBindingOnNode });
+
+    for (const args of [
+      "bind thread-other",
+      "resume thread-other",
+      "resume cli-other --host node-1 --bind here",
+    ]) {
+      const result = await handleCodexCommand(
+        createContext(args, undefined, { requestConversationBinding }),
+        { deps, pluginConfig: { supervision: { enabled: true } } },
+      );
+      expectResultTextContains(result, "Refusing to replace supervised Codex thread");
+    }
+
+    expect(requestConversationBinding).not.toHaveBeenCalled();
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    expect(resolveCodexCliSessionForBindingOnNode).not.toHaveBeenCalled();
+  });
+
+  it("keeps model status, fast mode, and permissions available for a locked session", async () => {
+    const locked = await createLockedSessionContextOverrides();
+    const sessionKey = locked.sessionKey ?? "missing";
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1", sessionKey },
+      { threadId: "thread-native", cwd: "/repo", model: "native-model" },
+    );
+    const setCodexConversationFastMode = vi.fn(async () => "Codex fast mode enabled.");
+    const setCodexConversationPermissions = vi.fn(
+      async () => "Codex permissions set to full access.",
+    );
+    const deps = createDeps({
+      setCodexConversationFastMode,
+      setCodexConversationPermissions,
+    });
+
+    await expect(
+      handleCodexCommand(createContext("model", undefined, locked), { deps }),
+    ).resolves.toEqual({ text: "Codex model: native-model" });
+    await expect(
+      handleCodexCommand(createContext("fast on", undefined, locked), { deps }),
+    ).resolves.toEqual({ text: "Codex fast mode enabled." });
+    await expect(
+      handleCodexCommand(createContext("permissions yolo", undefined, locked), { deps }),
+    ).resolves.toEqual({ text: "Codex permissions set to full access." });
+
+    expect(setCodexConversationFastMode).toHaveBeenCalledOnce();
+    expect(setCodexConversationPermissions).toHaveBeenCalledOnce();
   });
 
   it("escapes current bound model status before chat display", async () => {

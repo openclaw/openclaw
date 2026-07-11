@@ -67,7 +67,7 @@ export const AgentEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Channel context injected into message actions so tools can reply in-place. */
+/** Caller-supplied routing hints. Authorization must use trusted runtime context. */
 export const MessageActionToolContextSchema = Type.Object(
   {
     currentChannelId: Type.Optional(Type.String()),
@@ -117,6 +117,11 @@ export const MessageActionParamsSchema = Type.Object(
     inboundTurnKind: Type.Optional(Type.String({ enum: ["user_request", "room_event"] })),
     agentId: Type.Optional(Type.String()),
     toolContext: Type.Optional(MessageActionToolContextSchema),
+    /**
+     * Explicit operation-local marker for an authenticated direct operator.
+     * Missing values remain delegated, and agent runtime identity wins server-side.
+     */
+    conversationReadOrigin: Type.Optional(Type.Literal("direct-operator")),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

@@ -50,11 +50,17 @@ import { getSessionBindingService } from "../infra/outbound/session-binding-serv
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveMissingAgentHarnessSessionError } from "../sessions/agent-harness-session-key.js";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+} from "../sessions/model-overrides.js";
 import {
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
@@ -188,7 +194,9 @@ export function emitGatewaySessionEndPluginHook(params: {
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
   });
-  void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    await hookRunner.runSessionEnd(payload.event, payload.context);
+  }).catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
 }
@@ -231,7 +239,9 @@ export function emitGatewaySessionStartPluginHook(params: {
     cfg: params.cfg,
     resumedFrom: params.resumedFrom,
   });
-  void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    await hookRunner.runSessionStart(payload.event, payload.context);
+  }).catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
 }
@@ -915,6 +925,24 @@ export async function performGatewaySessionReset(params: {
     params.key,
     resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
   ).entry;
+  const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
+    resetTarget.target.canonicalKey,
+    initialResetEntry,
+  );
+  if (missingHarnessSessionError) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
+    };
+  }
+  // Reject before interrupting admitted work or firing reset hooks. The model lock is
+  // session-id scoped, so rotating first would silently detach native harness ownership.
+  if (isModelSelectionLocked(initialResetEntry)) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
+    };
+  }
   const resetLifecycleIdentities = [
     resetTarget.target.canonicalKey,
     params.key,
@@ -972,6 +1000,12 @@ export async function performGatewaySessionReset(params: {
         return {
           ok: false,
           error: errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError),
+        };
+      }
+      if (isModelSelectionLocked(entry)) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
         };
       }
       const hadExistingEntry = Boolean(entry);

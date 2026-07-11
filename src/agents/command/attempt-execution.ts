@@ -569,8 +569,12 @@ export function runAgentAttempt(params: {
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
   const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
+  const locksSessionRuntimeOverride =
+    sessionRuntimeOverride !== undefined && params.sessionEntry?.modelSelectionLocked === true;
   const sessionCliRuntime =
-    sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
+    sessionRuntimeOverride &&
+    !locksSessionRuntimeOverride &&
+    isCliProvider(sessionRuntimeOverride, params.cfg)
       ? sessionRuntimeOverride
       : undefined;
   const configuredCliRuntime =
@@ -586,7 +590,9 @@ export function runAgentAttempt(params: {
   const cliExecutionProvider = isRawModelRun
     ? params.providerOverride
     : (sessionCliRuntime ?? configuredCliRuntime ?? params.providerOverride);
-  const isCliExecutionProvider = isCliProvider(cliExecutionProvider, params.cfg);
+  const isCliExecutionProvider = sessionRuntimeOverride
+    ? sessionCliRuntime !== undefined
+    : isCliProvider(cliExecutionProvider, params.cfg);
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
       !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
@@ -739,6 +745,7 @@ export function runAgentAttempt(params: {
         config: params.cfg,
         prompt: cliPrompt,
         transcriptPrompt: params.transcriptBody,
+        modelProvider: params.providerOverride,
         provider: cliExecutionProvider,
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,
@@ -780,6 +787,11 @@ export function runAgentAttempt(params: {
         agentAccountId: params.runContext.accountId,
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
+        bashElevated: params.opts.bashElevated,
+        groupId: params.runContext.groupId,
+        groupChannel: params.runContext.groupChannel,
+        groupSpace: params.runContext.groupSpace,
+        spawnedBy: params.spawnedBy,
         toolsAllow: resolveCliRuntimeToolsAllow(
           params.opts.toolsAllow,
           params.opts.toolsAllowIsDefault,
@@ -868,6 +880,7 @@ export function runAgentAttempt(params: {
     cwd: params.cwd,
     config: params.cfg,
     agentHarnessId: embeddedAgentHarnessOverride,
+    modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,

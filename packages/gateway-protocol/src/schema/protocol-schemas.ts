@@ -221,6 +221,21 @@ import {
   ShutdownEventSchema,
   TickEventSchema,
 } from "./frames.js";
+import { FsDirEntrySchema, FsListDirParamsSchema, FsListDirResultSchema } from "./fs.js";
+import {
+  GatewaySuspendBlockerSchema,
+  GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareReadyResultSchema,
+  GatewaySuspendPrepareResultSchema,
+  GatewaySuspendResumeParamsSchema,
+  GatewaySuspendResumeResultSchema,
+  GatewaySuspendStatusReadyResultSchema,
+  GatewaySuspendStatusRunningResultSchema,
+  GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusResultSchema,
+  GatewaySuspendTaskBlockerSchema,
+} from "./gateway-suspend.js";
 import {
   ChatAbortedEventSchema,
   ChatAbortParamsSchema,
@@ -327,6 +342,10 @@ import {
   SessionsGroupsMutationResultSchema,
   SessionsGroupsPutParamsSchema,
   SessionsGroupsRenameParamsSchema,
+  SessionDiffFileSchema,
+  SessionDiffFileStatusSchema,
+  SessionsDiffParamsSchema,
+  SessionsDiffResultSchema,
   SessionsFilesGetParamsSchema,
   SessionsFilesGetResultSchema,
   SessionsFilesListParamsSchema,
@@ -422,6 +441,18 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
+  GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
+  GatewaySuspendPrepareParams: GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareBusyResult: GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareReadyResult: GatewaySuspendPrepareReadyResultSchema,
+  GatewaySuspendPrepareResult: GatewaySuspendPrepareResultSchema,
+  GatewaySuspendStatusParams: GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusRunningResult: GatewaySuspendStatusRunningResultSchema,
+  GatewaySuspendStatusReadyResult: GatewaySuspendStatusReadyResultSchema,
+  GatewaySuspendStatusResult: GatewaySuspendStatusResultSchema,
+  GatewaySuspendResumeParams: GatewaySuspendResumeParamsSchema,
+  GatewaySuspendResumeResult: GatewaySuspendResumeResultSchema,
 
   // Environment and agent-facing control RPC payloads.
   EnvironmentStatus: EnvironmentStatusSchema,
@@ -453,6 +484,9 @@ export const ProtocolSchemas = {
   WorktreeBranch: WorktreeBranchSchema,
   WorktreesBranchesParams: WorktreesBranchesParamsSchema,
   WorktreesBranchesResult: WorktreesBranchesResultSchema,
+  FsDirEntry: FsDirEntrySchema,
+  FsListDirParams: FsListDirParamsSchema,
+  FsListDirResult: FsListDirResultSchema,
 
   // Node pairing, invocation, presence, and pending-queue payloads.
   NodePairListParams: NodePairListParamsSchema,
@@ -508,6 +542,10 @@ export const ProtocolSchemas = {
   SessionsFilesListResult: SessionsFilesListResultSchema,
   SessionsFilesGetParams: SessionsFilesGetParamsSchema,
   SessionsFilesGetResult: SessionsFilesGetResultSchema,
+  SessionDiffFileStatus: SessionDiffFileStatusSchema,
+  SessionDiffFile: SessionDiffFileSchema,
+  SessionsDiffParams: SessionsDiffParamsSchema,
+  SessionsDiffResult: SessionsDiffResultSchema,
   SessionWorktreeInfo: SessionWorktreeInfoSchema,
   SessionsCreateParams: SessionsCreateParamsSchema,
   SessionsCreateResult: SessionsCreateResultSchema,

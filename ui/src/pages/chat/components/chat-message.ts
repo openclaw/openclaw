@@ -39,7 +39,7 @@ import {
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
-import { formatCompactTokenCount } from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
@@ -109,6 +109,7 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
       year: "numeric",
       hour: "numeric",
       minute: "2-digit",
+      timeZoneName: "short",
     }),
     title: date.toLocaleString([], {
       ...hourCycle,
@@ -125,17 +126,46 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   };
 }
 
+const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
+
+/** Footer label: relative for recent messages, compact date beyond a week. */
+export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    return "Unknown date";
+  }
+  const ageMs = nowMs - date.getTime();
+  // Derive from ageMs so the injected clock stays the single time source.
+  // Slightly-future (clock-skewed) messages clamp to "just now"; anything
+  // further out falls through to the compact date instead of lying forever.
+  if (
+    ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS &&
+    ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
+  ) {
+    return formatTimeAgo(Math.max(0, ageMs));
+  }
+  return date.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+
+// Footer times read relative ("5m ago"); the absolute timestamp lives in the
+// tooltip, or in the msg-meta popover when usage metadata makes the
+// timestamp interactive (a nested tooltip would fight the popover).
 function renderChatTimestamp(timestamp: number, interactive = false) {
   const display = formatChatTimestampForDisplay(timestamp);
-  return html`
-    <time
-      class="chat-group-timestamp"
-      datetime=${display.dateTime}
-      title=${interactive ? nothing : display.title}
-    >
-      ${display.label}
+  const timeEl = html`
+    <time class="chat-group-timestamp" datetime=${display.dateTime} aria-live="off">
+      ${formatChatRelativeTimestampLabel(timestamp)}
     </time>
   `;
+  if (interactive) {
+    return timeEl;
+  }
+  return html`<openclaw-tooltip content=${display.label}>${timeEl}</openclaw-tooltip>`;
 }
 
 function resolveMessageMetaDetails(target: EventTarget | null): HTMLDetailsElement | null {
@@ -692,8 +722,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     return nothing;
   }
 
-  if (normalizedRole === "tool" && group.messages.length > 1) {
-    const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key));
+  const groupedToolCards =
+    normalizedRole === "tool"
+      ? group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key))
+      : [];
+
+  if (normalizedRole === "tool" && (group.messages.length > 1 || groupedToolCards.length > 1)) {
+    const cards = groupedToolCards;
     const toolCount = cards.length || group.messages.length;
     const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
     // While a run is live, the newest still-running call names the group so
@@ -702,12 +737,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       ? cards.findLast((card) => isRunningToolCard(card, opts.runActive))
       : undefined;
     const groupSummaryLabel = runningCard
-      ? `${resolveToolRowText(runningCard)}…`
+      ? `${resolveToolRowText(runningCard, opts.runActive)}…`
       : summarizeToolGroup(
           cards.map((card) => ({
             name: card.name,
             args: card.args,
-            isError: isToolCardError(card) && group.turnSucceeded !== true,
+            isError: isToolCardError(card),
           })),
         );
     const activityDisclosureId = `activity:${group.key}`;
@@ -737,7 +772,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               type="button"
               aria-expanded=${String(activityExpanded)}
               aria-label=${hasError
-                ? `Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}, includes errors.`
+                ? t(
+                    toolCount === 1
+                      ? "chat.toolCards.group.activityErrorOne"
+                      : "chat.toolCards.group.activityErrorMany",
+                    { count: String(toolCount) },
+                  )
                 : nothing}
               @click=${(event: MouseEvent) => {
                 if (shouldToggleSelectableDisclosure(event)) {
@@ -746,9 +786,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               }}
             >
               <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
-              <span
-                class="chat-activity-group__label"
-                title=${`${toolCount} tool call${toolCount === 1 ? "" : "s"}`}
+              <span class="chat-activity-group__label" title=${groupSummaryLabel}
                 >${groupSummaryLabel}</span
               >
               <span
@@ -967,6 +1005,8 @@ function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
   }
 
   const display = formatChatTimestampForDisplay(timestamp);
+  // Absolute time leads the popover; the summary label itself stays relative.
+  parts.unshift(html`<span class="msg-meta__time">${display.label}</span>`);
 
   return html`
     <details
@@ -1786,7 +1826,6 @@ function renderInlineToolCards(
     onOpenSidebar?: (content: SidebarContent) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
-    turnSucceeded?: boolean;
     runActive?: boolean;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
@@ -1798,7 +1837,6 @@ function renderInlineToolCards(
       ${toolCards.map((card, index) =>
         renderToolCard(card, {
           expanded: opts.isToolExpanded?.(`${opts.messageKey}:toolcard:${index}`) ?? false,
-          turnSucceeded: opts.turnSucceeded,
           runActive: opts.runActive,
           onToggleExpanded: opts.onToggleToolExpanded
             ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
@@ -2155,7 +2193,6 @@ function renderGroupedMessage(
           onOpenSidebar,
           isToolExpanded: opts.isToolExpanded,
           onToggleToolExpanded: opts.onToggleToolExpanded,
-          turnSucceeded: opts.turnSucceeded,
           runActive: opts.runActive,
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
@@ -2251,6 +2288,7 @@ function renderGroupedMessage(
                               opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
+                              opts.runActive,
                             )
                           : renderInlineToolCards(toolCards, {
                               messageKey,
@@ -2259,7 +2297,6 @@ function renderGroupedMessage(
                               onOpenSidebar,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
-                              turnSucceeded: opts.turnSucceeded,
                               runActive: opts.runActive,
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
@@ -2307,7 +2344,6 @@ function renderGroupedMessage(
                   onOpenSidebar,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
-                  turnSucceeded: opts.turnSucceeded,
                   runActive: opts.runActive,
                   canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                   embedSandboxMode: opts.embedSandboxMode ?? "scripts",

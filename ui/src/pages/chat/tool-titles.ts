@@ -40,8 +40,11 @@ type PendingItem = {
   client: GatewayBrowserClient;
   notify: (() => void) | null;
 };
-type ToolTitlesResult = { titles?: Record<string, string> };
+type ToolTitlesResult = { titles?: Record<string, string>; disabled?: boolean };
 
+// Set when the gateway reports the opt-in is off; cleared on a new client
+// (a different gateway may have titles enabled).
+let titlesDisabledByGateway = false;
 let queue = new Map<string, PendingItem>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let activeClient: GatewayBrowserClient | null = null;
@@ -128,6 +131,9 @@ export function configureToolTitleFetcher(params: {
   agentId?: string | null;
   onTitlesChanged: (() => void) | null;
 }): void {
+  if (params.client !== activeClient) {
+    titlesDisabledByGateway = false;
+  }
   activeClient = params.client;
   activeSessionKey = params.sessionKey;
   activeAgentId = params.agentId ?? null;
@@ -136,6 +142,7 @@ export function configureToolTitleFetcher(params: {
 
 function scheduleTitleRequest(name: string, request: { key: string; input: string }): void {
   if (
+    titlesDisabledByGateway ||
     !activeClient ||
     !activeSessionKey ||
     titlesByKey.has(request.key) ||
@@ -190,6 +197,11 @@ async function flushTitleQueue(): Promise<void> {
       ...(head.agentId ? { agentId: head.agentId } : {}),
       items: batch.map((item) => ({ id: item.key, name: item.name, input: item.input })),
     });
+    if (result?.disabled === true) {
+      titlesDisabledByGateway = true;
+      queue = new Map();
+      return;
+    }
     const titles = result?.titles ?? {};
     let changed = false;
     for (const item of batch) {
@@ -203,7 +215,15 @@ async function flushTitleQueue(): Promise<void> {
     }
     if (changed) {
       titlesVersion += 1;
-      head.notify?.();
+      // Split panes can contribute rows for the same session to one batch;
+      // every contributing pane must repaint, not just the head's.
+      const notified = new Set<() => void>();
+      for (const item of batch) {
+        if (item.notify && !notified.has(item.notify)) {
+          notified.add(item.notify);
+          item.notify();
+        }
+      }
     }
   } catch {
     // Gateway without the method, no usable cheap model, transient errors:
@@ -225,6 +245,7 @@ async function flushTitleQueue(): Promise<void> {
 }
 
 export function resetToolTitlesForTest(): void {
+  titlesDisabledByGateway = false;
   titlesByKey.clear();
   pendingKeys.clear();
   failedKeys.clear();
