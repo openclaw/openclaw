@@ -262,6 +262,14 @@ describe("outbound audit projection", () => {
         session: { key: "agent:main:telegram:default:direct:999" },
       }),
     ).toBe("direct");
+    // An explicit group target must never validate a direct route.
+    expect(
+      conversationKindFor({
+        channel: "slack",
+        to: "group:123",
+        session: { key: "agent:main:slack:default:direct:123" },
+      }),
+    ).toBe("unknown");
   });
 
   it("does not classify by a policy session that names another conversation", () => {

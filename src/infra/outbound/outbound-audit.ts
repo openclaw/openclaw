@@ -212,7 +212,17 @@ export function uniformOutboundAuditTerminals(
 
 // Delivery targets may carry a kind prefix ("channel:C123", "user:U123") or a
 // channel-name prefix ("telegram:999") that session-key peer ids do not retain.
-const TARGET_KIND_PREFIX_RE = /^(?:channel|group|direct|dm|user):/i;
+const TARGET_KIND_PREFIX_RE = /^(channel|group|direct|dm|user):/i;
+
+function targetKindMatchesRouteKind(
+  targetKind: string,
+  routeKind: "channel" | "direct" | "dm" | "group",
+): boolean {
+  if (targetKind === "channel" || targetKind === "group") {
+    return routeKind === targetKind;
+  }
+  return routeKind === "direct" || routeKind === "dm";
+}
 
 /** True when a parsed session route provably names this delivery's destination. */
 function routeNamesDestination(
@@ -220,6 +230,12 @@ function routeNamesDestination(
   context: OutboundAuditDeliveryContext,
 ): route is NonNullable<ReturnType<typeof parseSessionDeliveryRoute>> {
   if (!route || route.channel !== context.channel.toLowerCase()) {
+    return false;
+  }
+  // An explicit target kind is a destination fact itself: "group:123" must
+  // never validate a direct:123 route, or direct mode over-collects.
+  const targetKind = TARGET_KIND_PREFIX_RE.exec(context.to)?.[1]?.toLowerCase();
+  if (targetKind && !targetKindMatchesRouteKind(targetKind, route.peerKind)) {
     return false;
   }
   const channelPrefix = `${context.channel.toLowerCase()}:`;
