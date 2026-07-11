@@ -431,10 +431,9 @@ describe("workboard doctor contract", () => {
       expect(result.changes).toEqual([]);
       expect(result.warnings).toEqual([
         expect.stringContaining("owning card was not migrated"),
+        expect.stringContaining("SQLite target already exists with different data"),
       ]);
-      expect(result.notices).toEqual([
-        expect.stringContaining("SQLite target already exists"),
-      ]);
+      expect(result.notices).toEqual([]);
       expect(await cardStore.entries()).toHaveLength(1);
       expect(await attachmentStore.entries()).toHaveLength(1);
 

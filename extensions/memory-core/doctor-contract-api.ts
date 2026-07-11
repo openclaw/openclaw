@@ -1151,17 +1151,28 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const warnings: string[] = [];
       const notices: string[] = [];
       for (const source of await collectLegacySources(params.config, params.env)) {
-        const targetHasRows = (
-          await Promise.all(
-            targetNamespacesForSource(source.label).map((namespace) =>
-              workspaceHasRows(namespace, source.workspaceDir),
-            ),
-          )
-        ).some(Boolean);
-        if (targetHasRows) {
-          notices.push(
-            `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because SQLite rows already exist; left legacy source in place`,
-          );
+        const targetHasRowsResults = await Promise.all(
+          targetNamespacesForSource(source.label).map((namespace) =>
+            workspaceHasRows(namespace, source.workspaceDir),
+          ),
+        );
+        const anyTargetHasRows = targetHasRowsResults.some(Boolean);
+        const allTargetsHaveRows =
+          targetHasRowsResults.length > 0 && targetHasRowsResults.every(Boolean);
+        if (anyTargetHasRows) {
+          if (allTargetsHaveRows) {
+            // All target namespaces already have rows — this is an idempotent
+            // skip, safe to downgrade to a notice.
+            notices.push(
+              `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because all SQLite target rows already exist; left legacy source in place`,
+            );
+          } else {
+            // Only some target namespaces have rows — this is a partial state
+            // that must remain a warning to prevent silent inconsistency.
+            warnings.push(
+              `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because some SQLite target rows already exist (partial migration); left legacy source in place`,
+            );
+          }
           continue;
         }
         let imported: number;

@@ -98,8 +98,8 @@ async function migrateNamespace<T>(params: {
           imported++;
           continue;
         }
-        notices.push(
-          `Skipped legacy Workboard ${params.label} entry ${entry.key} because the SQLite target already exists`,
+        warnings.push(
+          `Skipped legacy Workboard ${params.label} entry ${entry.key} because the SQLite target already exists with different data`,
         );
         continue;
       }
@@ -155,8 +155,8 @@ async function migrateAttachments(params: {
         imported++;
         continue;
       }
-      notices.push(
-        `Skipped legacy Workboard attachment entry ${entry.key} because the SQLite target already exists`,
+      warnings.push(
+        `Skipped legacy Workboard attachment entry ${entry.key} because the SQLite target already exists with different data`,
       );
       continue;
     }
