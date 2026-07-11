@@ -102,18 +102,49 @@ function resolvePendingFinalDeliveryRecoveryBackoffMs(attemptCount: number): num
   );
 }
 
-function isPendingFinalDeliveryRecoveryBackoffActive(params: {
+// Returns when a backoff-deferred pending final becomes eligible again, or
+// undefined when no backoff applies. Future last-attempt timestamps (clock
+// skew) retry immediately instead of stalling recovery until they pass.
+function resolvePendingFinalDeliveryBackoffEligibleAtMs(params: {
   entry: SessionEntry;
   nowMs: number;
-}): boolean {
+}): number | undefined {
   const attemptCount = normalizeAttemptCount(params.entry.pendingFinalDeliveryAttemptCount);
   const lastAttemptAt = normalizeFiniteTimestamp(params.entry.pendingFinalDeliveryLastAttemptAt);
-  if (attemptCount <= 0 || lastAttemptAt === undefined) {
-    return false;
+  if (attemptCount <= 0 || lastAttemptAt === undefined || lastAttemptAt > params.nowMs) {
+    return undefined;
   }
-  const backoffMs = resolvePendingFinalDeliveryRecoveryBackoffMs(attemptCount);
-  const elapsedMs = params.nowMs - lastAttemptAt;
-  return elapsedMs >= 0 && elapsedMs < backoffMs;
+  const nextEligibleAtMs =
+    lastAttemptAt + resolvePendingFinalDeliveryRecoveryBackoffMs(attemptCount);
+  return nextEligibleAtMs > params.nowMs ? nextEligibleAtMs : undefined;
+}
+
+type PendingFinalDeliveryDeferral = {
+  count: number;
+  nextEligibleAtMs: number;
+};
+
+type MainSessionRecoveryCounts = {
+  recovered: number;
+  failed: number;
+  skipped: number;
+  // Present only when backoff deferred at least one pending final delivery;
+  // the scheduler uses nextEligibleAtMs to run one follow-up pass so deferred
+  // entries retry in this process instead of waiting for the next restart.
+  deferred?: PendingFinalDeliveryDeferral;
+};
+
+function mergePendingFinalDeliveryDeferral(
+  current: PendingFinalDeliveryDeferral | undefined,
+  next: PendingFinalDeliveryDeferral | undefined,
+): PendingFinalDeliveryDeferral | undefined {
+  if (!current || !next) {
+    return current ?? next;
+  }
+  return {
+    count: current.count + next.count,
+    nextEligibleAtMs: Math.min(current.nextEligibleAtMs, next.nextEligibleAtMs),
+  };
 }
 
 function hasCurrentProcessOwner(params: {
@@ -798,8 +829,8 @@ async function recoverStore(params: {
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
   maxPendingFinalDeliveryAttempts?: number;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+}): Promise<MainSessionRecoveryCounts> {
+  const result: MainSessionRecoveryCounts = { recovered: 0, failed: 0, skipped: 0 };
   const maxPendingFinalDeliveryAttempts =
     params.maxPendingFinalDeliveryAttempts ?? DEFAULT_PENDING_FINAL_DELIVERY_MAX_RECOVERY_ATTEMPTS;
   const providedActiveSessionIds =
@@ -872,11 +903,18 @@ async function recoverStore(params: {
         result.skipped++;
         continue;
       }
-      if (isPendingFinalDeliveryRecoveryBackoffActive({ entry, nowMs: Date.now() })) {
+      const backoffEligibleAtMs = resolvePendingFinalDeliveryBackoffEligibleAtMs({
+        entry,
+        nowMs: Date.now(),
+      });
+      if (backoffEligibleAtMs !== undefined) {
         log.info(
           `pending final delivery restart recovery backoff active for ${sessionKey} after ${pendingFinalDeliveryAttemptCount}/${maxPendingFinalDeliveryAttempts} attempts`,
         );
-        result.skipped++;
+        result.deferred = mergePendingFinalDeliveryDeferral(result.deferred, {
+          count: 1,
+          nextEligibleAtMs: backoffEligibleAtMs,
+        });
         continue;
       }
       const resumed = await resumeMainSession({
@@ -979,8 +1017,8 @@ export async function recoverRestartAbortedMainSessions(
     activeSessionKeys?: Iterable<string>;
     maxPendingFinalDeliveryAttempts?: number;
   } = {},
-): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+): Promise<MainSessionRecoveryCounts> {
+  const result: MainSessionRecoveryCounts = { recovered: 0, failed: 0, skipped: 0 };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
 
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
@@ -995,6 +1033,7 @@ export async function recoverRestartAbortedMainSessions(
     result.recovered += storeResult.recovered;
     result.failed += storeResult.failed;
     result.skipped += storeResult.skipped;
+    result.deferred = mergePendingFinalDeliveryDeferral(result.deferred, storeResult.deferred);
   }
 
   if (result.recovered > 0 || result.failed > 0) {
@@ -1015,7 +1054,7 @@ export async function recoverStartupOrphanedMainSessions(
     resumedSessionKeys?: Set<string>;
     maxPendingFinalDeliveryAttempts?: number;
   } = {},
-): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
+): Promise<{ marked: number } & MainSessionRecoveryCounts> {
   const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
   const marked = await markStartupOrphanedMainSessionsForRecovery({
     cfg: params.cfg,
@@ -1037,6 +1076,7 @@ export async function recoverStartupOrphanedMainSessions(
     recovered: recovered.recovered,
     failed: recovered.failed,
     skipped: marked.skipped + recovered.skipped,
+    deferred: recovered.deferred,
   };
 }
 
@@ -1071,7 +1111,13 @@ export function scheduleRestartAbortedMainSessionRecovery(
     )
       .then((result) => {
         if (result.failed > 0 && attempt < maxRetries) {
+          // The failed-retry pass recomputes deferrals, so do not also
+          // schedule a deferred follow-up here; that would double-schedule.
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
+          return;
+        }
+        if (result.deferred) {
+          scheduleDeferredFollowUp(result.deferred.nextEligibleAtMs);
         }
       })
       .catch((err: unknown) => {
@@ -1092,6 +1138,19 @@ export function scheduleRestartAbortedMainSessionRecovery(
     setTimeout(() => {
       runRecoveryAttempt(attempt, delay);
     }, delay).unref?.();
+  };
+
+  // Backoff-deferred pending finals are not failures, so the failed-retry
+  // ladder never re-runs them; without this follow-up they would wait for the
+  // next gateway restart. One pass per deferral, naturally bounded by the
+  // per-entry attempt cap (dead-letter) and the backoff ceiling.
+  const scheduleDeferredFollowUp = (nextEligibleAtMs: number) => {
+    const followUpDelay = Math.max(0, nextEligibleAtMs - Date.now());
+    setTimeout(() => {
+      // Fresh attempt ladder: deferred follow-ups do not consume the
+      // failed-retry budget of the pass that scheduled them.
+      runRecoveryAttempt(1, initialDelay);
+    }, followUpDelay).unref?.();
   };
 
   scheduleAttempt(1, initialDelay);

@@ -1054,7 +1054,14 @@ describe("main-session-restart-recovery", () => {
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    // Attempt 2 backs off 60s; the deferral tells the startup scheduler when
+    // to run its follow-up pass instead of waiting for the next restart.
+    expect(result).toEqual({
+      recovered: 0,
+      failed: 0,
+      skipped: 0,
+      deferred: { count: 1, nextEligibleAtMs: lastAttemptAt + 60_000 },
+    });
     expect(callGateway).not.toHaveBeenCalled();
 
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
@@ -1064,6 +1071,79 @@ describe("main-session-restart-recovery", () => {
     expect(entry?.pendingFinalDeliveryText).toBe("retry me later");
     expect(entry?.pendingFinalDeliveryAttemptCount).toBe(2);
     expect(entry?.pendingFinalDeliveryLastAttemptAt).toBe(lastAttemptAt);
+  });
+
+  it("retries a backoff-deferred pending final delivery after expiry without a restart", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const sessionsDir = await makeSessionsDir();
+      const lastAttemptAt = Date.now();
+      await writeStore(sessionsDir, {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: lastAttemptAt - 10_000,
+          status: "running",
+          abortedLastRun: true,
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "retry me after backoff",
+          pendingFinalDeliveryCreatedAt: lastAttemptAt - 60_000,
+          pendingFinalDeliveryLastAttemptAt: lastAttemptAt,
+          pendingFinalDeliveryAttemptCount: 2,
+          pendingFinalDeliveryLastError: null,
+          pendingFinalDeliveryContext: {
+            channel: "discord",
+            to: "discord:dm:final",
+            accountId: "main",
+          },
+        },
+      });
+      // setImmediate stays real so store/transcript IO can settle while the
+      // fake clock controls the scheduler's recovery and follow-up timers.
+      const flushAsyncWork = async () => {
+        for (let i = 0; i < 25; i++) {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+        }
+      };
+
+      scheduleRestartAbortedMainSessionRecovery({ stateDir: tmpDir, delayMs: 10 });
+
+      // First pass runs inside the 60s attempt-2 backoff and defers.
+      await vi.advanceTimersByTimeAsync(10);
+      await flushAsyncWork();
+      expect(callGateway).not.toHaveBeenCalled();
+
+      // Crossing the backoff expiry fires the scheduled follow-up pass. Its
+      // store write settles a few async hops after callGateway resolves (the
+      // recovery runs inside the gateway work-admission wrapper), so drain
+      // setImmediate rounds until the retried attempt is durably recorded
+      // rather than guessing a fixed flush count that can race.
+      await vi.advanceTimersByTimeAsync(61_000);
+      const loadMainEntry = () =>
+        loadSessionStore(path.join(sessionsDir, "sessions.json"))["agent:main:main"];
+      let entry = loadMainEntry();
+      for (let i = 0; i < 200 && entry?.pendingFinalDeliveryAttemptCount !== 3; i++) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        entry = loadMainEntry();
+      }
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(firstGatewayParams()).toMatchObject({
+        deliver: true,
+        bestEffortDeliver: true,
+        channel: "discord",
+        to: "discord:dm:final",
+        accountId: "main",
+      });
+      expect(entry?.abortedLastRun).toBe(false);
+      expect(entry?.pendingFinalDelivery).toBe(true);
+      expect(entry?.pendingFinalDeliveryText).toBe("retry me after backoff");
+      expect(entry?.pendingFinalDeliveryAttemptCount).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not back off pending final delivery when the last attempt is in the future", async () => {
