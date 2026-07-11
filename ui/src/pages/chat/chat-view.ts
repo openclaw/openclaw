@@ -434,7 +434,7 @@ export function renderChat(props: ChatProps) {
                     ? html`
                         <openclaw-tooltip .content=${t("chat.splitView.open")}>
                           <button
-                            class="btn btn--icon chat-icon-btn chat-open-split-view"
+                            class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
                             type="button"
                             aria-label=${t("chat.splitView.open")}
                             @click=${props.onOpenSplitView}

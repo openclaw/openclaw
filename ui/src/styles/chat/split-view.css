@@ -132,7 +132,10 @@ openclaw-chat-pane {
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
+  /* 48px centers the 28px actions on the app's shared 24px chrome
+     centerline (sidebar brand row, floating toggles), so split headers
+     line up with the sidebar across the top of the shell. */
+  min-height: 48px;
   padding: 0 6px 0 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   background: color-mix(in srgb, var(--panel) 62%, transparent);
@@ -159,8 +162,6 @@ openclaw-chat-pane {
 .chat-pane__actions {
   display: flex;
   align-items: center;
-  /* Boxed .chat-icon-btn buttons need more breathing room than the old
-     borderless icons; matches the .chat-floating-toggles row gap. */
-  gap: 6px;
+  gap: 2px;
   flex: 0 0 auto;
 }

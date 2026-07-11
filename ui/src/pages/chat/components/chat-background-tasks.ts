@@ -318,7 +318,7 @@ export function renderBackgroundTasksToggle(
   return html`
     <openclaw-tooltip .content=${label}>
       <button
-        class="btn btn--icon chat-icon-btn chat-tasks-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
         type="button"
         aria-label=${label}
         aria-expanded=${String(expanded)}

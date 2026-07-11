@@ -716,7 +716,7 @@ export function renderSessionWorkspaceToggle(
   return html`
     <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
       <button
-        class="btn btn--icon chat-icon-btn chat-workspace-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle"
         type="button"
         aria-label=${label}
         aria-keyshortcuts="Meta+Shift+B"
@@ -746,7 +746,7 @@ export function renderSessionDiffToggle(
   return html`
     <openclaw-tooltip .content=${label}>
       <button
-        class="btn btn--icon chat-icon-btn chat-session-diff-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle"
         type="button"
         aria-label=${label}
         @click=${sessionWorkspace.onOpenDiff}
