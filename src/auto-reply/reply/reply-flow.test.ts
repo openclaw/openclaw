@@ -13,6 +13,14 @@ function deliveredText(deliver: DeliverMock, index = 0) {
   return payload?.text;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("createReplyDispatcher", () => {
   it("drops empty payloads and exact silent tokens without media", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
@@ -152,6 +160,134 @@ describe("createReplyDispatcher", () => {
 
     await dispatcher.waitForIdle();
     expect(delivered).toEqual(["tool", "block", "final"]);
+  });
+
+  it("releases the same dispatcher after a beforeDeliver timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const hookStarted = createDeferred<void>();
+      const delivered: string[] = [];
+      const errors: string[] = [];
+      let hookCalls = 0;
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+        beforeDeliver: (payload) => {
+          hookCalls += 1;
+          if (hookCalls === 1) {
+            hookStarted.resolve();
+            return new Promise<never>(() => {});
+          }
+          return payload;
+        },
+        onError: (error) => {
+          errors.push(error instanceof Error ? error.message : String(error));
+        },
+      });
+
+      dispatcher.sendFinalReply({ text: "stuck final" });
+      dispatcher.sendFinalReply({ text: "follow-up final" });
+      dispatcher.markComplete();
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual(["follow-up final"]);
+      expect(errors).toEqual(["beforeDeliver timed out after 15000ms"]);
+      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
+      expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds hooks appended after dispatcher construction", async () => {
+    vi.useFakeTimers();
+    try {
+      const hookStarted = createDeferred<void>();
+      const delivered: string[] = [];
+      let hookCalls = 0;
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+      });
+      dispatcher.appendBeforeDeliver?.((payload) => {
+        hookCalls += 1;
+        if (hookCalls === 1) {
+          hookStarted.resolve();
+          return new Promise<never>(() => {});
+        }
+        return payload;
+      });
+
+      dispatcher.sendFinalReply({ text: "stuck final" });
+      dispatcher.sendFinalReply({ text: "follow-up final" });
+      dispatcher.markComplete();
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual(["follow-up final"]);
+      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
+      expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives each beforeDeliver hook its own deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+        beforeDeliver: async (payload) => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10_000);
+          });
+          return { ...payload, text: `${payload.text}:first` };
+        },
+      });
+      dispatcher.appendBeforeDeliver?.(async (payload) => {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10_000);
+        });
+        return { ...payload, text: `${payload.text}:second` };
+      });
+
+      dispatcher.sendFinalReply({ text: "final" });
+      dispatcher.markComplete();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(delivered).toEqual([]);
+      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual(["final:first:second"]);
+      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("applies a hook appended after enqueue before the chain starts", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    dispatcher.sendFinalReply({ text: "queued" });
+    dispatcher.appendBeforeDeliver?.((payload) => ({ ...payload, text: "appended" }));
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliveredText(deliver)).toBe("appended");
   });
 
   it("fires onIdle when the queue drains", async () => {

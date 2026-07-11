@@ -177,6 +177,53 @@ describe("foreground reply freshness", () => {
     expect(cancellationReasons).toEqual([undefined]);
   });
 
+  it("releases a WhatsApp-shaped lane after beforeDeliver times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliveries: Delivery[] = [];
+      const hookStarted = createDeferred<void>();
+      const onSettled = vi.fn();
+      let hookCalls = 0;
+      const beforeDeliver = vi.fn((payload: ReplyPayload) => {
+        hookCalls += 1;
+        if (hookCalls === 1) {
+          hookStarted.resolve();
+          return new Promise<ReplyPayload>(() => {});
+        }
+        return payload;
+      });
+      hoisted.dispatchReplyFromConfigMock.mockImplementation(
+        async (params: DispatchReplyFromConfigParams) => {
+          params.dispatcher.sendFinalReply({ text: "stuck final" });
+          params.dispatcher.sendFinalReply({ text: "follow-up final" });
+          return {
+            queuedFinal: true,
+            counts: { tool: 0, block: 0, final: 2 },
+          };
+        },
+      );
+
+      const dispatch = dispatchWithDeliveries(buildForegroundCtx(), deliveries, {
+        beforeDeliver,
+        onSettled,
+      });
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(dispatch).resolves.toEqual({
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+        failedCounts: { tool: 0, block: 0, final: 1 },
+      });
+      expect(beforeDeliver).toHaveBeenCalledTimes(2);
+      expect(deliveries).toEqual([{ kind: "final", text: "follow-up final" }]);
+      expect(onSettled).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps an older foreground final when a newer inbound has no visible delivery while beforeDeliver is pending", async () => {
     const deliveries: Delivery[] = [];
     const beforeDeliverStarted = createDeferred<void>();

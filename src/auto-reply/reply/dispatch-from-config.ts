@@ -158,6 +158,8 @@ import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   appendReplyDispatcherBeforeDeliverCancelled,
+  captureReplyDispatchDeliveryOutcome,
+  type ReplyDispatchDeliveryOutcome,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type {
@@ -2958,7 +2960,11 @@ async function dispatchReplyFromConfigInner(
     const sendFinalPayload = async (
       payload: ReplyPayload,
       options: { abortSignal?: AbortSignal; deliveryId?: string } = {},
-    ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+    ): Promise<{
+      queuedFinal: boolean;
+      routedFinalCount: number;
+      dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
+    }> => {
       const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
       const throwIfFinalDeliveryAborted = () => {
         if (abortSignal?.aborted) {
@@ -3081,7 +3087,10 @@ async function dispatchReplyFromConfigInner(
       if (finalDeliveryCapture) {
         setReplyPayloadMetadata(normalizedPayload, { finalDeliveryCapture });
       }
+      const deliveryOutcome = captureReplyDispatchDeliveryOutcome(normalizedPayload);
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
+      const dispatcherOutcome =
+        queuedFinal && deliveryOutcome.isTracked() ? deliveryOutcome.promise : undefined;
       if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
         // The common settle owner runs this after successful delivery or
         // cancellation. Keeping reconciliation out of the reply operation lets a
@@ -3098,6 +3107,7 @@ async function dispatchReplyFromConfigInner(
       return {
         queuedFinal,
         routedFinalCount: 0,
+        ...(queuedFinal && dispatcherOutcome ? { dispatcherOutcome } : {}),
       };
     };
 
@@ -4154,6 +4164,8 @@ async function dispatchReplyFromConfigInner(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    const finalDeliveryOutcomes: Array<Promise<ReplyDispatchDeliveryOutcome>> = [];
+    let allQueuedFinalsObserved = true;
     // Explicit command turns (native or authorized text-slash like /compact) are
     // user-initiated, so a marked terminal reply for the command bypasses
     // room_event suppression. Ambient marked notices (no CommandTurn) stay
@@ -4202,20 +4214,46 @@ async function dispatchReplyFromConfigInner(
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
+      if (finalReply.queuedFinal) {
+        if (finalReply.dispatcherOutcome) {
+          finalDeliveryOutcomes.push(finalReply.dispatcherOutcome);
+        } else {
+          allQueuedFinalsObserved = false;
+        }
+      }
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
       }
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {
-      // The final reply already shipped, so clear the durable pending-final
-      // bookkeeping before honoring a late abort. A stuck-session recovery abort
-      // racing this window (#89115) otherwise strands pendingFinalDelivery=true,
-      // and the get-reply redelivery short-circuit then silently blocks all inbound.
-      await clearPendingFinalDeliveryAfterSuccess({
+      const pendingFinalDelivery = {
         storePath: sessionStoreEntry.storePath,
         sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-      });
+      };
+      if (queuedFinal && allQueuedFinalsObserved) {
+        // Delivery observers run from the queue itself, so direct low-level callers
+        // reconcile too; the settle task only makes lifecycle owners await it.
+        const reconcilePendingFinal = Promise.all(finalDeliveryOutcomes)
+          .then(async (outcomes) => {
+            if (outcomes.every((outcome) => outcome === "failed-before-deliver")) {
+              return;
+            }
+            await clearPendingFinalDeliveryAfterSuccess(pendingFinalDelivery);
+          })
+          .catch((error: unknown) => {
+            logVerbose(
+              `dispatch-from-config: pending final reconciliation failed: ${formatErrorMessage(error)}`,
+            );
+          });
+        registerReplyDispatcherSettledTask(dispatcher, () => reconcilePendingFinal);
+      } else {
+        // Routed delivery has a transport result already. Custom dispatchers that
+        // do not expose the core observer retain the legacy queue-admission behavior.
+        await clearPendingFinalDeliveryAfterSuccess(pendingFinalDelivery);
+      }
+      // Register successful queued cleanup before honoring a late abort. The
+      // outer settle owner still runs it from finally (#89115).
       throwIfDispatchOperationAborted();
     }
 
