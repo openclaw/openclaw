@@ -465,8 +465,18 @@ export async function resolveImplicitProviders(
       return getAuthStore();
     },
     env,
-    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, params.config),
-    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, params.config),
+    resolveProviderApiKey: createProviderApiKeyResolver(
+      env,
+      getAuthStore,
+      params.config,
+      params.workspaceDir,
+    ),
+    resolveProviderAuth: createProviderAuthResolver(
+      env,
+      getAuthStore,
+      params.config,
+      params.workspaceDir,
+    ),
   };
   const discoveryProviders = await resolveRuntimePluginDiscoveryProviders({
     config: params.config,
