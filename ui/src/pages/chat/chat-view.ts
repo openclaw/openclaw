@@ -120,7 +120,7 @@ export type ChatProps = {
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
   showNewMessages?: boolean;
-  onScrollToBottom?: () => void;
+  onScrollToBottom?: (options?: { smooth?: boolean }) => void;
   onRefresh: () => void;
   onToggleFocusMode?: () => void;
   getDraft?: () => string;
@@ -277,7 +277,6 @@ export function renderChat(props: ChatProps) {
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
     attachments: props.attachments,
-    showNewMessages: props.showNewMessages,
     replyTarget: props.replyTarget,
     realtimeTalkActive: props.realtimeTalkActive,
     realtimeTalkStatus: props.realtimeTalkStatus,
@@ -302,9 +301,23 @@ export function renderChat(props: ChatProps) {
     onDismissSideResult: props.onDismissSideResult,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,
-    onScrollToBottom: props.onScrollToBottom,
     onAttachmentsChange: props.onAttachmentsChange,
   });
+  const scrollToBottomButton =
+    props.showNewMessages && props.onScrollToBottom
+      ? html`
+          <div class="chat-scroll-to-bottom-wrap">
+            <button
+              class="chat-scroll-to-bottom"
+              type="button"
+              @click=${() => props.onScrollToBottom?.({ smooth: true })}
+              aria-label="Scroll to latest"
+            >
+              ${icons.arrowDown}
+            </button>
+          </div>
+        `
+      : nothing;
 
   return html`
     <section
@@ -489,7 +502,7 @@ export function renderChat(props: ChatProps) {
                 onExpand: () => props.onExpandPullRequests?.(),
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
-              ${chatColumnFooter}
+              ${scrollToBottomButton} ${chatColumnFooter}
             </div>
 
             ${sidebarOpen

@@ -120,36 +120,39 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   margin-inline: auto;
 }
 
-/* New messages indicator - floating pill above compose */
-.chat-new-messages {
+/* Scroll-to-bottom affordance centered above the composer. */
+.chat-scroll-to-bottom-wrap {
   align-self: center;
+  display: flex;
+  margin: 8px auto 0;
+  z-index: 10;
+}
+
+.chat-scroll-to-bottom {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  margin: 8px auto 0;
-  font-size: 12px;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
   line-height: 1;
-  font-family: var(--font-body);
   color: var(--text);
   background: var(--panel-strong);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  white-space: nowrap;
-  z-index: 10;
-  transition:
-    background 150ms ease-out,
-    border-color 150ms ease-out;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  pointer-events: auto;
 }
 
-.chat-new-messages:hover {
-  background: var(--panel);
-  border-color: var(--accent);
+.chat-scroll-to-bottom:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text) 28%, transparent);
+  outline-offset: 2px;
 }
 
-.chat-new-messages svg {
-  width: 16px;
-  height: 16px;
+.chat-scroll-to-bottom svg {
+  width: 18px;
+  height: 18px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
