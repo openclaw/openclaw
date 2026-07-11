@@ -240,6 +240,7 @@ export function createChannelProgressDraftCompositor(params: {
       }
       finalReplyStarted = false;
       finalReplyDelivered = false;
+      gate.reset();
       clearProgressState(false);
       return true;
     },

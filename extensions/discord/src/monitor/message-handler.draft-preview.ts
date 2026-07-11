@@ -289,14 +289,17 @@ export function createDiscordDraftPreviewController(params: {
       if (beganNewTurn) {
         progressDraftCollapsed = false;
         progressDraftStartedBeforeFinal = false;
+        finalReplyDelivered = false;
+        finalizedViaPreviewMessage = false;
       }
       if (discordStreamMode === "progress") {
         if (beganNewTurn) {
           draftStream?.forceNewMessage();
         }
-        return;
+        return beganNewTurn;
       }
       forceNewMessageIfNeeded();
+      return beganNewTurn;
     },
     async flush() {
       if (!draftStream) {

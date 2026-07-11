@@ -599,7 +599,7 @@ async function processDiscordMessageInner(
   })();
   const reasoningDurableEnabled = reasoningLevel === "on";
   const reasoningWindowEnabled = reasoningLevel === "stream";
-  const progressTurnStartedAt = Date.now();
+  let progressTurnStartedAt = Date.now();
   let progressReasoningSteps = 0;
   let progressToolCalls = 0;
   let progressCommentaryNotes = 0;
@@ -634,6 +634,26 @@ async function processDiscordMessageInner(
     if (windowReasoningOpen) {
       windowReasoningOpen = false;
       progressReasoningSteps += 1;
+    }
+  };
+  const resetProgressTurnState = () => {
+    finalReplyStartNotified = false;
+    userFacingFinalDelivered = false;
+    userFacingFinalDeliveryFailed = false;
+    pendingToolWarningFinal = undefined;
+    progressTurnStartedAt = Date.now();
+    progressReasoningSteps = 0;
+    progressToolCalls = 0;
+    progressCommentaryNotes = 0;
+    progressReceiptLine = undefined;
+    clearProgressDraftAfterFinalDelivery = false;
+    seenCommentaryIds.clear();
+    lastCommentaryNoteText = "";
+    windowReasoningOpen = false;
+  };
+  const handleAssistantMessageBoundary = () => {
+    if (draftPreview.handleAssistantMessageBoundary()) {
+      resetProgressTurnState();
     }
   };
   const buildProgressSummaryLine = () => {
@@ -1063,12 +1083,12 @@ async function processDiscordMessageInner(
             ? (payload) => draftPreview.updateFromPartial(payload.text)
             : undefined,
         onAssistantMessageStart: draftPreview.draftStream
-          ? () => draftPreview.handleAssistantMessageBoundary()
+          ? handleAssistantMessageBoundary
           : undefined,
         onReasoningEnd: draftPreview.draftStream
           ? () => {
               closePendingWindowThought();
-              return draftPreview.handleAssistantMessageBoundary();
+              handleAssistantMessageBoundary();
             }
           : undefined,
         onModelSelected,
