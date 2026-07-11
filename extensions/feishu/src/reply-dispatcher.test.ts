@@ -48,14 +48,6 @@ const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() =>
   }),
 );
 
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
@@ -937,8 +929,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("sends only the first and latest snapshots from a blocked update burst", async () => {
-    const firstUpdate = createDeferred();
+  it("delegates overlapping snapshots directly to the streaming session", async () => {
+    let releaseFirstUpdate!: () => void;
+    const firstUpdate = new Promise<void>((resolve) => {
+      releaseFirstUpdate = resolve;
+    });
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -950,7 +945,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    streamingInstances[0].update.mockImplementationOnce((() => firstUpdate.promise) as () => never);
+    streamingInstances[0].update.mockImplementationOnce((() => firstUpdate) as () => never);
 
     result.replyOptions.onPartialReply?.({ text: "first" });
     await vi.waitFor(() => {
@@ -959,85 +954,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     result.replyOptions.onPartialReply?.({ text: "first second" });
     result.replyOptions.onPartialReply?.({ text: "first second latest" });
 
-    expect(streamingUpdateTexts()).toEqual(["first"]);
-    firstUpdate.resolve();
     await vi.waitFor(() => {
-      expect(streamingInstances[0].update).toHaveBeenCalledTimes(2);
+      expect(streamingInstances[0].update).toHaveBeenCalledTimes(3);
     });
+    expect(streamingUpdateTexts()).toEqual(["first", "first second", "first second latest"]);
 
-    expect(streamingUpdateTexts()).toEqual(["first", "first second latest"]);
+    releaseFirstUpdate();
     await options.onIdle?.();
-  });
-
-  it("waits for the coalesced latest update before closing on idle", async () => {
-    const firstUpdate = createDeferred();
-    const latestUpdate = createDeferred();
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: { renderMode: "card", streaming: true },
-    });
-    const { result, options } = createDispatcherHarness({
-      runtime: createRuntimeLogger(),
-    });
-    await options.onReplyStart?.();
-    streamingInstances[0].update
-      .mockImplementationOnce((() => firstUpdate.promise) as () => never)
-      .mockImplementationOnce((() => latestUpdate.promise) as () => never);
-
-    result.replyOptions.onPartialReply?.({ text: "first" });
-    await vi.waitFor(() => {
-      expect(streamingInstances[0].update).toHaveBeenCalledTimes(1);
-    });
-    result.replyOptions.onPartialReply?.({ text: "first latest before idle" });
-    const idlePromise = options.onIdle?.();
-
-    expect(streamingInstances[0].close).not.toHaveBeenCalled();
-    firstUpdate.resolve();
-    await vi.waitFor(() => {
-      expect(streamingInstances[0].update).toHaveBeenCalledTimes(2);
-    });
-    expect(streamingUpdateTexts()).toEqual(["first", "first latest before idle"]);
-    expect(streamingInstances[0].close).not.toHaveBeenCalled();
-
-    latestUpdate.resolve();
-    await idlePromise;
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("first latest before idle", {
-      note: "Agent: agent",
-    });
-  });
-
-  it("does not poison future drains when a streaming update fails", async () => {
-    const errorMock = vi.fn();
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: { renderMode: "card", streaming: true },
-    });
-    const { result, options } = createDispatcherHarness({
-      runtime: { log: vi.fn(), error: errorMock } as never,
-    });
-    await options.onReplyStart?.();
-
-    streamingInstances[0].update.mockRejectedValueOnce(new Error("update failed"));
-    result.replyOptions.onPartialReply?.({ text: "failed snapshot" });
-    await vi.waitFor(() => {
-      expect(errorMock).toHaveBeenCalledWith(
-        "feishu[main]: streaming update failed: Error: update failed",
-      );
-    });
-
-    result.replyOptions.onPartialReply?.({ text: "failed snapshot recovered" });
-    await options.onIdle?.();
-
-    expect(streamingUpdateTexts()).toEqual(["failed snapshot", "failed snapshot recovered"]);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("failed snapshot recovered", {
-      note: "Agent: agent",
-    });
   });
 
   it("appends an independent error final without replacing the assistant answer", async () => {
