@@ -251,7 +251,10 @@ enum MacNodeCodexThreadCatalog {
             timeoutSeconds: max(0.01, deadline.timeIntervalSinceNow),
             maxLineBytes: maxLineBytes)
         let output = try await session.run()
-        return String(decoding: output.resultData, as: UTF8.self)
+        guard let payload = String(data: output.resultData, encoding: .utf8) else {
+            throw CatalogError.appServerUnavailable
+        }
+        return payload
     }
 
     private static func requireCatalogThread(
