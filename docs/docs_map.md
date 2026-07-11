@@ -3555,6 +3555,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Signals exported
   - H2: Configuration reference
   - H3: Environment variables
+  - H3: Instance identity (service.instance.id)
   - H2: Privacy and content capture
   - H2: Sampling and flushing
   - H2: Exported metrics
