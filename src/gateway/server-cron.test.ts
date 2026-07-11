@@ -1804,16 +1804,18 @@ describe("buildGatewayCronService", () => {
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "ping" },
       });
+      // Payload row fields depend on shared-process session-store state, so
+      // this test pins only the broadcast mechanism; hasAutomation projection
+      // is covered by session-utils and session-automation-index tests.
       const added = requireRecord(sessionsChanged().at(-1)?.[1], "added payload");
       expect(added.sessionKey).toBe("agent:main:probe");
       expect(added.reason).toBe("cron-binding");
-      expect(added.hasAutomation).toBe(true);
 
       broadcast.mockClear();
       await state.cron.update(job.id, { enabled: false });
       const disabled = requireRecord(sessionsChanged().at(-1)?.[1], "disabled payload");
       expect(disabled.sessionKey).toBe("agent:main:probe");
-      expect(disabled.hasAutomation).toBe(false);
+      expect(disabled.reason).toBe("cron-binding");
     } finally {
       state.cron.stop();
     }
