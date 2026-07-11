@@ -66,7 +66,7 @@ import { createFastTestModelSelectionState, createModelSelectionState } from "./
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
-import { initSessionState } from "./session.js";
+import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
@@ -447,22 +447,37 @@ export async function getReplyFromConfig(
       }),
     );
   }
-  if (!isFastTestEnv && hasInboundMediaForUnderstanding(finalized)) {
-    const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
-      applyMediaUnderstandingIfNeeded({
-        ctx: finalized,
-        cfg,
-        agentId,
-        agentDir,
-        workspaceDir,
-        activeModel: { provider, model },
-      }),
-    );
-    if (mediaResult?.extractedFileImages.length) {
-      extractedFileImages = mediaResult.extractedFileImages;
+
+  const mediaUnderstandingRequested = !isFastTestEnv && hasInboundMediaForUnderstanding(finalized);
+  const linkUnderstandingRequested = !isFastTestEnv && hasLinkCandidate(finalized);
+  const preprocessingState =
+    mediaUnderstandingRequested || linkUnderstandingRequested
+      ? await traceGetReplyPhase("reply.resolve_session_preprocessing_state", () =>
+          resolveReplySessionPreprocessingState({ ctx: finalized, cfg }),
+        )
+      : undefined;
+  const utilityModelSelectionLocked = isModelSelectionLocked(preprocessingState?.sessionEntry);
+
+  if (mediaUnderstandingRequested) {
+    // A durable native-harness lock owns attachment and link interpretation. The
+    // harness receives raw inputs, so unrelated utility models stay outside the turn.
+    if (!utilityModelSelectionLocked) {
+      const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
+        applyMediaUnderstandingIfNeeded({
+          ctx: finalized,
+          cfg,
+          agentId,
+          agentDir,
+          workspaceDir,
+          activeModel: { provider, model },
+        }),
+      );
+      if (mediaResult?.extractedFileImages.length) {
+        extractedFileImages = mediaResult.extractedFileImages;
+      }
     }
   }
-  if (!isFastTestEnv && hasLinkCandidate(finalized)) {
+  if (linkUnderstandingRequested && !utilityModelSelectionLocked) {
     await traceGetReplyPhase("reply.apply_link_understanding", () =>
       applyLinkUnderstandingIfNeeded({
         ctx: finalized,
@@ -523,6 +538,14 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  const sessionModelSelectionLocked = isModelSelectionLocked(sessionEntry);
+  if (sessionModelSelectionLocked && hasResolvedHeartbeatModelOverride) {
+    // Heartbeat routing is turn-local. A native harness lock owns the durable
+    // model selection, so heartbeat.model must not retarget its AppServer turn.
+    provider = defaultProvider;
+    model = defaultModel;
+    hasResolvedHeartbeatModelOverride = false;
+  }
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
   const resolvedOpts = attachProgressNarratorToReplyOptions({
@@ -530,7 +553,7 @@ export async function getReplyFromConfig(
     agentId,
     userMessage: finalized.BodyForAgent ?? finalized.Body,
     opts: optsWithSkillFilter,
-    disabled: isModelSelectionLocked(sessionEntry),
+    disabled: sessionModelSelectionLocked,
   });
   const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
   let { abortedLastRun } = sessionState;
@@ -646,7 +669,7 @@ export async function getReplyFromConfig(
       })
     : null;
   const resolvedChannelModelOverride =
-    channelModelOverride && !hasResolvedHeartbeatModelOverride
+    channelModelOverride && !hasResolvedHeartbeatModelOverride && !sessionModelSelectionLocked
       ? resolveModelRefFromString({
           raw: channelModelOverride.model,
           defaultProvider,
@@ -669,18 +692,22 @@ export async function getReplyFromConfig(
       sessionCtx.ParentSessionKey,
     defaultProvider,
   });
-  const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
-    isHeartbeat: opts?.isHeartbeat === true,
-    hasResolvedHeartbeatModelOverride,
-    sessionEntry,
-    storedOverride: storedModelOverride,
-    defaultProvider,
-    defaultModel,
-    primaryProvider,
-    primaryModel,
-  });
+  const staleHeartbeatAutoFallbackOverride =
+    !sessionModelSelectionLocked &&
+    isStaleHeartbeatAutoFallbackOverride({
+      isHeartbeat: opts?.isHeartbeat === true,
+      hasResolvedHeartbeatModelOverride,
+      sessionEntry,
+      storedOverride: storedModelOverride,
+      defaultProvider,
+      defaultModel,
+      primaryProvider,
+      primaryModel,
+    });
   const staleLegacyAutoFallbackWithoutOrigin =
-    storedModelOverride?.source === "session" && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
+    !sessionModelSelectionLocked &&
+    storedModelOverride?.source === "session" &&
+    hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
   if (
     storedModelOverride?.model &&
     !hasResolvedHeartbeatModelOverride &&
@@ -691,7 +718,7 @@ export async function getReplyFromConfig(
     model = storedModelOverride.model;
   }
   const canApplyAutoFallbackPrimaryProbe =
-    !isModelSelectionLocked(sessionEntry) &&
+    !sessionModelSelectionLocked &&
     !hasResolvedHeartbeatModelOverride &&
     !staleHeartbeatAutoFallbackOverride;
   const autoFallbackPrimaryProbe = canApplyAutoFallbackPrimaryProbe

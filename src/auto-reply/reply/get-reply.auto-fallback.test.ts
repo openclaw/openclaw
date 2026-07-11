@@ -231,6 +231,26 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(runParams?.autoFallbackPrimaryProbe).toBeUndefined();
   });
 
+  it("suppresses heartbeat model overrides for a model-locked session", async () => {
+    const { sessionKey } = mockAutoFallbackSession({ modelSelectionLocked: true });
+    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx(),
+        { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5" },
+        makeReasoningModelConfig(),
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-fallback",
+      hasResolvedHeartbeatModelOverride: false,
+    });
+  });
+
   it("does not re-enable default reasoning for explicit thinking-off primary probes", async () => {
     const { sessionKey } = mockAutoFallbackSession();
     mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });

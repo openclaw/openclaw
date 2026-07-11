@@ -48,6 +48,10 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import {
+  AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
+  resolveAgentHarnessSessionContextError,
+} from "../sessions/agent-harness-session-key.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import {
   applyModelOverrideToSessionEntry,
@@ -790,6 +794,20 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
 
   const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
     sessionResolution;
+  const harnessSessionError = sessionKey
+    ? resolveAgentHarnessSessionContextError(sessionKey, sessionResolution.sessionEntry)
+    : undefined;
+  if (harnessSessionError) {
+    throw new Error(harnessSessionError);
+  }
+  const isOneShotModelRun = opts.modelRun === true || opts.promptMode === "none";
+  if (
+    isOneShotModelRun &&
+    sessionKey &&
+    sessionResolution.sessionEntry?.modelSelectionLocked === true
+  ) {
+    throw new Error(AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE);
+  }
   const { sessionEntry: sessionEntryRaw, sessionStore } = createAgentCommandSessionWorkingCopy({
     sessionKey,
     sessionEntry: sessionResolution.sessionEntry,
@@ -1519,6 +1537,8 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         hasStoredOverride &&
+        // Locked harness sessions own their stored model metadata; generic repair must not rewrite it.
+        !isModelSelectionLocked(sessionEntry) &&
         !suppressVisibleSessionEffects
       ) {
         const initialEntry = sessionEntry;

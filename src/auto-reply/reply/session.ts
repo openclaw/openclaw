@@ -61,6 +61,7 @@ import {
   isAcpSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import {
   isModelSelectionLocked,
@@ -259,6 +260,7 @@ function resolveSessionConversationBindingContext(
 function resolveBoundConversationSessionKey(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
+  touch?: boolean;
   bindingContext?: {
     channel: string;
     accountId: string;
@@ -284,12 +286,15 @@ function resolveBoundConversationSessionKey(params: {
   if (!binding?.targetSessionKey) {
     return undefined;
   }
-  getSessionBindingService().touch(binding.bindingId);
+  if (params.touch !== false) {
+    getSessionBindingService().touch(binding.bindingId);
+  }
   return binding.targetSessionKey;
 }
 
 function resolveInitSessionStateAttemptContext(
-  params: InitSessionStateParams,
+  params: Pick<InitSessionStateParams, "cfg" | "ctx">,
+  options?: { touchConversationBinding?: boolean },
 ): InitSessionStateAttemptContext {
   const { cfg, ctx } = params;
   // Automated system events must not reset sessions or retarget conversation bindings.
@@ -307,6 +312,7 @@ function resolveInitSessionStateAttemptContext(
       cfg,
       ctx,
       bindingContext: conversationBindingContext,
+      touch: options?.touchConversationBinding,
     });
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
@@ -323,6 +329,43 @@ function resolveInitSessionStateAttemptContext(
     isSystemEvent,
     sessionCtxForState,
     storePath: resolveStorePath(cfg.session?.store, { agentId }),
+  };
+}
+
+export type ReplySessionPreprocessingState = {
+  sessionEntry?: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+};
+
+/** Resolves durable ownership before utility preprocessing can invoke another model. */
+export function resolveReplySessionPreprocessingState(
+  params: Pick<InitSessionStateParams, "cfg" | "ctx">,
+): ReplySessionPreprocessingState {
+  const attemptContext = resolveInitSessionStateAttemptContext(params, {
+    touchConversationBinding: false,
+  });
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg: params.cfg,
+    agentId: attemptContext.agentId,
+    sessionKey: resolveSessionKey(
+      params.cfg.session?.scope ?? "per-sender",
+      attemptContext.sessionCtxForState,
+      normalizeMainKey(params.cfg.session?.mainKey),
+    ),
+  });
+  const sessionEntry = loadReplySessionInitializationSnapshot({
+    storePath: attemptContext.storePath,
+    sessionKey,
+  }).currentEntry;
+  const contextError = resolveAgentHarnessSessionContextError(sessionKey, sessionEntry);
+  if (contextError) {
+    throw new Error(contextError);
+  }
+  return {
+    sessionEntry,
+    sessionKey,
+    storePath: attemptContext.storePath,
   };
 }
 

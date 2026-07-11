@@ -959,7 +959,12 @@ export async function runPreflightCompactionIfNeeded(params: {
       model: params.followupRun.run.model,
       authProfileId: params.followupRun.run.authProfileId,
       agentHarnessId:
-        entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
+        entry.sessionId === params.followupRun.run.sessionId
+          ? entry.modelSelectionLocked === true
+            ? resolvePersistedSessionRuntimeId(entry)
+            : entry.agentHarnessId
+          : undefined,
+      modelSelectionLocked: entry.modelSelectionLocked === true,
       thinkLevel: params.followupRun.run.thinkLevel,
       bashElevated: params.followupRun.run.bashElevated,
       trigger: "budget",

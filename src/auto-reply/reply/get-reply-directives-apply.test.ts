@@ -61,8 +61,8 @@ describe("formatModelOverrideResetEvent", () => {
 });
 
 describe("applyInlineDirectiveOverrides", () => {
-  it("rejects a mixed inline model change when model selection is locked", async () => {
-    const directives = parseInlineDirectives("hello /model openai/gpt-5.4");
+  it("rejects a mixed inline model and runtime change when model selection is locked", async () => {
+    const directives = parseInlineDirectives("hello /model openai/gpt-5.4 --runtime openclaw");
     const typing = {
       onReplyStart: async () => {},
       startTypingLoop: async () => {},
@@ -78,11 +78,16 @@ describe("applyInlineDirectiveOverrides", () => {
       updatedAt: 1,
       providerOverride: "openai",
       modelOverride: "gpt-5.5",
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
       modelSelectionLocked: true,
     };
 
     const result = await applyInlineDirectiveOverrides({
-      ctx: buildTestCtx({ Body: "hello /model openai/gpt-5.4", CommandAuthorized: true }),
+      ctx: buildTestCtx({
+        Body: "hello /model openai/gpt-5.4 --runtime openclaw",
+        CommandAuthorized: true,
+      }),
       cfg: {},
       agentId: "main",
       agentDir: "/tmp/agent",
@@ -100,8 +105,8 @@ describe("applyInlineDirectiveOverrides", () => {
         ownerList: [],
         senderIsOwner: true,
         isAuthorizedSender: true,
-        rawBodyNormalized: "hello /model openai/gpt-5.4",
-        commandBodyNormalized: "hello /model openai/gpt-5.4",
+        rawBodyNormalized: "hello /model openai/gpt-5.4 --runtime openclaw",
+        commandBodyNormalized: "hello /model openai/gpt-5.4 --runtime openclaw",
       },
       directives,
       messageProviderKey: "webchat",
@@ -123,7 +128,7 @@ describe("applyInlineDirectiveOverrides", () => {
       resolvedElevatedLevel: "off",
       defaultActivation: () => "always",
       contextTokens: 8192,
-      effectiveModelDirective: "openai/gpt-5.4",
+      effectiveModelDirective: directives.rawModelDirective,
       typing,
     });
 
@@ -134,9 +139,13 @@ describe("applyInlineDirectiveOverrides", () => {
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.fastLane).not.toHaveBeenCalled();
     expect(mocks.persist).not.toHaveBeenCalled();
-    expect(sessionEntry).toMatchObject({
+    expect(sessionEntry).toEqual({
+      sessionId: "session-1",
+      updatedAt: 1,
       providerOverride: "openai",
       modelOverride: "gpt-5.5",
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
       modelSelectionLocked: true,
     });
   });

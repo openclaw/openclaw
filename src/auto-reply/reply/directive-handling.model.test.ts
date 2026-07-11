@@ -1712,24 +1712,25 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
   });
 
-  it("rejects /model changes for model-locked sessions", async () => {
+  it("rejects model and runtime changes for model-locked sessions", async () => {
     const sessionEntry = createSessionEntry({
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-6",
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
       modelSelectionLocked: true,
     });
+    const initialSessionEntry = { ...sessionEntry };
 
     const result = await handleDirectiveOnly(
       createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        directives: parseInlineDirectives("/model openai/gpt-4o --runtime openclaw"),
         sessionEntry,
       }),
     );
 
     expect(result?.text).toBe(MODEL_SELECTION_LOCKED_MESSAGE);
-    expect(sessionEntry.providerOverride).toBe("anthropic");
-    expect(sessionEntry.modelOverride).toBe("claude-opus-4-6");
-    expect(sessionEntry.liveModelSwitchPending).toBeUndefined();
+    expect(sessionEntry).toEqual(initialSessionEntry);
   });
 
   it("persists /model only on the targeted session entry", async () => {

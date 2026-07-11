@@ -1,6 +1,7 @@
 /**
  * Resolves hook-selected model state and pre-model attachments for a run.
  */
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type {
@@ -8,6 +9,12 @@ import type {
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
 } from "../../../plugins/types.js";
+import {
+  AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+  resolveAgentHarnessSessionStoreEntryError,
+} from "../../../sessions/agent-harness-session-key.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
@@ -46,6 +53,45 @@ type HookRunnerLike = {
     context: HookContext,
   ): Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
+
+/** Durable harness sessions run only with their exact persisted identity and runtime lock. */
+export function resolveAgentHarnessRunAdmissionError(params: {
+  agentHarnessId?: string;
+  entry?: SessionEntry;
+  modelSelectionLocked?: boolean;
+  sessionId: string;
+  sessionKey?: string;
+}): string | undefined {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const entry = params.entry;
+  const reservedKey = isAgentHarnessSessionKey(sessionKey);
+  if (!entry) {
+    return reservedKey ? AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE : undefined;
+  }
+  // Rows created before harness supervision could already use this prefix. Only the
+  // durable lock makes an existing row harness-owned; missing reserved keys stay closed.
+  if (entry.modelSelectionLocked !== true) {
+    return undefined;
+  }
+  const durableEntryError = resolveAgentHarnessSessionStoreEntryError(sessionKey, entry);
+  if (durableEntryError) {
+    return durableEntryError;
+  }
+  const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
+  const durableHarnessId = normalizeOptionalAgentRuntimeId(entry.agentHarnessId);
+  const matchesRequestedRuntime =
+    params.modelSelectionLocked === true && requestedHarnessId === durableHarnessId;
+  const matchesDurableRuntime =
+    entry.sessionId === params.sessionId && durableHarnessId !== undefined;
+  return matchesRequestedRuntime && matchesDurableRuntime
+    ? undefined
+    : reservedKey
+      ? AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE
+      : AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE;
+}
 
 /**
  * Runs model-selection hooks before resolving the runtime model. The dedicated

@@ -45,6 +45,7 @@ const state = vi.hoisted(() => ({
       (entry as { modelSelectionLocked?: boolean } | undefined)?.modelSelectionLocked === true,
   ),
   applyModelOverrideToSessionEntryMock: vi.fn((_params: unknown) => ({ updated: false })),
+  repairProviderWrappedModelOverrideMock: vi.fn((_params: unknown) => ({ updated: false })),
   resolveAutoFallbackPrimaryProbeMock: vi.fn((_params: unknown) => undefined as unknown),
   resolveChannelModelOverrideMock: vi.fn((_params: unknown) => null as unknown),
   assertLifecycleCurrentMock: vi.fn(),
@@ -381,7 +382,8 @@ vi.mock("../sessions/model-overrides.js", () => ({
       this.name = "ModelSelectionLockedError";
     }
   },
-  repairProviderWrappedModelOverride: () => ({ updated: false }),
+  repairProviderWrappedModelOverride: (params: unknown) =>
+    state.repairProviderWrappedModelOverrideMock(params),
 }));
 
 vi.mock("../sessions/send-policy.js", () => ({
@@ -1006,6 +1008,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         (entry as { modelSelectionLocked?: boolean } | undefined)?.modelSelectionLocked === true,
     );
     state.applyModelOverrideToSessionEntryMock.mockReturnValue({ updated: false });
+    state.repairProviderWrappedModelOverrideMock.mockReturnValue({ updated: false });
     state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue(undefined);
     state.resolveChannelModelOverrideMock.mockImplementation((params: unknown) => {
       const input = params as {
@@ -1272,6 +1275,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       },
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     };
+    state.isModelSelectionLockedMock.mockReturnValue(true);
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
 
     await runBasicAgentCommand();
@@ -1288,6 +1292,38 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       sessionEntry: expect.objectContaining({
         agentHarnessId: "codex",
         modelSelectionLocked: true,
+      }),
+    });
+  });
+
+  it("skips legacy override repair when continuing an ordinary locked harness session", async () => {
+    setupSingleAttemptFallback();
+    state.resolvedSessionKeyMock = "agent:main:plugin-owned";
+    state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(true);
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      providerOverride: "openai",
+      modelOverride: "stale-fallback-model",
+      modelOverrideSource: "auto",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand();
+
+    expect(state.applyModelOverrideToSessionEntryMock).not.toHaveBeenCalled();
+    expect(state.repairProviderWrappedModelOverrideMock).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      agentHarnessRuntimeOverride: "codex",
+      sessionEntry: expect.objectContaining({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        providerOverride: "openai",
+        modelOverride: "stale-fallback-model",
+        modelOverrideSource: "auto",
       }),
     });
   });
@@ -2969,6 +3005,90 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
     expect(state.removeSessionTrajectoryArtifactsMock).not.toHaveBeenCalled();
     expect(state.removeInternalSessionEffectsTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects session-id-resolved model runs for harness-owned sessions", async () => {
+    state.resolvedSessionKeyMock = "agent:main:harness:codex:supervision:native-thread";
+    state.sessionEntryMock = {
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      sessionId: "session-1",
+      updatedAt: 1,
+    };
+
+    await expect(
+      agentCommand({
+        message: "probe",
+        sessionId: "session-1",
+        modelRun: true,
+        promptMode: "none",
+        sessionEffects: "internal",
+      }),
+    ).rejects.toThrow("Agent harness-owned sessions cannot be used for one-shot model runs.");
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects one-shot model runs for locked harness sessions with ordinary keys", async () => {
+    state.resolvedSessionKeyMock = "agent:main:plugin-owned";
+    state.sessionEntryMock = {
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      sessionId: "session-1",
+      updatedAt: 1,
+    };
+
+    await expect(
+      agentCommand({
+        message: "probe",
+        sessionId: "session-1",
+        modelRun: true,
+        promptMode: "none",
+        sessionEffects: "internal",
+      }),
+    ).rejects.toThrow("Agent harness-owned sessions cannot be used for one-shot model runs.");
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("continues a grandfathered unlocked harness-prefixed session as an ordinary run", async () => {
+    setupSingleAttemptFallback();
+    state.resolvedSessionKeyMock = "agent:main:harness:notes";
+    state.sessionEntryMock = {
+      agentHarnessId: "codex",
+      modelSelectionLocked: false,
+      sessionId: "session-1",
+      sessionFile: "/tmp/legacy-session.jsonl",
+      updatedAt: 1,
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      agentHarnessRuntimeOverride: undefined,
+      sessionEntry: expect.objectContaining({
+        agentHarnessId: "codex",
+        modelSelectionLocked: false,
+        sessionId: "session-1",
+      }),
+    });
+  });
+
+  it("rejects a locked harness row with the wrong owner before transcript or model work", async () => {
+    state.resolvedSessionKeyMock = "agent:main:harness:codex:supervision:native-thread";
+    state.sessionEntryMock = {
+      agentHarnessId: "other",
+      modelSelectionLocked: true,
+      sessionId: "session-1",
+      sessionFile: "/tmp/native-session.jsonl",
+      updatedAt: 1,
+    };
+
+    await expect(agentCommand({ message: "continue", sessionId: "session-1" })).rejects.toThrow(
+      "Session key namespace is reserved for agent harness-owned sessions.",
+    );
+    expect(state.prepareInternalSessionEffectsTranscriptMock).not.toHaveBeenCalled();
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
   });
 
   it("removes one-shot internal model-run artifacts after success", async () => {

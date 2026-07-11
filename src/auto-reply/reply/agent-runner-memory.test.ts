@@ -118,6 +118,7 @@ type EmbeddedAgentParams = {
 
 type CompactEmbeddedAgentSessionParams = {
   agentId?: string;
+  agentHarnessId?: string;
   authProfileId?: string;
   contextTokenBudget?: number;
   sessionKey?: string;
@@ -126,6 +127,7 @@ type CompactEmbeddedAgentSessionParams = {
   cwd?: string;
   force?: boolean;
   forcePreflight?: boolean;
+  modelSelectionLocked?: boolean;
   preflightRequired?: boolean;
   preflightCompactionTrigger?: string;
   sessionFile?: string;
@@ -1202,6 +1204,8 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
     };
     const onCompactionNotice = vi.fn();
 
@@ -1233,6 +1237,8 @@ describe("runMemoryFlushIfNeeded", () => {
       preflightCompactionTrigger: "tokens",
       deferOwningContextEngineCompaction: false,
       contextTokenBudget: 100,
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
     });
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");

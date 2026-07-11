@@ -15,7 +15,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -43,6 +43,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -243,6 +244,7 @@ import {
   buildBeforeModelResolveAttachments,
   createNativeModelOwnedRuntimeModel,
   resolveEmbeddedRuntimeModelPolicy,
+  resolveAgentHarnessRunAdmissionError,
   resolveHookModelSelection,
   resolveNativeModelOwnedHarnessId,
 } from "./run/setup.js";
@@ -571,6 +573,33 @@ function backfillSessionKey(params: {
   }
 }
 
+function assertAgentHarnessRunAdmission(params: RunEmbeddedAgentParams): void {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return;
+  }
+  const admissionAgentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const storePath =
+    normalizeOptionalString(params.sessionTarget?.storePath) ??
+    resolveStorePath(params.config?.session?.store, { agentId: admissionAgentId });
+  const durableEntry = loadSessionEntry({
+    ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
+    readConsistency: "latest",
+    sessionKey,
+    storePath,
+  });
+  const admissionError = resolveAgentHarnessRunAdmissionError({
+    agentHarnessId: params.agentHarnessId,
+    entry: durableEntry,
+    modelSelectionLocked: params.modelSelectionLocked,
+    sessionId: params.sessionId,
+    sessionKey,
+  });
+  if (admissionError) {
+    throw new Error(admissionError);
+  }
+}
+
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
   const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
   return [
@@ -665,6 +694,7 @@ async function runEmbeddedAgentInternal(
     sessionKey: paramsBase.sessionKey,
     agentId: paramsBase.agentId,
   });
+  assertAgentHarnessRunAdmission({ ...paramsBase, sessionKey: effectiveSessionKey });
   const runSessionTarget = await resolveAgentRunSessionTarget({
     ...paramsBase,
     sessionKey: effectiveSessionKey,
@@ -773,6 +803,9 @@ async function runEmbeddedAgentInternal(
         lifecycleGeneration = currentLifecycleGeneration;
         params = { ...params, lifecycleGeneration };
       }
+      // Queue waits can outlive the durable harness binding that admitted a run.
+      // Recheck only after lifecycle admission, before any run context or hook can execute.
+      assertAgentHarnessRunAdmission(params);
       claimAgentRunContext(params.runId, {
         ...existingContext,
         sessionKey: params.sessionKey ?? existingContext?.sessionKey,
@@ -2645,6 +2678,7 @@ async function runEmbeddedAgentInternal(
                     provider,
                     modelId,
                     harnessRuntime: agentHarness.id,
+                    modelSelectionLocked: params.modelSelectionLocked,
                     modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
@@ -2855,6 +2889,7 @@ async function runEmbeddedAgentInternal(
                     provider,
                     modelId,
                     harnessRuntime: agentHarness.id,
+                    modelSelectionLocked: params.modelSelectionLocked,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,

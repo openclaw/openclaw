@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -736,10 +737,16 @@ export function createFollowupRunner(params: {
         : undefined;
       if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
         activeSessionEntry = admittedSessionEntry;
-        if (admittedSessionEntry.sessionFile) {
-          run = { ...run, sessionFile: admittedSessionEntry.sessionFile };
-          effectiveQueued = { ...effectiveQueued, run };
-        }
+        // Admission is the authority for policy on this exact session generation. A queued
+        // snapshot may predate catalog adoption, but a replacement session must not inherit it.
+        run = {
+          ...run,
+          ...(admittedSessionEntry.sessionFile
+            ? { sessionFile: admittedSessionEntry.sessionFile }
+            : {}),
+          modelSelectionLocked: admittedSessionEntry.modelSelectionLocked === true,
+        };
+        effectiveQueued = { ...effectiveQueued, run };
       }
       const sendPolicyDenied =
         resolveSendPolicy({
@@ -1078,8 +1085,16 @@ export function createFollowupRunner(params: {
               entry: activeSessionEntry,
               cfg: runtimeConfig,
             });
+            // A locked harness owns the transcript. A configured CLI backend with the
+            // same id must not steal dispatch from that persisted harness.
+            const locksPersistedHarness =
+              activeSessionEntry?.modelSelectionLocked === true &&
+              normalizeOptionalAgentRuntimeId(activeSessionEntry.agentHarnessId) ===
+                sessionRuntimeOverride;
             const pinnedCliRuntime =
-              sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
+              !locksPersistedHarness &&
+              sessionRuntimeOverride &&
+              isCliProvider(sessionRuntimeOverride, runtimeConfig)
                 ? sessionRuntimeOverride
                 : undefined;
             const cliExecutionProvider =
@@ -1419,6 +1434,7 @@ export function createFollowupRunner(params: {
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                 provider,
                 model,
+                modelSelectionLocked: run.modelSelectionLocked,
                 agentHarnessId: sessionRuntimeOverride,
                 agentHarnessRuntimeOverride: sessionRuntimeOverride,
                 ...selectedAuthProfile,

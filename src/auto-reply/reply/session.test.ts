@@ -39,7 +39,7 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
-import { initSessionState } from "./session.js";
+import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -280,6 +280,75 @@ async function writeSessionStoreFast(
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 }
+
+describe("resolveReplySessionPreprocessingState", () => {
+  const sessionKey = "agent:main:harness:codex:supervision:media-preflight";
+
+  function resolvePreprocessingState(storePath: string) {
+    return resolveReplySessionPreprocessingState({
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      ctx: {
+        Body: "<media:audio>",
+        RawBody: "<media:audio>",
+        CommandBody: "<media:audio>",
+        From: "media-preflight",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+  }
+
+  it("returns the valid durable harness owner lock before preprocessing", async () => {
+    const storePath = await createStorePath("openclaw-media-preflight-valid-");
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "native-media-session",
+        updatedAt: Date.now(),
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    });
+
+    expect(resolvePreprocessingState(storePath)).toMatchObject({
+      sessionKey,
+      storePath,
+      sessionEntry: {
+        sessionId: "native-media-session",
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    });
+  });
+
+  it.each([
+    ["missing row", undefined],
+    [
+      "wrong owner",
+      {
+        sessionId: "native-media-session",
+        updatedAt: 1,
+        agentHarnessId: "other",
+        modelSelectionLocked: true,
+      },
+    ],
+    [
+      "missing session id",
+      {
+        updatedAt: 1,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    ],
+  ] as const)("rejects a reserved %s before preprocessing", async (_label, entry) => {
+    const storePath = await createStorePath(`openclaw-media-preflight-invalid-${_label}-`);
+    await writeSessionStoreFast(storePath, entry ? { [sessionKey]: entry } : {});
+
+    expect(() => resolvePreprocessingState(storePath)).toThrow();
+  });
+});
 
 async function writeTerminalTranscriptSessionStore(params: {
   storePath: string;

@@ -99,13 +99,13 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
     ).toBe(expected);
   });
 
-  it("keeps a persisted harness pin across provider overrides", () => {
+  it("does not treat an observed harness as a future-turn override", () => {
     expect(
       resolveSessionRuntimeOverrideForProvider({
         provider: "anthropic",
         entry: { agentHarnessId: "codex" },
       }),
-    ).toBe("codex");
+    ).toBeUndefined();
   });
 
   it("keeps a locked harness pin ahead of a conflicting runtime override", () => {

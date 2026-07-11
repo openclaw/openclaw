@@ -18,6 +18,7 @@ import type {
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
@@ -30,7 +31,6 @@ import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../vid
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { truncateUtf16Safe } from "../../../utils.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -573,6 +573,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "provider"
   | "modelId"
   | "agentHarnessId"
+  | "modelSelectionLocked"
   | "thinkLevel"
   | "reasoningLevel"
   | "bashElevated"
@@ -614,6 +615,7 @@ export function buildAfterTurnRuntimeContext(params: {
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,
       harnessRuntime: params.attempt.agentHarnessId,
+      modelSelectionLocked: params.attempt.modelSelectionLocked,
       thinkLevel: params.attempt.thinkLevel,
       reasoningLevel: params.attempt.reasoningLevel,
       bashElevated: params.attempt.bashElevated,

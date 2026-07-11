@@ -1,11 +1,14 @@
 // Setup tests cover model-resolution hooks and effective runtime model context
 // metadata before an embedded run starts.
 import { describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
+import { AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE } from "../../../sessions/agent-harness-session-key.js";
 import {
   buildBeforeModelResolveAttachments,
+  resolveAgentHarnessRunAdmissionError,
   resolveEmbeddedRuntimeModelPolicy,
   resolveEffectiveRuntimeModel,
   resolveHookModelSelection,
@@ -16,6 +19,90 @@ const hookContext = {
   sessionId: "session-1",
   workspaceDir: "/tmp/workspace",
 };
+
+describe("agent harness run admission", () => {
+  const sessionKey = "agent:main:harness:codex:supervision:native-thread";
+  const entry: SessionEntry = {
+    agentHarnessId: "codex",
+    modelSelectionLocked: true,
+    sessionId: "native-session",
+    updatedAt: 1,
+  };
+
+  it("accepts only the matching requested and durable harness lock", () => {
+    expect(
+      resolveAgentHarnessRunAdmissionError({
+        agentHarnessId: "codex",
+        entry,
+        modelSelectionLocked: true,
+        sessionId: "native-session",
+        sessionKey,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a pre-existing unlocked harness-prefixed session on the ordinary runtime path", () => {
+    expect(
+      resolveAgentHarnessRunAdmissionError({
+        entry: {
+          agentHarnessId: "openclaw",
+          sessionId: "legacy-session",
+          updatedAt: 1,
+        },
+        sessionId: "legacy-session",
+        sessionKey: "agent:main:harness:notes",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts an ordinary-key session with the exact durable harness lock", () => {
+    expect(
+      resolveAgentHarnessRunAdmissionError({
+        agentHarnessId: "codex",
+        entry,
+        modelSelectionLocked: true,
+        sessionId: "native-session",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ["a different session id", { sessionId: "other-session" }],
+    ["an omitted runtime lock", { modelSelectionLocked: undefined }],
+    ["a different harness", { agentHarnessId: "openclaw" }],
+  ])("rejects an ordinary-key locked session with %s", (_label, overrides) => {
+    expect(
+      resolveAgentHarnessRunAdmissionError({
+        agentHarnessId: "codex",
+        entry,
+        modelSelectionLocked: true,
+        sessionId: "native-session",
+        sessionKey: "agent:main:main",
+        ...overrides,
+      }),
+    ).toBe(AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE);
+  });
+
+  it.each([
+    { agentHarnessId: "openclaw", modelSelectionLocked: true, entry },
+    { agentHarnessId: "codex", modelSelectionLocked: false, entry },
+    { agentHarnessId: "codex", modelSelectionLocked: true, entry: undefined },
+    {
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      entry: { ...entry, sessionId: "stale-session" },
+    },
+  ])("rejects a mismatched or missing reserved runtime", (params) => {
+    expect(
+      resolveAgentHarnessRunAdmissionError({
+        ...params,
+        sessionId: "native-session",
+        sessionKey,
+      }),
+    ).toContain("reserved");
+  });
+});
 
 describe("buildBeforeModelResolveAttachments", () => {
   it("maps prompt image metadata to before_model_resolve attachments", () => {

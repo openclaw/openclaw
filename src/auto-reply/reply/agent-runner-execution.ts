@@ -1513,7 +1513,9 @@ async function runAgentTurnWithFallbackInternal(
     }
     return effectiveRun;
   };
-  let liveModelSwitchRuntimeEntry: Pick<SessionEntry, "agentRuntimeOverride"> | undefined;
+  let liveModelSwitchRuntimeEntry:
+    | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
+    | undefined;
   const applyLiveModelSwitchToRun = (
     run: FollowupRun["run"],
     err: LiveSessionModelSwitchError,
