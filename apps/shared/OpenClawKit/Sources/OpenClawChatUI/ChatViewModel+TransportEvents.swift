@@ -729,7 +729,7 @@ extension OpenClawChatViewModel {
         }
     }
 
-    nonisolated private static func runPendingRunOwner(
+    private nonisolated static func runPendingRunOwner(
         owner: PendingRunOwnerReference,
         runId: String,
         sessionSnapshot: SessionSnapshot,
@@ -760,7 +760,7 @@ extension OpenClawChatViewModel {
         }
     }
 
-    nonisolated private static func observePendingRunCompletion(
+    private nonisolated static func observePendingRunCompletion(
         owner: PendingRunOwnerReference,
         runId: String,
         sessionSnapshot: SessionSnapshot,
@@ -865,7 +865,7 @@ extension OpenClawChatViewModel {
         }
     }
 
-    nonisolated private static func pollPendingRunHistory(
+    private nonisolated static func pollPendingRunHistory(
         owner: PendingRunOwnerReference,
         runId: String,
         sessionSnapshot: SessionSnapshot,
