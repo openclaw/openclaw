@@ -363,6 +363,47 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.options.signal).toBeUndefined();
   });
 
+  it.skipIf(process.platform === "win32")(
+    "keeps bootstrap failure details on a valid UTF-16 boundary from a real child process",
+    async () => {
+      // 511 BMP units + one emoji (2 UTF-16 units) crosses the 512-unit detail cap.
+      // Raw `.slice(0, 512)` would leave a lone high surrogate in the Error message.
+      const prefix = "e".repeat(511);
+      const stderrPayload = `${prefix}😀 remote bootstrap diagnostic tail`;
+      const runCommand: WorkerBootstrapCommandRunner = async () =>
+        await runCommandWithTimeout(
+          [
+            process.execPath,
+            "-e",
+            `process.stderr.write(${JSON.stringify(stderrPayload)}); process.exit(1);`,
+          ],
+          { timeoutMs: 10_000, baseEnv: process.env },
+        );
+
+      let message: string | undefined;
+      try {
+        await bootstrapWorker({ ssh: SSH, artifact: BUNDLE }, { resolveIdentity, runCommand });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message).toBeDefined();
+      expect(message).toContain("Worker bootstrap preflight failed (exit 1):");
+      expect(message).toContain(prefix);
+      expect(message).not.toContain("😀");
+      expect(message).not.toContain("\uFFFD");
+      const detail = message!.slice(message!.indexOf(": ") + 2);
+      expect(detail.length).toBe(511);
+      expect(detail.charCodeAt(detail.length - 1)).toBe("e".charCodeAt(0));
+      expect(detail.charCodeAt(detail.length - 1)).toBeLessThan(0xd800);
+
+      // Prove the raw UTF-16 slice still splits this payload, so the helper is doing work.
+      const raw = stderrPayload.slice(0, 512);
+      expect(raw.charCodeAt(raw.length - 1)).toBeGreaterThanOrEqual(0xd800);
+      expect(raw.charCodeAt(raw.length - 1)).toBeLessThanOrEqual(0xdbff);
+    },
+  );
+
   it("rejects unpinned artifact digests before opening SSH", async () => {
     const runner = fakeRunner([]);
 
