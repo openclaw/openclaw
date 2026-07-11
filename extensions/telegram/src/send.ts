@@ -364,6 +364,8 @@ function buildTelegramClientOptionsCacheKey(params: {
 }
 
 function closeCachedTelegramClientOptions(entry: CachedTelegramClientOptions): void {
+  // Eviction may retire a cache entry while a send still holds a lease; defer
+  // transport.close until the last op-level lease releases so mid-request sockets stay open.
   entry.retired = true;
   if (entry.activeLeases > 0 || entry.closeStarted) {
     return;
@@ -630,52 +632,11 @@ async function withTelegramNativeQuoteFallback<T>(params: {
   }
 }
 
-function wrapTelegramApiWithClientOptionsLease(
-  api: TelegramApi,
-  leaseClientOptions: () => TelegramClientOptionsLease,
-): TelegramApi {
-  const proxies = new WeakMap<object, object>();
-  const wrapValue = (value: unknown, receiver: object): unknown => {
-    if (typeof value === "function") {
-      return (...args: unknown[]) => {
-        const lease = leaseClientOptions();
-        try {
-          const result = value.apply(receiver, args) as unknown;
-          if (result && typeof (result as Promise<unknown>).then === "function") {
-            return Promise.resolve(result).finally(() => lease.release());
-          }
-          lease.release();
-          return result;
-        } catch (err) {
-          lease.release();
-          throw err;
-        }
-      };
-    }
-    if (!value || typeof value !== "object") {
-      return value;
-    }
-    const cached = proxies.get(value);
-    if (cached) {
-      return cached;
-    }
-    const proxy = new Proxy(value, {
-      get(target, property, nestedReceiver) {
-        return wrapValue(Reflect.get(target, property, nestedReceiver), target);
-      },
-    });
-    proxies.set(value, proxy);
-    return proxy;
-  };
-  return wrapValue(api, api) as TelegramApi;
-}
-
 type TelegramApiContext = {
   cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
   api: TelegramApi;
   clientOptionsLease?: TelegramClientOptionsLease | undefined;
-  leaseClientOptions?: (() => TelegramClientOptionsLease) | undefined;
 };
 
 function resolveTelegramApiContext(opts: {
@@ -683,7 +644,6 @@ function resolveTelegramApiContext(opts: {
   accountId?: string;
   api?: TelegramApiOverride;
   cfg: OpenClawConfig;
-  holdClientOptionsLease?: boolean;
 }): TelegramApiContext {
   const cfg = requireRuntimeConfig(opts.cfg, "Telegram API context");
   const account = resolveTelegramAccount({
@@ -693,23 +653,22 @@ function resolveTelegramApiContext(opts: {
   const token = resolveToken(opts.token, account);
   let api: TelegramApi;
   let clientOptionsLease: TelegramClientOptionsLease | undefined;
-  let leaseClientOptions: (() => TelegramClientOptionsLease) | undefined;
   if (opts.api) {
     api = opts.api as TelegramApi;
   } else {
     const client = resolveTelegramClientOptions(account);
-    clientOptionsLease = opts.holdClientOptionsLease ? client.lease?.() : undefined;
+    // One op-level lease covers the full send/action (including pre-request work
+    // and retries) so eviction cannot close the transport mid-operation.
+    clientOptionsLease = client.lease?.();
     const bot = new Bot(token, client.clientOptions ? { client: client.clientOptions } : undefined);
     bot.api.config.use(getOrCreateAccountThrottler(token));
-    leaseClientOptions = client.lease;
-    api = client.lease ? wrapTelegramApiWithClientOptionsLease(bot.api, client.lease) : bot.api;
+    api = bot.api;
   }
   return {
     cfg,
     account,
     api,
     ...(clientOptionsLease ? { clientOptionsLease } : {}),
-    ...(leaseClientOptions ? { leaseClientOptions } : {}),
   };
 }
 
@@ -736,7 +695,6 @@ function createTelegramRequestWithDiag(params: {
   /** When true, the shouldRetry predicate is used exclusively without the TELEGRAM_RETRY_RE fallback. */
   strictShouldRetry?: boolean;
   useApiErrorLogging?: boolean;
-  leaseClientOptions?: (() => TelegramClientOptionsLease) | undefined;
 }): TelegramRequestWithDiag {
   const request = createTelegramRetryRunner({
     retry: params.retry,
@@ -754,7 +712,6 @@ function createTelegramRequestWithDiag(params: {
     label?: string,
     options?: { shouldLog?: (err: unknown) => boolean },
   ) => {
-    const lease = params.leaseClientOptions?.();
     const runRequest = () => request(fn, label);
     const call =
       params.useApiErrorLogging === false
@@ -764,12 +721,10 @@ function createTelegramRequestWithDiag(params: {
             fn: runRequest,
             ...(options?.shouldLog ? { shouldLog: options.shouldLog } : {}),
           });
-    return call
-      .catch((err: unknown) => {
-        logHttpError(label ?? "request", err);
-        throw err;
-      })
-      .finally(() => lease?.release());
+    return call.catch((err: unknown) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
   };
 }
 
@@ -820,7 +775,6 @@ function createTelegramNonIdempotentRequestWithDiag(params: {
   retry?: RetryConfig;
   verbose?: boolean;
   useApiErrorLogging?: boolean;
-  leaseClientOptions?: (() => TelegramClientOptionsLease) | undefined;
 }): TelegramRequestWithDiag {
   return createTelegramRequestWithDiag({
     cfg: params.cfg,
@@ -828,7 +782,6 @@ function createTelegramNonIdempotentRequestWithDiag(params: {
     retry: params.retry,
     verbose: params.verbose,
     useApiErrorLogging: params.useApiErrorLogging,
-    leaseClientOptions: params.leaseClientOptions,
     retryAfterMaxDelayMs: TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS,
     shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
     strictShouldRetry: true,
@@ -840,10 +793,7 @@ export async function sendMessageTelegram(
   text: string,
   opts: TelegramSendOpts,
 ): Promise<TelegramSendResult> {
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
     context,
     sendMessageTelegramWithContext(to, text, opts, context),
@@ -856,7 +806,7 @@ async function sendMessageTelegramWithContext(
   opts: TelegramSendOpts,
   apiContext: TelegramApiContext,
 ): Promise<TelegramSendResult> {
-  const { cfg, account, api, leaseClientOptions } = apiContext;
+  const { cfg, account, api } = apiContext;
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -903,7 +853,6 @@ async function sendMessageTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
   });
   const requestWithChatNotFound = createRequestWithChatNotFound({
     requestWithDiag,
@@ -1580,10 +1529,7 @@ export async function sendTypingTelegram(
   to: string,
   opts: TelegramTypingOpts,
 ): Promise<{ ok: true }> {
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(context, sendTypingTelegramWithContext(to, opts, context));
 }
 
@@ -1592,7 +1538,7 @@ async function sendTypingTelegramWithContext(
   opts: TelegramTypingOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true }> {
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -1606,7 +1552,6 @@ async function sendTypingTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
     shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
   });
   const threadParams = buildTypingThreadParams(target.messageThreadId ?? opts.messageThreadId);
@@ -1628,10 +1573,7 @@ export async function reactMessageTelegram(
   emoji: string,
   opts: TelegramReactionOpts,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
     context,
     reactMessageTelegramWithContext(chatIdInput, messageIdInput, emoji, opts, context),
@@ -1645,7 +1587,7 @@ async function reactMessageTelegramWithContext(
   opts: TelegramReactionOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   const rawTarget = String(chatIdInput);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -1661,7 +1603,6 @@ async function reactMessageTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
     shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "react" }),
   });
   const remove = opts.remove === true;
@@ -1703,10 +1644,7 @@ export async function deleteMessageTelegram(
   messageIdInput: string | number,
   opts: TelegramDeleteOpts,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
     context,
     deleteMessageTelegramWithContext(chatIdInput, messageIdInput, opts, context),
@@ -1719,7 +1657,7 @@ async function deleteMessageTelegramWithContext(
   opts: TelegramDeleteOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   const rawTarget = String(chatIdInput);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -1735,7 +1673,6 @@ async function deleteMessageTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
     shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "delete" }),
   });
   try {
@@ -1762,10 +1699,7 @@ export async function pinMessageTelegram(
   messageIdInput: string | number,
   opts: TelegramDeleteOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
     context,
     pinMessageTelegramWithContext(chatIdInput, messageIdInput, opts, context),
@@ -1778,7 +1712,7 @@ async function pinMessageTelegramWithContext(
   opts: TelegramDeleteOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   const rawTarget = String(chatIdInput);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -1794,7 +1728,6 @@ async function pinMessageTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
   });
   await requestWithDiag(
     () =>
@@ -1812,10 +1745,7 @@ export async function unpinMessageTelegram(
   messageIdInput: string | number | undefined,
   opts: TelegramDeleteOpts,
 ): Promise<{ ok: true; chatId: string; messageId?: string }> {
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
     context,
     unpinMessageTelegramWithContext(chatIdInput, messageIdInput, opts, context),
@@ -1828,7 +1758,7 @@ async function unpinMessageTelegramWithContext(
   opts: TelegramDeleteOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true; chatId: string; messageId?: string }> {
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   const rawTarget = String(chatIdInput);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -1844,7 +1774,6 @@ async function unpinMessageTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
   });
   await requestWithDiag(() => api.unpinChatMessage(chatId, messageId), "unpinChatMessage");
   logVerbose(
@@ -1890,10 +1819,7 @@ export async function editForumTopicTelegram(
     throw new Error("Telegram forum topic update requires a name or iconCustomEmojiId");
   }
 
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
     context,
     editForumTopicTelegramWithContext(chatIdInput, messageThreadIdInput, opts, context),
@@ -1914,7 +1840,7 @@ async function editForumTopicTelegramWithContext(
 }> {
   const trimmedName = opts.name?.trim();
   const trimmedIconCustomEmojiId = opts.iconCustomEmojiId?.trim();
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   const rawTarget = String(chatIdInput);
   const target = parseTelegramTarget(rawTarget);
   const chatId = await resolveAndPersistChatId({
@@ -1931,7 +1857,6 @@ async function editForumTopicTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
   });
   const payload = {
     ...(trimmedName ? { name: trimmedName } : {}),
@@ -2006,10 +1931,7 @@ export async function editMessageReplyMarkupTelegram(
   buttons: TelegramInlineButtons,
   opts: TelegramEditReplyMarkupOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
     context,
     editMessageReplyMarkupTelegramWithContext(chatIdInput, messageIdInput, buttons, opts, context),
@@ -2023,7 +1945,7 @@ async function editMessageReplyMarkupTelegramWithContext(
   opts: TelegramEditReplyMarkupOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   const rawTarget = String(chatIdInput);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -2039,7 +1961,6 @@ async function editMessageReplyMarkupTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
   });
   const replyMarkup = buildInlineKeyboard(buttons) ?? { inline_keyboard: [] };
   try {
@@ -2065,10 +1986,7 @@ export async function editMessageTelegram(
   text: string,
   opts: TelegramEditOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
     context,
     editMessageTelegramWithContext(chatIdInput, messageIdInput, text, opts, context),
@@ -2082,7 +2000,7 @@ async function editMessageTelegramWithContext(
   opts: TelegramEditOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   const rawTarget = String(chatIdInput);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -2098,7 +2016,6 @@ async function editMessageTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
     shouldRetry: (err) =>
       isRecoverableTelegramNetworkError(err, { context: "edit" }) || isTelegramServerError(err),
   });
@@ -2311,10 +2228,7 @@ export async function sendStickerTelegram(
     throw new Error("Telegram sticker file_id is required");
   }
 
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
     context,
     sendStickerTelegramWithContext(to, fileId, opts, context),
@@ -2327,7 +2241,7 @@ async function sendStickerTelegramWithContext(
   opts: TelegramStickerOpts,
   context: TelegramApiContext,
 ): Promise<TelegramSendResult> {
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -2353,7 +2267,6 @@ async function sendStickerTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
     useApiErrorLogging: false,
   });
   const requestWithChatNotFound = createRequestWithChatNotFound({
@@ -2410,10 +2323,7 @@ export async function sendPollTelegram(
   poll: PollInput,
   opts: TelegramPollOpts,
 ): Promise<{ messageId: string; chatId: string; pollId?: string }> {
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(context, sendPollTelegramWithContext(to, poll, opts, context));
 }
 
@@ -2423,7 +2333,7 @@ async function sendPollTelegramWithContext(
   opts: TelegramPollOpts,
   context: TelegramApiContext,
 ): Promise<{ messageId: string; chatId: string; pollId?: string }> {
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -2454,7 +2364,6 @@ async function sendPollTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
   });
   const requestWithChatNotFound = createRequestWithChatNotFound({
     requestWithDiag,
@@ -2546,10 +2455,7 @@ export async function createForumTopicTelegram(
     throw new Error("Forum topic name must be 128 characters or fewer");
   }
 
-  const context = resolveTelegramApiContext({
-    ...opts,
-    holdClientOptionsLease: true,
-  });
+  const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(
     context,
     createForumTopicTelegramWithContext(chatId, name, opts, context),
@@ -2563,7 +2469,7 @@ async function createForumTopicTelegramWithContext(
   context: TelegramApiContext,
 ): Promise<TelegramCreateForumTopicResult> {
   const trimmedName = name.trim();
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api } = context;
   // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
   // but createForumTopic must always target the base supergroup chat id.
   const target = parseTelegramTarget(chatId);
@@ -2581,7 +2487,6 @@ async function createForumTopicTelegramWithContext(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    leaseClientOptions,
   });
 
   const extra: TelegramCreateForumTopicParams = {};
