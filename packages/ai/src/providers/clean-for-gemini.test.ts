@@ -312,4 +312,48 @@ describe("cleanSchemaForGemini", () => {
 
     expect(cleaned.enum).toBeUndefined();
   });
+
+  // Regression: schema key order is not semantic. `{ enum: [...], type: "..." }`
+  // must produce the same output as `{ type: "...", enum: [...] }`. If the
+  // coercion is applied only while visiting `enum`, a later `type` key would
+  // overwrite `type: "string"` and Gemini would still reject the declaration.
+  it("coerces numeric enum with enum-before-type ordering (regression: property order independence)", () => {
+    const cleaned = cleanSchemaForGemini({
+      enum: [1, 2, 3],
+      type: "integer",
+    }) as { type?: unknown; enum?: unknown };
+
+    expect(cleaned.type).toBe("string");
+    expect(cleaned.enum).toStrictEqual(["1", "2", "3"]);
+  });
+
+  it("coerces boolean enum with enum-before-type ordering", () => {
+    const cleaned = cleanSchemaForGemini({
+      enum: [true, false],
+      type: "boolean",
+    }) as { type?: unknown; enum?: unknown };
+
+    expect(cleaned.type).toBe("string");
+    expect(cleaned.enum).toStrictEqual(["true", "false"]);
+  });
+
+  it("coerces numeric const with const-before-type ordering", () => {
+    const cleaned = cleanSchemaForGemini({
+      const: 42,
+      type: "integer",
+    }) as { type?: unknown; enum?: unknown };
+
+    expect(cleaned.type).toBe("string");
+    expect(cleaned.enum).toStrictEqual(["42"]);
+  });
+
+  it("leaves type untouched when no enum coercion happened", () => {
+    // A pure integer schema without enum/const must NOT be retyped as string.
+    const cleaned = cleanSchemaForGemini({
+      type: "integer",
+      description: "a plain integer field",
+    }) as { type?: unknown };
+
+    expect(cleaned.type).toBe("integer");
+  });
 });

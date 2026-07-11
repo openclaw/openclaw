@@ -326,23 +326,39 @@ function cleanSchemaForGeminiWithDefs(
   // This applies to both `enum` arrays and single-valued `const` (which is
   // rewritten to `enum: [value]` below).
   const coerceEnumValue = (v: unknown): string | undefined => {
-    if (typeof v === "string") return v;
-    if (typeof v === "number" && Number.isFinite(v)) return String(v);
-    if (typeof v === "boolean") return v ? "true" : "false";
-    if (typeof v === "bigint") return v.toString();
+    if (typeof v === "string") {
+      return v;
+    }
+    if (typeof v === "number" && Number.isFinite(v)) {
+      return String(v);
+    }
+    if (typeof v === "boolean") {
+      return v ? "true" : "false";
+    }
+    if (typeof v === "bigint") {
+      return v.toString();
+    }
     return undefined;
   };
   const coerceEnumArray = (arr: unknown): string[] | undefined => {
-    if (!Array.isArray(arr)) return undefined;
+    if (!Array.isArray(arr)) {
+      return undefined;
+    }
     const out: string[] = [];
     for (const entry of arr) {
       const coerced = coerceEnumValue(entry);
-      if (coerced !== undefined && !out.includes(coerced)) out.push(coerced);
+      if (coerced !== undefined && !out.includes(coerced)) {
+        out.push(coerced);
+      }
     }
     return out;
   };
 
   const cleaned: Record<string, unknown> = {};
+  // Track whether we produced an enum this pass; the final `type` is forced to
+  // "string" after the loop so that `type` appearing AFTER `enum` in the input
+  // schema cannot overwrite the coercion (schema key order is not semantic).
+  let enumCoercedToString = false;
 
   for (const [key, value] of Object.entries(obj)) {
     if (GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
@@ -353,7 +369,7 @@ function cleanSchemaForGeminiWithDefs(
       const coerced = coerceEnumValue(value);
       if (coerced !== undefined) {
         cleaned.enum = [coerced];
-        if (cleaned.type !== "string") cleaned.type = "string";
+        enumCoercedToString = true;
       }
       continue;
     }
@@ -362,8 +378,7 @@ function cleanSchemaForGeminiWithDefs(
       const coerced = coerceEnumArray(value);
       if (coerced && coerced.length > 0) {
         cleaned.enum = coerced;
-        // Gemini's schema validator only accepts `enum` on string-typed schemas.
-        if (obj.type !== "string") cleaned.type = "string";
+        enumCoercedToString = true;
       }
       continue;
     }
@@ -425,6 +440,14 @@ function cleanSchemaForGeminiWithDefs(
     } else {
       cleaned[key] = value;
     }
+  }
+
+  // Force `type: "string"` when the schema produced a coerced enum, regardless
+  // of the input schema's property order. Setting this after the loop makes the
+  // behavior independent of whether `type` appeared before or after `enum` /
+  // `const` in the input object.
+  if (enumCoercedToString) {
+    cleaned.type = "string";
   }
 
   // Cloud Code Assist API rejects anyOf/oneOf in nested schemas even after
