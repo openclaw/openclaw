@@ -26,7 +26,7 @@ enum CLIInstallPolicy {
         guard !CLIInstallBuild.isStable(appVersion: appVersion, isDebug: isDebug) else {
             return appVersion
         }
-        switch defaults.string(forKey: cliInstallPolicyKey) {
+        return switch defaults.string(forKey: cliInstallPolicyKey) {
         case "stable", "beta", "dev": nil
         case "exact", nil: appVersion
         default: appVersion
