@@ -22,10 +22,15 @@ import {
 
 const mocks = vi.hoisted(() => ({
   appendAudit: vi.fn(),
+  ensureSelectedAgentHarnessPlugin: vi.fn(),
 }));
 
 vi.mock("./audit.js", () => ({
   appendCrestodianAuditEntry: mocks.appendAudit,
+}));
+
+vi.mock("../agents/harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: mocks.ensureSelectedAgentHarnessPlugin,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -256,6 +261,7 @@ describe("detectSetupInference", () => {
 describe("activateSetupInference", () => {
   beforeEach(() => {
     mocks.appendAudit.mockReset();
+    mocks.ensureSelectedAgentHarnessPlugin.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -1633,9 +1639,11 @@ describe("activateSetupInference", () => {
       installed: true,
       status: "installed" as const,
     }));
-    const runEmbeddedAgent = vi.fn(async () => ({
-      meta: { finalAssistantVisibleText: "OK" },
-    }));
+    const ensureSelectedAgentHarnessPlugin = vi.fn(async () => {});
+    const runEmbeddedAgent = vi.fn(async () => {
+      expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledOnce();
+      return { meta: { finalAssistantVisibleText: "OK" } };
+    });
     const transformConfig = vi.fn(
       async (params: { transform: (config: OpenClawConfig) => { nextConfig: OpenClawConfig } }) => {
         persistedConfig = params.transform(persistedConfig).nextConfig;
@@ -1660,6 +1668,7 @@ describe("activateSetupInference", () => {
           runtimeConfig: initialConfig,
         })) as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
+        ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPlugin as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         applySetup: applySetup as never,
@@ -1669,6 +1678,13 @@ describe("activateSetupInference", () => {
 
     expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.4" });
     expect(ensureCodex).toHaveBeenCalledWith(expect.objectContaining({ model: "openai/gpt-5.4" }));
+    expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    );
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",

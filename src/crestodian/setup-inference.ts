@@ -134,6 +134,7 @@ export type ActivateSetupInferenceDeps = {
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   applySetup?: typeof applyCrestodianSetup;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
+  ensureSelectedAgentHarnessPlugin?: typeof import("../agents/harness/runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   resolvePluginProviders?: typeof resolvePluginProviders;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
@@ -883,6 +884,28 @@ async function activateSetupInferenceUnredacted(
         config: stagedCodexConfig,
         agentId: resolveDefaultAgentId(stagedCodexConfig),
       };
+
+      // The Gateway's startup registry predates this just-installed runtime. Load Codex before
+      // the embedded runner snapshots provider auth, or the probe can fall through to OpenAI.
+      const ensureHarnessPlugin =
+        deps.ensureSelectedAgentHarnessPlugin ??
+        (await import("../agents/harness/runtime-plugin.js")).ensureSelectedAgentHarnessPlugin;
+      try {
+        await ensureHarnessPlugin({
+          provider: testPlan.provider,
+          modelId: testPlan.model,
+          config: testPlan.config,
+          agentId: testPlan.agentId,
+          agentHarnessRuntimeOverride: "codex",
+          workspaceDir: tempDir,
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          status: "unavailable",
+          error: `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`,
+        };
+      }
     }
 
     if (plan.manualAuth) {
