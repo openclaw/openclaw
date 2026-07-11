@@ -6,7 +6,6 @@ let page: {
   keyboard: { press: ReturnType<typeof vi.fn> };
   mouse: { click: ReturnType<typeof vi.fn> };
   url: ReturnType<typeof vi.fn>;
-  waitForFunction: ReturnType<typeof vi.fn>;
 } | null = null;
 let locator: Record<string, ReturnType<typeof vi.fn>> | null = null;
 
@@ -85,7 +84,6 @@ describe("batchViaPlaywright", () => {
       keyboard: { press: navigate },
       mouse: { click: navigate },
       url: vi.fn(() => currentUrl),
-      waitForFunction: navigate,
     };
     locator = {
       click: navigate,
@@ -180,7 +178,6 @@ describe("batchViaPlaywright", () => {
       },
     },
     { name: "evaluate", action: { kind: "evaluate", fn: "() => true" } as const },
-    { name: "wait", action: { kind: "wait", fn: "() => true" } as const },
   ])("forwards proxy policy to existing batched $name actions", async ({ action }) => {
     const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
 
@@ -213,7 +210,7 @@ describe("batchViaPlaywright", () => {
       actions: [
         {
           kind: "batch",
-          actions: [{ kind: "wait", fn: "() => true" }],
+          actions: [{ kind: "hover", ref: "1" }],
         },
       ],
       evaluateEnabled: true,

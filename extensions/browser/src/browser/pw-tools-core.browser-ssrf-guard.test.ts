@@ -244,17 +244,6 @@ describe("pw-tools-core browser SSRF guards", () => {
           browserProxyMode: "explicit-browser-proxy",
         }),
     },
-    {
-      name: "wait",
-      run: async () =>
-        await interactions.waitForViaPlaywright({
-          cdpUrl: "http://127.0.0.1:18792",
-          targetId: "tab-1",
-          fn: "() => true",
-          ssrfPolicy: { allowPrivateNetwork: false },
-          browserProxyMode: "explicit-browser-proxy",
-        }),
-    },
   ])("preserves proxy policy for existing $name navigation checks", async ({ run }) => {
     let currentUrl = "https://example.com";
     const navigate = vi.fn(async () => {
@@ -285,6 +274,23 @@ describe("pw-tools-core browser SSRF guards", () => {
       browserProxyMode: "explicit-browser-proxy",
       targetId: "tab-1",
     });
+  });
+
+  it("keeps wait operations outside the action-owned request guard", async () => {
+    const waitForFunction = vi.fn(async () => {});
+    pageState.page = {
+      url: vi.fn(() => "https://example.com"),
+      waitForFunction,
+    };
+
+    await interactions.waitForViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      fn: "() => true",
+    });
+
+    expect(waitForFunction).toHaveBeenCalledWith("() => true", { timeout: expect.any(Number) });
+    expect(sessionMocks.withPageNavigationRequestGuard).not.toHaveBeenCalled();
   });
 
   it("keeps the request guard alive until an aborted hover actually settles", async () => {
@@ -335,57 +341,6 @@ describe("pw-tools-core browser SSRF guards", () => {
     expect(guardSettled).toBe(false);
 
     releaseHover();
-    await vi.waitFor(() => expect(guardSettled).toBe(true));
-  });
-
-  it("keeps the request guard alive until an aborted wait actually settles", async () => {
-    const ctrl = new AbortController();
-    let waitStarted!: () => void;
-    let releaseWait!: () => void;
-    const started = new Promise<void>((resolve) => {
-      waitStarted = resolve;
-    });
-    const pendingWait = new Promise<void>((resolve) => {
-      releaseWait = resolve;
-    });
-    let guardSettled = false;
-    pageState.page = {
-      url: vi.fn(() => "https://example.com"),
-      waitForFunction: vi.fn(() => {
-        waitStarted();
-        return pendingWait;
-      }),
-    };
-    sessionMocks.withPageNavigationRequestGuard.mockImplementationOnce(
-      async ({
-        action,
-        page,
-      }: {
-        action: (url: string) => Promise<unknown>;
-        page: { url: () => string };
-      }) => {
-        try {
-          return await action(page.url());
-        } finally {
-          guardSettled = true;
-        }
-      },
-    );
-
-    const task = interactions.waitForViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "tab-1",
-      fn: "() => true",
-      ssrfPolicy: { allowPrivateNetwork: false },
-      signal: ctrl.signal,
-    });
-    await started;
-    ctrl.abort(new Error("wait aborted by test"));
-
-    await expect(task).rejects.toThrow("wait aborted by test");
-    expect(guardSettled).toBe(false);
-
-    releaseWait();
     await vi.waitFor(() => expect(guardSettled).toBe(true));
   });
 

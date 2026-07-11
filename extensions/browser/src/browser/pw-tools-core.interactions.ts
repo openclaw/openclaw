@@ -1362,93 +1362,75 @@ export async function scrollIntoViewViaPlaywright(
 }
 
 /** Waits for load state, timeout, URL, text, ref, or selector conditions. */
-export async function waitForViaPlaywright(
-  opts: {
-    cdpUrl: string;
-    targetId?: string;
-    timeMs?: number;
-    text?: string;
-    textGone?: string;
-    selector?: string;
-    url?: string;
-    loadState?: "load" | "domcontentloaded" | "networkidle";
-    fn?: string;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  } & BrowserNavigationPolicyOptions,
-): Promise<void> {
+export async function waitForViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  timeMs?: number;
+  text?: string;
+  textGone?: string;
+  selector?: string;
+  url?: string;
+  loadState?: "load" | "domcontentloaded" | "networkidle";
+  fn?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
-    await stepPromise;
-    if (opts.signal?.aborted) {
-      throw toLintErrorObject(opts.signal.reason ?? new Error("aborted"), "Non-Error rejection");
-    }
+    await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
   };
 
   try {
-    await awaitNavigationGuardedInteraction(
-      {
-        action: async () => {
-          if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
-            await waitForStep(
-              page.waitForTimeout(
-                resolveBoundedDelayMs(opts.timeMs, "wait timeMs", ACT_MAX_WAIT_TIME_MS),
-              ),
-            );
-          }
-          if (opts.text) {
-            await waitForStep(
-              page.getByText(opts.text).first().waitFor({
-                state: "visible",
-                timeout,
-              }),
-            );
-          }
-          if (opts.textGone) {
-            await waitForStep(
-              page.getByText(opts.textGone).first().waitFor({
-                state: "hidden",
-                timeout,
-              }),
-            );
-          }
-          if (opts.selector) {
-            const selector = normalizeOptionalString(opts.selector) ?? "";
-            if (selector) {
-              await waitForStep(
-                page.locator(selector).first().waitFor({ state: "visible", timeout }),
-              );
-            }
-          }
-          if (opts.url) {
-            const url = normalizeOptionalString(opts.url) ?? "";
-            if (url) {
-              await waitForStep(page.waitForURL(url, { timeout }));
-            }
-          }
-          if (opts.loadState) {
-            await waitForStep(page.waitForLoadState(opts.loadState, { timeout }));
-          }
-          if (opts.fn) {
-            const fn = normalizeOptionalString(opts.fn) ?? "";
-            if (fn) {
-              await waitForStep(page.waitForFunction(fn, { timeout }));
-            }
-          }
-        },
-        cdpUrl: opts.cdpUrl,
-        page,
-        ...interactionNavigationPolicy(opts),
-        targetId: opts.targetId,
-      },
-      abortPromise,
-      opts.signal,
-      reconcileRemoteDialog,
-    );
+    // Playwright exposes no per-wait cancellation; retiring the shared
+    // connection would disrupt sibling tabs. Keep waits outside this guard.
+    if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
+      await waitForStep(
+        page.waitForTimeout(
+          resolveBoundedDelayMs(opts.timeMs, "wait timeMs", ACT_MAX_WAIT_TIME_MS),
+        ),
+      );
+    }
+    if (opts.text) {
+      await waitForStep(
+        page.getByText(opts.text).first().waitFor({
+          state: "visible",
+          timeout,
+        }),
+      );
+    }
+    if (opts.textGone) {
+      await waitForStep(
+        page.getByText(opts.textGone).first().waitFor({
+          state: "hidden",
+          timeout,
+        }),
+      );
+    }
+    if (opts.selector) {
+      const selector = normalizeOptionalString(opts.selector) ?? "";
+      if (selector) {
+        await waitForStep(page.locator(selector).first().waitFor({ state: "visible", timeout }));
+      }
+    }
+    if (opts.url) {
+      const url = normalizeOptionalString(opts.url) ?? "";
+      if (url) {
+        await waitForStep(page.waitForURL(url, { timeout }));
+      }
+    }
+    if (opts.loadState) {
+      await waitForStep(page.waitForLoadState(opts.loadState, { timeout }));
+    }
+    if (opts.fn) {
+      const fn = normalizeOptionalString(opts.fn) ?? "";
+      if (fn) {
+        await waitForStep(page.waitForFunction(fn, { timeout }));
+      }
+    }
   } finally {
     cleanup();
   }
@@ -1839,7 +1821,6 @@ async function executeSingleAction(
       await waitForViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
-        ...navigationPolicy,
         timeMs: action.timeMs,
         text: action.text,
         textGone: action.textGone,
@@ -1918,7 +1899,6 @@ function actionCanOutliveGuardAbort(action: BrowserActRequest): boolean {
     case "hover":
     case "scrollIntoView":
     case "drag":
-    case "wait":
       return true;
     case "batch":
       return action.actions.some(actionCanOutliveGuardAbort);
