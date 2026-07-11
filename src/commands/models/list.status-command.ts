@@ -479,11 +479,22 @@ export async function modelsStatusCommand(
     for (const raw of [defaultLabel, ...fallbacks]) {
       addProviderUse(raw, true);
     }
-    // Utility completions (narration/titles) ride the plain API path like image
-    // models, so missing utility-provider auth must fail --check instead of
-    // hiding behind the primary's codex-runtime fallback.
-    for (const raw of [imageModel, ...imageFallbacks, utilityModelRef ?? ""]) {
+    for (const raw of [imageModel, ...imageFallbacks]) {
       addProviderUse(raw, false);
+    }
+    // Utility completions (narration/titles) are a real runtime auth consumer.
+    // Register the utility ref only when no other configured model already
+    // covers its provider: shared providers are analyzed via those uses, while
+    // a utility-only provider would otherwise stay invisible to --check.
+    if (utilityModelRef) {
+      const utilityProvider = resolveStatusModelRef(utilityModelRef)?.provider;
+      const normalizedUtilityProvider = utilityProvider ? normalizeProviderId(utilityProvider) : "";
+      if (
+        normalizedUtilityProvider &&
+        !providerUseRefs.some((use) => use.provider === normalizedUtilityProvider)
+      ) {
+        addProviderUse(utilityModelRef, false);
+      }
     }
 
     const providersFromEnv = new Set<string>();

@@ -620,7 +620,8 @@ describe("modelsStatusCommand auth overview", () => {
       });
 
       // The utility model is a real runtime auth consumer: a provider that only
-      // narration/titles use must surface in the missing-auth overview.
+      // narration/titles use must enter the route/auth analysis instead of
+      // staying invisible to `models status`.
       mocks.loadConfig.mockReturnValue({
         ...baseConfig,
         agents: {
@@ -634,7 +635,11 @@ describe("modelsStatusCommand auth overview", () => {
         ref: "mistral/mistral-small",
         source: "config",
       });
-      expect(missingPayload.auth.missingProvidersInUse).toContain("mistral");
+      expect(missingPayload.auth.modelRouteIssues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ provider: "mistral", model: "mistral-small" }),
+        ]),
+      );
     } finally {
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);
