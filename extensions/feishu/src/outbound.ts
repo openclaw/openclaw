@@ -16,6 +16,7 @@ import {
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
+  getReplyPayloadTtsSupplement,
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
@@ -64,6 +65,10 @@ import {
 const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
 const FEISHU_PRESENTATION_FALLBACK_MARKER = "__openclawPresentationFallback";
 const FEISHU_TEXT_CHUNK_LIMIT = 4000;
+
+// Symbol to pass ttsSupplement through context spread without modifying ChannelOutboundContext type.
+// Unlike WeakMap, symbol properties survive object spread and remain accessible in sendMedia.
+const TTS_SUPPLEMENT_SYMBOL = Symbol("openclaw.feishuTtsSupplement");
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -456,6 +461,7 @@ async function sendFeishuFallbackPayload(params: {
   ctx: FeishuSendPayloadContext;
   payload: FeishuOutboundPayload;
   separateMediaAndText?: boolean;
+  ttsSupplement?: ReturnType<typeof getReplyPayloadTtsSupplement>;
 }) {
   const ctx = { ...params.ctx, payload: params.payload };
   const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(params.payload));
@@ -464,6 +470,14 @@ async function sendFeishuFallbackPayload(params: {
   const shouldSeparate =
     mediaUrls.length > 0 && (params.separateMediaAndText === true || textChunks.length > 1);
   if (!shouldSeparate) {
+    // Attach ttsSupplement to ctx via symbol property. Symbol properties survive
+    // object spread, so sendMedia can read it from the spread context object.
+    if (params.ttsSupplement) {
+      (ctx as Record<symbol, ReturnType<typeof getReplyPayloadTtsSupplement> | undefined>)[
+        TTS_SUPPLEMENT_SYMBOL
+      ] = params.ttsSupplement;
+    }
+
     return await sendTextMediaPayload({
       channel: "feishu",
       ctx,
@@ -490,6 +504,13 @@ async function sendFeishuFallbackPayload(params: {
   // then preserve the complete fallback through the normal 4k text fanout.
   let lastResult: Awaited<ReturnType<typeof sendText>> | undefined;
   for (const mediaUrl of mediaUrls) {
+    // Attach ttsSupplement to ctx via symbol property before spreading.
+    if (params.ttsSupplement) {
+      (ctx as Record<symbol, ReturnType<typeof getReplyPayloadTtsSupplement> | undefined>)[
+        TTS_SUPPLEMENT_SYMBOL
+      ] = params.ttsSupplement;
+    }
+
     lastResult = await sendMedia({
       ...ctx,
       text: "",
@@ -606,10 +627,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             interactive: undefined,
           }
         : payload;
+      const ttsSupplement = getReplyPayloadTtsSupplement(ctx.payload);
       return await sendFeishuFallbackPayload({
         ctx,
         payload: fallbackPayload,
         separateMediaAndText: presentationFallback || presentation !== undefined,
+        ttsSupplement,
       });
     }
 
@@ -771,7 +794,15 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       onDeliveryResult,
+      ...contextObj
     }) => {
+      // Extract ttsSupplement from symbol property (attached by sendFeishuFallbackPayload).
+      // Symbol properties survive object spread, so this works even though contextObj
+      // is a new object created by spreading the original ctx.
+      const ttsSupplement = (
+        contextObj as Record<symbol, ReturnType<typeof getReplyPayloadTtsSupplement> | undefined>
+      )[TTS_SUPPLEMENT_SYMBOL];
+
       const { replyToMessageId, replyInThread } = resolveFeishuReplyMode({
         replyToId,
         threadId,
@@ -794,6 +825,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         shouldSuppressFeishuTextForVoiceMedia({
           mediaUrl,
           audioAsVoice,
+          ttsSupplement,
         });
       const reportDelivery = async (result: Awaited<ReturnType<typeof sendOutboundText>>) => {
         await onDeliveryResult?.(attachChannelToResult("feishu", result));

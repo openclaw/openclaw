@@ -208,6 +208,44 @@ describe("sendMediaFeishu msg_type routing", () => {
     ).toBe(false);
   });
 
+  it("respects ttsSupplement.visibleTextAlreadyDelivered over audioAsVoice", () => {
+    // TTS supplement with visibleTextAlreadyDelivered=false should send text
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "Hello world",
+          visibleTextAlreadyDelivered: false,
+        },
+      }),
+    ).toBe(false);
+
+    // TTS supplement with visibleTextAlreadyDelivered=true should suppress text
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "Hello world",
+          visibleTextAlreadyDelivered: true,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores ttsSupplement without spokenText", () => {
+    // ttsSupplement without spokenText (empty string) should fall back to audioAsVoice
+    // Note: getReplyPayloadTtsSupplement returns undefined if spokenText is empty
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/audio.mp3",
+        audioAsVoice: true,
+        ttsSupplement: undefined,
+      }),
+    ).toBe(true);
+  });
+
   it("uses msg_type=media for mp4 video", async () => {
     runFfprobeMock.mockResolvedValueOnce("4.2\n");
 
