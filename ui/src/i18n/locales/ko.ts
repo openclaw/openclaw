@@ -169,16 +169,6 @@ export const ko: TranslationMap = {
       node: "노드",
     },
   },
-  instances: {
-    title: "연결된 인스턴스",
-    subtitle: "Gateway와 클라이언트의 프레즌스 비콘입니다.",
-    showHosts: "호스트 및 IP 표시",
-    hideHosts: "호스트 및 IP 숨기기",
-    toggleHostVisibility: "호스트 표시 전환",
-    noInstances: "아직 보고된 인스턴스가 없습니다.",
-    lastInput: "마지막 입력 {time}",
-    reason: "사유 {reason}",
-  },
   worktrees: {
     newWorktree: "새 worktree",
     owner: "소유자",
@@ -388,6 +378,7 @@ export const ko: TranslationMap = {
       skills: "Skills",
       channels: "채널",
       cronJobs: "Cron 작업",
+      memory: "메모리",
     },
     context: {
       title: "Agent Context",
@@ -620,7 +611,6 @@ export const ko: TranslationMap = {
     workboard: "워크보드",
     worktrees: "Worktree",
     channels: "채널",
-    instances: "인스턴스",
     sessions: "세션",
     usage: "사용량",
     cron: "Cron 작업",
@@ -642,7 +632,6 @@ export const ko: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "디버그",
     logs: "로그",
-    dreams: "드리밍",
     plugin: "플러그인",
   },
   subtitles: {
@@ -652,7 +641,6 @@ export const ko: TranslationMap = {
     workboard: "에이전트 작업 대기열 및 세션 인계.",
     worktrees: "격리된 에이전트 작업 체크아웃 및 복구 스냅샷입니다.",
     channels: "채널 및 설정.",
-    instances: "연결된 클라이언트와 노드.",
     sessions: "활성 세션 및 기본값.",
     usage: "API 사용량 및 비용.",
     cron: "웨이크업 및 반복 실행.",
@@ -674,8 +662,10 @@ export const ko: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "스냅샷, 이벤트, RPC.",
     logs: "실시간 Gateway 로그.",
-    dreams: "수면 중 메모리 통합.",
     plugin: "플러그인이 제공하는 패널입니다.",
+  },
+  mcpPage: {
+    manageServersLink: "플러그인 페이지에서 서버를 관리하세요.",
   },
   pluginsPage: {
     searchLabel: "플러그인 검색",
@@ -1591,10 +1581,6 @@ export const ko: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "에이전트",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "장면",
       diary: "일지",
@@ -2181,9 +2167,9 @@ export const ko: TranslationMap = {
       workSessions: "작업",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "최근 채팅",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2490,6 +2476,50 @@ export const ko: TranslationMap = {
       howHeading: "어떻게 작동해야 하나요?",
       howHint: "결과 전달 방식을 선택하세요.",
       title: "새 자동화",
+      createAndRun: "만들고 지금 실행",
+    },
+    suggestions: {
+      title: "자동화 아이디어",
+      hint: "시작용 자동화 — 하나를 선택하고 만들기 전에 수정해 보세요.",
+      use: "아이디어 사용 →",
+      ideas: {
+        repoPulse: {
+          name: "저장소 현황",
+          tagline: "밤새 발생한 이슈, PR, CI 실패를 긴급도 순으로 정리.",
+          prompt:
+            "내 저장소의 밤새 활동을 검토하세요: 새 이슈, 풀 리퀘스트, CI 실패. 오늘 가장 주의가 필요한 세 가지를 링크와 한 줄 이유와 함께 요약해 주세요.",
+        },
+        standupGhostwriter: {
+          name: "스탠드업 대필",
+          tagline: "어제 작업을 바탕으로 스탠드업 업데이트를 자동 작성.",
+          prompt:
+            "어제의 커밋, 병합된 풀 리퀘스트, 열린 리뷰 스레드를 바탕으로 스탠드업 업데이트를 작성해 주세요. 최대 세 줄: 완료, 진행 중, 블로킹.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News 스카우트",
+          tagline: "커피 한 잔과 함께 읽을 링크 세 개, 핫한 의견 포함.",
+          prompt:
+            "오늘 Hacker News 프론트 페이지에서 AI 에이전트, 개발자 도구, TypeScript 관련 게시물을 찾아 주세요. 가장 흥미로운 링크 세 개를 각각 한 줄 핫테이크와 함께 보내 주세요.",
+        },
+        dependencyRadar: {
+          name: "의존성 레이더",
+          tagline: "오래되었거나 취약한 의존성을 업그레이드 메모와 함께 정리.",
+          prompt:
+            "내 메인 프로젝트에서 오래되었거나 취약한 의존성을 확인해 주세요. 주목할 업데이트를 각각 한 줄 위험 메모와 함께 나열하고, 업그레이드 명령어를 작성해 주세요.",
+        },
+        watchdog: {
+          name: "야간 감시",
+          tagline: "한 줄 결과로 확인하는 시간별 상태 점검.",
+          prompt:
+            "서비스와 Gateway의 상태를 확인해 주세요: 최근 로그에서 새로운 오류, 재시작, 또는 비정상적인 부하를 스캔하세요. 모든 것이 정상이면 짧은 이상 없음 한 줄로 답하고, 문제가 있어 보이면 무엇이 실패했는지와 어디서부터 살펴봐야 할지 보고해 주세요.",
+        },
+        polyglotMinute: {
+          name: "폴리글랏 미닛",
+          tagline: "아침 커피와 함께하는 유용한 외국어 표현 하나.",
+          prompt:
+            "일본어에서 유용한 표현 하나를 알려주세요: 표현, 발음 방법, 직역 의미, 그리고 언제 사용하는지. 다섯 줄 이내로 간단하게 설명해 주세요.",
+        },
+      },
     },
     summary: {
       enabled: "사용",

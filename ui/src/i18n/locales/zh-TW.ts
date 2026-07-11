@@ -168,16 +168,6 @@ export const zh_TW: TranslationMap = {
       node: "節點",
     },
   },
-  instances: {
-    title: "已連線的實例",
-    subtitle: "來自 Gateway 和用戶端的存在信標。",
-    showHosts: "顯示主機和 IP",
-    hideHosts: "隱藏主機和 IP",
-    toggleHostVisibility: "切換主機可見性",
-    noInstances: "尚未回報任何實例。",
-    lastInput: "上次輸入 {time}",
-    reason: "原因 {reason}",
-  },
   worktrees: {
     newWorktree: "新增 worktree",
     owner: "擁有者",
@@ -387,6 +377,7 @@ export const zh_TW: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "記憶體",
     },
     context: {
       title: "Agent Context",
@@ -618,7 +609,6 @@ export const zh_TW: TranslationMap = {
     workboard: "工作板",
     worktrees: "Worktrees",
     channels: "頻道",
-    instances: "實例",
     sessions: "工作階段",
     usage: "使用情況",
     cron: "定時任務",
@@ -640,7 +630,6 @@ export const zh_TW: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "調試",
     logs: "日誌",
-    dreams: "夢境",
     plugin: "外掛程式",
   },
   subtitles: {
@@ -650,7 +639,6 @@ export const zh_TW: TranslationMap = {
     workboard: "代理工作佇列與工作階段交接。",
     worktrees: "隔離的代理程式任務簽出與復原快照。",
     channels: "頻道和設置。",
-    instances: "已連接客戶端和節點。",
     sessions: "活動會話和默認設置。",
     usage: "API 使用情況和成本。",
     cron: "喚醒和重複運行。",
@@ -672,8 +660,10 @@ export const zh_TW: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "快照、事件、RPC。",
     logs: "實時網關日誌。",
-    dreams: "睡眠期間的記憶整合。",
     plugin: "外掛程式提供的面板。",
+  },
+  mcpPage: {
+    manageServersLink: "在插件頁面管理伺服器。",
   },
   pluginsPage: {
     searchLabel: "搜尋外掛程式",
@@ -1572,10 +1562,6 @@ export const zh_TW: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "代理",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "場景",
       diary: "日誌",
@@ -2143,9 +2129,9 @@ export const zh_TW: TranslationMap = {
       workSessions: "工作",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "最近的聊天",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2447,6 +2433,50 @@ export const zh_TW: TranslationMap = {
       howHeading: "它應該如何運作？",
       howHint: "選擇結果的傳送方式。",
       title: "新增自動化",
+      createAndRun: "建立並立即執行",
+    },
+    suggestions: {
+      title: "自動化靈感",
+      hint: "入門自動化範本 — 選一個並在建立前調整。",
+      use: "使用此靈感 →",
+      ideas: {
+        repoPulse: {
+          name: "儲存庫脈動",
+          tagline: "隔夜的 issues、PR 與 CI 失敗，依緊急程度排序。",
+          prompt:
+            "檢視我的儲存庫中的隔夜活動：新 issues、pull requests 與 CI 失敗。摘要出今天最需要我關注的三件事，每項附上連結與一行原因。",
+        },
+        standupGhostwriter: {
+          name: "站立會議代筆",
+          tagline: "根據昨天的工作自動草擬站立會議更新。",
+          prompt:
+            "根據昨天的 commits、已合併的 pull requests 與開放的 review 討論串，草擬我的站立會議更新。最多三條重點：已完成、進行中、受阻。",
+        },
+        hackerNewsScout: {
+          name: "Hacker News 探員",
+          tagline: "三個值得配咖啡閱讀的連結，附上犀利短評。",
+          prompt:
+            "掃描今日 Hacker News 首頁中關於 AI agents、開發者工具與 TypeScript 的文章。傳給我三個最有趣的連結，每個附上一行犀利短評。",
+        },
+        dependencyRadar: {
+          name: "依賴雷達",
+          tagline: "過時或有漏洞的依賴，附升級說明。",
+          prompt:
+            "檢查我的主要專案中過時或有漏洞的依賴。列出值得注意的更新，每項附上一行風險說明，並草擬升級指令。",
+        },
+        watchdog: {
+          name: "夜間守衛",
+          tagline: "每小時健康檢查，一行摘要結果。",
+          prompt:
+            "檢查我的服務與 Gateway 是否正常運作：掃描近期日誌，尋找新錯誤、重啟或異常負載。一切正常時回覆一行簡短的確認訊息；若發現異常，請說明出了什麼問題以及從何處開始排查。",
+        },
+        polyglotMinute: {
+          name: "多語言一分鐘",
+          tagline: "每天早晨喝咖啡時，學一句實用的外語短句。",
+          prompt:
+            "教我一句實用的日語短句：短句內容、發音方式、字面意思，以及使用時機。請控制在五行以內。",
+        },
+      },
     },
     summary: {
       enabled: "已啟用",

@@ -172,16 +172,6 @@ export const it: TranslationMap = {
       node: "Nodo",
     },
   },
-  instances: {
-    title: "Istanze connesse",
-    subtitle: "Beacon di presenza dal gateway e dai client.",
-    showHosts: "Mostra host e IP",
-    hideHosts: "Nascondi host e IP",
-    toggleHostVisibility: "Attiva/disattiva visibilità host",
-    noInstances: "Nessuna istanza segnalata ancora.",
-    lastInput: "Ultimo input {time}",
-    reason: "Motivo {reason}",
-  },
   worktrees: {
     newWorktree: "Nuovo worktree",
     owner: "Proprietario",
@@ -393,6 +383,7 @@ export const it: TranslationMap = {
       skills: "Skills",
       channels: "Canali",
       cronJobs: "Processi cron",
+      memory: "Memoria",
     },
     context: {
       title: "Contesto agente",
@@ -630,7 +621,6 @@ export const it: TranslationMap = {
     workboard: "Bacheca di lavoro",
     worktrees: "Worktree",
     channels: "Canali",
-    instances: "Istanze",
     sessions: "Sessioni",
     usage: "Utilizzo",
     cron: "Processi cron",
@@ -652,7 +642,6 @@ export const it: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debug",
     logs: "Log",
-    dreams: "Sogni",
     plugin: "Plugin",
   },
   subtitles: {
@@ -662,7 +651,6 @@ export const it: TranslationMap = {
     workboard: "Coda di lavoro degli agenti e passaggio di sessione.",
     worktrees: "Checkout isolati delle attività degli agenti e snapshot di ripristino.",
     channels: "Canali e impostazioni.",
-    instances: "Client e nodi connessi.",
     sessions: "Sessioni attive e valori predefiniti.",
     usage: "Utilizzo API e costi.",
     cron: "Risvegli ed esecuzioni ricorrenti.",
@@ -684,8 +672,10 @@ export const it: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Snapshot, eventi, RPC.",
     logs: "Log gateway live.",
-    dreams: "Sogni della memoria, consolidamento e riflessione.",
     plugin: "Pannello fornito dal plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Gestisci i server nella pagina Plugins.",
   },
   pluginsPage: {
     searchLabel: "Cerca plugin",
@@ -1604,10 +1594,6 @@ export const it: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agente",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scena",
       diary: "Diario",
@@ -2209,9 +2195,9 @@ export const it: TranslationMap = {
       workSessions: "Lavoro",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Chat recenti",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2522,6 +2508,50 @@ export const it: TranslationMap = {
       howHeading: "Come deve funzionare?",
       howHint: "Scegli come vengono consegnati i risultati.",
       title: "Nuova automazione",
+      createAndRun: "Crea ed esegui ora",
+    },
+    suggestions: {
+      title: "Idee di automazione",
+      hint: "Automazioni di partenza — scegline una e modificala prima di crearla.",
+      use: "Usa l'idea →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "Problemi notturni, PR e fallimenti CI, ordinati per urgenza.",
+          prompt:
+            "Esamina l'attività notturna nei miei repository: nuovi problemi, pull request e fallimenti CI. Riepiloga le tre cose che richiedono maggiormente la mia attenzione oggi, ciascuna con un link e una motivazione in una riga.",
+        },
+        standupGhostwriter: {
+          name: "Ghostwriter standup",
+          tagline: "Il tuo aggiornamento standup, redatto dal lavoro di ieri.",
+          prompt:
+            "Redigi il mio aggiornamento standup dai commit di ieri, dalle pull request unite e dai thread di revisione aperti. Massimo tre punti: fatto, in corso, bloccato.",
+        },
+        hackerNewsScout: {
+          name: "Scout di Hacker News",
+          tagline: "Tre link che valgono il tuo caffè, con opinioni forti.",
+          prompt:
+            "Scansiona la prima pagina di Hacker News di oggi per post su agenti AI, strumenti per sviluppatori e TypeScript. Inviami i tre link più interessanti, ciascuno con un'opinione forte in una riga.",
+        },
+        dependencyRadar: {
+          name: "Radar dipendenze",
+          tagline: "Dipendenze obsolete o vulnerabili, con note di aggiornamento.",
+          prompt:
+            "Controlla il mio progetto principale alla ricerca di dipendenze obsolete o vulnerabili. Elenca gli aggiornamenti rilevanti con una nota di rischio in una riga ciascuno e prepara il comando di aggiornamento.",
+        },
+        watchdog: {
+          name: "Guardia notturna",
+          tagline: "Controllo di salute orario con un verdetto in una riga.",
+          prompt:
+            "Verifica che i miei servizi e il Gateway siano in buono stato: analizza i log recenti alla ricerca di nuovi errori, riavvii o carichi insoliti. Rispondi con una breve riga di tutto OK quando tutto va bene; se qualcosa sembra rotto, segnala cosa ha fallito e da dove iniziare a guardare.",
+        },
+        polyglotMinute: {
+          name: "Minuto poliglotta",
+          tagline: "Una frase straniera utile con il caffè del mattino.",
+          prompt:
+            "Insegnami una frase utile in giapponese: la frase, come pronunciarla, il suo significato letterale e quando usarla. Tienila sotto le cinque righe.",
+        },
+      },
     },
     summary: {
       enabled: "Abilitato",

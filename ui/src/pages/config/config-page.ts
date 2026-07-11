@@ -4,7 +4,7 @@ import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode } from "../../api/types.ts";
-import type { RouteId } from "../../app-route-paths.ts";
+import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -21,7 +21,7 @@ import {
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
+import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -584,6 +584,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.context.theme.refresh();
   }
 
+  private setLocale(locale: Locale) {
+    this.settings = patchSettings({ locale });
+    void i18n.setLocale(locale);
+  }
+
   private setTheme(
     theme: ThemeName,
     context?: Parameters<typeof startThemeTransition>[0]["context"],
@@ -792,9 +797,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       configSaving: configState.configSaving,
       configApplying: configState.configApplying,
       connected: configState.connected,
+      pluginsHref: pathForRoute("plugins", this.context.basePath),
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
-      onServerEnabledChange: (name, enabled) => runtimeConfig.setMcpServerEnabled(name, enabled),
       editor: renderConfig({
         ...props,
         activeSection: "mcp",
@@ -815,6 +820,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     const fastMode = agentsDefaults?.fastMode;
     const appConfig = this.context.config.current;
     return renderQuickSettings({
+      locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
+      onLocaleChange: (locale) => this.setLocale(locale),
       currentModel: model,
       thinkingLevel,
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,

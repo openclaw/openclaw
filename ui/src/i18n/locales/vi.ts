@@ -170,16 +170,6 @@ export const vi: TranslationMap = {
       node: "Nút",
     },
   },
-  instances: {
-    title: "Phiên bản đã kết nối",
-    subtitle: "Beacon hiện diện từ gateway và các máy khách.",
-    showHosts: "Hiển thị máy chủ và IP",
-    hideHosts: "Ẩn máy chủ và IP",
-    toggleHostVisibility: "Bật/tắt hiển thị máy chủ",
-    noInstances: "Chưa có phiên bản nào được báo cáo.",
-    lastInput: "Đầu vào gần nhất {time}",
-    reason: "Lý do {reason}",
-  },
   worktrees: {
     newWorktree: "Worktree mới",
     owner: "Chủ sở hữu",
@@ -389,6 +379,7 @@ export const vi: TranslationMap = {
       skills: "Skills",
       channels: "Kênh",
       cronJobs: "Cron Jobs",
+      memory: "Bộ nhớ",
     },
     context: {
       title: "Ngữ cảnh agent",
@@ -622,7 +613,6 @@ export const vi: TranslationMap = {
     workboard: "Bảng công việc",
     worktrees: "Worktree",
     channels: "Kênh",
-    instances: "Phiên bản",
     sessions: "Phiên",
     usage: "Mức sử dụng",
     cron: "Tác vụ Cron",
@@ -644,7 +634,6 @@ export const vi: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Gỡ lỗi",
     logs: "Nhật ký",
-    dreams: "Đang mơ",
     plugin: "Plugin",
   },
   subtitles: {
@@ -654,7 +643,6 @@ export const vi: TranslationMap = {
     workboard: "Hàng đợi công việc của tác nhân và bàn giao phiên.",
     worktrees: "Các bản checkout tác vụ agent được cô lập và snapshot khôi phục.",
     channels: "Kênh và cài đặt.",
-    instances: "Máy khách và nút đã kết nối.",
     sessions: "Phiên đang hoạt động và mặc định.",
     usage: "Mức sử dụng API và chi phí.",
     cron: "Đánh thức và chạy định kỳ.",
@@ -677,8 +665,10 @@ export const vi: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Ảnh chụp, sự kiện, RPC.",
     logs: "Nhật ký gateway trực tiếp.",
-    dreams: "Mơ bộ nhớ, hợp nhất và phản chiếu.",
     plugin: "Bảng điều khiển do plugin cung cấp.",
+  },
+  mcpPage: {
+    manageServersLink: "Quản lý máy chủ trên trang Plugins.",
   },
   pluginsPage: {
     searchLabel: "Tìm kiếm plugin",
@@ -1589,10 +1579,6 @@ export const vi: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Cảnh",
       diary: "Nhật ký",
@@ -2180,9 +2166,9 @@ export const vi: TranslationMap = {
       workSessions: "Công việc",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Cuộc trò chuyện gần đây",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2488,6 +2474,50 @@ export const vi: TranslationMap = {
       howHeading: "Nó nên hoạt động như thế nào?",
       howHint: "Chọn cách gửi kết quả.",
       title: "Tự động hóa mới",
+      createAndRun: "Tạo & chạy ngay",
+    },
+    suggestions: {
+      title: "Ý tưởng tự động hóa",
+      hint: "Các tự động hóa mẫu — chọn một cái và chỉnh sửa trước khi tạo.",
+      use: "Dùng ý tưởng →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "Các issue, PR và lỗi CI qua đêm, xếp hạng theo mức độ khẩn cấp.",
+          prompt:
+            "Xem lại hoạt động qua đêm trong các repository của tôi: issue mới, pull request và lỗi CI. Tóm tắt ba điều cần chú ý nhất hôm nay, mỗi điều kèm một liên kết và một câu lý do ngắn.",
+        },
+        standupGhostwriter: {
+          name: "Soạn thảo standup",
+          tagline: "Bản cập nhật standup của bạn, được soạn từ công việc hôm qua.",
+          prompt:
+            "Soạn bản cập nhật standup của tôi từ các commit hôm qua, pull request đã merge và các luồng review đang mở. Tối đa ba gạch đầu dòng: đã xong, đang làm, bị chặn.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News scout",
+          tagline: "Ba liên kết đáng đọc trong lúc uống cà phê, kèm nhận xét nhanh.",
+          prompt:
+            "Quét trang đầu Hacker News hôm nay để tìm các bài về AI agents, công cụ lập trình và TypeScript. Gửi cho tôi ba liên kết thú vị nhất, mỗi cái kèm một nhận xét ngắn.",
+        },
+        dependencyRadar: {
+          name: "Dependency radar",
+          tagline: "Các dependency lỗi thời hoặc có lỗ hổng bảo mật, kèm ghi chú nâng cấp.",
+          prompt:
+            "Kiểm tra dự án chính của tôi để tìm các dependency lỗi thời hoặc có lỗ hổng bảo mật. Liệt kê các bản cập nhật đáng chú ý kèm một câu ghi chú rủi ro, và soạn lệnh nâng cấp.",
+        },
+        watchdog: {
+          name: "Canh đêm",
+          tagline: "Kiểm tra sức khỏe hàng giờ với một dòng kết luận.",
+          prompt:
+            "Kiểm tra xem các dịch vụ và gateway của tôi có hoạt động bình thường không: quét nhật ký gần đây để tìm lỗi mới, khởi động lại, hoặc tải bất thường. Trả lời bằng một dòng ngắn xác nhận tất cả ổn khi mọi thứ bình thường; nếu có gì đó trục trặc, hãy báo cáo những gì đã hỏng và nên bắt đầu kiểm tra ở đâu.",
+        },
+        polyglotMinute: {
+          name: "Phút đa ngôn ngữ",
+          tagline: "Một cụm từ ngoại ngữ hữu ích cùng tách cà phê buổi sáng.",
+          prompt:
+            "Dạy tôi một cụm từ hữu ích trong tiếng Nhật: cụm từ đó, cách phát âm, nghĩa đen và khi nào nên dùng. Giữ trong vòng năm dòng.",
+        },
+      },
     },
     summary: {
       enabled: "Đã bật",
