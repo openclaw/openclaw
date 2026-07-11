@@ -5,6 +5,15 @@ import { defaultRuntime } from "../../runtime.js";
 type DurableCliCommanderOptions = {
   json?: boolean;
   limit?: string;
+  actorKind?: string;
+  actorRef?: string;
+  reason?: string;
+  idempotencyKey?: string;
+  decisionRef?: string;
+  decisionKind?: string;
+  supersededByRef?: string;
+  evidence?: string;
+  metadata?: string;
 };
 
 function parseLimit(value: string | undefined): number | undefined {
@@ -40,6 +49,42 @@ async function runDurableAction(
   );
 }
 
+async function runDurableWakeAction(
+  action: DurableCliAction,
+  wakeId: string | undefined,
+  opts: DurableCliCommanderOptions,
+): Promise<void> {
+  await durableCommand(
+    {
+      action,
+      wakeId,
+      json: Boolean(opts.json),
+      limit: parseLimit(opts.limit),
+      actorKind: opts.actorKind,
+      actorRef: opts.actorRef,
+      reason: opts.reason,
+      idempotencyKey: opts.idempotencyKey,
+      decisionRef: opts.decisionRef,
+      decisionKind: opts.decisionKind,
+      supersededByRef: opts.supersededByRef,
+      evidence: opts.evidence,
+      metadata: opts.metadata,
+    },
+    defaultRuntime,
+  );
+}
+
+function addWakeControlOptions(command: Command): Command {
+  return addCommonOptions(command)
+    .requiredOption("--actor-kind <kind>", "Decision actor kind: external, parent, or operator")
+    .requiredOption("--actor-ref <ref>", "External, owner, or operator actor reference")
+    .requiredOption("--reason <reason>", "Audited reason for the durable wake control")
+    .requiredOption("--idempotency-key <key>", "Caller-provided idempotency key")
+    .option("--decision-ref <ref>", "External decision or ticket reference")
+    .option("--evidence <json>", "Additional evidence as a JSON object")
+    .option("--metadata <json>", "Additional metadata as a JSON object");
+}
+
 export function registerDurableCommand(program: Command) {
   const durable = program
     .command("durable")
@@ -58,6 +103,66 @@ export function registerDurableCommand(program: Command) {
       .option("--limit <count>", "Maximum runs to show", "50"),
   ).action(async (opts) => {
     await runDurableAction("runs", undefined, opts);
+  });
+
+  addCommonOptions(
+    durable
+      .command("obligations")
+      .description("List unresolved durable attention obligations")
+      .option("--limit <count>", "Maximum obligations to show", "50"),
+  ).action(async (opts) => {
+    await runDurableAction("obligations", undefined, opts);
+  });
+
+  addCommonOptions(
+    durable
+      .command("wakes")
+      .description("List pending durable wake obligations")
+      .option("--limit <count>", "Maximum wakes to show", "50"),
+  ).action(async (opts) => {
+    await runDurableAction("wakes", undefined, opts);
+  });
+
+  addCommonOptions(durable.command("wake <wakeId>").description("Inspect one durable wake")).action(
+    async (wakeId: string, opts) => {
+      await runDurableWakeAction("wake", wakeId, opts);
+    },
+  );
+
+  addCommonOptions(
+    durable
+      .command("wake-attempts <wakeId>")
+      .description("List delivery attempts for one durable wake")
+      .option("--limit <count>", "Maximum attempts to show", "50"),
+  ).action(async (wakeId: string, opts) => {
+    await runDurableWakeAction("wake-attempts", wakeId, opts);
+  });
+
+  addWakeControlOptions(
+    durable.command("wake-ack <wakeId>").description("Acknowledge a durable wake"),
+  ).action(async (wakeId: string, opts) => {
+    await runDurableWakeAction("wake-ack", wakeId, opts);
+  });
+
+  addWakeControlOptions(
+    durable
+      .command("wake-supersede <wakeId>")
+      .description("Supersede a durable wake")
+      .option("--superseded-by-ref <ref>", "Replacement decision or wake reference"),
+  ).action(async (wakeId: string, opts) => {
+    await runDurableWakeAction("wake-supersede", wakeId, opts);
+  });
+
+  addWakeControlOptions(
+    durable
+      .command("wake-mark <wakeId>")
+      .description("Mark a durable wake inspected or decision-required")
+      .requiredOption(
+        "--decision-kind <kind>",
+        "inspected, requires_human_decision, or requires_operator_decision",
+      ),
+  ).action(async (wakeId: string, opts) => {
+    await runDurableWakeAction("wake-mark", wakeId, opts);
   });
 
   for (const [name, action, description] of [

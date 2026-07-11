@@ -65,9 +65,12 @@ import type {
   DurableSideEffectUncertaintyFact,
   DurableSideEffectUncertaintyStatus,
   DurableUnresolvedObligation,
+  DurableWakeControlDecision,
+  DurableWakeControlDecisionKind,
   DurableWakeDeliveryAttempt,
   DurableWakeDeliveryAttemptStatus,
   FinalizeDurableWakeDeliveryAttemptInput,
+  DurableWakeInspection,
   UpdateDurableRuntimeRunInput,
   UpdateDurableRuntimeLinkInput,
   RecordDurableContinuationCleanupInput,
@@ -75,6 +78,10 @@ import type {
   RecordDurableWakeDeliveryAttemptInput,
   RenewDurableWakeDeliveryAttemptClaimInput,
   ResolveDurableSideEffectUncertaintyFactInput,
+  MarkDurableWakeDecisionRequiredInput,
+  SupersedeDurableWakeDeliveryAttemptInput,
+  SupersedeDurableWakeInput,
+  DurableWakeControlInput,
   UpdateDurableParentWakeInput,
   UpdateDurableWakeDeliveryAttemptInput,
   UpdateDurableWakeInput,
@@ -353,6 +360,71 @@ function parseJsonRecord(value: string | null): Record<string, unknown> | undefi
   } catch {
     return undefined;
   }
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseMetadata(value: string | null): Record<string, unknown> {
+  return parseJsonRecord(value) ?? {};
+}
+
+function buildWakeControlDecision(
+  input: DurableWakeControlInput,
+  kind: DurableWakeControlDecisionKind,
+  now: number,
+): DurableWakeControlDecision {
+  const actorRef = optionalText(input.actorRef);
+  if (!actorRef) {
+    throw new Error("Durable wake control requires actorRef");
+  }
+  return {
+    kind,
+    actorKind: input.actorKind,
+    actorRef,
+    ...(input.reason ? { reason: input.reason } : {}),
+    ...(input.decisionRef ? { decisionRef: input.decisionRef } : {}),
+    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    ...(input.evidence ? { evidence: input.evidence } : {}),
+    ...(input.metadata ? { metadata: input.metadata } : {}),
+    decidedAt: now,
+  };
+}
+
+function mergeWakeControlMetadata(
+  currentMetadataJson: string | null,
+  decision: DurableWakeControlDecision,
+  extras?: Record<string, unknown>,
+): Record<string, unknown> {
+  const metadata = parseMetadata(currentMetadataJson);
+  const existingControls = Array.isArray(metadata.durableWakeControls)
+    ? metadata.durableWakeControls
+    : [];
+  return {
+    ...metadata,
+    durableWakeControl: decision,
+    durableWakeControls: [...existingControls, decision],
+    ...(extras ?? {}),
+  };
+}
+
+function latestWakeControl(metadataJson: string | null): Record<string, unknown> | undefined {
+  const metadata = parseJsonRecord(metadataJson);
+  const control = metadata?.durableWakeControl;
+  return isRecordValue(control) ? control : undefined;
+}
+
+function isMatchingControlNoop(
+  current: DurableParentWakeRow,
+  kind: DurableWakeControlDecisionKind,
+  idempotencyKey: string | undefined,
+): boolean {
+  const control = latestWakeControl(current.metadata_json);
+  if (!control || control.kind !== kind) {
+    return false;
+  }
+  return idempotencyKey ? control.idempotencyKey === idempotencyKey : true;
 }
 
 function rowToRun(row: DurableRuntimeRunRow): DurableRuntimeRun {
@@ -703,6 +775,35 @@ function isAllowedWakeStatusTransition(
   return false;
 }
 
+function isTerminalWakeDeliveryAttemptStatus(status: DurableWakeDeliveryAttemptStatus): boolean {
+  return status === "delivered" || status === "failed" || status === "superseded";
+}
+
+function isAllowedWakeDeliveryAttemptStatusTransition(
+  current: DurableWakeDeliveryAttemptStatus,
+  next: DurableWakeDeliveryAttemptStatus,
+): boolean {
+  if (current === next) {
+    return true;
+  }
+  if (current === "pending") {
+    return (
+      next === "attempted" ||
+      next === "delivered" ||
+      next === "failed" ||
+      next === "unknown" ||
+      next === "superseded"
+    );
+  }
+  if (current === "attempted") {
+    return next === "delivered" || next === "failed" || next === "unknown" || next === "superseded";
+  }
+  if (current === "unknown") {
+    return next === "delivered" || next === "failed" || next === "superseded";
+  }
+  return false;
+}
+
 function isSameSqlValue(
   left: string | number | bigint | null,
   right: string | number | bigint | null,
@@ -933,6 +1034,157 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
     return rows.map(rowToParentWake);
   };
 
+  const storeListSideEffectUncertaintyFacts = (options?: {
+    sourceRunId?: string;
+    status?: DurableSideEffectUncertaintyStatus;
+    limit?: number;
+  }): DurableSideEffectUncertaintyFact[] => {
+    const sourceRunId = optionalText(options?.sourceRunId);
+    const rows = queryRows<DurableSideEffectUncertaintyFactRow>(
+      db,
+      durableDb
+        .selectFrom("durable_runtime_uncertainty_facts")
+        .selectAll()
+        .$if(Boolean(sourceRunId), (qb) => qb.where("source_run_id", "=", sourceRunId!))
+        .$if(Boolean(options?.status), (qb) => qb.where("status", "=", options!.status!))
+        .orderBy("updated_at", "desc")
+        .orderBy("fact_id", "desc")
+        .limit(normalizeQueryLimit(options?.limit, 500)),
+    );
+    return rows.map(rowToUncertaintyFact);
+  };
+
+  const acknowledgeDurableWakeRecord = (
+    input: DurableWakeControlInput,
+  ): DurableWake | undefined => {
+    const now = input.now ?? Date.now();
+    const current = queryFirst<DurableParentWakeRow>(
+      db,
+      durableDb
+        .selectFrom("durable_runtime_parent_wakes")
+        .selectAll()
+        .where("wake_id", "=", input.wakeId),
+    );
+    if (!current) {
+      return undefined;
+    }
+    if (current.status === "acked") {
+      return rowToParentWake(current);
+    }
+    if (isTerminalWakeStatus(current.status)) {
+      return undefined;
+    }
+    const decision = buildWakeControlDecision(input, "acknowledged", now);
+    return updateDurableWakeRecord({
+      wakeId: input.wakeId,
+      status: "acked",
+      ackedAt: now,
+      metadata: mergeWakeControlMetadata(current.metadata_json, decision),
+      now,
+    });
+  };
+
+  const supersedeDurableWakeRecord = (
+    input: SupersedeDurableWakeInput,
+  ): DurableWake | undefined => {
+    const now = input.now ?? Date.now();
+    const current = queryFirst<DurableParentWakeRow>(
+      db,
+      durableDb
+        .selectFrom("durable_runtime_parent_wakes")
+        .selectAll()
+        .where("wake_id", "=", input.wakeId),
+    );
+    if (!current) {
+      return undefined;
+    }
+    if (current.status === "superseded") {
+      return rowToParentWake(current);
+    }
+    if (isTerminalWakeStatus(current.status)) {
+      return undefined;
+    }
+    const decision = buildWakeControlDecision(input, "superseded", now);
+    return updateDurableWakeRecord({
+      wakeId: input.wakeId,
+      status: "superseded",
+      failedReason: input.reason ?? "superseded",
+      metadata: mergeWakeControlMetadata(current.metadata_json, decision, {
+        ...(input.supersededByRef ? { supersededByRef: input.supersededByRef } : {}),
+      }),
+      now,
+    });
+  };
+
+  const markDurableWakeDecisionRequiredRecord = (
+    input: MarkDurableWakeDecisionRequiredInput,
+  ): DurableWake | undefined => {
+    const now = input.now ?? Date.now();
+    const current = queryFirst<DurableParentWakeRow>(
+      db,
+      durableDb
+        .selectFrom("durable_runtime_parent_wakes")
+        .selectAll()
+        .where("wake_id", "=", input.wakeId),
+    );
+    if (!current) {
+      return undefined;
+    }
+    if (isTerminalWakeStatus(current.status)) {
+      return isMatchingControlNoop(current, input.decisionKind, input.idempotencyKey)
+        ? rowToParentWake(current)
+        : undefined;
+    }
+    const decision = buildWakeControlDecision(input, input.decisionKind, now);
+    return updateDurableWakeRecord({
+      wakeId: input.wakeId,
+      status: current.status,
+      metadata: mergeWakeControlMetadata(current.metadata_json, decision),
+      now,
+    });
+  };
+
+  const getDurableWakeInspectionRecord = (wakeId: string): DurableWakeInspection | undefined => {
+    const wake = getDurableWakeRecord(wakeId);
+    if (!wake) {
+      return undefined;
+    }
+    const metadata = wake.metadata ?? {};
+    const diagnostics = isRecordValue(metadata.diagnostics) ? metadata.diagnostics : undefined;
+    const evidence = isRecordValue(metadata.evidence) ? metadata.evidence : undefined;
+    const unresolvedUncertaintyFacts = wake.sourceRunId
+      ? storeListSideEffectUncertaintyFacts({
+          sourceRunId: wake.sourceRunId,
+          status: "open",
+        })
+      : [];
+    return {
+      wake,
+      targetResolution: {
+        ...(wake.targetResolutionStatus ? { status: wake.targetResolutionStatus } : {}),
+        ...(wake.targetResolutionReason ? { reason: wake.targetResolutionReason } : {}),
+        ...(wake.targetKind ? { targetKind: wake.targetKind } : {}),
+        ...(wake.targetRef ? { targetRef: wake.targetRef } : {}),
+        ...(wake.ownerKind ? { ownerKind: wake.ownerKind } : {}),
+        ...(wake.ownerRef ? { ownerRef: wake.ownerRef } : {}),
+        ...(wake.reportRouteRef ? { reportRouteRef: wake.reportRouteRef } : {}),
+        ...(wake.factsRef ? { factsRef: wake.factsRef } : {}),
+        ...(wake.sourceRunId ? { sourceRunId: wake.sourceRunId } : {}),
+        ...(diagnostics ? { diagnostics } : {}),
+        ...(evidence ? { evidence } : {}),
+      },
+      deliveryAttempts: listWakeDeliveryAttemptRecords({ wakeId }),
+      unresolvedUncertaintyFacts,
+      sourceRefs: {
+        ...(wake.factsRef ? { factsRef: wake.factsRef } : {}),
+        ...(wake.sourceRunId ? { sourceRunId: wake.sourceRunId } : {}),
+        dedupeKey: wake.dedupeKey,
+        ...(wake.parentRunId ? { parentRunId: wake.parentRunId } : {}),
+        ...(wake.parentSessionKey ? { parentSessionKey: wake.parentSessionKey } : {}),
+      },
+    };
+  };
+
   const recordWakeDeliveryAttemptRecord = (
     input: RecordDurableWakeDeliveryAttemptInput,
   ): DurableWakeDeliveryAttempt => {
@@ -1038,8 +1290,26 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       const nextUnknownAt = input.unknownAt === undefined ? current.unknown_at : input.unknownAt;
       const nextMetadataJson =
         input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
+      if (isTerminalWakeDeliveryAttemptStatus(current.status)) {
+        const isNoOp =
+          input.status === current.status &&
+          isSameSqlValue(nextEvidenceJson, current.evidence_json) &&
+          isSameSqlValue(nextError, current.error_message) &&
+          isSameSqlValue(nextAttemptedAt, current.attempted_at) &&
+          isSameSqlValue(nextDeliveredAt, current.delivered_at) &&
+          isSameSqlValue(nextFailedAt, current.failed_at) &&
+          isSameSqlValue(nextUnknownAt, current.unknown_at) &&
+          isSameSqlValue(nextMetadataJson, current.metadata_json);
+        return isNoOp ? rowToWakeDeliveryAttempt(current) : undefined;
+      }
+      if (!isAllowedWakeDeliveryAttemptStatusTransition(current.status, input.status)) {
+        return undefined;
+      }
       const nextClaim =
-        input.status === "delivered" || input.status === "failed" || input.status === "unknown"
+        input.status === "delivered" ||
+        input.status === "failed" ||
+        input.status === "unknown" ||
+        input.status === "superseded"
           ? { delivery_claimed_by: null, delivery_claim_expires_at: null }
           : {};
       const expectedClaimedBy = optionalText(input.expectedClaimedBy);
@@ -1306,6 +1576,43 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
         .limit(normalizeQueryLimit(options?.limit, 500)),
     );
     return rows.map(rowToWakeDeliveryAttempt);
+  };
+
+  const supersedeWakeDeliveryAttemptRecord = (
+    input: SupersedeDurableWakeDeliveryAttemptInput,
+  ): DurableWakeDeliveryAttempt | undefined => {
+    const now = input.now ?? Date.now();
+    const current = queryFirst<DurableWakeDeliveryAttemptRow>(
+      db,
+      durableDb
+        .selectFrom("durable_runtime_wake_delivery_attempts")
+        .selectAll()
+        .where("delivery_attempt_id", "=", input.deliveryAttemptId),
+    );
+    if (!current || current.wake_id !== input.wakeId) {
+      return undefined;
+    }
+    if (current.status === "superseded") {
+      return rowToWakeDeliveryAttempt(current);
+    }
+    const decision = buildWakeControlDecision(input, "superseded", now);
+    const currentMetadata = parseMetadata(current.metadata_json);
+    return updateWakeDeliveryAttemptRecord({
+      deliveryAttemptId: input.deliveryAttemptId,
+      status: "superseded",
+      evidence: {
+        kind: "wake_delivery_attempt_superseded",
+        ...(input.supersededByRef ? { supersededByRef: input.supersededByRef } : {}),
+        control: decision,
+      },
+      error: input.reason ?? null,
+      metadata: {
+        ...currentMetadata,
+        durableWakeDeliveryAttemptControl: decision,
+        ...(input.supersededByRef ? { supersededByRef: input.supersededByRef } : {}),
+      },
+      now,
+    });
   };
 
   return {
@@ -2305,8 +2612,26 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       return updateDurableWakeRecord(input);
     },
 
+    acknowledgeDurableWake(input: DurableWakeControlInput): DurableWake | undefined {
+      return acknowledgeDurableWakeRecord(input);
+    },
+
+    supersedeDurableWake(input: SupersedeDurableWakeInput): DurableWake | undefined {
+      return supersedeDurableWakeRecord(input);
+    },
+
+    markDurableWakeDecisionRequired(
+      input: MarkDurableWakeDecisionRequiredInput,
+    ): DurableWake | undefined {
+      return markDurableWakeDecisionRequiredRecord(input);
+    },
+
     getDurableWake(wakeId: string): DurableWake | undefined {
       return getDurableWakeRecord(wakeId);
+    },
+
+    getDurableWakeInspection(wakeId: string): DurableWakeInspection | undefined {
+      return getDurableWakeInspectionRecord(wakeId);
     },
 
     listDurableWakes(options?: {
@@ -2455,19 +2780,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       status?: DurableSideEffectUncertaintyStatus;
       limit?: number;
     }): DurableSideEffectUncertaintyFact[] {
-      const sourceRunId = optionalText(options?.sourceRunId);
-      const rows = queryRows<DurableSideEffectUncertaintyFactRow>(
-        db,
-        durableDb
-          .selectFrom("durable_runtime_uncertainty_facts")
-          .selectAll()
-          .$if(Boolean(sourceRunId), (qb) => qb.where("source_run_id", "=", sourceRunId!))
-          .$if(Boolean(options?.status), (qb) => qb.where("status", "=", options!.status!))
-          .orderBy("updated_at", "desc")
-          .orderBy("fact_id", "desc")
-          .limit(normalizeQueryLimit(options?.limit, 500)),
-      );
-      return rows.map(rowToUncertaintyFact);
+      return storeListSideEffectUncertaintyFacts(options);
     },
 
     recordContinuationCleanup(
@@ -2648,6 +2961,12 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       return finalizeWakeDeliveryAttemptRecord(input);
     },
 
+    supersedeWakeDeliveryAttempt(
+      input: SupersedeDurableWakeDeliveryAttemptInput,
+    ): DurableWakeDeliveryAttempt | undefined {
+      return supersedeWakeDeliveryAttemptRecord(input);
+    },
+
     getWakeDeliveryAttempt(deliveryAttemptId: string): DurableWakeDeliveryAttempt | undefined {
       return getWakeDeliveryAttemptRecord(deliveryAttemptId);
     },
@@ -2659,6 +2978,21 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       limit?: number;
     }): DurableWakeDeliveryAttempt[] {
       return listWakeDeliveryAttemptRecords(options);
+    },
+
+    listPendingWakeObligations(options?: { limit?: number }): DurableWake[] {
+      return listDurableWakeRecords({ status: "pending", limit: options?.limit });
+    },
+
+    listUnresolvedUncertaintyFacts(options?: {
+      sourceRunId?: string;
+      limit?: number;
+    }): DurableSideEffectUncertaintyFact[] {
+      return storeListSideEffectUncertaintyFacts({
+        sourceRunId: options?.sourceRunId,
+        status: "open",
+        limit: options?.limit,
+      });
     },
 
     listUnresolvedObligations(options?: {
