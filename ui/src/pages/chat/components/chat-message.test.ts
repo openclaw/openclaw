@@ -992,6 +992,19 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("clamps skewed-future footer labels but dates far-future ones", () => {
+    const nowMs = Date.UTC(2026, 3, 24, 18, 30);
+    expect(formatChatRelativeTimestampLabel(nowMs + 30 * 1000, nowMs)).toBe("just now");
+    const nextYear = Date.UTC(2027, 3, 24, 18, 30);
+    expect(formatChatRelativeTimestampLabel(nextYear, nowMs)).toBe(
+      new Date(nextYear).toLocaleDateString([], {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
+    );
+  });
+
   it("omits streaming bubble class for completed stream segments", () => {
     const container = document.createElement("div");
 

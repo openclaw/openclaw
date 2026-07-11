@@ -127,6 +127,7 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
 }
 
 const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
 
 /** Footer label: relative for recent messages, compact date beyond a week. */
 export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
@@ -135,9 +136,13 @@ export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date
     return "Unknown date";
   }
   const ageMs = nowMs - date.getTime();
-  if (ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS) {
-    // Derive from ageMs so the injected clock stays the single time source;
-    // clamp keeps slightly future (clock-skewed) messages at "just now".
+  // Derive from ageMs so the injected clock stays the single time source.
+  // Slightly-future (clock-skewed) messages clamp to "just now"; anything
+  // further out falls through to the compact date instead of lying forever.
+  if (
+    ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS &&
+    ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
+  ) {
     return formatTimeAgo(Math.max(0, ageMs));
   }
   return date.toLocaleDateString([], {
