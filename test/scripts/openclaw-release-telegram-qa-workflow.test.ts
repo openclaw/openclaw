@@ -207,7 +207,7 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 describe("release Telegram QA workflow", () => {
-  it("dispatches exactly one trusted-main child from release checks", () => {
+  it("dispatches one accepted trusted-main child from release checks", () => {
     const releaseSource = readFileSync(RELEASE_CHECKS_PATH, "utf8");
     const reusableSource = readFileSync(WORKFLOW_PATH, "utf8");
     const releaseWorkflow = parse(releaseSource) as {
@@ -236,7 +236,13 @@ describe("release Telegram QA workflow", () => {
     expect(dispatch?.run).toContain("trap cancel_child_on_failure EXIT");
     expect(dispatch?.run).toContain("for _ in $(seq 1 6)");
     expect(dispatch?.run).toContain("/actions/runs/${run_id}/cancel");
-    expect(dispatch?.run).toContain('[[ "$child_head_sha" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]');
+    expect(dispatch?.run).toContain("for dispatch_attempt in 1 2 3 4 5");
+    expect(dispatch?.run).toContain('gh api "repos/${GITHUB_REPOSITORY}/commits/main"');
+    expect(dispatch?.run).toContain(
+      'if [[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]; then',
+    );
+    expect(dispatch?.run).toContain("Trusted main moved from");
+    expect(dispatch?.run).toContain("Trusted main kept moving");
     expect(dispatch?.run).toContain("for _ in $(seq 1 1080)");
     expect(dispatch?.run).toContain("Trusted Telegram QA concluded ${conclusion}");
     expect(
@@ -266,14 +272,10 @@ describe("release Telegram QA workflow", () => {
     );
     expect(reusableSource).toContain('--signer-digest "$CALLED_WORKFLOW_SHA"');
     const resolveJob = releaseWorkflow.jobs?.resolve_target;
-    expect(resolveJob?.outputs?.trusted_workflow_sha).toBe(
-      "${{ steps.trusted_workflow.outputs.sha }}",
-    );
-    const resolveTrustedWorkflow = resolveJob?.steps?.find(
-      (step) => step.name === "Resolve trusted main Telegram workflow SHA",
-    );
-    expect(resolveTrustedWorkflow?.run).toContain("--ref refs/heads/main");
-    expect(resolveTrustedWorkflow?.run).not.toContain("--fallback-ok");
+    expect(resolveJob?.outputs?.trusted_workflow_sha).toBeUndefined();
+    expect(
+      resolveJob?.steps?.find((step) => step.name === "Resolve trusted main Telegram workflow SHA"),
+    ).toBeUndefined();
     const dispatchedWorkflow = parse(reusableSource) as {
       on?: {
         workflow_call?: {
