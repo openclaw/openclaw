@@ -5565,6 +5565,37 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(updates.join("\n")).not.toContain("CheckingReading");
   });
 
+  it("repositions split reasoning before deleting the prior preview", async () => {
+    const answerDraftStream = createDraftStream(2001);
+    const reasoningDraftStream = createSequencedDraftStream(3001);
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    let replacementMessageId: number | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReasoningStream?.({ text: "<think>First thought</think>" });
+      await replyOptions?.onReasoningEnd?.();
+      await replyOptions?.onReasoningStream?.({ text: "<think>Second thought</think>" });
+      replacementMessageId = reasoningDraftStream.messageId();
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenNthCalledWith(1, "🧠 _First thought_");
+    expect(reasoningDraftStream.update).toHaveBeenNthCalledWith(2, "🧠 _Second thought_");
+    expect(reasoningDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
+    expect(reasoningDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(reasoningDraftStream.clear).toHaveBeenCalledTimes(1);
+    expect(
+      reasoningDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
+    ).toBeLessThan(reasoningDraftStream.update.mock.invocationCallOrder[1]);
+    expect(reasoningDraftStream.update.mock.invocationCallOrder[1]).toBeLessThan(
+      reasoningDraftStream.clear.mock.invocationCallOrder[0],
+    );
+    expect(replacementMessageId).toBe(3002);
+  });
+
   it("streams reasoning from configured defaults", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,

@@ -155,7 +155,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 182,
+      "line": 184,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Searching…",
       "surface": "android",
@@ -163,7 +163,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 285,
+      "line": 287,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Mic off",
       "surface": "android",
@@ -171,7 +171,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 299,
+      "line": 301,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Off",
       "surface": "android",
@@ -211,7 +211,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 648,
+      "line": 649,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -219,7 +219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1511,
+      "line": 1512,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job started.",
       "surface": "android",
@@ -227,7 +227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1511,
+      "line": 1512,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron run queued.",
       "surface": "android",
@@ -235,7 +235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1555,
+      "line": 1556,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job disabled.",
       "surface": "android",
@@ -243,7 +243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1555,
+      "line": 1556,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job enabled.",
       "surface": "android",
@@ -251,7 +251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3147,
+      "line": 3149,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "surface": "android",
@@ -259,7 +259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3149,
+      "line": 3151,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -267,7 +267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3151,
+      "line": 3153,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -5875,7 +5875,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 323,
+      "line": 333,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Chat needs attention",
       "surface": "android",
@@ -5883,7 +5883,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 506,
+      "line": 517,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "All",
       "surface": "android",
@@ -5891,7 +5891,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 564,
+      "line": 575,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -5899,7 +5899,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 585,
+      "line": 596,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "New chat",
       "surface": "android",
@@ -5907,7 +5907,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 590,
+      "line": 601,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "More new chat options",
       "surface": "android",
@@ -5915,7 +5915,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 605,
+      "line": 616,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Refresh chat",
       "surface": "android",
@@ -5923,7 +5923,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 608,
+      "line": 619,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Chat",
       "surface": "android",
@@ -5931,7 +5931,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 756,
+      "line": 767,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Loading session",
       "surface": "android",
@@ -5939,7 +5939,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 783,
+      "line": 794,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Jump to latest",
       "surface": "android",
@@ -5947,7 +5947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 809,
+      "line": 820,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Ready when you are",
       "surface": "android",
@@ -5955,7 +5955,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 840,
+      "line": 851,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Fix connection",
       "surface": "android",
@@ -5963,7 +5963,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 841,
+      "line": 852,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Copy diagnostics",
       "surface": "android",
@@ -5971,7 +5971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1025,
+      "line": 1036,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Preparing audio…",
       "surface": "android",
@@ -5979,7 +5979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1025,
+      "line": 1036,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Speaking…",
       "surface": "android",
@@ -5987,7 +5987,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1046,
+      "line": 1057,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Tools running",
       "surface": "android",
@@ -5995,7 +5995,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1048,
+      "line": 1059,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "OpenClaw is working",
       "surface": "android",
@@ -6003,7 +6003,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1051,
+      "line": 1062,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "+${toolCalls.size - 4} more",
       "surface": "android",
@@ -6011,7 +6011,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1061,
+      "line": 1072,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Thinking",
       "surface": "android",
@@ -6019,7 +6019,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1062,
+      "line": 1073,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "OpenClaw is preparing a response.",
       "surface": "android",
@@ -6027,7 +6027,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1226,
+      "line": 1255,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Stop",
       "surface": "android",
@@ -6035,7 +6035,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1292,
+      "line": 1352,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Default",
       "surface": "android",
@@ -6043,7 +6043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1358,
+      "line": 1418,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Pin model",
       "surface": "android",
@@ -6051,7 +6051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1358,
+      "line": 1418,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Unpin model",
       "surface": "android",
@@ -6059,7 +6059,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1375,
+      "line": 1435,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "No commands found",
       "surface": "android",
@@ -6067,15 +6067,31 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1437,
+      "line": 1497,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Gateway offline",
       "surface": "android",
       "id": "native.android.8e3e367df24cae4b"
     },
     {
+      "kind": "conditional-branch",
+      "line": 1543,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
+      "source": "Close thinking level selector",
+      "surface": "android",
+      "id": "native.android.36ed01582459bc10"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 1543,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
+      "source": "Open thinking level selector",
+      "surface": "android",
+      "id": "native.android.82d6389036a1e211"
+    },
+    {
       "kind": "ui-named-argument",
-      "line": 1537,
+      "line": 1603,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Attach image",
       "surface": "android",
@@ -6083,7 +6099,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1572,
+      "line": 1638,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Message OpenClaw",
       "surface": "android",
@@ -6091,7 +6107,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1588,
+      "line": 1654,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Open voice",
       "surface": "android",
@@ -6099,7 +6115,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1637,
+      "line": 1703,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Remove attachment",
       "surface": "android",
@@ -6107,7 +6123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1658,
+      "line": 1724,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Main",
       "surface": "android",
@@ -6115,7 +6131,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1666,
+      "line": 1732,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "$emoji $name",
       "surface": "android",
@@ -6123,7 +6139,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1725,
+      "line": 1791,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Send",
       "surface": "android",
@@ -6131,7 +6147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1765,
+      "line": 1822,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}",
       "surface": "android",

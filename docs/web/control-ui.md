@@ -202,6 +202,7 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). T
     - View/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`).
     - Profile: a settings page showing the default agent's identity with all-time usage stats — lifetime tokens, peak day, longest session, activity streaks, a year-long token heatmap, top tools, and channel highlights (`usage.cost`, `sessions.usage`).
     - MCP has a dedicated settings page for configured servers, enablement, OAuth/filter/parallel summaries, common operator commands, and the scoped `mcp` config editor.
+    - Model Providers: a settings page listing every configured model provider with its brand icon, auth state (`models.authStatus`), model availability (`models.list`), live plan/quota/billing data where the provider reports it (`usage.status`), and local session spend for the last 30 days (`sessions.usage`). A Refresh action re-reads credential state and provider usage.
     - Apply and restart with validation (`config.apply`), then wake the last active session.
     - Writes include a base-hash guard to prevent clobbering concurrent edits.
     - Writes (`config.set`/`config.apply`/`config.patch`) preflight active SecretRef resolution for refs in the submitted config payload; unresolved active submitted refs are rejected before write.
