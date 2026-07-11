@@ -3,6 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_RUN_ABORTED_ERROR } from "../../agents/run-termination.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { testing, setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 
@@ -426,6 +427,75 @@ describe("agent job gateway dedupe observations", () => {
       endedAt: 4,
       error: "still running",
     });
+  });
+
+  it("uses the newer source when an older cross-source terminal is sticky", () => {
+    const runId = "run-sticky-collision";
+    const newerChat = new Map();
+
+    setRpcQueueTimeoutEntry({
+      dedupe: newerChat,
+      kind: "agent",
+      runId,
+      ts: 100,
+    });
+    setChatEntry({
+      dedupe: newerChat,
+      runId,
+      ts: 200,
+      payload: okPayload(runId, { startedAt: 150, endedAt: 200 }),
+    });
+
+    expectTerminalSnapshot(runId, okSnapshot({ startedAt: 150, endedAt: 200 }));
+
+    const newerAgentRunId = `${runId}-reverse`;
+    const newerAgent = new Map();
+    setAgentEntry({
+      dedupe: newerAgent,
+      runId: newerAgentRunId,
+      ts: 200,
+      payload: okPayload(newerAgentRunId, { startedAt: 150, endedAt: 200 }),
+    });
+    setChatEntry({
+      dedupe: newerAgent,
+      runId: newerAgentRunId,
+      ts: 100,
+      payload: {
+        runId: newerAgentRunId,
+        status: "timeout",
+        startedAt: 50,
+        endedAt: 100,
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    });
+
+    expectTerminalSnapshot(newerAgentRunId, okSnapshot({ startedAt: 150, endedAt: 200 }));
+  });
+
+  it("lets a fresh wait observe lifecycle completion after a dedupe snapshot", async () => {
+    const dedupe = new Map();
+    const runId = "run-lifecycle-after-dedupe";
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 100 },
+    });
+    setAgentEntry({
+      dedupe,
+      runId,
+      ts: 150,
+      payload: okPayload(runId, { startedAt: 100, endedAt: 150 }),
+    });
+
+    const wait = waitForTerminalSnapshot(runId, { ignoreCachedSnapshot: true });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 100, endedAt: 200 },
+    });
+
+    await expect(wait).resolves.toEqual(okSnapshot({ startedAt: 100, endedAt: 200 }));
   });
 
   it("preserves an RPC cancel snapshot when late completion writes the same key", () => {

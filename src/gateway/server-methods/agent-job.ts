@@ -34,6 +34,7 @@ type AgentJobSource = "agent" | "chat" | "lifecycle";
 type AgentRunObservation = AgentJobTerminalSnapshot & {
   runId: string;
   source: AgentJobSource;
+  recordedAt: number;
   version: number;
 };
 type AgentRunSnapshot = AgentRunObservation & { cachedAt: number };
@@ -42,7 +43,7 @@ type PendingAgentRunTerminal = {
   timer: NodeJS.Timeout;
 };
 type AgentJobRecord = {
-  snapshot: AgentRunSnapshot;
+  cachedAt: number;
   snapshotsBySource: Map<AgentJobSource, AgentRunSnapshot>;
 };
 type AgentJobWaiter = () => void;
@@ -66,7 +67,7 @@ function nextAgentRunVersion(): number {
 
 function pruneAgentRunCache(now = Date.now()) {
   for (const [runId, job] of agentJobs) {
-    if (now - job.snapshot.cachedAt <= AGENT_RUN_CACHE_TTL_MS) {
+    if (now - job.cachedAt <= AGENT_RUN_CACHE_TTL_MS) {
       continue;
     }
     agentJobs.delete(runId);
@@ -141,7 +142,7 @@ function recordAgentRunSnapshot(
   const sourceSnapshot = mergeSnapshot(snapshotsBySource.get(entry.source), entry);
   snapshotsBySource.set(entry.source, sourceSnapshot);
   agentJobs.set(entry.runId, {
-    snapshot: mergeSnapshot(existing?.snapshot, sourceSnapshot),
+    cachedAt: entry.cachedAt,
     snapshotsBySource,
   });
   enforceAgentRunCacheMaxEntries();
@@ -258,6 +259,7 @@ function createSnapshotFromLifecycleEvent(params: {
   return {
     runId,
     source: "lifecycle",
+    recordedAt: Date.now(),
     status: terminalOutcome.status,
     startedAt,
     endedAt,
@@ -440,8 +442,33 @@ export function setGatewayDedupeEntry(params: {
       ...incomingObservation.snapshot,
       runId: key.runId,
       source: key.source,
+      recordedAt: params.entry.ts,
     });
   }
+}
+
+function getFreshestDedupeSnapshot(
+  snapshotsBySource: Map<AgentJobSource, AgentRunSnapshot>,
+): AgentRunSnapshot | undefined {
+  const agent = snapshotsBySource.get("agent");
+  const chat = snapshotsBySource.get("chat");
+  if (agent && chat) {
+    return chat.recordedAt > agent.recordedAt ? chat : agent;
+  }
+  return agent ?? chat;
+}
+
+function getCanonicalAgentRunSnapshot(
+  snapshotsBySource: Map<AgentJobSource, AgentRunSnapshot>,
+): AgentRunSnapshot | undefined {
+  const dedupe = getFreshestDedupeSnapshot(snapshotsBySource);
+  const lifecycle = snapshotsBySource.get("lifecycle");
+  if (!dedupe || !lifecycle) {
+    return dedupe ?? lifecycle;
+  }
+  return dedupe.version > lifecycle.version
+    ? mergeSnapshot(lifecycle, dedupe)
+    : mergeSnapshot(dedupe, lifecycle);
 }
 
 function getAgentRunSnapshot(params: {
@@ -451,7 +478,11 @@ function getAgentRunSnapshot(params: {
 }): AgentRunSnapshot | undefined {
   pruneAgentRunCache();
   const job = agentJobs.get(params.runId);
-  const snapshot = params.source ? job?.snapshotsBySource.get(params.source) : job?.snapshot;
+  const snapshot = params.source
+    ? job?.snapshotsBySource.get(params.source)
+    : job
+      ? getCanonicalAgentRunSnapshot(job.snapshotsBySource)
+      : undefined;
   return snapshot && snapshot.version > params.afterVersion ? snapshot : undefined;
 }
 
