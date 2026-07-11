@@ -7,6 +7,7 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
@@ -59,6 +60,8 @@ async function waitForProbeFailure(url: string): Promise<void> {
 }
 
 describe("provider local service", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   afterEach(() => {
     stopManagedProviderLocalServicesForTest();
   });
@@ -481,7 +484,7 @@ describe("provider local service", () => {
 
   it("does not keep one-shot hosts alive through diagnostic pipes", async () => {
     const port = await freePort();
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-unref-"));
+    const tempDir = tempDirs.make("openclaw-local-service-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
     const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
     const script = [
@@ -538,7 +541,6 @@ describe("provider local service", () => {
         servicePid = await readPidFile(servicePidPath).catch(() => undefined);
       }
       killPidIfAlive(servicePid);
-      await fs.rm(tempDir, { force: true, recursive: true });
     }
   });
 
