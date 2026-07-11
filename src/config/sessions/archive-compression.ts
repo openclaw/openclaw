@@ -1,8 +1,11 @@
 // Zstd compression for archived transcript artifacts (Codex-style cold tier).
 // Archives are kept long-term by default, so compressing them is what keeps
 // "never delete conversations" cheap: JSONL transcripts compress ~10:1.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import zlib from "node:zlib";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 
 export const SESSION_ARCHIVE_ZSTD_SUFFIX = ".zst";
 
@@ -65,4 +68,29 @@ export function readSessionArchiveContentSync(filePath: string): string {
     );
   }
   return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
+}
+
+/**
+ * Materializes a compressed archive as a plain JSONL cache file and returns
+ * the readable path; plain archives pass through untouched. Archives are
+ * write-once (timestamped names), so a cache hit never needs revalidation —
+ * this lets every downstream transcript reader (index, tail chunks, header
+ * probes) work on archives without learning about compression.
+ */
+export function materializeSessionArchiveForRead(filePath: string): string {
+  if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+    return filePath;
+  }
+  const cacheDir = path.join(resolvePreferredOpenClawTmpDir(), "session-archive-read-cache");
+  const cacheName = `${createHash("sha256").update(filePath).digest("hex").slice(0, 32)}.jsonl`;
+  const cachePath = path.join(cacheDir, cacheName);
+  if (fs.existsSync(cachePath)) {
+    return cachePath;
+  }
+  const content = readSessionArchiveContentSync(filePath);
+  fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+  const tempPath = `${cachePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, content, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(tempPath, cachePath);
+  return cachePath;
 }
