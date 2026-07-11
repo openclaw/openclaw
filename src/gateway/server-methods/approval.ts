@@ -509,6 +509,8 @@ export function createApprovalHandlers(
         (requestedDecision !== null &&
           record.presentation.allowedDecisions.includes(requestedDecision));
       const kindMatches = resolveParams?.kind === record.presentation.kind;
+      // Ambiguous verdicts consume the first-answer slot as a denial. Leaving
+      // the approval retryable would let a later surface release authority.
       const forceMalformedDeny = !validParams || !kindMatches || !decisionAllowed;
       let resolution:
         | ApplyApprovalDecisionResult<ExecApprovalRequestPayload>
