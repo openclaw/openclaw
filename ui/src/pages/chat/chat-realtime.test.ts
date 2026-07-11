@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 
 const { realtimeTalkSessionCtor, sessionStart, sessionStop } = vi.hoisted(() => ({
   realtimeTalkSessionCtor: vi.fn(function () {
@@ -53,7 +54,14 @@ const vadThresholdCases: Array<[string, string, number | undefined]> = [
 
 describe("chat realtime actions", () => {
   beforeEach(() => {
-    localStorage.clear();
+    // Node 24+ exposes a `localStorage` accessor on `globalThis` for the
+    // experimental Web Storage flag. Because Vitest's jsdom setup only copies
+    // window props that are not already defined on the global, jsdom's real
+    // `localStorage` is skipped when Node's accessor is present, and calls
+    // like `localStorage.clear()` throw. Install a deterministic mock so the
+    // suite behaves the same on every Node/jsdom combination.
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
     realtimeTalkSessionCtor.mockClear();
     sessionStart.mockReset();
     sessionStart.mockResolvedValue(undefined);
