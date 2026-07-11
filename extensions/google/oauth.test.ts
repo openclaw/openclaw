@@ -841,6 +841,33 @@ describe("loginGeminiCliOAuth", () => {
     expect(result.projectId).toBe(projectId);
   }
 
+  it("propagates cancellation through Gemini identity and project discovery", async () => {
+    const controller = new AbortController();
+    const signals: Array<AbortSignal | null | undefined> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        signals.push(init?.signal);
+        if (url === USERINFO_URL) {
+          return new Response(JSON.stringify({ email: "test@example.com" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        controller.abort(new Error("setup cancelled"));
+        throw controller.signal.reason;
+      }),
+    );
+
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    await expect(resolveGoogleOAuthIdentity("access-token", controller.signal)).rejects.toThrow(
+      "setup cancelled",
+    );
+    expect(signals).toEqual([controller.signal, controller.signal]);
+  });
+
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
   let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
 

@@ -1,5 +1,5 @@
 // Wizard session tests cover session creation and state transitions.
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WizardSession } from "./session.js";
 
 function noteRunner() {
@@ -150,6 +150,27 @@ describe("WizardSession", () => {
 
     finish();
     expect((await session.next()).status).toBe("done");
+  });
+
+  test("expires an abandoned interactive session", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new WizardSession(
+        async (prompter) => {
+          await prompter.text({ message: "Name" });
+        },
+        { timeoutMs: 1_000 },
+      );
+
+      expect((await session.next()).step?.type).toBe("text");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const done = await session.next();
+      expect(done.status).toBe("cancelled");
+      expect(session.signal.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("a runner finishing after cancellation cannot overwrite cancelled state", async () => {

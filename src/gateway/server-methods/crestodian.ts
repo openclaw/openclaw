@@ -12,6 +12,8 @@ import { buildOnboardingWelcome } from "../../crestodian/onboarding-welcome.js";
 import { formatCrestodianStartupMessage } from "../../crestodian/overview.js";
 import { defaultRuntime } from "../../runtime.js";
 import { WizardSession } from "../../wizard/session.js";
+
+const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -103,30 +105,33 @@ export const crestodianHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionId = params.sessionId;
-    const session = new WizardSession(async (prompter, signal) => {
-      const result = await runExclusiveCrestodianSetupActivation(async () => {
-        const { activateSetupInference } = await import("../../crestodian/setup-inference.js");
-        return await activateSetupInference({
-          kind: "provider-auth",
-          authChoice: params.authChoice,
-          ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
-          surface: "gateway",
-          runtime: {
-            ...defaultRuntime,
-            exit: (code: number | undefined): never => {
-              throw new Error(`setup step exited with code ${String(code)}`);
+    const session = new WizardSession(
+      async (prompter, signal) => {
+        const result = await runExclusiveCrestodianSetupActivation(async () => {
+          const { activateSetupInference } = await import("../../crestodian/setup-inference.js");
+          return await activateSetupInference({
+            kind: "provider-auth",
+            authChoice: params.authChoice,
+            ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
+            surface: "gateway",
+            runtime: {
+              ...defaultRuntime,
+              exit: (code: number | undefined): never => {
+                throw new Error(`setup step exited with code ${String(code)}`);
+              },
             },
-          },
-          prompter,
-          signal,
-          isCancelled: () => signal.aborted,
-          onCommitStarted: () => session.lockCancellation(),
+            prompter,
+            signal,
+            isCancelled: () => signal.aborted,
+            onCommitStarted: () => session.lockCancellation(),
+          });
         });
-      });
-      if (!result.ok) {
-        throw new Error(result.error);
-      }
-    });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+      },
+      { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
+    );
     context.wizardSessions.set(sessionId, session);
     // Return ownership immediately. The client polls wizard.next for the first step,
     // so it can cancel even while a provider is opening a browser or waiting on OAuth.

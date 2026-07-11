@@ -172,6 +172,7 @@ class WizardSessionPrompter implements WizardPrompter {
 
 export class WizardSession {
   private readonly abortController = new AbortController();
+  private readonly expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private currentStep: WizardStep | null = null;
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
@@ -187,8 +188,15 @@ export class WizardSession {
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
 
-  constructor(private runner: (prompter: WizardPrompter, signal: AbortSignal) => Promise<void>) {
+  constructor(
+    private runner: (prompter: WizardPrompter, signal: AbortSignal) => Promise<void>,
+    options?: { timeoutMs?: number },
+  ) {
     const prompter = new WizardSessionPrompter(this);
+    if (options?.timeoutMs !== undefined) {
+      this.expiryTimer = setTimeout(() => this.cancel(), options.timeoutMs);
+      this.expiryTimer.unref?.();
+    }
     void this.run(prompter);
   }
 
@@ -282,6 +290,9 @@ export class WizardSession {
         this.error = String(err);
       }
     } finally {
+      if (this.expiryTimer) {
+        clearTimeout(this.expiryTimer);
+      }
       this.resolveStep(null);
     }
   }

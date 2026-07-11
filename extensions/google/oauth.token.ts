@@ -74,6 +74,7 @@ async function buildGeminiCliCredentials(params: {
   refreshTokenFallback?: string;
   existing?: Pick<GeminiCliOAuthCredentials, "email" | "projectId">;
   allowIdentityFallback?: boolean;
+  signal?: AbortSignal;
 }): Promise<GeminiCliOAuthCredentials> {
   const accessToken = params.tokenResponse.access_token;
   if (!accessToken) {
@@ -83,7 +84,7 @@ async function buildGeminiCliCredentials(params: {
   let identity: { email?: string; projectId?: string } = params.existing ?? {};
   try {
     if (!identity.email || !identity.projectId) {
-      const discovered = await resolveGeminiCliIdentity(accessToken);
+      const discovered = await resolveGeminiCliIdentity(accessToken, params.signal);
       identity = {
         email: identity.email ?? discovered.email,
         projectId: identity.projectId ?? discovered.projectId,
@@ -110,10 +111,11 @@ async function buildGeminiCliCredentials(params: {
 
 async function resolveGeminiCliIdentity(
   accessToken: string,
+  signal?: AbortSignal,
 ): Promise<{ email?: string; projectId?: string }> {
   return isGeminiCliPersonalOAuth()
-    ? await resolveGooglePersonalOAuthIdentity(accessToken)
-    : await resolveGoogleOAuthIdentity(accessToken);
+    ? await resolveGooglePersonalOAuthIdentity(accessToken, signal)
+    : await resolveGoogleOAuthIdentity(accessToken, signal);
 }
 
 export async function exchangeCodeForTokens(
@@ -135,6 +137,7 @@ export async function exchangeCodeForTokens(
 
   const refreshed = await buildGeminiCliCredentials({
     tokenResponse: await requestTokenGrant(body, signal),
+    signal,
   });
   if (!refreshed.refresh) {
     throw new Error("No refresh token received. Please try again.");
