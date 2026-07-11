@@ -33,6 +33,17 @@ function postedMessage(client: ReturnType<typeof createSlackSendTestClient>, cal
   return mockObjectArg(client.chat.postMessage, "chat.postMessage", callIndex);
 }
 
+function postedText(message: Record<string, unknown>): string {
+  const text = message.text;
+  if (text == null) {
+    return "";
+  }
+  if (typeof text !== "string") {
+    throw new Error("Expected chat.postMessage text to be a string");
+  }
+  return text;
+}
+
 function slackDnsRequestError(): Error {
   return Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"), {
     code: "slack_webapi_request_error",
@@ -525,9 +536,9 @@ describe("sendMessageSlack blocks", () => {
     expect(posts.length).toBeGreaterThan(1);
     expect(posts.every((post) => post.blocks === undefined)).toBe(true);
     expect(
-      posts.every((post) => Array.from(String(post.text ?? "")).length <= SLACK_TEXT_LIMIT),
+      posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT),
     ).toBe(true);
-    expect(posts.map((post) => String(post.text ?? "")).join("\n")).toContain("Series-11");
+    expect(posts.map(postedText).join("\n")).toContain("Series-11");
   });
 
   it("chunks overlong chart fallback sent separately from authored text", async () => {
@@ -568,12 +579,9 @@ describe("sendMessageSlack blocks", () => {
     });
     expect(posts.slice(1).every((post) => post.blocks === undefined)).toBe(true);
     expect(
-      posts.every((post) => Array.from(String(post.text ?? "")).length <= SLACK_TEXT_LIMIT),
+      posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT),
     ).toBe(true);
-    const fallbackText = posts
-      .slice(1)
-      .map((post) => String(post.text ?? ""))
-      .join("\n");
+    const fallbackText = posts.slice(1).map(postedText).join("\n");
     expect(fallbackText).toContain("*Summary*");
     expect(fallbackText.match(/Series-11/g)).toHaveLength(1);
   });
@@ -729,7 +737,7 @@ describe("sendMessageSlack blocks", () => {
     expect(posts[1]).toMatchObject({ text: "- Refresh", blocks: [blocks[3]] });
     expect(posts.slice(2).every((post) => post.blocks === undefined)).toBe(true);
     expect(
-      posts.every((post) => Array.from(String(post.text ?? "")).length <= SLACK_TEXT_LIMIT),
+      posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT),
     ).toBe(true);
     expect(posts[0]?.reply_broadcast).toBeUndefined();
     expect(posts[2]?.reply_broadcast).toBe(true);
@@ -843,7 +851,7 @@ describe("sendMessageSlack blocks", () => {
     expect(posts[1]?.blocks).toBeUndefined();
     expect(posts.slice(2).every((post) => post.blocks === undefined)).toBe(true);
     expect(
-      posts.every((post) => Array.from(String(post.text ?? "")).length <= SLACK_TEXT_LIMIT),
+      posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT),
     ).toBe(true);
     const fallbackText = posts
       .slice(2)
@@ -941,7 +949,7 @@ describe("sendMessageSlack blocks", () => {
     expect(posts[0]).toMatchObject({ text: "Revenue (pie chart)", blocks: [blocks[1]] });
     expect(posts.slice(1).every((post) => post.blocks === undefined)).toBe(true);
     expect(
-      posts.every((post) => Array.from(String(post.text ?? "")).length <= SLACK_TEXT_LIMIT),
+      posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT),
     ).toBe(true);
     const fallbackText = posts
       .slice(1)
@@ -984,7 +992,7 @@ describe("sendMessageSlack blocks", () => {
       postedMessage(client, index),
     );
     expect(posts.every((post) => post.blocks === undefined)).toBe(true);
-    expect(posts.every((post) => String(post.text ?? "").length <= 20)).toBe(true);
+    expect(posts.every((post) => postedText(post).length <= 20)).toBe(true);
     expect(
       posts
         .map((post) => post.text)
@@ -1024,7 +1032,7 @@ describe("sendMessageSlack blocks", () => {
     expect(posts[0]).toMatchObject({ text: "Pipeline (table)", blocks });
     expect(posts[1]).toMatchObject({ text: "Pipeline (table)" });
     expect(posts[1]?.blocks).toBeUndefined();
-    expect(posts.every((post) => String(post.text ?? "").length <= 40)).toBe(true);
+    expect(posts.every((post) => postedText(post).length <= 40)).toBe(true);
     expect(
       posts
         .slice(1)
@@ -1056,10 +1064,7 @@ describe("sendMessageSlack blocks", () => {
     expect(posts[0]?.blocks).toEqual(blocks);
     expect(posts[0]?.text).toBe("Visible summary");
     expect(posts.slice(1).every((post) => post.blocks === undefined)).toBe(true);
-    const chunkedText = posts
-      .slice(1)
-      .map((post) => String(post.text ?? ""))
-      .join("\n");
+    const chunkedText = posts.slice(1).map(postedText).join("\n");
     expect(chunkedText).toContain("start-");
     expect(chunkedText).toContain("-tail");
     expect(chunkedText).not.toContain("Visible summary");
@@ -1162,8 +1167,8 @@ describe("sendMessageSlack blocks", () => {
     );
     expect(posts.length).toBeGreaterThan(1);
     expect(posts.every((post) => post.blocks === undefined)).toBe(true);
-    expect(posts.map((post) => post.text ?? "").join("\n")).toContain("2xxx");
-    expect(posts.map((post) => post.text ?? "").join("\n")).toContain("-tail");
+    expect(posts.map(postedText).join("\n")).toContain("2xxx");
+    expect(posts.map(postedText).join("\n")).toContain("-tail");
   });
 
   it("replaces rejected native charts while preserving sibling blocks", async () => {

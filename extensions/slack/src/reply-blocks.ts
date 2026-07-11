@@ -207,7 +207,10 @@ export function resolveSlackReplyRenderPlan(
     !authoredTextRepresentedInBlocks
       ? buildSlackAuthoredTextBlocks(text)
       : [];
-  let presentationBlocks = buildSlackPresentationBlocks(presentationForBlocks, presentationOffsets);
+  const presentationBlocks = buildSlackPresentationBlocks(
+    presentationForBlocks,
+    presentationOffsets,
+  );
   let interactiveBlocks = buildSlackInteractiveBlocks(
     payload.interactive,
     resolveSlackBlockOffsets([...channelBlocks, ...authoredTextBlocks, ...presentationBlocks]),
@@ -222,7 +225,6 @@ export function resolveSlackReplyRenderPlan(
     // Portable presentation can degrade completely to text. Raw channel blocks
     // and separately-authored interactive controls remain fail-closed.
     authoredTextBlocks = [];
-    presentationBlocks = [];
     interactiveBlocks = buildSlackInteractiveBlocks(
       payload.interactive,
       resolveSlackBlockOffsets(channelBlocks),
@@ -276,10 +278,9 @@ export function resolveSlackReplyRenderPlan(
     };
   }
 
-  const textIsSlackMrkdwn = Boolean(
+  const textIsSlackMrkdwn =
     presentation?.blocks.some((block) => block.type === "chart" || block.type === "table") ||
-    hasSlackNativeDataBlock(blocks),
-  );
+    hasSlackNativeDataBlock(blocks);
   const singleText = textIsSlackMrkdwn
     ? appendSlackBlocksAccessibleFallbackText(
         renderSlackVisiblePresentationFallback({ presentation, text }),

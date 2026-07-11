@@ -5,20 +5,6 @@ import { createSlackEditTestClient } from "./blocks.test-helpers.js";
 const { editSlackMessage } = await import("./actions.js");
 const SLACK_TEXT_LIMIT = 8000;
 
-function readFirstChatUpdatePayload(client: ReturnType<typeof createSlackEditTestClient>): {
-  text?: string;
-} {
-  const [call] = client.chat.update.mock.calls;
-  if (!call) {
-    throw new Error("expected Slack chat.update call");
-  }
-  const [payload] = call;
-  if (!payload || typeof payload !== "object") {
-    throw new Error("expected Slack chat.update payload");
-  }
-  return payload as { text?: string };
-}
-
 describe("editSlackMessage blocks", () => {
   it("preserves long plain-text edits", async () => {
     const client = createSlackEditTestClient();

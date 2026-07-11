@@ -85,9 +85,10 @@ describe("Feishu outbound shared delivery", () => {
       ],
     });
 
-    const textChunks = sendMessageFeishuMock.mock.calls.map((call) =>
-      String((call[0] as { text?: unknown } | undefined)?.text ?? ""),
-    );
+    const textChunks = sendMessageFeishuMock.mock.calls.map((call) => {
+      const text = (call[0] as { text?: unknown } | undefined)?.text;
+      return typeof text === "string" ? text : "";
+    });
     const deliveredText = textChunks.join("\n");
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();

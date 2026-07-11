@@ -431,10 +431,7 @@ async function sendFeishuFallbackPayload(params: {
 
   // Card fallbacks can exceed media-caption limits. Deliver attachments first,
   // then preserve the complete fallback through the normal 4k text fanout.
-  let lastResult:
-    | Awaited<ReturnType<typeof sendMedia>>
-    | Awaited<ReturnType<typeof sendText>>
-    | undefined;
+  let lastResult: Awaited<ReturnType<typeof sendText>> | undefined;
   for (const mediaUrl of mediaUrls) {
     lastResult = await sendMedia({
       ...ctx,

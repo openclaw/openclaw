@@ -325,10 +325,10 @@ function createCombinedSlackSendReceipt(
     results: partReceipts.map((partReceipt) => ({ channel: "slack", receipt: partReceipt })),
     threadId: threadTs,
   });
-  return {
-    ...receipt,
-    parts: receipt.parts.map((part, index) => ({ ...part, index })),
-  };
+  receipt.parts.forEach((part, index) => {
+    part.index = index;
+  });
+  return receipt;
 }
 
 function resolveToken(params: {
