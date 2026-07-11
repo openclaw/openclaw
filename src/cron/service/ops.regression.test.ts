@@ -679,4 +679,70 @@ describe("cron service ops regressions", () => {
 
     clearCommandLane(CommandLane.Cron);
   });
+  it("#104518: deletes a successful on-exit deleteAfterRun job instead of retaining it disabled", async () => {
+    const runScenario = async (params: {
+      id: string;
+      deleteAfterRun: boolean;
+      runStatus: "ok" | "error";
+    }) => {
+      const store = opsRegressionFixtures.makeStorePath();
+      const nowMs = Date.now();
+      const job = createIsolatedRegressionJob({
+        id: params.id,
+        name: params.id,
+        scheduledAt: nowMs,
+        schedule: { kind: "on-exit", command: 'sh -c "exit 0"' },
+        payload: { kind: "agentTurn", message: "post-exit payload" },
+        state: {},
+      });
+      job.deleteAfterRun = params.deleteAfterRun;
+      // The gateway exit watcher durably disables the job BEFORE firing
+      // (replay protection); the fire itself is a force run on the disabled
+      // job, mirrored here.
+      job.enabled = false;
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      const state = createCronServiceState({
+        cronEnabled: false,
+        storePath: store.storePath,
+        log: noopLogger,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob:
+          params.runStatus === "ok"
+            ? vi.fn().mockResolvedValue({ status: "ok", summary: "ok" })
+            : vi.fn().mockResolvedValue({ status: "error", error: "boom" }),
+      });
+      const result = await run(state, params.id, "force");
+      expect(result).toEqual({ ok: true, ran: true });
+      return state.store?.jobs.find((entry) => entry.id === params.id);
+    };
+
+    // Successful deleteAfterRun on-exit job: deleted, like one-shot "at" jobs.
+    const deleted = await runScenario({
+      id: "onexit-delete-ok",
+      deleteAfterRun: true,
+      runStatus: "ok",
+    });
+    expect(deleted).toBeUndefined();
+
+    // Without deleteAfterRun the job stays, durably disabled by the pre-fire
+    // transition (persistence-order contract unchanged).
+    const retained = await runScenario({
+      id: "onexit-keep-ok",
+      deleteAfterRun: false,
+      runStatus: "ok",
+    });
+    expect(retained?.enabled).toBe(false);
+    expect(retained?.state.lastStatus).toBe("ok");
+
+    // Failed runs are retained for inspection even with deleteAfterRun.
+    const failed = await runScenario({
+      id: "onexit-delete-error",
+      deleteAfterRun: true,
+      runStatus: "error",
+    });
+    expect(failed?.enabled).toBe(false);
+    expect(failed?.state.lastStatus).toBe("error");
+  });
 });
