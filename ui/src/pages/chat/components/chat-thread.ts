@@ -709,10 +709,13 @@ export function renderChatThread(props: ChatThreadProps) {
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
   // 1:1 sessions (no labeled foreign sender anywhere in the thread) drop the
   // avatar gutter entirely; group threads keep avatars as the always-visible
-  // identity marker. senderLabel is only populated for non-default senders.
-  const isDirectThread = !chatItems.some(
-    (item) => item.kind === "group" && Boolean(item.senderLabel?.trim()),
-  );
+  // identity marker. Scan the full raw history, not chatItems: the rendered
+  // window (last ~30, search-filtered) could misclassify a group thread whose
+  // labeled senders scrolled out of view and flip the layout mid-scroll.
+  const isDirectThread = !props.messages.some((message) => {
+    const label = (message as { senderLabel?: unknown } | null)?.senderLabel;
+    return typeof label === "string" && label.trim() !== "";
+  });
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
