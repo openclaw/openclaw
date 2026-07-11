@@ -247,7 +247,18 @@ async function waitForDeferredGatewayActivationOnce(
 
     const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
       const method = request.method ?? "GET";
-      const pathname = new URL(request.url ?? "/", `http://${CONTROL_HOST}`).pathname;
+      let pathname: string;
+      try {
+        pathname = new URL(request.url ?? "/", `http://${CONTROL_HOST}`).pathname;
+      } catch {
+        drainRequest(request);
+        if (response.headersSent || response.writableEnded || response.destroyed) {
+          response.destroy();
+        } else {
+          writeJson(response, 400, { error: "invalid request target" });
+        }
+        return;
+      }
 
       if (pathname === "/healthz") {
         if (method !== "GET") {
