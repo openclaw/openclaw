@@ -9,6 +9,7 @@ import {
 } from "../agents/auth-profiles.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -220,6 +221,11 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       cache: context.cache,
       manifestRegistry: context.manifestRegistry,
     });
+    for (const value of resolved.values()) {
+      if (typeof value === "string") {
+        registerSecretValueForRedaction(value);
+      }
+    }
     applyResolvedAssignments({
       assignments: context.assignments,
       resolved,

@@ -195,6 +195,7 @@ describe("RealtimeTalkSession", () => {
         prefixPaddingMs: 250,
         reasoningEffort: "low",
       },
+      { inputDeviceId: "usb-mic" },
     );
 
     await session.start();
@@ -210,6 +211,10 @@ describe("RealtimeTalkSession", () => {
       prefixPaddingMs: 250,
       reasoningEffort: "low",
     });
+    expect(webRtcCtor).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ inputDeviceId: "usb-mic" }),
+    );
   });
 
   it("does not fall back to Gateway relay when config selects a client transport", async () => {

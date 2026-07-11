@@ -302,7 +302,7 @@ describe("qa suite runtime launcher", () => {
         channelDriver: "crabline",
         smokeArtifactPath: "crabline-fake-provider-smoke.json",
       },
-      scenarioIds: ["channel-chat-baseline", "dm-chat-baseline", "control-ui-chat-flow-playwright"],
+      scenarioIds: ["telegram-help-command", "dm-chat-baseline", "control-ui-chat-flow-playwright"],
     });
 
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "crabline-serial");
@@ -311,7 +311,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow"),
         concurrency: 1,
-        scenarioIds: ["channel-chat-baseline", "dm-chat-baseline"],
+        scenarioIds: ["telegram-help-command", "dm-chat-baseline"],
       }),
     );
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
@@ -367,7 +367,7 @@ describe("qa suite runtime launcher", () => {
       },
       concurrency: 8,
       scenarioIds: [
-        "channel-chat-baseline",
+        "dm-chat-baseline",
         "runtime-tool-image-generate",
         "runtime-inventory-drift-check",
         "session-memory-ranking",
@@ -382,7 +382,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow", "shared"),
         concurrency: 1,
-        scenarioIds: ["channel-chat-baseline"],
+        scenarioIds: ["dm-chat-baseline"],
       }),
     );
     for (const [index, scenarioId] of [
@@ -442,7 +442,7 @@ describe("qa suite runtime launcher", () => {
       outputDir: ".artifacts/qa-e2e/serial",
       concurrency: 1,
       scenarioIds: [
-        "channel-chat-baseline",
+        "dm-chat-baseline",
         "group-visible-reply-tool",
         "control-ui-chat-flow-playwright",
       ],
@@ -499,7 +499,7 @@ describe("qa suite runtime launcher", () => {
       outputDir: ".artifacts/qa-e2e/script-isolation",
       concurrency: 8,
       scenarioIds: [
-        "channel-chat-baseline",
+        "dm-chat-baseline",
         "control-ui-chat-flow-playwright",
         "docker-npm-onboard-channel-agent",
       ],
@@ -607,7 +607,7 @@ describe("qa suite runtime launcher", () => {
       outputDir: ".artifacts/qa-e2e/weighted",
       concurrency: 3,
       scenarioIds: [
-        "channel-chat-baseline",
+        "dm-chat-baseline",
         "group-visible-reply-tool",
         "control-ui-chat-flow-playwright",
       ],
@@ -696,7 +696,7 @@ describe("qa suite runtime launcher", () => {
       outputDir: ".artifacts/qa-e2e/native-before-isolated",
       concurrency: 2,
       scenarioIds: [
-        "channel-chat-baseline",
+        "dm-chat-baseline",
         "group-visible-reply-tool",
         "control-ui-chat-flow-playwright",
       ],
@@ -776,7 +776,7 @@ describe("qa suite runtime launcher", () => {
       outputDir: ".artifacts/qa-e2e/smoke",
       concurrency: 8,
       scenarioIds: [
-        "channel-chat-baseline",
+        "dm-chat-baseline",
         "group-visible-reply-tool",
         "control-ui-chat-flow-playwright",
       ],
@@ -790,7 +790,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow", "shared"),
         concurrency: 1,
-        scenarioIds: ["channel-chat-baseline"],
+        scenarioIds: ["dm-chat-baseline"],
       }),
     );
     expect(runQaFlowSuite).toHaveBeenNthCalledWith(
@@ -808,7 +808,7 @@ describe("qa suite runtime launcher", () => {
       scenarios?: Array<{ name?: unknown; status?: unknown }>;
     };
     expect(summary.scenarios).toMatchObject([
-      { name: "channel-chat-baseline", status: "pass" },
+      { name: "dm-chat-baseline", status: "pass" },
       { name: "group-visible-reply-tool", status: "pass" },
       { name: "Control UI chat flow Playwright coverage", status: "pass" },
     ]);
@@ -821,7 +821,7 @@ describe("qa suite runtime launcher", () => {
       outputDir: ".artifacts/qa-e2e/smoke",
       concurrency: 8,
       scenarioIds: [
-        "channel-chat-baseline",
+        "telegram-help-command",
         "dm-chat-baseline",
         "thread-follow-up",
         "control-ui-chat-flow-playwright",
@@ -835,7 +835,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow", "shared-1"),
         concurrency: 1,
-        scenarioIds: ["channel-chat-baseline"],
+        scenarioIds: ["telegram-help-command"],
       }),
     );
     expect(runQaFlowSuite).toHaveBeenNthCalledWith(
@@ -863,7 +863,7 @@ describe("qa suite runtime launcher", () => {
       outputDir: ".artifacts/qa-e2e/smoke",
       concurrency: 8,
       scenarioIds: [
-        "channel-chat-baseline",
+        "dm-chat-baseline",
         "runtime-tool-image-generate",
         "runtime-inventory-drift-check",
         "session-memory-ranking",
@@ -878,7 +878,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow", "shared"),
         concurrency: 1,
-        scenarioIds: ["channel-chat-baseline"],
+        scenarioIds: ["dm-chat-baseline"],
       }),
     );
     expect(runQaFlowSuite).toHaveBeenNthCalledWith(
@@ -903,7 +903,7 @@ describe("qa suite runtime launcher", () => {
       outputDir: ".artifacts/qa-e2e/gateway-state",
       concurrency: 8,
       scenarioIds: [
-        "channel-chat-baseline",
+        "dm-chat-baseline",
         "subagent-stale-child-links",
         "control-ui-chat-flow-playwright",
       ],
@@ -915,7 +915,7 @@ describe("qa suite runtime launcher", () => {
       1,
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow", "shared"),
-        scenarioIds: ["channel-chat-baseline"],
+        scenarioIds: ["dm-chat-baseline"],
       }),
     );
     expect(runQaFlowSuite).toHaveBeenNthCalledWith(

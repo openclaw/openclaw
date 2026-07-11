@@ -812,6 +812,7 @@ type TrustedToolExecutionEventInput = Extract<
   DiagnosticEventInput,
   { type: TrustedToolExecutionEvent["type"] }
 >;
+type TrustedSkillUsedEventInput = Extract<DiagnosticEventInput, { type: "skill.used" }>;
 
 type DiagnosticDispatchInput = DiagnosticEventInput | Omit<DiagnosticSecurityEvent, "seq" | "ts">;
 
@@ -833,8 +834,15 @@ export type DiagnosticToolCallContent = Readonly<{
   toolOutput?: unknown;
 }>;
 
+export type DiagnosticSkillUsagePrivateData = Readonly<{
+  skillFile: string;
+}>;
+
 export type DiagnosticEventPrivateData = Readonly<{
+  /** Raw failure text for trusted diagnostics exporters; never part of the public event payload. */
+  errorMessage?: string;
   modelContent?: DiagnosticModelCallContent;
+  skillUsage?: DiagnosticSkillUsagePrivateData;
   toolContent?: DiagnosticToolCallContent;
 }>;
 
@@ -866,6 +874,7 @@ type QueuedDiagnosticEvent = {
   event: DiagnosticEventPayload;
   metadata: DiagnosticEventMetadata;
   privateData?: DiagnosticEventPrivateData;
+  trustedListenersOnly?: boolean;
 };
 
 type DiagnosticEventsGlobalState = {
@@ -997,6 +1006,7 @@ function dispatchDiagnosticEvent(
   enriched: DiagnosticEventPayload,
   metadata: DiagnosticEventMetadata,
   privateData?: DiagnosticEventPrivateData,
+  options: { trustedListenersOnly?: boolean } = {},
 ): void {
   if (state.dispatchDepth > 100) {
     console.error(
@@ -1007,23 +1017,25 @@ function dispatchDiagnosticEvent(
 
   state.dispatchDepth += 1;
   try {
-    for (const listener of state.listeners) {
-      try {
-        listener(
-          cloneDiagnosticEventForListener(enriched),
-          createDiagnosticMetadataForListener(metadata),
-        );
-      } catch (err) {
-        const errorMessage =
-          err instanceof Error
-            ? (err.stack ?? err.message)
-            : typeof err === "string"
-              ? err
-              : String(err);
-        console.error(
-          `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
-        );
-        // Ignore listener failures.
+    if (!options.trustedListenersOnly) {
+      for (const listener of state.listeners) {
+        try {
+          listener(
+            cloneDiagnosticEventForListener(enriched),
+            createDiagnosticMetadataForListener(metadata),
+          );
+        } catch (err) {
+          const errorMessage =
+            err instanceof Error
+              ? (err.stack ?? err.message)
+              : typeof err === "string"
+                ? err
+                : String(err);
+          console.error(
+            `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
+          );
+          // Ignore listener failures.
+        }
       }
     }
     for (const listener of state.trustedListeners) {
@@ -1134,7 +1146,9 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
     state.asyncDrainScheduled = false;
     const batch = state.asyncQueue.splice(0, MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN);
     for (const entry of batch) {
-      dispatchDiagnosticEvent(state, entry.event, entry.metadata, entry.privateData);
+      dispatchDiagnosticEvent(state, entry.event, entry.metadata, entry.privateData, {
+        trustedListenersOnly: entry.trustedListenersOnly,
+      });
     }
     if (state.asyncQueue.length > 0) {
       scheduleAsyncDiagnosticDrain(state);
@@ -1312,6 +1326,30 @@ export function getInternalDiagnosticEventSequence(): number {
 /** Emits a trusted diagnostic event from core/runtime-owned instrumentation. */
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, true);
+}
+
+/** Keeps trusted internal skill accounting alive when optional diagnostics are disabled. */
+export function emitTrustedSkillUsedDiagnosticEvent(
+  event: TrustedSkillUsedEventInput,
+  privateData?: DiagnosticEventPrivateData,
+) {
+  const state = getDiagnosticEventsState();
+  if (state.enabled) {
+    emitDiagnosticEventWithTrust(event, true, { privateData });
+    return;
+  }
+  const queued = {
+    event: enrichDiagnosticEvent(state, event),
+    metadata: { trusted: true },
+    privateData,
+    trustedListenersOnly: true,
+  } satisfies QueuedDiagnosticEvent;
+  if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
+    noteAsyncDiagnosticDrop(state, queued);
+    return;
+  }
+  state.asyncQueue.push(queued);
+  scheduleAsyncDiagnosticDrain(state);
 }
 
 /** Emits a trusted diagnostic event with private listener-only payload data. */

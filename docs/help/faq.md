@@ -1220,12 +1220,12 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
   </Accordion>
 
-  <Accordion title="I set gateway.bind tailnet but it cannot bind and nothing listens">
-    `tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine is not on Tailscale (or the interface is down), there is nothing to bind to.
+  <Accordion title="I set gateway.bind tailnet but it listens only on loopback">
+    `tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine is not on Tailscale (or the interface is down), the Gateway falls back to loopback instead of exposing another network interface.
 
-    Fix: start Tailscale on that host, or switch to `gateway.bind: "loopback"` / `"lan"`.
+    Fix: start Tailscale on that host and restart the Gateway, or switch explicitly to `gateway.bind: "loopback"` / `"lan"`.
 
-    `tailnet` is explicit; `auto` prefers loopback. Use `gateway.bind: "tailnet"` for a tailnet-only bind.
+    `tailnet` is explicit; `auto` prefers loopback. Use `gateway.bind: "tailnet"` to limit non-loopback exposure to the Tailnet while retaining the required same-host `127.0.0.1` listener.
 
   </Accordion>
 
@@ -1535,7 +1535,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
   </Accordion>
 
   <Accordion title="How do I stop/cancel a running task?">
-    Send any of these **as a standalone message** (no slash) to trigger an abort: `stop`, `stop action`, `stop current action`, `stop run`, `stop current run`, `stop agent`, `stop the agent`, `stop openclaw`, `openclaw stop`, `stop don't do anything`, `stop do not do anything`, `stop doing anything`, `do not do that`, `please stop`, `stop please`, `abort`, `esc`, `wait`, `exit`, `interrupt`, `halt`. Common non-English triggers (French, German, Spanish, Chinese, Japanese, Hindi, Arabic, Russian) also work.
+    Send any of these **as a standalone message** (no slash) to trigger an abort: `stop`, `stop action`, `stop current action`, `stop run`, `stop current run`, `stop agent`, `stop the agent`, `stop openclaw`, `openclaw stop`, `stop don't do anything`, `stop do not do anything`, `stop doing anything`, `do not do that`, `please stop`, `stop please`, `abort`, `esc`, `exit`, `interrupt`, `halt`. Common non-English triggers (French, German, Spanish, Chinese, Japanese, Hindi, Arabic, Russian) also work.
 
     For background processes started by the exec tool, ask the agent to run:
 

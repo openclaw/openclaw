@@ -25,6 +25,7 @@ import {
   applyDefaultVitestNoOutputTimeout,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
+  createVitestPreflightPnpmArgs,
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
@@ -84,16 +85,13 @@ function cleanupVitestRunSpec(spec) {
   }
 }
 
-function runVitestSpec(spec) {
-  if (spec.includeFilePath && spec.includePatterns) {
-    writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
-  }
+function runPnpmSpecCommand(spec, pnpmArgs, label) {
   let noOutputTimedOut = false;
   return new Promise((resolve, reject) => {
     const { child, getForwardedSignal, teardown } = spawnWatchedVitestProcess({
-      pnpmArgs: spec.pnpmArgs,
+      pnpmArgs,
       env: spec.env,
-      label: spec.config,
+      label,
       onNoOutputTimeout: () => {
         noOutputTimedOut = true;
       },
@@ -105,7 +103,6 @@ function runVitestSpec(spec) {
 
     child.on("exit", (code, signal) => {
       teardown();
-      cleanupVitestRunSpec(spec);
       const forwardedSignal = getForwardedSignal();
       if (forwardedSignal) {
         forceKillVitestProcessGroup(child);
@@ -117,10 +114,31 @@ function runVitestSpec(spec) {
 
     child.on("error", (error) => {
       teardown();
-      cleanupVitestRunSpec(spec);
-      reject(error);
+      reject(error instanceof Error ? error : new Error(String(error)));
     });
   });
+}
+
+async function runVitestSpec(spec) {
+  if (spec.includeFilePath && spec.includePatterns) {
+    writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
+  }
+  try {
+    if (spec.preflightPnpmArgs) {
+      console.error(`[test] preflight ${spec.config}`);
+      const preflightResult = await runPnpmSpecCommand(
+        spec,
+        spec.preflightPnpmArgs,
+        `${spec.config}:preflight`,
+      );
+      if (preflightResult.code !== 0 || preflightResult.signal) {
+        return preflightResult;
+      }
+    }
+    return await runPnpmSpecCommand(spec, spec.pnpmArgs, spec.config);
+  } finally {
+    cleanupVitestRunSpec(spec);
+  }
 }
 
 function applyDefaultParallelVitestWorkerBudget(specs, env) {
@@ -270,6 +288,7 @@ async function main() {
             plan.config,
             ...plan.forwardedArgs,
           ],
+          preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
           watchMode: plan.watchMode,
         }))
       : createVitestRunSpecs(args, {

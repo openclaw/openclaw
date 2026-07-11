@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { runCrestodianAgentTurnWithDeps } from "./agent-turn.js";
+import { classifyCrestodianApprovalText } from "./approval-intent.js";
 import { CrestodianChatEngine } from "./chat-engine.js";
 
 const mocks = vi.hoisted(() => ({
@@ -67,6 +68,82 @@ describe("CrestodianChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(false);
   });
 
+  it("offers masked model provider setup after a providerless bootstrap", async () => {
+    useTempStateDir();
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: null,
+      configHashAfter: "after",
+      lines: ["Workspace: /tmp/work"],
+    }));
+    const engine = new CrestodianChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        applySetup,
+        detectInferenceBackends: async () => [],
+        loadOverview: fakeOverviewLoader(),
+      },
+    });
+    engine.propose({ kind: "setup", workspace: "/tmp/work" });
+
+    const setup = await engine.handle("yes");
+
+    expect(setup.text).toContain("Configure a model provider now?");
+    expect(engine.hasPendingProposal()).toBe(true);
+
+    const providerSetup = await engine.handle("yes");
+
+    expect(providerSetup.action).toBe("open-tui");
+    expect(providerSetup.handoff).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
+  });
+
+  it("hosts model provider setup in gateway chat with sensitive replies masked", async () => {
+    useTempStateDir();
+    const answers: string[] = [];
+    const engine = new CrestodianChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runModelSetupWizard: async (workspace, prompter) => {
+        answers.push(`workspace:${workspace}`);
+        const provider = await prompter.select({
+          message: "Model/auth provider",
+          options: [{ value: "openai", label: "OpenAI" }],
+        });
+        answers.push(`provider:${provider}`);
+        const key = await prompter.text({ message: "API key", sensitive: true });
+        answers.push(`key:${key}`);
+      },
+    });
+
+    const providerStep = await engine.handle(
+      "configure model provider workspace /tmp/gateway-work",
+    );
+    expect(providerStep.text).toContain("Model/auth provider");
+
+    const keyStep = await engine.handle("1");
+    expect(keyStep.text).toContain("API key");
+    expect(keyStep.sensitive).toBe(true);
+
+    const done = await engine.handle("sk-test");
+    expect(done.text).toContain("finished without a default model");
+    expect(answers).toEqual(["workspace:/tmp/gateway-work", "provider:openai", "key:sk-test"]);
+  });
+
+  it("keeps deterministic mode available when model provider setup is declined", async () => {
+    const engine = new CrestodianChatEngine();
+    engine.propose({ kind: "model-setup" });
+
+    const reply = await engine.handle("not now");
+
+    expect(reply.text).toContain("remains available in deterministic mode");
+    expect(reply.text).toContain("configure model provider");
+    expect(engine.hasPendingProposal()).toBe(false);
+  });
+
   it("drops the proposal when the user declines", async () => {
     const runConfigSet = vi.fn(async () => {});
     const engine = new CrestodianChatEngine({ deps: { runConfigSet } });
@@ -78,29 +155,41 @@ describe("CrestodianChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(false);
   });
 
-  it("drops an agent-loop proposal when the user declines", async () => {
+  it("voids an agent-loop proposal on decline and lets the AI acknowledge", async () => {
+    let observedProposalOnSecondTurn: string | undefined = "sentinel";
     const runAgentTurn = vi.fn(
       async (params: { session: { proposalRef: { current?: string } } }) => {
-        params.session.proposalRef.current = "registered-operation";
-        return { text: "I can change that after your approval." };
+        if (runAgentTurn.mock.calls.length === 1) {
+          params.session.proposalRef.current = "registered-operation";
+          return { text: "I can change that after your approval." };
+        }
+        observedProposalOnSecondTurn = params.session.proposalRef.current;
+        return { text: "Okay, leaving it as is." };
       },
     );
     const engine = new CrestodianChatEngine({
       runAgentTurn: runAgentTurn as never,
+      classifyApproval: async ({ message }) => classifyCrestodianApprovalText(message),
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
     await engine.handle("change the model");
     const declined = await engine.handle("no thanks");
 
-    expect(declined.text).toContain("Skipped");
-    expect(runAgentTurn).toHaveBeenCalledOnce();
+    // The decline voids the registered hash before the AI turn, so a later
+    // generic approval can never arm the stale mutation.
+    expect(observedProposalOnSecondTurn).toBeUndefined();
+    expect(declined.text).toContain("leaving it as is");
+    expect(runAgentTurn).toHaveBeenCalledTimes(2);
   });
 
-  it("hosts a channel setup wizard as chat turns after approval", async () => {
+  it("hosts a channel setup wizard as chat turns", async () => {
     useTempStateDir();
     const wizardRuns: string[] = [];
     const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (channel: string, prompter: WizardPrompter) => {
         wizardRuns.push(channel);
         const token = await prompter.text({ message: "Bot token" });
@@ -116,10 +205,8 @@ describe("CrestodianChatEngine", () => {
       },
     });
 
-    const plan = await engine.handle("connect telegram");
-    expect(plan.text).toContain("walk through connecting the telegram channel");
-
-    const tokenStep = await engine.handle("yes");
+    // Starting the wizard is not a write: it begins immediately, no approval step.
+    const tokenStep = await engine.handle("connect telegram");
     expect(tokenStep.text).toContain("Bot token");
 
     const modeStep = await engine.handle("123:abc");
@@ -133,8 +220,10 @@ describe("CrestodianChatEngine", () => {
   it("marks sensitive hosted-wizard replies and auto-advances notes", async () => {
     useTempStateDir();
     const engine = new CrestodianChatEngine({
-      yes: true,
       surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.note("Before entering the token, open the provider console.");
         await prompter.text({ message: "Bot token", sensitive: true });
@@ -151,8 +240,10 @@ describe("CrestodianChatEngine", () => {
   it("routes sensitive CLI wizard prompts to the masked channel setup flow", async () => {
     useTempStateDir();
     const engine = new CrestodianChatEngine({
-      yes: true,
       surface: "cli",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token", sensitive: true });
       },
@@ -163,12 +254,52 @@ describe("CrestodianChatEngine", () => {
     expect(reply.text).toContain("Sensitive input is not accepted");
     expect(reply.text).toContain("openclaw channels add --channel telegram");
     expect(reply.sensitive).toBeUndefined();
+
+    const handoff = await engine.handle("open channel wizard");
+    expect(handoff.action).toBe("open-setup");
+    expect(handoff.handoff).toEqual({
+      kind: "open-setup",
+      target: "channels",
+      channel: "telegram",
+    });
+
+    const channelRequired = await engine.handle("open channel wizard");
+    expect(channelRequired.action).toBe("none");
+    expect(channelRequired.text).toContain("Which channel");
+
+    const selectedChannel = await engine.handle("slack");
+    expect(selectedChannel.action).toBe("open-setup");
+    expect(selectedChannel.handoff).toEqual({
+      kind: "open-setup",
+      target: "channels",
+      channel: "slack",
+    });
+  });
+
+  it("hands typed setup switches to CLI hosts but not gateway hosts", async () => {
+    const common = {
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    };
+    const cli = new CrestodianChatEngine({ ...common, surface: "cli" });
+    const cliReply = await cli.handle("open classic wizard");
+    expect(cliReply.action).toBe("open-setup");
+    expect(cliReply.handoff).toEqual({ kind: "open-setup", target: "classic" });
+
+    const gateway = new CrestodianChatEngine({ ...common, surface: "gateway" });
+    const gatewayReply = await gateway.handle("open setup wizard");
+    expect(gatewayReply.action).toBe("none");
+    expect(gatewayReply.handoff).toBeUndefined();
+    expect(gatewayReply.text).toContain("The app owns the setup screens here");
   });
 
   it("keeps hosted-wizard validation errors on the current prompt", async () => {
     useTempStateDir();
     const engine = new CrestodianChatEngine({
-      yes: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({
           message: "Port",
@@ -189,7 +320,9 @@ describe("CrestodianChatEngine", () => {
   it("cancels a hosted wizard mid-flight", async () => {
     useTempStateDir();
     const engine = new CrestodianChatEngine({
-      yes: true,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token" });
       },
@@ -202,11 +335,329 @@ describe("CrestodianChatEngine", () => {
     expect(cancelled.text).toContain("cancelled");
   });
 
-  it("signals the agent handoff for talk to agent", async () => {
-    const engine = new CrestodianChatEngine({});
+  it("signals the agent handoff for talk to agent in deterministic mode", async () => {
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
     const reply = await engine.handle("talk to agent");
     expect(reply.action).toBe("open-tui");
     expect(reply.handoff?.kind).toBe("open-tui");
+  });
+
+  it("executes an open-tui directive from the agent loop", async () => {
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => ({
+        text: "Handing you over. *waves claw*",
+        directive: { kind: "open-tui" as const, agentId: "work" },
+      }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    const reply = await engine.handle("I want to talk to my work agent now");
+    expect(reply.action).toBe("open-tui");
+    expect(reply.handoff).toMatchObject({ kind: "open-tui", agentId: "work" });
+    expect(reply.text).toContain("Handing you over");
+  });
+
+  it("executes an open-setup directive from the agent loop", async () => {
+    const engine = new CrestodianChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => ({
+        text: "Opening the menu wizard.",
+        directive: { kind: "open-setup" as const, target: "guided" as const },
+      }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    const reply = await engine.handle("I would rather use menus");
+    expect(reply.action).toBe("open-setup");
+    expect(reply.handoff).toEqual({ kind: "open-setup", target: "guided" });
+    expect(reply.text).toContain("Opening the menu wizard");
+  });
+
+  it("starts the channel wizard from an agent-loop directive", async () => {
+    useTempStateDir();
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => ({
+        text: "Telegram it is — setup questions follow.",
+        directive: { kind: "channel-setup" as const, channel: "telegram" },
+      }),
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+    const reply = await engine.handle("hook me up with telegram please");
+    expect(reply.text).toContain("Telegram it is");
+    expect(reply.text).toContain("Bot token");
+  });
+
+  it("arms an agent turn when the classifier approves in the user's own words", async () => {
+    const armedFlags: boolean[] = [];
+    const runAgentTurn = vi.fn(
+      async (params: {
+        approvalArmed: boolean;
+        session: { proposalRef: { current?: string } };
+      }) => {
+        armedFlags.push(params.approvalArmed);
+        params.session.proposalRef.current = "op-hash";
+        return { text: "ok" };
+      },
+    );
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      classifyApproval: async ({ message }) =>
+        message.includes("sounds great") ? "approve" : "other",
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    await engine.handle("switch me to gpt");
+    await engine.handle("that sounds great, please");
+
+    expect(armedFlags).toEqual([false, true]);
+  });
+
+  it("clears a stale host proposal once the agent loop owns the conversation", async () => {
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        params.session.proposalRef.current = "agent-proposal";
+        return { text: "loop reply" };
+      },
+      classifyApproval: async () => "other",
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("actually, tell me about workspaces first");
+
+    // A later approval must arm the loop's own proposal, not the stale one.
+    expect(engine.hasPendingProposal()).toBe(false);
+  });
+
+  it("keeps a host setup proposal when the loop only answers a question", async () => {
+    let observedInput = "";
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        observedInput = params.input;
+        return { text: "A workspace is where your agent keeps its project files." };
+      },
+      classifyApproval: async () => "other",
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose({
+      kind: "setup",
+      workspace: "/tmp/work",
+      model: "openai/gpt-5.5",
+      inferenceRoutes: [
+        { kind: "codex-cli", model: "openai/gpt-5.5" },
+        { kind: "claude-cli", model: "claude-cli/claude-opus-4-8" },
+      ],
+    });
+
+    await engine.handle("what does workspace mean?");
+
+    expect(engine.hasPendingProposal()).toBe(true);
+    expect(observedInput).toContain(
+      '"inferenceRoutes":[{"kind":"codex-cli","model":"openai/gpt-5.5"},{"kind":"claude-cli","model":"claude-cli/claude-opus-4-8"}]',
+    );
+  });
+
+  it("preserves captured setup routes when planner fallback changes only the workspace", async () => {
+    useTempStateDir();
+    const detectInferenceBackends = vi.fn(async () => []);
+    const activateSetupInference = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 100,
+      lines: ["Default model: openai/gpt-5.5"],
+    }));
+    let pendingOperation = "";
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async (params) => {
+        pendingOperation = params.pendingOperation ?? "";
+        return {
+          reply: "I'll use the new workspace and keep the selected AI route.",
+          command: "setup workspace /tmp/new-work",
+          modelLabel: "planner",
+        };
+      },
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: {
+        activateSetupInference,
+        detectInferenceBackends,
+        loadOverview: fakeOverviewLoader(),
+      },
+    });
+    engine.propose({
+      kind: "setup",
+      workspace: "/tmp/old-work",
+      model: "openai/gpt-5.5",
+      inferenceRoutes: [
+        { kind: "codex-cli", model: "openai/gpt-5.5" },
+        { kind: "claude-cli", model: "claude-cli/claude-opus-4-8" },
+      ],
+    });
+
+    const revised = await engine.handle("put the workspace under /tmp/new-work instead");
+    expect(revised.text).toContain(
+      "Model choices: test in this captured order: Codex app-server (openai/gpt-5.5) → Claude Code CLI (claude-cli/claude-opus-4-8); persist the first one that answers.",
+    );
+    expect(pendingOperation).toContain(
+      '"inferenceRoutes":[{"kind":"codex-cli","model":"openai/gpt-5.5"},{"kind":"claude-cli","model":"claude-cli/claude-opus-4-8"}]',
+    );
+
+    await engine.handle("yes");
+
+    expect(detectInferenceBackends).not.toHaveBeenCalled();
+    expect(activateSetupInference).toHaveBeenCalledWith({
+      kind: "codex-cli",
+      modelRef: "openai/gpt-5.5",
+      workspace: "/tmp/new-work",
+      surface: "cli",
+      runtime: expect.any(Object),
+      recordSetupAudit: false,
+    });
+  });
+
+  it("tells the agent loop when a preserved host proposal was resolved", async () => {
+    const observedInputs: string[] = [];
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        observedInputs.push(params.input);
+        return { text: "answer" };
+      },
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: { loadOverview: fakeOverviewLoader(), runConfigSet },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("why that port?");
+    await engine.handle("yes");
+    await engine.handle("what next?");
+
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(observedInputs).toHaveLength(2);
+    expect(observedInputs[1]).toContain("[host-proposal-resolved]");
+    expect(observedInputs[1]).toContain("was approved");
+  });
+
+  it("keeps a host-resolution marker queued across planner fallback", async () => {
+    const observedInputs: string[] = [];
+    const runConfigSet = vi.fn(async () => {});
+    const runAgentTurn = vi.fn(async (params: { input: string }) => {
+      observedInputs.push(params.input);
+      return observedInputs.length === 1 ? null : { text: "native reply" };
+    });
+    const planner = vi.fn(async () => ({ reply: "planner fallback", modelLabel: "planner" }));
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner,
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: { loadOverview: fakeOverviewLoader(), runConfigSet },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("yes");
+    await engine.handle("what next?");
+    await engine.handle("try the native session again");
+    await engine.handle("and now?");
+
+    expect(planner).toHaveBeenCalledOnce();
+    expect(observedInputs).toHaveLength(3);
+    expect(observedInputs[0]).toContain("was approved");
+    expect(observedInputs[1]).toContain("was approved");
+    expect(observedInputs[2]).not.toContain("host-proposal-resolved");
+  });
+
+  it("clears both proposal stores when the agent takes a directive", async () => {
+    const armedFlags: boolean[] = [];
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        armedFlags.push(params.approvalArmed);
+        if (armedFlags.length === 1) {
+          params.session.proposalRef.current = "agent-proposal";
+          return {
+            text: "Opening setup.",
+            directive: { kind: "open-setup" as const, target: "guided" as const },
+          };
+        }
+        return { text: "No pending change." };
+      },
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("use the wizard instead");
+    await engine.handle("yes");
+
+    expect(engine.hasPendingProposal()).toBe(false);
+    expect(armedFlags).toEqual([false, false]);
+  });
+
+  it("never injects exact sensitive config JSON into a follow-up model turn", async () => {
+    let observedInput = "";
+    const secret = "123:very-secret";
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        observedInput = params.input;
+        return { text: "That is the Telegram bot credential." };
+      },
+      classifyApproval: async () => "other",
+      deps: { loadOverview: fakeOverviewLoader(), runConfigSet: vi.fn(async () => {}) },
+    });
+
+    await engine.handle(`config set channels.telegram.botToken ${secret}`);
+    await engine.handle("what is that setting?");
+
+    expect(observedInput).not.toContain(secret);
+    expect(observedInput).toContain("<redacted>");
+  });
+
+  it("keeps an exact sensitive config set away from every model path", async () => {
+    useTempStateDir();
+    const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
+    const planner = vi.fn(async () => ({ reply: "should never run" }));
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner as never,
+      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+
+    const proposed = await engine.handle("config set channels.telegram.botToken 123:very-secret");
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(planner).not.toHaveBeenCalled();
+    expect(proposed.text).toContain("<redacted>");
+    expect(proposed.text).not.toContain("very-secret");
+    expect(engine.hasPendingProposal()).toBe(true);
+
+    const applied = await engine.handle("yes");
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(applied.text).toContain("[crestodian] done: config.set");
+  });
+
+  it("redacts sensitive config-set values from the AI-visible history", async () => {
+    const planner = vi.fn(async (_params: { history?: Array<{ role: string; text: string }> }) => ({
+      reply: "noted",
+    }));
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: planner as never,
+      classifyApproval: async () => "other",
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    await engine.handle("config set channels.telegram.botToken 123:very-secret");
+    await engine.handle("did that work?");
+
+    const history = planner.mock.calls.at(-1)?.[0]?.history ?? [];
+    const userTurns = history.filter((turn) => turn.role === "user").map((turn) => turn.text);
+    expect(userTurns.some((text) => text.includes("very-secret"))).toBe(false);
+    expect(userTurns.some((text) => text.includes("<redacted secret>"))).toBe(true);
   });
 
   it("prefers the real agent loop for fuzzy messages", async () => {
@@ -295,6 +746,7 @@ describe("CrestodianChatEngine", () => {
     const engine = new CrestodianChatEngine({
       runAgentTurn: async () => null,
       planWithAssistant: planner,
+      classifyApproval: async () => "other",
       deps: { loadOverview: fakeOverviewLoader() },
     });
     engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
@@ -424,7 +876,12 @@ describe("Crestodian agent loop backends", () => {
     const call = runCliAgent.mock.calls[0][0];
     expect(call.provider).toBe("claude-cli");
     expect(call.model).toBe("claude-opus-4-8");
-    expect(call.crestodianTool).toEqual({ surface: "cli", approvalArmed: false, proposalRef: {} });
+    expect(call.crestodianTool).toEqual({
+      surface: "cli",
+      approvalArmed: false,
+      proposalRef: {},
+      directiveRef: {},
+    });
     // CLI harnesses reject toolsAllow; the restriction rides on the MCP config.
     expect(call.toolsAllow).toBeUndefined();
     expect(call.cliSessionId).toBeUndefined();
@@ -454,7 +911,12 @@ describe("Crestodian agent loop backends", () => {
     const call = runCliAgent.mock.calls[0][0];
     expect(call.provider).toBe("claude-cli");
     expect(call.model).toBe("claude-opus-4-8");
-    expect(call.crestodianTool).toEqual({ surface: "cli", approvalArmed: false, proposalRef: {} });
+    expect(call.crestodianTool).toEqual({
+      surface: "cli",
+      approvalArmed: false,
+      proposalRef: {},
+      directiveRef: {},
+    });
     const config = call.config as {
       agents?: { defaults?: { model?: { primary?: string } } };
     };
@@ -498,7 +960,12 @@ describe("Crestodian agent loop backends", () => {
     const call = runEmbeddedAgent.mock.calls[0][0];
     expect(call.toolsAllow).toEqual(["crestodian"]);
     expect(call.agentHarnessId).toBe("codex");
-    expect(call.crestodianTool).toEqual({ surface: "cli", approvalArmed: false, proposalRef: {} });
+    expect(call.crestodianTool).toEqual({
+      surface: "cli",
+      approvalArmed: false,
+      proposalRef: {},
+      directiveRef: {},
+    });
   });
 });
 
@@ -514,6 +981,7 @@ function fakeOverviewLoader(
       tools: {
         codex: { command: "codex", found: overrides.codexFound ?? false },
         claude: { command: "claude", found: overrides.claudeFound ?? false },
+        gemini: { command: "gemini", found: false },
         apiKeys: { openai: false, anthropic: false },
       },
       gateway: { url: "ws://127.0.0.1:18789", source: "local", reachable: false },

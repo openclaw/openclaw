@@ -6,6 +6,7 @@ import type {
   BlockReplyContext,
   PartialReplyPayload,
   SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
 } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
@@ -71,6 +72,8 @@ export type RunEmbeddedAgentParams = {
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
+  /** Capabilities declared by the gateway client that originated this run. */
+  clientCaps?: string[];
   chatType?: ChatType;
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
@@ -91,6 +94,8 @@ export type RunEmbeddedAgentParams = {
   groupSpace?: string | null;
   /** Trusted provider role ids for the requester in this group turn. */
   memberRoleIds?: string[];
+  /** Opaque host-issued capability for current-turn channel message actions. */
+  messageActionTurnCapability?: string;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
   /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
@@ -143,6 +148,12 @@ export type RunEmbeddedAgentParams = {
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
   cwd?: string;
   agentDir?: string;
+  /**
+   * Run config consumed by core paths (model selection, tools, plugin
+   * activation). Plugin harnesses resolve `plugins.entries.<id>.config` from
+   * the live global config, NOT from this object — per-run plugin-config
+   * overrides are unsupported; use an explicit run param instead.
+   */
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
@@ -162,6 +173,8 @@ export type RunEmbeddedAgentParams = {
   modelFallbacksOverride?: string[];
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
+  /** True when the pinned non-default harness owns model selection for this session. */
+  modelSelectionLocked?: boolean;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */
   agentHarnessRuntimeOverride?: string;
   authProfileId?: string;
@@ -264,6 +277,7 @@ export type RunEmbeddedAgentParams = {
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;

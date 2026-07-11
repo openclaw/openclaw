@@ -58,6 +58,7 @@ describe("createCronToolSchema", () => {
         "schedule",
         "sessionKey",
         "sessionTarget",
+        "trigger",
         "wakeMode",
       ].toSorted(),
     );
@@ -78,6 +79,7 @@ describe("createCronToolSchema", () => {
         "schedule",
         "sessionKey",
         "sessionTarget",
+        "trigger",
         "wakeMode",
       ].toSorted(),
     );
@@ -225,6 +227,21 @@ describe("createCronToolSchema", () => {
           sessionKey: null,
           payload: {
             toolsAllow: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts payload.model and payload.fallbacks null in patch (clear-to-inherit)", () => {
+    expect(
+      Value.Check(createCronToolSchema(), {
+        action: "update",
+        jobId: "job-1",
+        patch: {
+          payload: {
+            model: null,
+            fallbacks: null,
           },
         },
       }),

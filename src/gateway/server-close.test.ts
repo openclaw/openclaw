@@ -64,6 +64,7 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
+    debug: vi.fn(),
     info: mocks.logInfo,
     warn: mocks.logWarn,
   })),
@@ -117,7 +118,9 @@ function createGatewayCloseTestDeps(
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: null,
     worktreeCleanup: null,
+    skillCuratorCleanup: vi.fn(),
     agentUnsub: null,
+    taskUnsub: null,
     heartbeatUnsub: null,
     transcriptUnsub: null,
     lifecycleUnsub: null,
@@ -1297,12 +1300,14 @@ describe("createGatewayCloseHandler", () => {
 
   it("unsubscribes lifecycle listeners and disposes bundle runtimes during shutdown", async () => {
     const lifecycleUnsub = vi.fn();
+    const taskUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
     const stopTaskRegistryMaintenance = vi.fn();
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         stopTaskRegistryMaintenance,
         lifecycleUnsub,
+        taskUnsub,
         transcriptUnsub,
       }),
     );
@@ -1310,6 +1315,7 @@ describe("createGatewayCloseHandler", () => {
     await close({ reason: "test shutdown" });
 
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
+    expect(taskUnsub).toHaveBeenCalledTimes(1);
     expect(transcriptUnsub).toHaveBeenCalledTimes(1);
     expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAgentHarnesses).toHaveBeenCalledTimes(1);

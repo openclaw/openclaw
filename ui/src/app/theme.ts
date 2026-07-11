@@ -37,10 +37,6 @@ function prefersLightScheme(): boolean {
   return globalThis.matchMedia("(prefers-color-scheme: light)").matches;
 }
 
-export function resolveSystemTheme(): ResolvedTheme {
-  return prefersLightScheme() ? "light" : "dark";
-}
-
 export function parseThemeSelection(
   themeRaw: unknown,
   modeRaw: unknown,

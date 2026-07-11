@@ -1,5 +1,6 @@
 // Control UI tests cover chat behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import {
   registerChatAttachmentPayload,
   resetChatAttachmentPayloadStoreForTest,
@@ -36,6 +37,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatVerboseLevel: null,
     client: null,
     connected: true,
+    connectionEpoch: 0,
     hello: null,
     lastError: null,
     sessionKey: "main",
@@ -211,6 +213,142 @@ describe("chat side result gateway events", () => {
 
     expect(state.chatSideResult).toBeNull();
     expect(state.chatSideResultTerminalRuns?.has("btw-main-global")).toBe(false);
+  });
+
+  it("clears the pending side question when its result arrives", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-1" };
+
+    handleChatSideResultGatewayEvent(state, {
+      kind: "btw",
+      runId: "btw-run-1",
+      sessionKey: "main",
+      question: "what changed?",
+      text: "Answer.",
+      ts: 123,
+    });
+
+    expect(state.chatSideResultPending).toBeNull();
+    expect(state.chatSideResult).not.toBeNull();
+  });
+
+  it("converts a resultless terminal BTW run into an error card and swallows the event", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-3" };
+
+    const result = handleChatGatewayEvent(state, {
+      runId: "btw-run-3",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "⚠️ /btw requires an active session with existing context." },
+        ],
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(state.chatSideResultPending).toBeNull();
+    expect(state.chatSideResult).toMatchObject({
+      kind: "btw",
+      runId: "btw-run-3",
+      question: "what changed?",
+      text: "⚠️ /btw requires an active session with existing context.",
+      isError: true,
+    });
+    // Swallowed: the detached failure must not be adopted into the transcript.
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("ignores side results from retired (superseded or dismissed) runs", () => {
+    const state = createState();
+    // A newer question retired the old pending run before its result arrived.
+    state.chatSideResultPending = { question: "older question", ts: 1, runId: "btw-run-old" };
+    retirePendingChatSideQuestion(state);
+    state.chatSideResultPending = { question: "newer question", ts: 2, runId: "btw-run-new" };
+
+    expect(
+      handleChatSideResultGatewayEvent(state, {
+        kind: "btw",
+        runId: "btw-run-old",
+        sessionKey: "main",
+        question: "older question",
+        text: "Stale answer.",
+        ts: 123,
+      }),
+    ).toBe(true);
+
+    expect(state.chatSideResult).toBeNull();
+    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-new" });
+    // The entry stays so the retired run's terminal chat event is swallowed too.
+    expect(state.chatSideResultTerminalRuns?.has("btw-run-old")).toBe(true);
+  });
+
+  it("keeps this pane's pending card when another run's result arrives", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "my question", ts: 1, runId: "btw-run-mine" };
+
+    // Same session, different run (e.g. a split pane) that was never retired
+    // here: it must not replace the live pending card, but its terminal chat
+    // event must still be swallowed in this pane.
+    expect(
+      handleChatSideResultGatewayEvent(state, {
+        kind: "btw",
+        runId: "btw-run-other-pane",
+        sessionKey: "main",
+        question: "other pane question",
+        text: "Other pane answer.",
+        ts: 123,
+      }),
+    ).toBe(true);
+
+    expect(state.chatSideResult).toBeNull();
+    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-mine" });
+    expect(state.chatSideResultTerminalRuns?.has("btw-run-other-pane")).toBe(true);
+
+    // This pane's own run still resolves its pending card.
+    handleChatSideResultGatewayEvent(state, {
+      kind: "btw",
+      runId: "btw-run-mine",
+      sessionKey: "main",
+      question: "my question",
+      text: "My answer.",
+      ts: 124,
+    });
+    expect(state.chatSideResult).toMatchObject({ runId: "btw-run-mine" });
+    expect(state.chatSideResultPending).toBeNull();
+  });
+
+  it("keeps a dismissed pending run's terminal reply out of the transcript", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "dismissed question", ts: 1, runId: "btw-run-5" };
+    retirePendingChatSideQuestion(state);
+    expect(state.chatSideResultPending).toBeNull();
+
+    const result = handleChatGatewayEvent(state, {
+      runId: "btw-run-5",
+      sessionKey: "main",
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "Late reply." }] },
+    });
+
+    expect(result).toBeNull();
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatSideResult).toBeNull();
+  });
+
+  it("keeps the pending side question when an unrelated run terminates", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-4" };
+
+    handleChatGatewayEvent(state, {
+      runId: "main-run-9",
+      sessionKey: "main",
+      state: "final",
+    });
+
+    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-4" });
   });
 
   it("ignores tracked BTW terminal events without touching the active run", () => {
@@ -797,6 +935,7 @@ describe("handleChatEvent", () => {
             kind: "direct",
             updatedAt: 1,
             hasActiveRun: true,
+            activeRunIds: ["run-1"],
             status: "running",
             startedAt: 100,
           },
@@ -3604,6 +3743,82 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
     ]);
+  });
+
+  it("rejects stale success and cleanup after a same-client reconnect", async () => {
+    const staleRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const freshRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockImplementationOnce(() => freshRequest.promise);
+    const client = { request } as unknown as NonNullable<ChatState["client"]>;
+    const visibleMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "visible before reconnect" }],
+    };
+    const state = createState({
+      chatMessages: [visibleMessage],
+      client,
+      connected: true,
+      connectionEpoch: 1,
+    });
+
+    const staleLoad = loadChatHistory(state);
+    state.connected = false;
+    state.connectionEpoch = 2;
+    state.connected = true;
+    state.connectionEpoch = 3;
+    const freshLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    staleRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "stale history" }] }],
+      thinkingLevel: "high",
+    });
+    await staleLoad;
+
+    expect(state.chatMessages).toEqual([visibleMessage]);
+    expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatLoading).toBe(true);
+
+    freshRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh history" }] }],
+      thinkingLevel: "low",
+    });
+    await freshLoad;
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("rejects stale errors and cleanup after a same-client reconnect", async () => {
+    const staleRequest = createDeferred<{ messages: Array<unknown> }>();
+    const request = vi.fn(() => staleRequest.promise);
+    const client = { request } as unknown as NonNullable<ChatState["client"]>;
+    const state = createState({
+      client,
+      connected: true,
+      connectionEpoch: 1,
+    });
+
+    const staleLoad = loadChatHistory(state);
+    state.connected = false;
+    state.connectionEpoch = 2;
+    state.connected = true;
+    state.connectionEpoch = 3;
+    // The connection owner has already prepared the new epoch. The stale
+    // finalizer must not clear its loading state.
+    state.chatLoading = true;
+    staleRequest.reject(new Error("stale history failure"));
+    await staleLoad;
+
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
+    expect(state.chatLoading).toBe(true);
   });
 
   it("ignores stale history responses after switching sessions", async () => {

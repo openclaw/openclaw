@@ -84,7 +84,7 @@ export type SubagentCompletionDeliveryState = {
     | "waiting_for_requester_turn";
 };
 
-export type SubagentKillReconciliationState = {
+type SubagentKillReconciliationState = {
   /** Actual cancellation time; a yielded run may have an older execution end. */
   killedAt: number;
   /** Requester aborts must not re-inject a delayed completion after queues are cleared. */
@@ -123,6 +123,8 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
+  /** Sticky owner while restart recovery replays this exact terminal run. */
+  terminalOwner?: "interrupted-recovery";
   /** Present only while a current-version killed run awaits bounded reconciliation. */
   killReconciliation?: SubagentKillReconciliationState;
   /** Durable requester-stop policy until silent completion cleanup finishes. */

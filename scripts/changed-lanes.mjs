@@ -13,13 +13,28 @@ const DOCS_PATH_RE = /^(?:docs\/|README\.md$|AGENTS\.md$|.*\.mdx?$)/u;
 const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
 const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
 const CORE_PATH_RE = /^(?:src\/|ui\/|packages\/)/u;
+const SCRIPTS_TYPECHECK_PATH_RE =
+  /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
 const TOOLING_PATH_RE =
   /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|config\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.swiftlint\.yml$|\.oxlint.*|\.oxfmt.*)/u;
 const ROOT_GLOBAL_PATH_RE =
   /^(?:package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsdown\.config\.ts$|vitest\.config\.ts$)/u;
 const LEGACY_ROOT_ASSET_PATH_RE = /^assets\//u;
-const LIVE_DOCKER_TOOLING_PATH_RE =
-  /^(?:scripts\/test-docker-all\.mjs|scripts\/test-docker-all\.sh|scripts\/lib\/live-docker-auth\.sh|scripts\/test-live-(?:acp-bind|cli-backend|codex-harness|gateway-models|models)-docker\.sh|src\/gateway\/gateway-acp-bind\.live\.test\.ts|src\/gateway\/live-agent-probes\.test\.ts)$/u;
+export const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
+  "scripts/lib/live-docker-auth.sh",
+  "scripts/test-live-acp-bind-docker.sh",
+  "scripts/test-live-cli-backend-docker.sh",
+  "scripts/test-live-codex-harness-docker.sh",
+  "scripts/test-live-gateway-models-docker.sh",
+  "scripts/test-live-models-docker.sh",
+  "scripts/test-live-subagent-announce-docker.sh",
+];
+const LIVE_DOCKER_TOOLING_PATHS = new Set([
+  ...LIVE_DOCKER_AUTH_SHELL_TARGETS,
+  "scripts/test-docker-all.mjs",
+  "src/gateway/gateway-acp-bind.live.test.ts",
+  "src/gateway/live-agent-probes.test.ts",
+]);
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
 const TEST_PATH_RE =
   /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$/u;
@@ -41,7 +56,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "package.json",
 ]);
 
-/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
+/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "scripts" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
 
 /**
  * @typedef {{
@@ -72,6 +87,7 @@ export function createEmptyChangedLanes() {
     coreTests: false,
     extensions: false,
     extensionTests: false,
+    scripts: false,
     apps: false,
     docs: false,
     tooling: false,
@@ -126,6 +142,10 @@ export function detectChangedLanes(changedPaths, options = {}) {
   }
 
   for (const changedPath of paths) {
+    if (SCRIPTS_TYPECHECK_PATH_RE.test(changedPath)) {
+      lanes.scripts = true;
+    }
+
     if (DOCS_PATH_RE.test(changedPath)) {
       lanes.docs = true;
       continue;
@@ -145,7 +165,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (LIVE_DOCKER_TOOLING_PATH_RE.test(changedPath)) {
+    if (LIVE_DOCKER_TOOLING_PATHS.has(changedPath)) {
       lanes.liveDockerTooling = true;
       reasons.push(`${changedPath}: live Docker tooling surface`);
       continue;
@@ -357,7 +377,7 @@ export function listStagedChangedPaths(cwd = process.cwd()) {
 /**
  * Classifies package.json script-only changes from git content.
  */
-export function classifyPackageJsonChangeFromGit(params) {
+function classifyPackageJsonChangeFromGit(params) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
     if (isLiveDockerPackageScriptOnlyChange(before, after)) {
@@ -482,7 +502,7 @@ function stableJson(value) {
 /**
  * Writes changed-lane booleans to the GitHub Actions output file.
  */
-export function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
+function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }

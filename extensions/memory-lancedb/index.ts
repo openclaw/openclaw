@@ -1168,7 +1168,8 @@ export function sanitizeForMemoryCapture(text: string): string {
 
   // Pre-truncate to cap regex work on very large inputs (ReDoS mitigation)
   const MAX_SANITIZE_CHARS = 10_000;
-  let cleaned = text.length > MAX_SANITIZE_CHARS ? text.slice(0, MAX_SANITIZE_CHARS) : text;
+  let cleaned =
+    text.length > MAX_SANITIZE_CHARS ? truncateUtf16Safe(text, MAX_SANITIZE_CHARS) : text;
   let strippedInjectedContext = false;
 
   // Strip leading timestamp prefix
@@ -1658,7 +1659,7 @@ export default definePluginEntry({
           });
 
           return {
-            content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}..."` }],
+            content: [{ type: "text", text: `Stored: "${truncateUtf16Safe(text, 100)}..."` }],
             details: { action: "created", id: entry.id },
           };
         },
@@ -1709,7 +1710,7 @@ export default definePluginEntry({
             }
 
             const list = results
-              .map((r) => `- [${r.entry.id}] ${r.entry.text.slice(0, 60)}...`)
+              .map((r) => `- [${r.entry.id}] ${truncateUtf16Safe(r.entry.text, 60)}...`)
               .join("\n");
 
             // Strip vector data for serialization

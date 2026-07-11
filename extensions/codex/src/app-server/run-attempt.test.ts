@@ -16,6 +16,7 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
@@ -29,7 +30,11 @@ import {
 } from "./attempt-context.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
-import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  resolveCodexSupervisionAppServerRuntimeOptions,
+} from "./config.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
@@ -40,10 +45,14 @@ import {
   CodexAppServerEventProjector,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
-import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
+import {
+  buildCodexAppServerConnectionFingerprint,
+  buildCodexPluginAppCacheKey,
+} from "./plugin-app-cache-key.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolCallResponse,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexServerNotification,
@@ -74,14 +83,31 @@ import {
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
-import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
+import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import {
+  readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
+  writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
 import * as sharedClientModule from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
-  startOrResumeThread,
+  startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  registerCodexTestSessionIdentity(
+    params.params.sessionFile,
+    params.params.sessionId,
+    params.params.sessionKey,
+  );
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+}
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -133,12 +159,22 @@ async function writeExistingBinding(
   workspaceDir: string,
   overrides: Partial<Parameters<typeof writeCodexAppServerBinding>[1]> = {},
 ) {
+  const supervisionFingerprint =
+    overrides.connectionScope === "supervision" && !overrides.appServerRuntimeFingerprint
+      ? buildCodexAppServerConnectionFingerprint(
+          resolveCodexSupervisionAppServerRuntimeOptions({
+            pluginConfig: { supervision: { enabled: true } },
+          }),
+        )
+      : undefined;
   await writeCodexAppServerBinding(sessionFile, {
     threadId: "thread-existing",
     cwd: workspaceDir,
     model: "gpt-5.4-codex",
     modelProvider: "openai",
+    historyCoveredThrough: new Date().toISOString(),
     webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+    ...(supervisionFingerprint ? { appServerRuntimeFingerprint: supervisionFingerprint } : {}),
     ...overrides,
   });
 }
@@ -1231,6 +1267,37 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("reuses one computer execution when Codex redelivers an in-flight request", async () => {
+    const response: CodexDynamicToolCallResponse = {
+      success: true,
+      contentItems: [{ type: "inputText", text: "left_click ok" }],
+    };
+    let finishExecution!: (value: typeof response) => void;
+    const inFlight = new Promise<typeof response>((resolve) => {
+      finishExecution = resolve;
+    });
+    const start = vi.fn(() => inFlight);
+    const registry = testing.createCodexDynamicToolExecutionRegistry();
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-computer-1",
+    };
+
+    const first = registry.claim(call, start);
+    const replayed = registry.claim(call, start);
+
+    expect(first.replayed).toBe(false);
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.execution).toBe(first.execution);
+    expect(start).toHaveBeenCalledTimes(1);
+    finishExecution(response);
+    await expect(Promise.all([first.execution, replayed.execution])).resolves.toEqual([
+      response,
+      response,
+    ]);
+  });
+
   it("emits TUI-compatible tool events for Codex dynamic tool calls", async () => {
     const sessionFile = path.join(tempDir, "session-tool-events.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-tool-events");
@@ -1243,23 +1310,27 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
-    await expect(
-      harness.handleServerRequest({
-        id: "request-tool-1",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-1",
-          namespace: null,
-          tool: "python",
-          arguments: { code: "print('hi')" },
-        },
-      }),
-    ).resolves.toMatchObject({
+    const request = {
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "python",
+        arguments: { code: "print('hi')" },
+      },
+    };
+    const [firstResponse, replayedResponse] = await Promise.all([
+      harness.handleServerRequest(request),
+      harness.handleServerRequest(request),
+    ]);
+    expect(firstResponse).toMatchObject({
       success: false,
       contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: python" }],
     });
+    expect(replayedResponse).toEqual(firstResponse);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -1299,6 +1370,11 @@ describe("runCodexAppServerAttempt", () => {
       );
     expect(resultEvent?.data.result).not.toHaveProperty("success");
     expect(resultEvent?.data.result).not.toHaveProperty("contentItems");
+    const toolPhases = onRunAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "tool")
+      .map((event) => event.data?.phase);
+    expect(toolPhases).toEqual(["start", "result"]);
   });
 
   it("maps sanitized dynamic tool output into transcript progress content", () => {
@@ -1309,6 +1385,7 @@ describe("runCodexAppServerAttempt", () => {
         { type: "inputText", text: `lookup result: ${rawToolSecret}` },
         { type: "inputImage", imageUrl: "data:image/png;base64,abc" },
         { type: "unsupportedCodexOutput", imageUrl: "data:image/png;base64,ignored" },
+        { type: `${"x".repeat(79)}🚀tail` },
       ],
     });
     const content = result.content as Array<{ text?: string; type?: string; url?: string }>;
@@ -1323,11 +1400,18 @@ describe("runCodexAppServerAttempt", () => {
       type: "text",
       text: "[Unsupported Codex dynamic tool output: unsupportedCodexOutput]",
     });
+    expect(content[3]).toEqual({
+      type: "text",
+      text: `[Unsupported Codex dynamic tool output: ${"x".repeat(79)}...]`,
+    });
     expect(JSON.stringify(result)).not.toContain(rawToolSecret);
   });
 
   it("keeps leading delivery hints out of the Codex current user request", async () => {
     for (const [index, deliveryHint] of MESSAGE_TOOL_DELIVERY_HINTS.entries()) {
+      // Bindings are keyed by session identity, so the previous iteration's
+      // thread would otherwise resume against a harness that cannot serve it.
+      resetCodexTestBindingStore();
       const sessionFile = path.join(tempDir, `session-delivery-hint-${index}.jsonl`);
       const workspaceDir = path.join(tempDir, `workspace-delivery-hint-${index}`);
       const harness = createStartedThreadHarness();
@@ -1436,39 +1520,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(rawAfterCompletion).not.toContain(
       '"idempotencyKey":"codex-app-server:thread-1:turn-1:prompt"',
     );
-  });
-
-  it("accepts turn completions scoped by nested turn thread id", async () => {
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "parent-thread",
-        turn: {
-          id: "turn-1",
-          threadId: "thread-1",
-          status: "completed",
-          items: [{ id: "agent-1", type: "agentMessage", text: "Nested done." }],
-          error: null,
-          startedAt: null,
-          completedAt: null,
-          durationMs: null,
-        },
-      },
-    });
-
-    const result = await run;
-
-    expect(result.promptError).toBeNull();
-    expect(result.assistantTexts).toEqual(["Nested done."]);
-    expect(result.assistantTranscriptOwned).toBe(true);
   });
 
   it("delivers completed assistant text when an orphan native tool call lacks a matching result", async () => {
@@ -1630,6 +1681,27 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsSpawn).not.toHaveProperty("deferLoading");
     expect(sessionsYield).not.toHaveProperty("namespace");
     expect(sessionsYield).not.toHaveProperty("deferLoading");
+  });
+
+  it("registers the ring-zero crestodian tool directly without a per-run plugin config", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual([]);
+
+    params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["crestodian"]);
+
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["crestodian", "message"]);
+
+    const toolBridge = createCodexToolBridgeForTest(params, [
+      createRuntimeDynamicTool("crestodian"),
+    ]);
+    const crestodian = flattenSpecsWithNamespace(toolBridge.specs).find(
+      (tool) => tool.name === "crestodian",
+    );
+    expect(crestodian).not.toHaveProperty("namespace");
+    expect(crestodian).not.toHaveProperty("deferLoading");
   });
 
   it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
@@ -1982,7 +2054,8 @@ describe("runCodexAppServerAttempt", () => {
     params.cleanupBundleMcpOnRunEnd = true;
 
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(() => expect(notify).toBeDefined(), fastWait);
+    // The keyed router only delivers turn/completed after the turn is bound.
+    await vi.waitFor(() => expect(events).toContain("request:turn/start"), fastWait);
     if (!notify) {
       throw new Error("expected turn notification handler");
     }
@@ -2054,19 +2127,20 @@ describe("runCodexAppServerAttempt", () => {
     const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
     const closeAndWait = vi.fn(async () => true);
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           ...mockClientRuntimeMethods(),
-          request: vi.fn(async (method: string) => {
-            if (method === "thread/start") {
-              return threadStartResult();
-            }
-            if (method === "turn/start") {
-              return turnStartResult();
-            }
-            return {};
-          }),
+          request,
           addNotificationHandler: vi.fn((handler) => {
             notify = handler;
             return () => undefined;
@@ -2082,7 +2156,11 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(() => expect(notify).toBeDefined(), fastWait);
+    // The keyed router only delivers turn/completed after the turn is bound.
+    await vi.waitFor(
+      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+      fastWait,
+    );
     if (!notify) {
       throw new Error("expected turn notification handler");
     }
@@ -2346,7 +2424,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -2490,7 +2568,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -2539,7 +2617,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -2586,13 +2664,14 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const originalBindingUpdatedAt = Date.now() - 60_000;
-    const bindingPath = `${sessionFile}.codex-app-server.json`;
-    const bindingPayload = JSON.parse(await fs.readFile(bindingPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    bindingPayload.updatedAt = new Date(originalBindingUpdatedAt).toISOString();
-    await fs.writeFile(bindingPath, `${JSON.stringify(bindingPayload, null, 2)}\n`);
+    const originalBinding = await readCodexAppServerBinding(sessionFile);
+    if (!originalBinding) {
+      throw new Error("expected Codex binding");
+    }
+    await writeCodexAppServerBinding(sessionFile, {
+      ...originalBinding,
+      historyCoveredThrough: new Date(originalBindingUpdatedAt).toISOString(),
+    });
     const sessionManager = SessionManager.open(sessionFile);
     const firstHarness = createResumeHarness();
     const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -2601,7 +2680,9 @@ describe("runCodexAppServerAttempt", () => {
     await firstHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await firstRun;
     const completedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(Date.parse(completedBinding?.updatedAt ?? "")).toBeGreaterThan(originalBindingUpdatedAt);
+    expect(Date.parse(completedBinding?.historyCoveredThrough ?? "")).toBeGreaterThan(
+      originalBindingUpdatedAt,
+    );
 
     const secondHarness = createResumeHarness();
     const secondParams = createParams(sessionFile, workspaceDir);
@@ -2625,13 +2706,14 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const oldBindingUpdatedAt = Date.now() - 60_000;
-    const bindingPath = `${sessionFile}.codex-app-server.json`;
-    const bindingPayload = JSON.parse(await fs.readFile(bindingPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    bindingPayload.updatedAt = new Date(oldBindingUpdatedAt).toISOString();
-    await fs.writeFile(bindingPath, `${JSON.stringify(bindingPayload, null, 2)}\n`);
+    const oldBinding = await readCodexAppServerBinding(sessionFile);
+    if (!oldBinding) {
+      throw new Error("expected Codex binding");
+    }
+    await writeCodexAppServerBinding(sessionFile, {
+      ...oldBinding,
+      historyCoveredThrough: new Date(oldBindingUpdatedAt).toISOString(),
+    });
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
@@ -3441,6 +3523,58 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("preserves every command failure from official app-server events", async () => {
+    const sessionFile = path.join(tempDir, "session-multi-command-failure.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-multi-command-failure");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+
+    for (const [id, status, exitCode] of [
+      ["command-failed-1", "failed", 1],
+      ["command-succeeded", "completed", 0],
+      ["command-failed-2", "failed", 2],
+    ] as const) {
+      await harness.notify({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id,
+            command: `/bin/bash -lc 'exit ${exitCode}'`,
+            cwd: workspaceDir,
+            status: "inProgress",
+          },
+        },
+      });
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id,
+            command: `/bin/bash -lc 'exit ${exitCode}'`,
+            cwd: workspaceDir,
+            status,
+            aggregatedOutput: "",
+            exitCode,
+            durationMs: 1,
+          },
+        },
+      });
+    }
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+    expect(result.toolMetas).toHaveLength(3);
+    expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
+  });
+
   it("promotes implicit Codex yolo approval policy when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
@@ -4179,6 +4313,10 @@ describe("runCodexAppServerAttempt", () => {
       },
     );
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
+    // The keyed router only accepts turn-scoped requests once the turn is bound.
+    await vi.waitFor(() =>
+      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+    );
 
     const result = await handleRequest?.({
       id: "request-elicitation-1",
@@ -4375,6 +4513,10 @@ describe("runCodexAppServerAttempt", () => {
     params.agentDir = agentDir;
     const run = runCodexAppServerAttempt(params, { pluginConfig });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
+    // The keyed router only accepts turn-scoped requests once the turn is bound.
+    await vi.waitFor(() =>
+      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+    );
 
     const result = await handleRequest?.({
       id: "request-elicitation-1",
@@ -5006,7 +5148,6 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
-      persistExtendedHistory: true,
     });
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
@@ -5123,7 +5264,7 @@ describe("runCodexAppServerAttempt", () => {
     const agentDir = path.join(tempDir, "agent");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -5553,7 +5694,6 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
       serviceTier: "priority",
-      persistExtendedHistory: true,
     });
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
@@ -5810,6 +5950,114 @@ describe("runCodexAppServerAttempt", () => {
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
+  });
+
+  it("uses a supervised native model for review policy despite an outer Anthropic default", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-existing",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+    const nativeResponse = threadStartResult("thread-existing");
+    nativeResponse.model = "gpt-5.5";
+    nativeResponse.modelProvider = "openai";
+    nativeResponse.thread.modelProvider = "openai";
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/read") {
+        return { thread: nativeResponse.thread };
+      }
+      if (method === "thread/resume") {
+        return nativeResponse;
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
+    const clientFactory = vi.fn(async () => harness.client);
+    const params = {
+      ...createParams(sessionFile, workspaceDir),
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      model: createCodexTestModel("anthropic"),
+      config: { tools: { exec: { mode: "auto" } } },
+    } as EmbeddedRunAttemptParams;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: { mode: "guardian" },
+        supervision: { enabled: true },
+      },
+      clientFactory,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: null,
+        startOptions: expect.objectContaining({ homeScope: "user" }),
+      }),
+    );
+    const resumeRequest = harness.requests.find((request) => request.method === "thread/resume");
+    const resumeParams = resumeRequest?.params as Record<string, unknown> | undefined;
+    expect(resumeParams).not.toHaveProperty("model");
+    expect(resumeParams).not.toHaveProperty("modelProvider");
+    expect(resumeParams?.approvalsReviewer).toBe("auto_review");
+    const turnRequest = harness.requests.find((request) => request.method === "turn/start");
+    const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(turnParams).not.toHaveProperty("model");
+    expect(turnParams).not.toHaveProperty("modelProvider");
+    expect(turnParams?.approvalsReviewer).toBe("auto_review");
+  });
+
+  it("fails before client startup when a successor generation hides a private supervision binding", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionKey = "agent:main:supervised-stale-generation";
+    registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+    const storePath = path.join(tempDir, "sessions.json");
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "session-current",
+        updatedAt: Date.now(),
+      },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionId = "session-current";
+    params.sessionKey = sessionKey;
+    params.config = { session: { store: storePath } };
+    const clientFactory = vi.fn(async () => {
+      throw new Error("client must not start");
+    });
+
+    await expect(
+      runCodexAppServerAttempt(params, {
+        pluginConfig: { supervision: { enabled: true } },
+        clientFactory,
+      }),
+    ).rejects.toThrow("Codex session generation is no longer current");
+    expect(clientFactory).not.toHaveBeenCalled();
+
+    registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-existing",
+      connectionScope: "supervision",
+    });
   });
 
   it("does not inherit a bound local provider for explicit native OpenAI resumed runs", async () => {

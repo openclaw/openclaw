@@ -16,6 +16,16 @@ struct ChatTranscriptCacheIdentityTests {
         #expect(id == nil)
     }
 
+    @Test @MainActor func `windows share one outbox owner per gateway`() {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-cache-owner-\(UUID().uuidString).sqlite")
+        let gatewayID = "gw-shared-\(UUID().uuidString)"
+        let first = MacChatTranscriptCache.store(databaseURL: databaseURL, gatewayID: gatewayID)
+        let second = MacChatTranscriptCache.store(databaseURL: databaseURL, gatewayID: gatewayID)
+
+        #expect(first === second)
+    }
+
     @Test func `local mode keys on state dir so profiles never collide`() {
         let defaultProfile = MacChatTranscriptCache.gatewayID(
             mode: .local,
@@ -39,7 +49,7 @@ struct ChatTranscriptCacheIdentityTests {
     @Test func `local state dir aliases resolve to one identity`() throws {
         // macOS tmp lives behind a /var -> /private/var symlink; both spellings
         // of the same state dir must map to a single cache scope.
-        let canonical = try FileManager.default.temporaryDirectory
+        let canonical = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-cache-identity-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: canonical, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: canonical) }

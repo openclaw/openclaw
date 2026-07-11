@@ -86,7 +86,7 @@ function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof value === "object" && value !== null && "then" in value;
 }
 
-export function isApprovalDecision(value: string): value is ExecApprovalDecision {
+function isApprovalDecision(value: string): value is ExecApprovalDecision {
   return value === "allow-once" || value === "allow-always" || value === "deny";
 }
 
@@ -558,6 +558,12 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
       }
     | null
     | undefined;
+  resolveRecord?: (params: {
+    approvalId: string;
+    decision: ExecApprovalDecision;
+    resolvedBy: string | null;
+    snapshot: ExecApprovalRecord<TPayload>;
+  }) => boolean;
   resolvedEventName: string;
   buildResolvedEvent: (params: {
     approvalId: string;
@@ -622,7 +628,14 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
 
   const resolvedBy =
     params.client?.connect?.client?.displayName ?? params.client?.connect?.client?.id ?? null;
-  const ok = params.manager.resolve(resolved.approvalId, params.decision, resolvedBy);
+  const ok = params.resolveRecord
+    ? params.resolveRecord({
+        approvalId: resolved.approvalId,
+        decision: params.decision,
+        resolvedBy,
+        snapshot: resolved.snapshot,
+      })
+    : params.manager.resolve(resolved.approvalId, params.decision, resolvedBy);
   if (!ok) {
     respondUnknownOrExpiredApproval(params.respond);
     return;

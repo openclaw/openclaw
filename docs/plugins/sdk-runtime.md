@@ -3,7 +3,7 @@ summary: "api.runtime -- the injected runtime helpers available to plugins"
 title: "Plugin runtime helpers"
 sidebarTitle: "Runtime helpers"
 read_when:
-  - You need to call core helpers from a plugin (TTS, STT, image gen, web search, subagent, nodes)
+  - You need to call core helpers from a plugin (TTS, STT, image gen, web search, Gateway, subagent, nodes)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
 ---
@@ -160,6 +160,19 @@ two-party event loops that do not go through the shared inbound reply runner.
       update: (entry) => ({ thinkingLevel: "high" }),
     });
 
+    const created = await api.runtime.agent.session.createSessionEntry({
+      cfg,
+      key: "agent:main:my-plugin:task-1",
+      initialEntry: {
+        agentHarnessId: "my-harness",
+        modelSelectionLocked: true,
+        pluginExtensions: { "my-plugin": { phase: "initializing" } },
+      },
+      afterCreate: async () => ({
+        pluginExtensions: { "my-plugin": { phase: "ready" } },
+      }),
+    });
+
     const storePath = api.runtime.agent.session.resolveStorePath(cfg.session?.store, { agentId });
     await api.runtime.agent.session.runWithWorkAdmission(
       { storePath, sessionKey },
@@ -171,7 +184,11 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted.
 
-    Use `runWithWorkAdmission(...)` when a plugin starts work on a persisted session. The callback rejects archived or concurrently replaced sessions, keeps archive/reset/delete mutations coordinated through completion, and receives an `AbortSignal` that must be forwarded to the agent run.
+    `createSessionEntry(...)` creates a new canonical session row and transcript. Its trusted `initialEntry` surface is deliberately narrow: a non-empty `agentHarnessId`, optional `modelSelectionLocked: true`, and optional `pluginExtensions`. The injected runtime accepts only harness ids owned by the calling plugin through `registerAgentHarness(...)`; this is an ownership invariant, not a sandbox between in-process plugins. It rejects an existing row; `label` and `spawnedCwd` are separate creation fields rather than trusted-entry patches.
+
+    Creation holds the session lifecycle mutation fence through `afterCreate`, so new work waits for plugin-owned initialization to finish and pre-existing admitted work makes creation fail. The callback receives a clone of the created state. If it returns a patch, that patch may contain only `pluginExtensions`, and its value is the complete final `pluginExtensions` field. A callback or final-persistence failure rolls back the unchanged new row and transcript; guarded rollback preserves a row changed or claimed concurrently. `recoverMatchingInitialEntry: true` is only for retrying interrupted initialization when the persisted trusted fields match exactly, and recovery requires `afterCreate` to return a final patch.
+
+    Use `runWithWorkAdmission(...)` when a plugin starts work on a persisted session. The callback rejects archived or concurrently replaced sessions, keeps archive/reset/delete mutations coordinated through completion, and receives an `AbortSignal` that must be forwarded to the agent run. A harness may explicitly name trusted execution delegates through its experimental `delegatedExecutionPluginIds` registration field. Delegates can admit and run only an exact existing model-locked session; all session mutations remain restricted to the harness owner. See [Agent harness plugins](/plugins/sdk-agent-harness#delegated-execution).
 
     For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read its events, append messages, publish updates, and run related operations under the same transcript write lock. Passing `sessionFile`, using `resolveSessionTranscriptLegacyFileTarget(...)`, or importing low-level `appendSessionTranscriptMessage(...)` / `emitSessionTranscriptUpdate(...)` from `openclaw/plugin-sdk/agent-harness-runtime` is deprecated; those paths exist only for legacy code that already receives an active transcript artifact.
 
@@ -203,6 +220,38 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
+    Provider orchestration can also acquire the configured local-service
+    lifecycle before issuing an HTTP request:
+
+    ```typescript
+    const lease = await api.runtime.llm.acquireLocalService(
+      {
+        providerId,
+        baseUrl,
+        headers,
+      },
+      signal,
+    );
+    try {
+      // Send and fully consume the provider request.
+    } finally {
+      await lease?.release();
+    }
+    ```
+
+    `acquireLocalService(...)` is a stable, generic provider-service SDK
+    contract. The host resolves process configuration from
+    `models.providers.<providerId>.localService`; callers cannot supply a
+    command, arguments, environment, or lifecycle policy. Process spawning,
+    readiness, diagnostics, and idle-stop policy remain internal to the host.
+
+    Pass the exact configured provider id and resolved request base URL. Do not
+    replace aliases with an adapter id: separate aliases can point at separate
+    local GPU hosts. The host rejects endpoints that do not match the configured
+    provider base URL, apart from the `/v1` normalization used by Ollama and LM
+    Studio adapters. The host owns startup serialization, readiness probes,
+    request leases, abort handling, and idle shutdown.
+
     The helper uses the same simple-completion preparation path as OpenClaw's
     built-in runtime and the host-owned runtime config snapshot. Context engines
     receive a session-bound `llm.complete` capability, so model calls use the
@@ -213,6 +262,27 @@ two-party event loops that do not go through the shared inbound reply runner.
     <Warning>
     Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
     </Warning>
+
+  </Accordion>
+  <Accordion title="api.runtime.gateway">
+    Call another Gateway method in process while preserving the current plugin's trusted runtime
+    identity. This is intended for bundled or trusted official plugins that compose plugin-owned
+    Gateway capabilities without opening a loopback WebSocket connection.
+
+    ```typescript
+    if (await api.runtime.gateway.isAvailable()) {
+      const result = await api.runtime.gateway.request<{ callId: string }>(
+        "voicecall.start",
+        { to: "+15550001234", mode: "conversation" },
+        { timeoutMs: 60_000 },
+      );
+    }
+    ```
+
+    Requests use `operator.write` scope and do not grant admin scope. Calls from arbitrary external
+    plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
+    `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
+    before choosing this path from tools that can also run in standalone agent processes.
 
   </Accordion>
   <Accordion title="api.runtime.subagent">
@@ -589,7 +659,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     await store.clear();
     ```
 
-    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry. When a write would exceed the plugin row cap, the runtime sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows.
+    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
 
     `openSyncKeyedStore<T>(...)` returns the same store shape with synchronous methods (`register`, `registerIfAbsent`, `lookup`, `consume`, `clear` all return values directly instead of promises) for callers that cannot await.
 

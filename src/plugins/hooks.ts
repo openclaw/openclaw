@@ -58,6 +58,7 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
   PluginHookBeforeAgentRunEvent,
+  PluginHookCronReconciledEvent,
   PluginHookCronChangedEvent,
   PluginHookGatewayCronDeliveryStatus,
   PluginHookGatewayCronJobState,
@@ -138,6 +139,7 @@ export type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookBeforeAgentRunEvent,
+  PluginHookCronReconciledEvent,
   PluginHookAfterToolCallEvent,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -230,6 +232,10 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   // The runner is fail-open for this hook name, so a timed-out handler is
   // logged and the run proceeds without its modifications.
   before_agent_start: 15_000,
+  // Terminal finalization hooks sit on the runner's completion path. A hung
+  // handler must not freeze final delivery or keep compaction retry recovery
+  // unresolved; timeout fail-opens with the original final answer.
+  before_agent_finalize: 15_000,
   before_prompt_build: 15_000,
   resolve_exec_env: 15_000,
 };
@@ -1560,6 +1566,16 @@ export function createHookRunner(
   }
 
   /**
+   * Run cron_reconciled after the Gateway scheduler reaches a complete state.
+   */
+  async function runCronReconciled(
+    event: PluginHookCronReconciledEvent,
+    ctx: PluginHookGatewayContext,
+  ): Promise<void> {
+    return runVoidHook("cron_reconciled", event, ctx);
+  }
+
+  /**
    * Run cron_changed hook for gateway-owned cron lifecycle changes.
    */
   async function runCronChanged(
@@ -1680,6 +1696,7 @@ export function createHookRunner(
     runGatewayStart,
     runGatewayStop,
     runHeartbeatPromptContribution,
+    runCronReconciled,
     runCronChanged,
     // Install hooks
     runBeforeInstall,

@@ -1,4 +1,3 @@
-import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 /**
  * Selects and invokes native agent harnesses for embedded run attempts.
  */
@@ -21,6 +20,10 @@ import type {
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
+import {
+  unwrapModelHeaderSentinelsForProviderEgress,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../provider-secret-egress.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { expandToolGroups, mergeAlsoAllowPolicy, normalizeToolName } from "../tool-policy.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
@@ -31,7 +34,8 @@ import {
   type AgentHarnessPolicy,
 } from "./policy.js";
 import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
-import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
+import { buildAgentHarnessSupportContext, compareHarnessSupport } from "./support.js";
+import type { AgentHarness, AgentHarnessSupport } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
 export { resolveAgentHarnessPolicy } from "./policy.js";
@@ -90,6 +94,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "senderName"
   | "senderUsername"
   | "senderE164"
+  | "senderIsOwner"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -130,67 +135,6 @@ function applyAgentHarnessAvailabilityPolicy(policy: AgentHarnessPolicy): AgentH
   return policy;
 }
 
-function compareHarnessSupport(
-  left: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
-  right: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
-): number {
-  const priorityDelta = (right.support.priority ?? 0) - (left.support.priority ?? 0);
-  if (priorityDelta !== 0) {
-    return priorityDelta;
-  }
-  return left.harness.id.localeCompare(right.harness.id);
-}
-
-function buildAgentHarnessSupportContext(params: {
-  provider: string;
-  modelId?: string;
-  requestedRuntime: AgentHarnessSupportContext["requestedRuntime"];
-  config?: OpenClawConfig;
-}): AgentHarnessSupportContext {
-  const providerOwnership = resolveProviderRefOwnership({
-    provider: params.provider,
-    config: params.config,
-  });
-  return {
-    provider: params.provider,
-    modelId: params.modelId,
-    modelProvider: buildAgentHarnessSupportModelProvider(params),
-    requestedRuntime: params.requestedRuntime,
-    providerOwnerStatus: providerOwnership.status,
-    providerOwnerPluginIds:
-      providerOwnership.status === "unowned" ? [] : providerOwnership.pluginIds,
-  };
-}
-
-function buildAgentHarnessSupportModelProvider(params: {
-  provider: string;
-  modelId?: string;
-  config?: OpenClawConfig;
-}): AgentHarnessSupportContext["modelProvider"] {
-  const providerConfig = findNormalizedProviderValue(
-    params.config?.models?.providers,
-    params.provider,
-  );
-  if (!providerConfig) {
-    return undefined;
-  }
-  const modelConfig = params.modelId
-    ? providerConfig.models?.find((entry) => entry.id === params.modelId)
-    : undefined;
-  return {
-    api: modelConfig?.api ?? providerConfig.api ?? "openai-responses",
-    baseUrl: modelConfig?.baseUrl ?? providerConfig.baseUrl,
-    azureApiVersion: readStringParam(
-      modelConfig?.params?.azureApiVersion ?? providerConfig.params?.azureApiVersion,
-    ),
-    request: providerConfig.request,
-  };
-}
-
-function readStringParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 export function selectAgentHarness(params: {
   provider: string;
   modelId?: string;
@@ -223,12 +167,14 @@ function selectAgentHarnessDecision(params: {
   agentHarnessRuntimeOverride?: string;
 }): AgentHarnessSelectionDecision {
   const resolvedPolicy = resolveConfiguredAgentHarnessPolicy(params);
+  const pinnedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const runtimeOverride = normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
+  const selectedRuntimeOverride = pinnedHarnessId ?? runtimeOverride;
   const policy =
-    runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride)
+    selectedRuntimeOverride && !isDefaultAgentRuntimeId(selectedRuntimeOverride)
       ? ({
           ...resolvedPolicy,
-          runtime: runtimeOverride,
+          runtime: selectedRuntimeOverride,
           runtimeSource: "model",
         } as AgentHarnessPolicy)
       : resolvedPolicy;
@@ -248,11 +194,26 @@ function selectAgentHarnessDecision(params: {
   if (runtime !== "auto") {
     const forced = pluginHarnesses.find((entry) => entry.id === runtime);
     if (forced) {
+      // A persisted harness owns the existing transcript. Provider/model fields are only
+      // routing metadata for native sessions and may change with channel or heartbeat config.
+      // Keep the pinned harness authoritative; if it is unavailable, fail closed below.
+      if (pinnedHarnessId === runtime) {
+        return buildSelectionDecision({
+          harness: forced,
+          policy,
+          selectedReason: "forced_plugin",
+          candidates: listHarnessCandidates(pluginHarnesses),
+        });
+      }
       const supportContext = buildAgentHarnessSupportContext({
         provider: params.provider,
         modelId: params.modelId,
         requestedRuntime: runtime,
         config: params.config,
+        providerOwnership: resolveProviderRefOwnership({
+          provider: params.provider,
+          config: params.config,
+        }),
       });
       const support = forced.supports(supportContext);
       if (support.supported) {
@@ -319,6 +280,10 @@ function selectAgentHarnessDecision(params: {
             modelId: params.modelId,
             requestedRuntime: runtime,
             config: params.config,
+            providerOwnership: resolveProviderRefOwnership({
+              provider: params.provider,
+              config: params.config,
+            }),
           });
           return pluginHarnesses.map((harness) => ({
             harness,
@@ -371,8 +336,7 @@ export async function runAgentHarnessAttempt(
     agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
   const harness = selection.harness;
-  const attemptParams =
-    harness.id === "openclaw" ? params : applyPluginHarnessDenyAllToolPolicy(params);
+  const attemptParams = harness.id === "openclaw" ? params : preparePluginHarnessParams(params);
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
@@ -395,6 +359,22 @@ export async function runAgentHarnessAttempt(
     });
     throw error;
   }
+}
+
+function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptParams {
+  const boundary = "plugin harness handoff";
+  const resolvedApiKey = params.resolvedApiKey
+    ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
+    : params.resolvedApiKey;
+  const model = unwrapModelHeaderSentinelsForProviderEgress(params.model, boundary);
+  if (model === params.model && resolvedApiKey === params.resolvedApiKey) {
+    return applyPluginHarnessDenyAllToolPolicy(params);
+  }
+  return applyPluginHarnessDenyAllToolPolicy({
+    ...params,
+    model,
+    resolvedApiKey,
+  });
 }
 
 function applyPluginHarnessDenyAllToolPolicy(
@@ -463,6 +443,7 @@ function resolvePluginHarnessToolPolicies(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    senderIsOwner: params.senderIsOwner,
   });
   const groupPolicyParams = {
     config: params.config,

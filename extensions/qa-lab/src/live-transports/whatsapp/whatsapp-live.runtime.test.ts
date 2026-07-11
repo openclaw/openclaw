@@ -585,9 +585,9 @@ describe("WhatsApp QA live runtime", () => {
     expect(() => testing.assertSafeArchiveEntries(["/tmp/creds.json"])).toThrow("unsafe entry");
   });
 
-  it("registers the WhatsApp canary and pairing scenarios", () => {
-    const scenarios = testing.findScenarios(["whatsapp-canary", "whatsapp-pairing-block"]);
-    expect(scenarios.map(({ id }) => id)).toEqual(["whatsapp-canary", "whatsapp-pairing-block"]);
+  it("registers the WhatsApp canary scenario", () => {
+    const scenarios = testing.findScenarios(["whatsapp-canary"]);
+    expect(scenarios.map(({ id }) => id)).toEqual(["whatsapp-canary"]);
   });
 
   it("keeps direct Gateway scenario ids stable while labeling report headings as Gateway probes", () => {
@@ -1321,8 +1321,6 @@ describe("WhatsApp QA live runtime", () => {
       "canary",
       "mention-gating",
       "top-level-reply-shape",
-      "restart-resume",
-      "help-command",
       "quote-reply",
       "reaction-observation",
       "allowlist-block",
@@ -1577,11 +1575,8 @@ describe("WhatsApp QA live runtime", () => {
   it("keeps mock-backed and native approval scenarios out of default live-frontier selection", () => {
     const expectedDefaultIds = [
       "whatsapp-canary",
-      "whatsapp-pairing-block",
       "whatsapp-mention-gating",
       "whatsapp-top-level-reply-shape",
-      "whatsapp-restart-resume",
-      "whatsapp-help-command",
       "whatsapp-reply-to-message",
       "whatsapp-group-reply-to-message",
       "whatsapp-status-reactions",
@@ -1599,20 +1594,12 @@ describe("WhatsApp QA live runtime", () => {
   it("adds deterministic audio preflight to the default mock-openai WhatsApp selection", () => {
     expect(testing.findScenarios(undefined, "mock-openai").map(({ id }) => id)).toEqual([
       "whatsapp-canary",
-      "whatsapp-pairing-block",
       "whatsapp-mention-gating",
       "whatsapp-group-pending-history-context",
       "whatsapp-broadcast-group-fanout",
       "whatsapp-group-activation-always",
       "whatsapp-group-reply-to-bot-triggers",
       "whatsapp-top-level-reply-shape",
-      "whatsapp-restart-resume",
-      "whatsapp-help-command",
-      "whatsapp-commands-command",
-      "whatsapp-tools-compact-command",
-      "whatsapp-whoami-command",
-      "whatsapp-context-command",
-      "whatsapp-tool-only-usage-footer",
       "whatsapp-reply-to-message",
       "whatsapp-group-reply-to-message",
       "whatsapp-reply-to-mode-batched",
@@ -1633,13 +1620,8 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-message-actions",
       "whatsapp-inbound-structured-messages",
       "whatsapp-group-audio-gating",
-      "whatsapp-access-control-dm-open",
-      "whatsapp-access-control-dm-disabled",
-      "whatsapp-access-control-group-open",
-      "whatsapp-access-control-group-disabled",
       "whatsapp-reply-delivery-shape",
       "whatsapp-stream-final-message-accounting",
-      "whatsapp-native-new-command",
       "whatsapp-status-reactions",
       "whatsapp-status-reaction-lifecycle",
       "whatsapp-group-allowlist-block",
@@ -2281,75 +2263,6 @@ describe("WhatsApp QA live runtime", () => {
         redactMetadata: false,
       }),
     ).toBe("safe local diagnostic");
-  });
-
-  it("adds WhatsApp command UX parity scenarios to the mock-backed selection", () => {
-    const scenarios = testing.findScenarios([
-      "whatsapp-commands-command",
-      "whatsapp-tools-compact-command",
-      "whatsapp-whoami-command",
-      "whatsapp-context-command",
-      "whatsapp-tool-only-usage-footer",
-    ]);
-
-    expect(
-      scenarios.map((scenario) => {
-        const run = scenario.buildRun();
-        if (run.kind === "approval") {
-          throw new Error(`${scenario.id} unexpectedly built an approval run`);
-        }
-        return [
-          scenario.id,
-          run.input,
-          String(run.matchText),
-          run.expectedJoinedSutTextIncludes,
-          run.expectedSutMessageCountRange,
-        ] as const;
-      }),
-    ).toEqual([
-      [
-        "whatsapp-commands-command",
-        "/commands",
-        "/Commands \\(|\\/session|\\/verbose/iu",
-        ["/session", "/verbose"],
-        undefined,
-      ],
-      [
-        "whatsapp-tools-compact-command",
-        "/tools compact",
-        "/Available tools|exec|Use \\/tools verbose for descriptions/iu",
-        ["exec", "Use /tools verbose for descriptions"],
-        undefined,
-      ],
-      [
-        "whatsapp-whoami-command",
-        "/whoami",
-        "/(?=.*Identity)(?=.*Channel: whatsapp)(?=.*AllowFrom:)/isu",
-        undefined,
-        undefined,
-      ],
-      [
-        "whatsapp-context-command",
-        "/context list",
-        "/(?=.*Context breakdown)(?=.*Workspace:)(?=.*Tool schemas)/isu",
-        undefined,
-        undefined,
-      ],
-      [
-        "whatsapp-tool-only-usage-footer",
-        "/usage tokens",
-        "/Usage footer: tokens/iu",
-        undefined,
-        undefined,
-      ],
-    ]);
-    expect(scenarios.map((scenario) => scenario.defaultProviderModes)).toEqual([
-      ["mock-openai"],
-      ["mock-openai"],
-      ["mock-openai"],
-      ["mock-openai"],
-      ["mock-openai"],
-    ]);
   });
 
   it("defines WhatsApp final-message accounting as a settled two-chunk assertion", () => {

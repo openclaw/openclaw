@@ -141,14 +141,16 @@ vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeExternalAuthProviderRefs: resolveRuntimeExternalAuthProviderRefsMock,
 }));
 
-vi.mock("./model.static-catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./model.static-catalog.js")>();
-  return {
-    ...actual,
-    resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
-    resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
-  };
-});
+vi.mock("./model.static-catalog.js", () => ({
+  canonicalizeManifestModelCatalogProviderAlias: ({ provider }: { provider: string }) => {
+    // Static-catalog coverage exercises alias discovery. Model resolution only needs the canonical
+    // result here; rescanning every plugin manifest made each table-like case pay I/O.
+    const normalized = provider.trim().toLowerCase();
+    return normalized === "moonshotai" || normalized === "moonshot-ai" ? "moonshot" : provider;
+  },
+  resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
+  resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
+}));
 
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
@@ -1241,6 +1243,39 @@ describe("resolveModel", () => {
       workspaceDir: expect.any(String),
       includeRuntimeDiscovery: true,
     });
+  });
+
+  it("leaves maxTokens undefined when no configured or catalog value is available (regression: #98295)", () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/98295.
+    // A custom provider entry without maxTokens (and no matching bundled
+    // static catalog row) must not synthesize an oversized output cap from
+    // DEFAULT_CONTEXT_TOKENS. Leaving maxTokens undefined lets the transport
+    // omit `max_completion_tokens` so the provider applies its own default,
+    // avoiding HTTP 400 (Param Incorrect) from strict OpenAI-compatible
+    // servers whose completion-token ceiling is below the synthesized value.
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce(undefined);
+    const cfg = {
+      models: {
+        providers: {
+          xiaomi: {
+            baseUrl: "https://api.xiaomimimo.com/v1",
+            models: [
+              {
+                id: "mimo-v2.5-pro",
+                name: "mimo-v2.5-pro",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("xiaomi", "mimo-v2.5-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.id).toBe("mimo-v2.5-pro");
+    expect(model.baseUrl).toBe("https://api.xiaomimimo.com/v1");
+    expect(model.maxTokens).toBeUndefined();
   });
 
   it("inherits bundled static transport for configured provider fallback models", () => {
@@ -4217,22 +4252,22 @@ describe("resolveModel", () => {
   it("normalizes stale native xai completions transport to responses", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "xai",
-      modelId: "grok-4.20-beta-latest-reasoning",
+      modelId: "grok-4.20-0309-reasoning",
       templateModel: buildForwardCompatTemplate({
-        id: "grok-4.20-beta-latest-reasoning",
-        name: "Grok 4.20 Beta Latest (Reasoning)",
+        id: "grok-4.20-0309-reasoning",
+        name: "Grok 4.20 0309 (Reasoning)",
         provider: "xai",
         api: "openai-completions",
         baseUrl: "https://api.x.ai/v1",
       }),
     });
 
-    const result = resolveModelForTest("xai", "grok-4.20-beta-latest-reasoning", "/tmp/agent");
+    const result = resolveModelForTest("xai", "grok-4.20-0309-reasoning", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
     expectRecordFields(result.model, {
       provider: "xai",
-      id: "grok-4.20-beta-latest-reasoning",
+      id: "grok-4.20-0309-reasoning",
       api: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
     });
@@ -4241,17 +4276,17 @@ describe("resolveModel", () => {
   it("normalizes stale native xai completions transport after plugin model normalization", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "xai",
-      modelId: "grok-4.20-beta-latest-reasoning",
+      modelId: "grok-4.3",
       templateModel: buildForwardCompatTemplate({
-        id: "grok-4.20-beta-latest-reasoning",
-        name: "Grok 4.20 Beta Latest (Reasoning)",
+        id: "grok-4.3",
+        name: "Grok 4.3",
         provider: "xai",
         api: "openai-completions",
         baseUrl: "https://api.x.ai/v1",
       }),
     });
 
-    const result = resolveModel("xai", "grok-4.20-beta-latest-reasoning", "/tmp/agent", undefined, {
+    const result = resolveModel("xai", "grok-4.3-latest", "/tmp/agent", undefined, {
       authStorage: { mocked: true } as never,
       modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
       runtimeHooks: {
@@ -4276,7 +4311,7 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expectRecordFields(result.model, {
       provider: "xai",
-      id: "grok-4.20-beta-latest-reasoning",
+      id: "grok-4.3",
       api: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
     });

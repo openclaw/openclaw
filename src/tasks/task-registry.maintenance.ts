@@ -30,6 +30,7 @@ import {
   isPluginStateDatabaseOpen,
   sweepExpiredPluginStateEntries,
 } from "../plugin-state/plugin-state-store.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   deriveSessionChatTypeFromKey,
@@ -64,6 +65,7 @@ import {
 import type { TaskAuditFinding, TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
+import type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
 import {
   resolveEffectiveTaskCleanupAfter,
   resolveTaskCleanupAfter,
@@ -883,7 +885,7 @@ function reconcileTaskRecordForOperatorInspectionWithContexts(
   return projectTaskLost(task, now, backingSessionContext);
 }
 
-export function reconcileTaskRecordForOperatorInspection(
+function reconcileTaskRecordForOperatorInspection(
   task: TaskRecord,
   context: CronRecoveryContext = createCronRecoveryContext(),
 ): TaskRecord {
@@ -910,15 +912,6 @@ export function reconcileInspectableTasks(): TaskRecord[] {
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
-
-export type ActiveTaskRestartBlocker = {
-  taskId: string;
-  status: Extract<TaskStatus, "running">;
-  runtime: TaskRecord["runtime"];
-  runId?: string;
-  label?: string;
-  title?: string;
-};
 
 function isActiveTaskRestartBlockerStatus(
   status: TaskStatus,
@@ -1100,7 +1093,9 @@ function startScheduledSweep() {
   const clearSweepInProgress = () => {
     sweepInProgress = false;
   };
-  sweepTaskRegistry().then(clearSweepInProgress, clearSweepInProgress);
+  void runWithGatewayIndependentRootWorkAdmission(async () => {
+    await sweepTaskRegistry();
+  }).then(clearSweepInProgress, clearSweepInProgress);
 }
 
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {

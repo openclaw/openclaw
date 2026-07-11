@@ -244,4 +244,11 @@ describe("formatSlackBotStarterThreadLabel", () => {
       }),
     ).toBe("Slack thread DM (assistant root): Line one Line two");
   });
+
+  it("drops a surrogate-pair emoji whole when it straddles the snippet limit", () => {
+    const starterText = `${"a".repeat(79)}🐱tail`;
+    expect(formatSlackBotStarterThreadLabel({ roomLabel: "DM", starterText })).toBe(
+      `Slack thread DM (assistant root): ${"a".repeat(79)}`,
+    );
+  });
 });

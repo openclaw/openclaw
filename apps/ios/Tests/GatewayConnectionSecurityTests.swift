@@ -16,7 +16,8 @@ import Testing
         lanHost: String?,
         tailnetDns: String?,
         gatewayPort: Int?,
-        fingerprint: String?) -> GatewayDiscoveryModel.DiscoveredGateway
+        fingerprint: String?,
+        tlsEnabled: Bool = true) -> GatewayDiscoveryModel.DiscoveredGateway
     {
         let endpoint: NWEndpoint = .service(name: "Test", type: "_openclaw-gw._tcp", domain: "local.", interface: nil)
         return GatewayDiscoveryModel.DiscoveredGateway(
@@ -28,7 +29,7 @@ import Testing
             tailnetDns: tailnetDns,
             gatewayPort: gatewayPort,
             canvasPort: nil,
-            tlsEnabled: true,
+            tlsEnabled: tlsEnabled,
             tlsFingerprintSha256: fingerprint,
             cliPath: nil)
     }
@@ -75,6 +76,117 @@ import Testing
         #expect(params?.allowTOFU == false)
     }
 
+    @Test @MainActor func `discovered gateway availability requires advertised TLS or a stored pin`() {
+        let unpinnedID = "test|\(UUID().uuidString)"
+        let pinnedID = "test|\(UUID().uuidString)"
+        defer {
+            clearTLSFingerprint(stableID: unpinnedID)
+            clearTLSFingerprint(stableID: pinnedID)
+        }
+        self.clearTLSFingerprint(stableID: unpinnedID)
+        self.clearTLSFingerprint(stableID: pinnedID)
+
+        let controller = self.makeController()
+        let unavailable = self.makeDiscoveredGateway(
+            stableID: unpinnedID,
+            lanHost: "gateway.local",
+            tailnetDns: nil,
+            gatewayPort: 18789,
+            fingerprint: "untrusted-txt-fingerprint",
+            tlsEnabled: false)
+        let advertisedTLS = self.makeDiscoveredGateway(
+            stableID: unpinnedID,
+            lanHost: "gateway.local",
+            tailnetDns: nil,
+            gatewayPort: 18789,
+            fingerprint: nil)
+        let pinned = self.makeDiscoveredGateway(
+            stableID: pinnedID,
+            lanHost: "gateway.local",
+            tailnetDns: nil,
+            gatewayPort: 18789,
+            fingerprint: nil,
+            tlsEnabled: false)
+
+        #expect(controller.discoveredGatewayConnectionAvailability(unavailable) == .secureTransportRequired)
+        #expect(controller.discoveredGatewayConnectionAvailability(unavailable).canConnect == false)
+        #expect(controller.discoveredGatewayConnectionAvailability(unavailable).guidanceText?
+            .contains("trusted private-LAN") == true)
+        #expect(controller.discoveredGatewayConnectionAvailability(advertisedTLS) == .available)
+
+        GatewayTLSStore.saveFingerprint("stored-pin", stableID: pinnedID)
+        #expect(controller.discoveredGatewayConnectionAvailability(pinned) == .available)
+    }
+
+    @Test @MainActor func `blocked discovered gateway does no connection work`() async {
+        let stableID = "test|\(UUID().uuidString)"
+        defer { clearTLSFingerprint(stableID: stableID) }
+        self.clearTLSFingerprint(stableID: stableID)
+        let tcpCalls = OSAllocatedUnfairLock(initialState: 0)
+        let tlsCalls = OSAllocatedUnfairLock(initialState: 0)
+        let resolverCalls = OSAllocatedUnfairLock(initialState: 0)
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in
+                tcpCalls.withLock { $0 += 1 }
+                return true
+            },
+            tlsFingerprintProbe: { _ in
+                tlsCalls.withLock { $0 += 1 }
+                return .fingerprint("unexpected")
+            },
+            serviceEndpointResolver: { _ in
+                resolverCalls.withLock { $0 += 1 }
+                return (host: "unexpected.example", port: 443)
+            })
+        let gateway = self.makeDiscoveredGateway(
+            stableID: stableID,
+            lanHost: "untrusted-txt.example",
+            tailnetDns: nil,
+            gatewayPort: 18789,
+            fingerprint: "untrusted-txt-fingerprint",
+            tlsEnabled: false)
+
+        let message = await controller.connectWithDiagnostics(gateway)
+
+        #expect(message?.contains("Manual Setup") == true)
+        #expect(resolverCalls.withLock { $0 } == 0)
+        #expect(tcpCalls.withLock { $0 } == 0)
+        #expect(tlsCalls.withLock { $0 } == 0)
+        #expect(controller.pendingTrustPrompt == nil)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+    }
+
+    @Test @MainActor func `quick setup prefers an eligible discovered gateway`() {
+        let blockedID = "test|\(UUID().uuidString)"
+        let eligibleID = "test|\(UUID().uuidString)"
+        defer {
+            clearTLSFingerprint(stableID: blockedID)
+            clearTLSFingerprint(stableID: eligibleID)
+        }
+        self.clearTLSFingerprint(stableID: blockedID)
+        self.clearTLSFingerprint(stableID: eligibleID)
+        let controller = self.makeController()
+        let blocked = self.makeDiscoveredGateway(
+            stableID: blockedID,
+            lanHost: nil,
+            tailnetDns: nil,
+            gatewayPort: nil,
+            fingerprint: nil,
+            tlsEnabled: false)
+        let eligible = self.makeDiscoveredGateway(
+            stableID: eligibleID,
+            lanHost: nil,
+            tailnetDns: nil,
+            gatewayPort: nil,
+            fingerprint: nil)
+        controller._test_setGateways([blocked, eligible])
+
+        #expect(controller.preferredDiscoveredGateway()?.stableID == eligibleID)
+    }
+
     @Test @MainActor func `autoconnect requires stored pin for discovered gateways`() {
         let stableID = "test|\(UUID().uuidString)"
         defer { clearTLSFingerprint(stableID: stableID) }
@@ -118,6 +230,36 @@ import Testing
         #expect(controller._test_resolveManualUseTLS(host: "[::1]", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "::ffff:127.0.0.1", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "0.0.0.0", useTLS: false) == false)
+    }
+
+    @Test @MainActor func `manual transport presentation shows effective remote security`() {
+        let presentation = GatewayConnectionController.manualTransportPresentation(
+            host: "gateway.example.com",
+            requestedTLS: false)
+
+        #expect(presentation.requiresTLS)
+        #expect(presentation.effectiveTLS)
+        #expect(presentation.helperText == "Secure connection is required for this host.")
+    }
+
+    @Test @MainActor func `manual transport presentation allows unencrypted private LAN`() {
+        let presentation = GatewayConnectionController.manualTransportPresentation(
+            host: "192.168.1.20",
+            requestedTLS: false)
+
+        #expect(!presentation.requiresTLS)
+        #expect(!presentation.effectiveTLS)
+        #expect(presentation.helperText == "Use only on a trusted private network.")
+    }
+
+    @Test @MainActor func `manual transport presentation does not repeat selected private LAN TLS state`() {
+        let presentation = GatewayConnectionController.manualTransportPresentation(
+            host: "192.168.1.20",
+            requestedTLS: true)
+
+        #expect(!presentation.requiresTLS)
+        #expect(presentation.effectiveTLS)
+        #expect(presentation.helperText == nil)
     }
 
     @Test @MainActor func `manual connections allow private lan plaintext`() {
@@ -210,7 +352,7 @@ import Testing
         #expect(appModel.gatewayStatusText == "Verify gateway TLS fingerprint")
     }
 
-    @Test @MainActor func staleTrustAcceptanceReleasesAutoConnectSuppression() async {
+    @Test @MainActor func `stale trust acceptance releases auto connect suppression`() async {
         let host = "gateway-\(UUID().uuidString).example.com"
         let port = 18789
         let stableID = "manual|\(host.lowercased())|\(port)"
@@ -256,6 +398,24 @@ import Testing
         #expect(tlsProbeCalls.withLock { $0 } == 0)
         #expect(controller.pendingTrustPrompt == nil)
         #expect(appModel.gatewayStatusText == "Can't reach gateway at \(host):\(port). Check Tailscale or LAN.")
+    }
+
+    @Test @MainActor func `unreachable tailscale host explains serve publishing`() async {
+        let host = "gateway-\(UUID().uuidString).example.ts.net"
+        let port = 443
+        let stableID = "manual|\(host.lowercased())|\(port)"
+        defer { clearTLSFingerprint(stableID: stableID) }
+        self.clearTLSFingerprint(stableID: stableID)
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in false })
+
+        await controller.connectManual(host: host, port: port, useTLS: true)
+
+        #expect(appModel.gatewayStatusText ==
+            "Can't reach gateway at \(host):\(port). Verify Tailscale Serve is enabled and publishes this Gateway.")
     }
 
     @Test @MainActor func `manual first use TLS probe reports handshake timeout without trust prompt`() async {
@@ -346,7 +506,7 @@ import Testing
         #expect(appModel.gatewayStatusText == message)
     }
 
-    @Test @MainActor func targetSwitchCancelsSuspendedDiscoveryResolution() async {
+    @Test @MainActor func `target switch cancels suspended discovery resolution`() async {
         let defaults = UserDefaults.standard
         let previousInstanceID = defaults.string(forKey: "node.instanceId")
         defer {

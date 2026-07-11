@@ -27,7 +27,7 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 function isInsideGitRepository(searchPath: string): boolean {
-  for (let current = searchPath; ; ) {
+  for (let current = searchPath; ;) {
     if (existsSync(path.join(current, ".git"))) {
       return true;
     }
@@ -291,10 +291,23 @@ export function createFindToolDefinition(
             const cleanup = () => {
               rl.close();
             };
+            const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
+              if (settled) {
+                return;
+              }
+              stopChild?.();
+              cleanup();
+              settle(() => reject(new Error(`fd ${stream} error: ${error.message}`)));
+            };
 
             child.stderr?.on("data", (chunk) => {
               stderr = appendBoundedTextTail(stderr, chunk);
             });
+            // Readline re-emits input failures, while the stream listener also catches
+            // implementations that do not. settle() keeps the shared failure path one-shot.
+            rl.on("error", (error) => onStreamError("stdout", error));
+            child.stdout?.on("error", (error) => onStreamError("stdout", error));
+            child.stderr?.on("error", (error) => onStreamError("stderr", error));
 
             rl.on("line", (line) => {
               lines.push(line);

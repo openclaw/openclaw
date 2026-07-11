@@ -116,6 +116,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let thinkingSignature: String?
     public let mimeType: String?
     public let fileName: String?
+    public let durationSeconds: Double?
     public let content: AnyCodable?
 
     // Tool-call fields (when `type == "toolCall"` or similar)
@@ -130,6 +131,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         thinkingSignature: String? = nil,
         mimeType: String?,
         fileName: String?,
+        durationSeconds: Double? = nil,
         content: AnyCodable?,
         id: String? = nil,
         name: String? = nil,
@@ -141,6 +143,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.thinkingSignature = thinkingSignature
         self.mimeType = mimeType
         self.fileName = fileName
+        self.durationSeconds = durationSeconds
         self.content = content
         self.id = id
         self.name = name
@@ -154,6 +157,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case thinkingSignature
         case mimeType
         case fileName
+        case durationSeconds
         case content
         case id
         case name
@@ -168,6 +172,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.thinkingSignature = try container.decodeIfPresent(String.self, forKey: .thinkingSignature)
         self.mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
         self.fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
+        self.durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
         self.id = try container.decodeIfPresent(String.self, forKey: .id)
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.arguments = try container.decodeIfPresent(AnyCodable.self, forKey: .arguments)
@@ -211,6 +216,10 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         case usage
         case stopReason
         case errorMessage
+        case mediaPath = "MediaPath"
+        case mediaPaths = "MediaPaths"
+        case mediaType = "MediaType"
+        case mediaTypes = "MediaTypes"
     }
 
     public init(
@@ -263,14 +272,14 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.stopReason = decodedStopReason
         self.errorMessage = decodedErrorMessage
 
-        if let decoded = try? container.decode([OpenClawChatMessageContent].self, forKey: .content) {
-            self.content = decoded
-            return
-        }
-
-        // Some session log formats store `content` as a plain string.
-        if let text = try? container.decode(String.self, forKey: .content) {
-            self.content = [
+        let decodedContent: [OpenClawChatMessageContent] = if let decoded = try? container.decode(
+            [OpenClawChatMessageContent].self,
+            forKey: .content)
+        {
+            decoded
+        } else if let text = try? container.decode(String.self, forKey: .content) {
+            // Some session log formats store `content` as a plain string.
+            [
                 OpenClawChatMessageContent(
                     type: "text",
                     text: text,
@@ -283,10 +292,35 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
                     name: nil,
                     arguments: nil),
             ]
-            return
+        } else {
+            []
         }
 
-        self.content = []
+        let mediaPaths =
+            (try? container.decode([String].self, forKey: .mediaPaths))
+            ?? (try? container.decode(String.self, forKey: .mediaPath)).map { [$0] }
+            ?? []
+        let mediaTypes =
+            (try? container.decode([String].self, forKey: .mediaTypes))
+            ?? (try? container.decode(String.self, forKey: .mediaType)).map { [$0] }
+            ?? []
+        let alreadyContainsAudio = decodedContent.contains { content in
+            content.mimeType?.lowercased().hasPrefix("audio/") == true
+        }
+        let audioAttachments: [OpenClawChatMessageContent] = alreadyContainsAudio ? [] : mediaPaths
+            .enumerated()
+            .compactMap { index, mediaPath in
+                guard mediaTypes.indices.contains(index) else { return nil }
+                let mimeType = mediaTypes[index].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard mimeType.lowercased().hasPrefix("audio/") else { return nil }
+                return OpenClawChatMessageContent(
+                    type: "file",
+                    text: nil,
+                    mimeType: mimeType,
+                    fileName: (mediaPath as NSString).lastPathComponent,
+                    content: nil)
+            }
+        self.content = decodedContent + audioAttachments
     }
 
     static func displayText(
@@ -496,6 +530,7 @@ public struct OpenClawPendingAttachment: Identifiable {
     public let mimeType: String
     public let type: String
     public let preview: OpenClawPlatformImage?
+    public let durationSeconds: Double?
 
     public init(
         url: URL?,
@@ -503,7 +538,8 @@ public struct OpenClawPendingAttachment: Identifiable {
         fileName: String,
         mimeType: String,
         type: String = "file",
-        preview: OpenClawPlatformImage?)
+        preview: OpenClawPlatformImage?,
+        durationSeconds: Double? = nil)
     {
         self.url = url
         self.data = data
@@ -511,6 +547,7 @@ public struct OpenClawPendingAttachment: Identifiable {
         self.mimeType = mimeType
         self.type = type
         self.preview = preview
+        self.durationSeconds = durationSeconds
     }
 }
 

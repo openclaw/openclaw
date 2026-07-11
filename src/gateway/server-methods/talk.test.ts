@@ -1521,8 +1521,14 @@ describe("talk.session unified handlers", () => {
       reason: "barge-in",
     });
 
+    let acceptToolResult!: () => void;
+    mocks.submitTalkRealtimeRelayToolResult.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        acceptToolResult = resolve;
+      }),
+    );
     const toolRespond = vi.fn();
-    await talkHandlers["talk.session.submitToolResult"]({
+    const toolRequest = talkHandlers["talk.session.submitToolResult"]({
       req: { type: "req", id: "4", method: "talk.session.submitToolResult" },
       params: {
         sessionId: "relay-unified-1",
@@ -1535,12 +1541,37 @@ describe("talk.session unified handlers", () => {
       respond: toolRespond as never,
       context: {} as never,
     });
+    expect(toolRespond).not.toHaveBeenCalled();
+    acceptToolResult();
+    await toolRequest;
     expect(mocks.submitTalkRealtimeRelayToolResult).toHaveBeenCalledWith({
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
       callId: "call-1",
       result: { status: "working" },
       options: { suppressResponse: true, willContinue: true },
+    });
+    expectRespondOk(toolRespond, { ok: true });
+
+    mocks.submitTalkRealtimeRelayToolResult.mockRejectedValueOnce(
+      new Error("provider rejected tool result"),
+    );
+    const rejectedToolRespond = vi.fn();
+    await talkHandlers["talk.session.submitToolResult"]({
+      req: { type: "req", id: "4-rejected", method: "talk.session.submitToolResult" },
+      params: {
+        sessionId: "relay-unified-1",
+        callId: "call-rejected",
+        result: { ok: true },
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: rejectedToolRespond as never,
+      context: {} as never,
+    });
+    expectRespondError(rejectedToolRespond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "Error: provider rejected tool result",
     });
 
     const steerRespond = vi.fn();
@@ -2247,6 +2278,38 @@ describe("talk.client.toolCall handler", () => {
     expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
+  });
+
+  it("returns the tool-call acknowledgement while the agent run continues", async () => {
+    let finishRun: (() => void) | undefined;
+    mocks.chatSend.mockImplementationOnce(
+      ({ respond }: { respond: (ok: boolean, result?: unknown, error?: unknown) => void }) =>
+        new Promise<void>((resolve) => {
+          finishRun = resolve;
+          respond(true, { runId: "run-active" }, undefined);
+        }),
+    );
+    const respond = vi.fn();
+
+    await talkHandlers["talk.client.toolCall"]({
+      req: { type: "req", id: "1", method: "talk.client.toolCall" },
+      params: {
+        sessionKey: "main",
+        callId: "call-active",
+        name: "openclaw_agent_consult",
+        args: { question: "What is running?" },
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        logGateway: { warn: vi.fn() },
+      } as never,
+    });
+
+    expectRespondOk(respond, { runId: "run-active" });
+    finishRun?.();
   });
 
   it("passes configured consult thinking and fast-mode overrides to chat.send", async () => {

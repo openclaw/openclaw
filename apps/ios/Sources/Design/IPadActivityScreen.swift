@@ -231,7 +231,7 @@ struct IPadActivityScreen: View {
     private func open(_ item: CommandCenterTab.WorkItem) {
         switch item.route {
         case let .chat(sessionKey):
-            self.appModel.openChat(sessionKey: sessionKey)
+            self.appModel.openChat(sessionKey: sessionKey, unread: item.isUnread)
             self.openChat()
         case .settings:
             self.openSettings()

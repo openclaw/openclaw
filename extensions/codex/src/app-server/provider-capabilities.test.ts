@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
+import type { CodexAppServerClientFactory } from "./shared-client.js";
 
 const appServer = {
   start: {},

@@ -10,23 +10,25 @@ title: "Location command"
 
 - `location.get` is a node command, invoked via `node.invoke` or `openclaw nodes location get`.
 - Off by default.
-- Android app settings use a selector: Off / While Using.
+- Android third-party builds use a selector: Off / While Using / Always. Play builds remain Off / While Using.
 - Precise Location is a separate toggle.
 
 ## Why a selector (not just a switch)
 
-OS location permissions are multi-level (iOS/macOS expose While Using vs Always; Android currently supports foreground-only). Precise location is a separate OS grant too (iOS 14+ "Precise", Android "fine" vs "coarse"). The in-app selector drives the requested mode, but the OS still decides the actual grant.
+OS location permissions are multi-level. Precise location is a separate OS grant too (iOS 14+ "Precise", Android "fine" vs "coarse"). The in-app selector drives the requested mode, but the OS still decides the actual grant.
 
 ## Settings model
 
 Per node device:
 
-- `location.enabledMode`: `off | whileUsing`
+- `location.enabledMode`: `off | whileUsing | always`
 - `location.preciseEnabled`: bool
 
 UI behavior:
 
 - Selecting `whileUsing` requests foreground permission.
+- Selecting `always` in the Android third-party build first requests foreground permission, explains the background access, then opens Android app settings for the separate **Allow all the time** grant.
+- Android Play builds do not declare background location permission or show `always`.
 - If the OS denies the requested level, the app reverts to the highest granted level and shows status.
 
 ## Permissions mapping (node.permissions)
@@ -80,7 +82,8 @@ Errors (stable codes):
 
 ## Background behavior
 
-- The Android app denies `location.get` while backgrounded; keep OpenClaw open when requesting location on Android.
+- Android third-party builds accept background `location.get` only when the user selected `Always` and Android granted background location. The existing persistent node service adds the `location` service type and discloses `Location: Always` while active.
+- Android Play builds and `While Using` mode deny `location.get` while backgrounded.
 - Other node platforms may differ.
 
 ## Model/tooling integration
@@ -93,6 +96,7 @@ Errors (stable codes):
 
 - Off: "Location sharing is disabled."
 - While Using: "Only when OpenClaw is open."
+- Always: "Allow requested location checks while OpenClaw is in the background."
 - Precise: "Use precise GPS location. Toggle off to share approximate location."
 
 ## Related

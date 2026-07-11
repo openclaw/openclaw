@@ -1,5 +1,5 @@
 // Covers plugin-backed memory state registration and reset behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildMemoryPromptSection,
   clearMemoryPluginState,
@@ -234,6 +234,58 @@ describe("memory plugin state", () => {
     ]);
   });
 
+  it("drops malformed public memory artifacts instead of crashing the sort", async () => {
+    // Record-shaped artifact as shipped by @mem0/openclaw-mem0 <= 1.0.14 —
+    // none of the file-backed fields the sort dereferences.
+    const recordShapedArtifact = {
+      id: "mem0:memory:1",
+      type: "memory",
+      title: "A memory",
+      content: "memory text",
+    } as unknown as MemoryPluginPublicArtifact;
+
+    registerMemoryCapability("openclaw-mem0", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            recordShapedArtifact,
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
+  it("ignores a non-array public artifact listing", async () => {
+    registerMemoryCapability("openclaw-mem0", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return { artifacts: [] } as unknown as MemoryPluginPublicArtifact[];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([]);
+  });
+
   it("preserves sidecar runtime fields when a memory plugin adds public artifacts only", async () => {
     const runtime = createMemoryRuntime();
     const flushPlanResolver = () => createMemoryFlushPlan("memory/sidecar.md");
@@ -285,6 +337,33 @@ describe("memory plugin state", () => {
         citationsMode: "off",
       }),
     ).toEqual(["citations: off"]);
+  });
+
+  it("passes agent context through the primary and supplemental prompt builders", () => {
+    const primary = vi.fn(() => ["primary"]);
+    const supplemental = vi.fn(() => ["supplemental"]);
+    registerMemoryPromptSection(primary);
+    registerMemoryPromptSupplement("memory-wiki", supplemental);
+
+    const availableTools = new Set(["memory_search", "memory_get"]);
+    expect(
+      buildMemoryPromptSection({
+        availableTools,
+        citationsMode: "on",
+        agentId: "marketing-agent",
+        agentSessionKey: "agent:marketing-agent:main",
+        sandboxed: true,
+      }),
+    ).toEqual(["primary", "supplemental"]);
+    const expectedContext = {
+      availableTools,
+      citationsMode: "on",
+      agentId: "marketing-agent",
+      agentSessionKey: "agent:marketing-agent:main",
+      sandboxed: true,
+    };
+    expect(primary).toHaveBeenCalledWith(expectedContext);
+    expect(supplemental).toHaveBeenCalledWith(expectedContext);
   });
 
   it("appends prompt supplements in plugin-id order", () => {

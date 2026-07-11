@@ -534,8 +534,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       pendingText = "";
     }
     itemProgressTextById.set(snapshot.itemId, snapshot.text);
-    const delta =
-      isPrefixUpdate && hasPendingSnapshot ? snapshot.text.slice(previous.length) : snapshot.text;
+    const delta = isPrefixUpdate ? snapshot.text.slice(previous.length) : snapshot.text;
     appendVisibleProgress(delta, kind);
   };
 

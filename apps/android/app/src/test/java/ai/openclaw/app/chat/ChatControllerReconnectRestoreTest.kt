@@ -86,7 +86,7 @@ class ChatControllerReconnectRestoreTest {
       controller.load("main")
       runCurrent()
       val historyCallsAfterLoad = gateway.callCount("chat.history")
-      val commandCallsAfterLoad = gateway.callCount("commands.list")
+      val metadataCallsAfterLoad = gateway.callCount("chat.metadata")
 
       controller.onDisconnected("Offline")
       controller.onGatewayConnected()
@@ -94,7 +94,7 @@ class ChatControllerReconnectRestoreTest {
 
       // Reconnect refetched history once and restored nothing.
       assertEquals(historyCallsAfterLoad + 1, gateway.callCount("chat.history"))
-      assertEquals(commandCallsAfterLoad + 1, gateway.callCount("commands.list"))
+      assertEquals(metadataCallsAfterLoad + 1, gateway.callCount("chat.metadata"))
       assertEquals(0, controller.pendingRunCount.value)
       assertNull(controller.streamingAssistantText.value)
       assertNull(controller.errorText.value)

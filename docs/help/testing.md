@@ -86,10 +86,13 @@ When debugging real providers/models (requires real creds):
 - Runtime performance reports: dispatch `OpenClaw Performance` with
   `live_openai_candidate=true` for a real `openai/gpt-5.5` agent turn or
   `deep_profile=true` for Kova CPU/heap/trace artifacts. Daily scheduled runs
-  publish mock-provider, deep-profile, and GPT 5.5 lane artifacts to
-  `openclaw/clawgrit-reports` when `CLAWGRIT_REPORTS_TOKEN` is configured. The
-  mock-provider report also includes source-level gateway boot, memory,
-  plugin-pressure, repeated fake-model hello-loop, and CLI startup numbers.
+  publish mock-provider, deep-profile, and GPT 5.5 lane reports to
+  `openclaw/clawgrit-reports` from a separate artifact-consuming publisher job;
+  missing or invalid publisher authentication fails scheduled and
+  `profile=release` runs. Manual non-release dispatches keep the GitHub artifacts
+  and treat report publication as advisory. The mock-provider report also
+  includes source-level gateway boot, memory, plugin-pressure, repeated
+  fake-model hello-loop, and CLI startup numbers.
 - Docker live model sweep: `pnpm test:docker:live-models`
   - Each selected model runs a text turn plus a small file-read-style probe.
     Models whose metadata advertises `image` input also run a tiny image turn.
@@ -583,8 +586,9 @@ for Slack rows.
 The architecture and scenario-helper names for new channel adapters live in
 [QA overview - Adding a channel](/concepts/qa-e2e-automation#adding-a-channel).
 The minimum bar: implement the transport runner on the shared `qa-lab` host
-seam, declare `qaRunners` in the plugin manifest, mount as
-`openclaw qa <runner>`, and author scenarios under `qa/scenarios/`.
+seam, add an `adapterFactory` for shared scenarios, declare `qaRunners` in the
+plugin manifest, mount as `openclaw qa <runner>`, and author scenarios under
+`qa/scenarios/`.
 
 ## Test suites (what runs where)
 
@@ -896,7 +900,7 @@ without mutating the host auth store:
 - Installer Docker smoke: `bash scripts/test-install-sh-docker.sh` shares one npm cache across its root, update, and direct-npm containers. Update smoke defaults to npm `latest` as the stable baseline before upgrading to the candidate tarball. Override with `OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE=2026.4.22` locally, or with the Install Smoke workflow's `update_baseline_version` input on GitHub. Non-root installer checks keep an isolated npm cache so root-owned cache entries do not mask user-local install behavior. Set `OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR=/path/to/cache` to reuse the root/update/direct-npm cache across local reruns.
 - Install Smoke CI skips the duplicate direct-npm global update with `OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL=1`; run the script locally without that env when direct `npm install -g` coverage is needed.
 - Agents delete shared workspace CLI smoke: `pnpm test:docker:agents-delete-shared-workspace` (script: `scripts/e2e/agents-delete-shared-workspace-docker.sh`) builds the root Dockerfile image by default, seeds two agents with one workspace in an isolated container home, runs `agents delete --json`, and verifies valid JSON plus retained workspace behavior. Reuse the install-smoke image with `OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE=openclaw-dockerfile-smoke:local OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD=1`.
-- Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
+- Gateway networking and host lifecycle: `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`) preserves the two-container LAN WebSocket auth/health smoke, then uses loopback Admin HTTP to prove prepare fencing, retained-control access, resume recovery, and a prepared same-container stop/start. The restart check must finish before the original lease expires, verifies that suspension state is process-local while persisted Gateway config and container identity survive, and emits machine-readable phase timing JSON.
 - Browser CDP snapshot smoke: `pnpm test:docker:browser-cdp-snapshot` (script: `scripts/e2e/browser-cdp-snapshot-docker.sh`) builds the source E2E image plus a Chromium layer, starts Chromium with raw CDP, runs `browser doctor --deep`, and verifies CDP role snapshots cover link URLs, cursor-promoted clickables, iframe refs, and frame metadata.
 - OpenAI Responses web_search minimal reasoning regression: `pnpm test:docker:openai-web-search-minimal` (script: `scripts/e2e/openai-web-search-minimal-docker.sh`) runs a mocked OpenAI server through Gateway, verifies `web_search` raises `reasoning.effort` from `minimal` to `low`, then forces the provider schema reject and checks the raw detail appears in Gateway logs.
 - MCP channel bridge (seeded Gateway + stdio bridge + raw Claude notification-frame smoke): `pnpm test:docker:mcp-channels` (script: `scripts/e2e/mcp-channels-docker.sh`)

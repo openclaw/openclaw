@@ -86,8 +86,22 @@ export type RuntimeNodeInvokeParams = {
   scopes?: OperatorScope[];
 };
 
+export type RuntimeGatewayRequestOptions = {
+  timeoutMs?: number;
+};
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
+  gateway: {
+    /** Whether this process owns an active Gateway request context. */
+    isAvailable: () => Promise<boolean>;
+    /** Dispatch a Gateway method as the current trusted plugin. */
+    request: <T = unknown>(
+      method: string,
+      params?: Record<string, unknown>,
+      options?: RuntimeGatewayRequestOptions,
+    ) => Promise<T>;
+  };
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;

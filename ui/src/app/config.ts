@@ -28,7 +28,7 @@ const SEAM_COLOR_CSS_VARIABLES = [
   "--focus-glow",
 ] as const;
 
-export type ApplicationConfig = {
+type ApplicationConfig = {
   assistantIdentity: {
     agentId: string | null;
     name: string;
@@ -38,6 +38,7 @@ export type ApplicationConfig = {
     avatarReason: string | null;
   };
   serverVersion: string | null;
+  devGitBranch: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
@@ -72,6 +73,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
     avatarReason: null,
   },
   serverVersion: null,
+  devGitBranch: null,
   localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
@@ -137,6 +139,10 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
       avatarReason: identity.avatarReason ?? null,
     },
     serverVersion: parsed.serverVersion ?? null,
+    devGitBranch:
+      typeof parsed.devGitBranch === "string" && parsed.devGitBranch.trim()
+        ? parsed.devGitBranch.trim()
+        : null,
     localMediaPreviewRoots: Array.isArray(parsed.localMediaPreviewRoots)
       ? parsed.localMediaPreviewRoots.filter((value): value is string => typeof value === "string")
       : [],

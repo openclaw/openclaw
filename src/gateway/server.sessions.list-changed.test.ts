@@ -370,6 +370,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
         updatedAt: Date.now() - 1_000,
         modelProvider: "anthropic",
         model: "test-model-without-catalog-context",
+        modelSelectionLocked: true,
         parentSessionKey: "agent:main:main",
         totalTokens: 0,
         totalTokensFresh: false,
@@ -393,6 +394,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
       estimatedCostUsd?: number;
       modelProvider?: string;
       model?: string;
+      modelSelectionLocked?: boolean;
     }>;
   }>(ws, "sessions.list", {});
 
@@ -409,6 +411,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
   expect(child?.estimatedCostUsd).toBeUndefined();
   expect(child?.modelProvider).toBe("anthropic");
   expect(child?.model).toBe("test-model-without-catalog-context");
+  expect(child?.modelSelectionLocked).toBe(true);
 
   ws.close();
 });
@@ -443,6 +446,116 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   expectFields(session, {
     thinkingDefault: "medium",
     thinkingOptions: ["off", "minimal", "low", "medium", "high"],
+  });
+});
+
+test.each(["gpt-5.6-sol", "gpt-5.6-terra"])(
+  "sessions.patch returns authoritative native Codex Ultra metadata for %s",
+  async (model) => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        resolveThinkingProfile: ({ compat }) => ({
+          levels: [
+            { id: "off" },
+            { id: "high" },
+            { id: "max" },
+            ...(compat?.supportedReasoningEfforts?.includes("ultra")
+              ? [{ id: "ultra" as const }]
+              : []),
+          ],
+          defaultLevel: "high",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+    testState.agentConfig = {
+      model: { primary: `openai/${model}` },
+      models: {
+        [`openai/${model}`]: { agentRuntime: { id: "codex" } },
+      },
+    };
+    await writeMainSessionStore({ modelProvider: "openai", model });
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      {
+        provider: "openai",
+        id: model,
+        name: model,
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
+      },
+    ]);
+
+    const result = await invokeSessionMutation({
+      method: "sessions.patch",
+      params: { key: "main", thinkingLevel: "ultra" },
+      context: { loadGatewayModelCatalog },
+    });
+
+    const resolved = requireRecord(result.responsePayload.resolved, "resolved patch metadata");
+    expectFields(resolved, {
+      modelProvider: "openai",
+      model,
+      thinkingLevel: "ultra",
+    });
+    expect(requireRecord(resolved.agentRuntime, "resolved agent runtime").id).toBe("codex");
+    expect(
+      requireArray(resolved.thinkingLevels, "resolved thinking levels").map(
+        (level) => requireRecord(level, "thinking level").id,
+      ),
+    ).toContain("ultra");
+    expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+
+    const event = expectChangedBroadcast(result.broadcastToConnIds, {
+      sessionKey: "agent:main:main",
+      reason: "patch",
+      thinkingLevel: "ultra",
+    });
+    expect(event).not.toHaveProperty("thinkingLevels");
+    expect(event).not.toHaveProperty("thinkingOptions");
+    expect(event).not.toHaveProperty("thinkingDefault");
+  },
+);
+
+test("sessions.patch omits thinking metadata when an unrelated patch skips the catalog", async () => {
+  testState.agentConfig = {
+    model: { primary: "synthetic/plain" },
+  };
+  await writeMainSessionStore({
+    modelProvider: "synthetic",
+    model: "plain",
+    thinkingLevel: "max",
+  });
+  const loadGatewayModelCatalog = vi.fn(async () => [
+    {
+      provider: "synthetic",
+      id: "plain",
+      name: "plain",
+      reasoning: false,
+    },
+  ]);
+
+  const result = await invokeSessionMutation({
+    method: "sessions.patch",
+    params: { key: "main", label: "Renamed" },
+    context: { loadGatewayModelCatalog },
+  });
+
+  const resolved = requireRecord(result.responsePayload.resolved, "resolved patch metadata");
+  expect(resolved).not.toHaveProperty("thinkingLevel");
+  expect(resolved).not.toHaveProperty("thinkingLevels");
+  expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+  expectChangedBroadcast(result.broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    thinkingLevel: "max",
   });
 });
 
@@ -750,7 +863,11 @@ test("sessions.changed mutation events include session management metadata", asy
   await createSessionStoreDir();
   await writeSessionStore({
     entries: {
-      "discord:group:dev": sessionStoreEntry("sess-dev", { pinnedAt: 10 }),
+      "discord:group:dev": sessionStoreEntry("sess-dev", {
+        pinnedAt: 10,
+        lastReadAt: 20,
+        lastActivityAt: 5,
+      }),
     },
   });
 
@@ -765,6 +882,9 @@ test("sessions.changed mutation events include session management metadata", asy
     archivedAt: expect.any(Number),
     pinned: false,
     pinnedAt: null,
+    unread: false,
+    lastReadAt: 20,
+    lastActivityAt: 5,
   });
 
   const restored = await invokeSessionsPatch({
@@ -798,6 +918,30 @@ test("sessions.changed mutation events include session management metadata", asy
     reason: "patch",
     pinned: false,
     pinnedAt: null,
+  });
+
+  const unread = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: true,
+  });
+  expectChangedBroadcast(unread.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: true,
+    lastReadAt: 20,
+    lastActivityAt: 5,
+  });
+
+  const read = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: false,
+  });
+  expectChangedBroadcast(read.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: false,
+    lastReadAt: expect.any(Number),
+    lastActivityAt: 5,
   });
 });
 
@@ -952,6 +1096,42 @@ test("sessions.compact passes the selected global agent into embedded compaction
     authProfileId: "github-copilot:work",
   });
   await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
+test("sessions.compact mounts a dashboard managed worktree as its workspace", async () => {
+  const { dir } = await createSessionStoreDir();
+  const sessionFile = path.join(dir, "sess-suggested.jsonl");
+  await fs.writeFile(
+    sessionFile,
+    createLinearSessionTranscript("sess-suggested", ["one", "two"]),
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      "dashboard:suggested": sessionStoreEntry("sess-suggested", {
+        sessionFile,
+        spawnedCwd: "/tmp/suggested-worktree",
+      }),
+    },
+  });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+
+  const { responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig,
+    params: { key: "agent:main:dashboard:suggested" },
+    subscribedConnIds: new Set(),
+  });
+
+  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
+  expectFields(responsePayload, {
+    ok: true,
+    key: "agent:main:dashboard:suggested",
+    compacted: true,
+  });
+  expect(embeddedRunMock.compactEmbeddedAgentSession.mock.calls[0]?.[0]).toMatchObject({
+    workspaceDir: "/tmp/suggested-worktree",
+    cwd: "/tmp/suggested-worktree",
+  });
 });
 
 test("sessions.changed mutation events include subagent ownership metadata", async () => {

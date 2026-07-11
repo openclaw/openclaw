@@ -854,7 +854,7 @@ function mergeMissingExplicitValues(
   return { changed, value: changed ? next : currentValue };
 }
 
-export function injectExplicitlySetPaths(params: {
+function injectExplicitlySetPaths(params: {
   valueSource: unknown;
   persistedCandidate: unknown;
   explicitSetPaths?: readonly (readonly string[])[];

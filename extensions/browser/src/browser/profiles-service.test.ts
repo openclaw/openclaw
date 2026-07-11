@@ -58,6 +58,7 @@ const [{ resolveBrowserConfig }, { createBrowserProfilesService }] = await Promi
   import("./config.js"),
   import("./profiles-service.js"),
 ]);
+const { setDefaultBrowserProfile } = await import("./config-mutations.js");
 
 function createCtx(resolved: BrowserServerState["resolved"]) {
   const state: BrowserServerState = {
@@ -116,6 +117,20 @@ describe("BrowserProfilesService", () => {
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles.work?.cdpPort).toBe(18801);
     expect(writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("persists an existing managed profile as the browser default", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      browser: {
+        profiles: {
+          imported: { cdpPort: 18801, color: "#0066CC" },
+        },
+      },
+    });
+
+    await setDefaultBrowserProfile("imported");
+
+    expect(writtenBrowserConfig().defaultProfile).toBe("imported");
   });
 
   it("falls back to derived CDP range when resolved CDP range is missing", async () => {
@@ -221,6 +236,26 @@ describe("BrowserProfilesService", () => {
     expect(result.isRemote).toBe(true);
     const profiles = writtenBrowserConfig().profiles as Record<string, { cdpUrl?: string }>;
     expect(profiles.remote?.cdpUrl).toBe("http://10.0.0.42:9222");
+  });
+
+  it("redacts CDP credentials from create responses while preserving profile auth", async () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+    const { ctx } = createCtx(resolved);
+    const cdpUrl = "http://browser-user:browser-password@127.0.0.1:9222/?token=browser-token";
+
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "remote", cdpUrl });
+
+    expect(result.cdpUrl).toBe("http://127.0.0.1:9222/?token=***");
+    expect(result.cdpUrl).not.toContain("browser-user");
+    expect(result.cdpUrl).not.toContain("browser-password");
+    expect(result.cdpUrl).not.toContain("browser-token");
+    const profiles = writtenBrowserConfig().profiles as Record<string, { cdpUrl?: string }>;
+    expect(profiles.remote?.cdpUrl).toBe(cdpUrl);
   });
 
   it("rejects private-network cdpUrl when strict SSRF mode is enabled", async () => {

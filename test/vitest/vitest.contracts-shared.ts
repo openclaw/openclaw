@@ -36,13 +36,14 @@ export const channelSessionContractPatterns = [
   "src/channels/plugins/contracts/plugins-core.resolve-config-writes.contract.test.ts",
   "src/channels/plugins/contracts/registry.contract.test.ts",
   "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+  "src/channels/plugins/contracts/thread-binding-artifact.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
 ];
 
 export const pluginContractPatterns = ["src/plugins/contracts/**/*.test.ts"];
 
-export function loadContractsIncludePatternsFromEnv(
+function loadContractsIncludePatternsFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): string[] | null {
   return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);

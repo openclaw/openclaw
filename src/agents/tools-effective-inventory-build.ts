@@ -129,7 +129,7 @@ export function buildReadableToolsByName(
 }
 
 /** Builds effective inventory entries from already runtime-compatible tools. */
-export function buildEffectiveToolInventoryEntries(
+function buildEffectiveToolInventoryEntries(
   tools: readonly AnyAgentTool[],
   rawToolsByName: ReadonlyMap<string, AnyAgentTool> = new Map(),
 ): EffectiveToolInventoryEntry[] {

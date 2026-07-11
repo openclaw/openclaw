@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
+  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
 } from "../trajectory/paths.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand, setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.js";
@@ -491,5 +492,37 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("tool.result");
     expect(output).toContain("trajectory-dir ok");
     expect(output).not.toContain("No sessions found");
+  });
+
+  it("rejects oversized trajectory snapshots", async () => {
+    const runtime = makeRuntime();
+    fs.writeFileSync(trajectoryPath, "");
+    fs.truncateSync(trajectoryPath, TRAJECTORY_RUNTIME_FILE_MAX_BYTES + 1);
+
+    await expect(sessionsTailCommand({ store: storePath, sessionKey }, runtime)).rejects.toThrow(
+      /File exceeds 52428800 bytes/,
+    );
+  });
+
+  it("rejects oversized follow-mode trajectory deltas", async () => {
+    const runtime = makeRuntime();
+    writeJsonl(trajectoryPath, [
+      makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" }),
+    ]);
+
+    const run = sessionsTailCommand({ store: storePath, sessionKey, follow: true }, runtime);
+    try {
+      await waitForRuntimeOutput(runtime, "session.started");
+      const initialSize = fs.statSync(trajectoryPath).size;
+      fs.truncateSync(trajectoryPath, initialSize + TRAJECTORY_RUNTIME_FILE_MAX_BYTES + 1);
+      await vi.waitFor(() => {
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Trajectory delta exceeds 52428800 bytes"),
+        );
+      });
+    } finally {
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
   });
 });

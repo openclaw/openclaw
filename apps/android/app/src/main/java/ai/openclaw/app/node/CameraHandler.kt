@@ -4,9 +4,9 @@ import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.CameraHudKind
 import ai.openclaw.app.gateway.GatewaySession
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -173,6 +173,5 @@ class CameraHandler(
     }
   }
 
-  private fun parseIncludeAudio(paramsJson: String?): Boolean? =
-    parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio")
+  private fun parseIncludeAudio(paramsJson: String?): Boolean? = parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio")
 }

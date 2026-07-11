@@ -1563,6 +1563,7 @@ export function createExecTool(
       return execParams;
     },
     execute: async (_toolCallId, args, signal, onUpdate) => {
+      signal?.throwIfAborted();
       let params = stripMalformedXmlArgValueSuffixFromKeys(
         args as ExecToolArgs,
         XML_ARG_VALUE_EXEC_PARAM_KEYS,
@@ -1583,9 +1584,10 @@ export function createExecTool(
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
-      if (!allowBackground && (backgroundRequested || yieldRequested)) {
-        warnings.push("Warning: background execution is disabled; running synchronously.");
-      }
+      const foregroundFallbackWarning =
+        !allowBackground && (backgroundRequested || yieldRequested)
+          ? "Warning: background execution is disabled; running synchronously."
+          : undefined;
       const yieldWindow = allowBackground
         ? backgroundRequested
           ? 0
@@ -1878,6 +1880,7 @@ export function createExecTool(
             ask,
             autoReview,
             autoReviewer,
+            signal,
             strictInlineEval: defaults?.strictInlineEval,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
@@ -1885,6 +1888,7 @@ export function createExecTool(
             defaultTimeoutSec,
             approvalRunningNoticeMs,
             warnings,
+            foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
             notifySessionKey,
             notifyOnExit,
             trustedSafeBinDirs,
@@ -1909,6 +1913,7 @@ export function createExecTool(
             ask,
             autoReview,
             autoReviewer,
+            signal,
             safeBins,
             safeBinProfiles,
             strictInlineEval: defaults?.strictInlineEval,
@@ -1941,10 +1946,17 @@ export function createExecTool(
           if (gatewayResult.deniedResult) {
             return gatewayResult.deniedResult;
           }
+          signal?.throwIfAborted();
           execCommandOverride = gatewayResult.execCommandOverride;
           if (gatewayResult.allowWithoutEnforcedCommand) {
             execCommandOverride = undefined;
           }
+        }
+
+        // Pending approvals have not started the command. Add fallback warnings only
+        // after approval routing proves this call will execute in the foreground.
+        if (foregroundFallbackWarning) {
+          warnings.push(foregroundFallbackWarning);
         }
 
         const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
@@ -1960,6 +1972,7 @@ export function createExecTool(
           });
         }
 
+        signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,
           execCommand: execCommandOverride,

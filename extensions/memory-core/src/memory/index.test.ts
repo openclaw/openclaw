@@ -34,6 +34,7 @@ let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
 let providerRuntimeBatchCalls: string[][] = [];
 let providerRuntimeBatchGate: Promise<void> | null = null;
+let providerRuntimeBatchErrors: unknown[] = [];
 let providerRuntimeBatchFailuresRemaining = 0;
 let providerRuntimeActiveBatchCalls = 0;
 let providerRuntimeMaxActiveBatchCalls = 0;
@@ -233,6 +234,9 @@ vi.mock("./embeddings.js", () => {
                     try {
                       await providerRuntimeBatchGate;
                       providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
+                      if (providerRuntimeBatchErrors.length > 0) {
+                        throw providerRuntimeBatchErrors.shift();
+                      }
                       if (providerRuntimeBatchFailuresRemaining > 0) {
                         providerRuntimeBatchFailuresRemaining -= 1;
                         throw new Error("provider runtime batch failed");
@@ -299,6 +303,7 @@ describe("memory index", () => {
     embedBatchInputCalls = 0;
     providerRuntimeBatchCalls = [];
     providerRuntimeBatchGate = null;
+    providerRuntimeBatchErrors = [];
     providerRuntimeBatchFailuresRemaining = 0;
     providerRuntimeActiveBatchCalls = 0;
     providerRuntimeMaxActiveBatchCalls = 0;
@@ -679,6 +684,81 @@ describe("memory index", () => {
 
       expect(betaRow).toBeDefined();
       expect(JSON.parse(betaRow?.embedding ?? "[]")).toEqual([0, 1, 0, 0]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("derives batch attempts locally instead of trusting provider error metadata", async () => {
+    providerRuntimeBatchErrors = [
+      Object.assign(new Error("provider runtime batch failed"), {
+        batchAttempts: Number.MAX_SAFE_INTEGER,
+      }),
+    ];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(embedBatchCalls).toBe(1);
+      expect(manager.status().batch).toMatchObject({
+        enabled: true,
+        failures: 1,
+        lastError: "provider runtime batch failed",
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it.each([
+    ["frozen errors", Object.freeze(new Error("provider runtime retry failed"))],
+    ["primitive rejections", "provider runtime retry failed"],
+  ])("preserves %s while recording both attempts", async (_kind, retryError) => {
+    providerRuntimeBatchErrors = [new Error("memory embeddings batch timed out"), retryError];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(2);
+      expect(embedBatchCalls).toBe(1);
+      expect(manager.status().batch).toMatchObject({
+        enabled: false,
+        failures: 2,
+        lastError: "provider runtime retry failed",
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("resets batch failures when a timeout retry recovers", async () => {
+    providerRuntimeBatchErrors = [new Error("provider runtime batch failed")];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+      expect(manager.status().batch?.failures).toBe(1);
+
+      await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+      providerRuntimeBatchCalls = [];
+      providerRuntimeBatchErrors = [new Error("memory embeddings batch timed out")];
+      embedBatchCalls = 0;
+
+      await manager.sync({ reason: "test", force: true });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(2);
+      expect(embedBatchCalls).toBe(0);
+      expect(manager.status().batch).toMatchObject({
+        enabled: true,
+        failures: 0,
+        lastError: undefined,
+      });
     } finally {
       await manager.close?.();
     }
@@ -2078,6 +2158,62 @@ describe("memory index", () => {
     }
   });
 
+  it("exposes already-created local runtime facts without probing embeddings", async () => {
+    const cfg = createCfg({});
+    const { getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js");
+    const manager = await getRequiredMemoryIndexManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
+    try {
+      const getRuntimeFacts = vi.fn(() => ({
+        engine: "llama.cpp" as const,
+        state: "ready" as const,
+        backend: "cuda" as const,
+        buildType: "prebuilt" as const,
+        deviceNames: ["NVIDIA Test GPU"],
+        offload: {
+          supported: true,
+          offloadedLayers: 24,
+          totalLayers: 24,
+        },
+        context: {
+          requestedSize: 4096,
+        },
+      }));
+      const provider = {
+        id: "local",
+        model: "test-model.gguf",
+        embedQuery: vi.fn(async () => [1, 0, 0, 0]),
+        embedBatch: vi.fn(async (texts: string[]) => texts.map(() => [1, 0, 0, 0])),
+      };
+      Object.defineProperty(provider, Symbol.for("openclaw.localEmbeddingRuntimeFacts"), {
+        value: getRuntimeFacts,
+      });
+      const fields = manager as unknown as {
+        provider: typeof provider | null;
+      };
+      fields.provider = provider;
+
+      expect(manager.status().custom?.llamaCppRuntime).toMatchObject({
+        state: "ready",
+        backend: "cuda",
+        deviceNames: ["NVIDIA Test GPU"],
+        offload: {
+          offloadedLayers: 24,
+          totalLayers: 24,
+        },
+        context: {
+          requestedSize: 4096,
+        },
+      });
+      expect(getRuntimeFacts).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("keeps metadata after unchanged in-place force reindex", async () => {
     const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
@@ -2311,5 +2447,4 @@ describe("memory index", () => {
       restoreMemoryIndexStateDir();
     }
   });
-
 });

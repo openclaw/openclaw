@@ -3,8 +3,8 @@
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   getActivePluginChannelRegistryVersion,
-  getActivePluginRegistry,
-  getActivePluginRegistryVersion,
+  getActivePluginHttpRouteRegistry,
+  getActivePluginHttpRouteRegistryVersion,
 } from "../plugins/runtime.js";
 import { isPlainObject } from "../utils.js";
 
@@ -146,24 +146,26 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 ];
 
 let cachedReloadRules: ReloadRule[] | null = null;
-let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
-let cachedActiveRegistryVersion = -1;
+let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
+let cachedGatewayRegistryVersion = -1;
 let cachedChannelRegistryVersion = -1;
 
 function listReloadRules(): ReloadRule[] {
-  const registry = getActivePluginRegistry();
-  const activeRegistryVersion = getActivePluginRegistryVersion();
+  // Reload metadata is Gateway policy. Agent-scoped registry activation must
+  // not replace the pinned Gateway surface and silently change restart rules.
+  const registry = getActivePluginHttpRouteRegistry();
+  const gatewayRegistryVersion = getActivePluginHttpRouteRegistryVersion();
   const channelRegistryVersion = getActivePluginChannelRegistryVersion();
   // Plugin/channel reload rules are process-stable until the active registry
   // version changes; cache them to keep every config diff cheap.
   if (
     registry !== cachedRegistry ||
-    activeRegistryVersion !== cachedActiveRegistryVersion ||
+    gatewayRegistryVersion !== cachedGatewayRegistryVersion ||
     channelRegistryVersion !== cachedChannelRegistryVersion
   ) {
     cachedReloadRules = null;
     cachedRegistry = registry;
-    cachedActiveRegistryVersion = activeRegistryVersion;
+    cachedGatewayRegistryVersion = gatewayRegistryVersion;
     cachedChannelRegistryVersion = channelRegistryVersion;
   }
   if (cachedReloadRules) {
@@ -229,6 +231,9 @@ function listReloadRules(): ReloadRule[] {
     ...channelPluginStateRules,
     ...BASE_RELOAD_RULES_TAIL,
   ];
+  // Narrow config contracts must override broad owner fallbacks. Sort once per
+  // registry snapshot so the hot path can retain first-match semantics.
+  rules.sort((a, b) => b.prefix.length - a.prefix.length);
   cachedReloadRules = rules;
   return rules;
 }

@@ -4,10 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
 import {
   collectQaSuiteGatewayConfigPatch,
   collectQaSuiteGatewayRuntimeOptions,
   collectQaSuitePluginIds,
+  collectQaSuiteTransportPolicy,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
   resolveQaSuiteScenarioChannel,
@@ -319,6 +321,21 @@ describe("qa suite planning helpers", () => {
     expect(scenarioRequiresIsolatedQaSuiteWorker(makeQaSuiteTestScenario("plain"))).toBe(false);
   });
 
+  it("isolates and collects scenario-declared transport policy", () => {
+    const scenario = makeQaSuiteTestScenario("sender-policy", {
+      transportPolicy: {
+        requireGroupMention: true,
+        senderAllowlist: ["driver"],
+      },
+    });
+
+    expect(scenarioRequiresIsolatedQaSuiteWorker(scenario)).toBe(true);
+    expect(collectQaSuiteTransportPolicy([scenario])).toEqual({
+      requireGroupMention: true,
+      senderAllowlist: ["driver"],
+    });
+  });
+
   it("collects unique scenario-declared bundled plugins in encounter order", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic", { plugins: ["active-memory", "memory-wiki"] }),
@@ -401,6 +418,22 @@ describe("qa suite planning helpers", () => {
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
+  it("targets the selected adapter account in scenario startup config patches", () => {
+    const scenarios = [readQaScenarioById("thread-reply-override")];
+
+    expect(collectQaSuiteGatewayConfigPatch(scenarios, "matrix-alt")).toEqual({
+      channels: {
+        matrix: {
+          accounts: {
+            "matrix-alt": {
+              threadReplies: "always",
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("collects gateway runtime options across selected scenarios", () => {
     const scenarios = [
       makeQaSuiteTestScenario("plain"),
@@ -449,6 +482,20 @@ describe("qa suite planning helpers", () => {
         concurrency: 1,
       }),
     ).toBe(false);
+  });
+
+  it("isolates serial runs when transport policy would leak into another scenario", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [
+          makeQaSuiteTestScenario("dm-baseline"),
+          makeQaSuiteTestScenario("sender-policy", {
+            transportPolicy: { senderAllowlist: ["driver"] },
+          }),
+        ],
+        concurrency: 1,
+      }),
+    ).toBe(true);
   });
 
   it("keeps concurrent runs on isolated workers", () => {
@@ -593,7 +640,7 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic", "crabline-only"]);
   });
 
-  it("keeps explicitly requested channel-driver-specific scenarios", () => {
+  it("rejects explicitly requested scenarios that do not match the current lane", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("qa-channel-only", {
@@ -601,13 +648,24 @@ describe("qa suite planning helpers", () => {
       }),
     ];
 
-    expect(
+    expect(() =>
       selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["qa-channel-only"],
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
         channelDriver: "crabline",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: qa-channel-only (channelDriver=qa-channel)",
+    );
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["qa-channel-only"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["qa-channel-only"]);
   });
