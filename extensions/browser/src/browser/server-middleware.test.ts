@@ -3,7 +3,10 @@ import http from "node:http";
 import type { Express, NextFunction, Request, Response } from "express";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { installBrowserCommonMiddleware } from "./server-middleware.js";
+import {
+  installBrowserAuthMiddleware,
+  installBrowserCommonMiddleware,
+} from "./server-middleware.js";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -13,6 +16,7 @@ async function startMiddlewareTestServer(): Promise<{ url: string; getRouteCalls
   const app = express();
   let routeCalls = 0;
   installBrowserCommonMiddleware(app);
+  installBrowserAuthMiddleware(app, { token: "test-token" });
   app.post("/mutate", (req, res) => {
     routeCalls += 1;
     res.status(200).json({ body: req.body });
@@ -110,6 +114,7 @@ describe("installBrowserCommonMiddleware", () => {
     const response = await fetch(`${url}/mutate`, {
       method: "POST",
       headers: {
+        authorization: "Bearer test-token",
         "content-type": "application/json",
       },
       body: JSON.stringify({ ok: true }),
