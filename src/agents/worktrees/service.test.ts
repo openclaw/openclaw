@@ -686,23 +686,6 @@ describe("ManagedWorktreeService", () => {
     await git(repo, "worktree", "remove", "--force", foreign);
   });
 
-  it("adopts a worktree orphaned when create() crashed before the registry insert, during gc()", async () => {
-    const created = await service.create({ repoRoot: repo, name: "orphan-gc" });
-    // Simulates a create() that crashed between `git worktree add` and insertRegistryWorktree():
-    // the live worktree + branch stay on disk exactly as create() left them, but the row that
-    // would name them in the registry never landed.
-    deleteRegistryWorktree(env, created.id);
-    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
-
-    const result = await service.gc();
-
-    expect(result.orphansDeleted).toBe(0);
-    const adopted = (await service.list()).find((entry) => entry.path === created.path);
-    expect(adopted).toMatchObject({ path: created.path, branch: created.branch });
-    expect(await fs.stat(created.path)).toBeTruthy();
-    expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
-  });
-
   it("adopts an orphaned worktree instead of throwing on a retried create() with the same name", async () => {
     const created = await service.create({
       repoRoot: repo,
@@ -781,39 +764,6 @@ describe("ManagedWorktreeService", () => {
     expect(findRegistryWorktreeByPath(env, created.path)).toBeUndefined();
   });
 
-  it("gc adoption loses to a concurrent create() registration without duplicating the row", async () => {
-    const created = await service.create({ repoRoot: repo, name: "race-gc" });
-    deleteRegistryWorktree(env, created.id);
-    // A protected idle session record makes gc call isOwnerActive AFTER its registry snapshot
-    // but BEFORE reconcileOrphans, deterministically simulating a create() that registers the
-    // orphan path inside that window — the exact interleaving the atomic claim guards.
-    await service.create({
-      repoRoot: repo,
-      name: "race-idle",
-      ownerKind: "session",
-      ownerId: "agent:race",
-    });
-    now += IDLE_GC_MS + 1;
-    const winner: ManagedWorktreeRecord = {
-      ...created,
-      id: "race-winner",
-      createdAt: now,
-      lastActiveAt: now,
-    };
-
-    const result = await service.gc({
-      isOwnerActive: () => {
-        insertRegistryWorktree(env, winner);
-        return true;
-      },
-    });
-
-    expect(result.orphansDeleted).toBe(0);
-    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === created.path);
-    expect(rows.map((entry) => entry.id)).toEqual(["race-winner"]);
-    expect(await fs.stat(created.path)).toBeTruthy();
-  });
-
   it("retried create() returns the concurrent winner's record instead of double-registering", async () => {
     const created = await service.create({ repoRoot: repo, name: "race-retry" });
     deleteRegistryWorktree(env, created.id);
@@ -878,27 +828,65 @@ describe("ManagedWorktreeService", () => {
     expect(rows.map((entry) => entry.id)).toEqual(["race-winner"]);
   });
 
-  it("binds a gc-adopted name to the manual record until removed", async () => {
-    const created = await service.create({ repoRoot: repo, name: "gc-owned" });
-    deleteRegistryWorktree(env, created.id);
-    await service.gc();
-    const adopted = (await service.list()).find((entry) => entry.path === created.path);
-    expect(adopted?.ownerKind).toBe("manual");
+  it("gc during a normal create() preserves the in-flight worktree and leaves one live row", async () => {
+    const syncDir = path.join(root, "sync");
+    await fs.mkdir(syncDir, { recursive: true });
+    const startedFlag = path.join(syncDir, "setup-started");
+    const releaseFlag = path.join(syncDir, "setup-release");
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    // The setup script parks create() mid-provisioning until released, so gc deterministically
+    // observes the live-worktree/no-registry-row window of a normal create().
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
+      { mode: 0o755 },
+    );
 
-    // An owner-carrying retry hits the owner guard against gc's manual record...
-    await expect(
-      service.create({
-        repoRoot: repo,
-        name: "gc-owned",
-        ownerKind: "workboard",
-        ownerId: "card-9",
-      }),
-    ).rejects.toThrow(/already in use by manual/);
+    const createPromise = service.create({ repoRoot: repo, name: "during-gc" });
+    while (!(await fs.stat(startedFlag).catch(() => undefined))) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    }
+    const result = await service.gc();
+    await fs.writeFile(releaseFlag, "");
+    const created = await createPromise;
 
-    // ...while an ownerless retry reuses it.
-    const reused = await service.create({ repoRoot: repo, name: "gc-owned" });
-    expect(reused.id).toBe(adopted?.id);
-    expect(reused.ownerKind).toBe("manual");
+    expect(result.orphansDeleted).toBe(0);
+    expect(await fs.stat(created.path)).toBeTruthy();
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === created.path);
+    expect(rows.map((entry) => entry.id)).toEqual([created.id]);
+  });
+
+  it("normal create() returns the concurrent winner's record instead of double-registering", async () => {
+    const sibling = await service.create({ repoRoot: repo, name: "sibling" });
+    const winner: ManagedWorktreeRecord = {
+      ...sibling,
+      id: "race-winner",
+      name: "race-normal",
+      path: path.join(path.dirname(sibling.path), "race-normal"),
+      branch: "openclaw/race-normal",
+    };
+    let raced = false;
+    // Normal create()'s first now() read is the record's createdAt, taken right before its
+    // final claim; the trapdoor inserts the competing row there, simulating a concurrent
+    // create() that registered the same path during this call's provisioning window.
+    const racingService = new ManagedWorktreeService({
+      env,
+      now: () => {
+        if (!raced) {
+          raced = true;
+          insertRegistryWorktree(env, winner);
+        }
+        return now;
+      },
+    });
+
+    const created = await racingService.create({ repoRoot: repo, name: "race-normal" });
+
+    expect(created.id).toBe("race-winner");
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === winner.path);
+    expect(rows.map((entry) => entry.id)).toEqual(["race-winner"]);
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {

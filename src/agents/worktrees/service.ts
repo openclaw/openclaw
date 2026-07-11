@@ -24,7 +24,6 @@ import {
   findLiveRegistryWorktreeByOwner,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
-  insertRegistryWorktree,
   insertRegistryWorktreeIfPathFree,
   listRegistryWorktrees,
   updateRegistryWorktree,
@@ -269,10 +268,9 @@ async function canResetFailedWorktreeAdd(
 }
 
 /**
- * A crash between `git worktree add` and `insertRegistryWorktree()` (or an orphan directory
- * found during gc) can leave a live git worktree + managed branch with no registry row.
- * Adoption requires an exact match on both path and branch so foreign or detached worktrees
- * are never silently claimed.
+ * A create() that crashed between `git worktree add` and its registry insert leaves a live
+ * git worktree + managed branch with no registry row. Adoption requires an exact match on
+ * both path and branch so foreign or detached worktrees are never silently claimed.
  */
 async function findAdoptableOrphan(
   repoRoot: string,
@@ -373,6 +371,8 @@ export class ManagedWorktreeService {
       if (!recordOwnerMatches(existing, params)) {
         throw worktreeNameInUseError(existing, name);
       }
+      // restore() re-activates this EXISTING row via updateRegistryWorktree — it operates on
+      // the row that already owns the path, so it cannot create a duplicate live row.
       return await this.restore({ id: existing.id });
     }
     const branch = `openclaw/${name}`;
@@ -392,7 +392,7 @@ export class ManagedWorktreeService {
       ) {
         const adoptedBase = await resolveBase(repository.repoRoot, params.baseRef);
         // Claim BEFORE provisioning: only the claim holder may provision or destroy this
-        // path; losers must never touch it. Claiming first means a concurrent create()/gc()
+        // path; losers must never touch it. Claiming first means a concurrent create()
         // cannot register the path during the (long) setup re-run and then have its live
         // worktree force-removed by this call's failure cleanup, and the repo setup script
         // never runs twice concurrently in the same path.
@@ -507,7 +507,19 @@ export class ManagedWorktreeService {
       createdAt,
       lastActiveAt: createdAt,
     };
-    insertRegistryWorktree(this.env, record);
+    // Every new live row goes through the atomic path claim. A lost claim means a concurrent
+    // create() registered this exact path during the setup window (same-name serialization);
+    // mirror the live-row-at-path shortcut for the row that won.
+    if (!insertRegistryWorktreeIfPathFree(this.env, record)) {
+      const winner = findLiveRegistryWorktreeByPath(this.env, worktreePath);
+      if (!winner) {
+        throw new Error(`worktree registration raced and lost: ${worktreePath}`);
+      }
+      if (!recordOwnerMatches(winner, params)) {
+        throw worktreeNameInUseError(winner, name);
+      }
+      return winner;
+    }
     return record;
   }
 
@@ -864,7 +876,7 @@ export class ManagedWorktreeService {
     repoRoot: string;
     path: string;
     branch: string;
-    baseRef?: string;
+    baseRef: string;
     ownerKind?: ManagedWorktreeOwnerKind;
     ownerId?: string;
   }): ManagedWorktreeRecord | undefined {
@@ -876,17 +888,16 @@ export class ManagedWorktreeService {
       repoRoot: params.repoRoot,
       path: params.path,
       branch: params.branch,
-      // gc-side adoption cannot recover the crashed create()'s base; "HEAD" is its placeholder.
-      baseRef: params.baseRef ?? "HEAD",
+      baseRef: params.baseRef,
       // Mirrors create()'s owner defaulting so a retried create() keeps findLiveByOwner()
-      // lookups and idle-gc expiry working; gc-side adoption cannot recover an owner.
+      // lookups and idle-gc expiry working.
       ownerKind: params.ownerKind ?? "manual",
       ...(params.ownerId ? { ownerId: params.ownerId } : {}),
       createdAt,
       lastActiveAt: createdAt,
     };
-    // Atomic path claim: a concurrent create()/gc() may have registered this path after the
-    // caller's registry snapshot; the loser must never add a second row for the same path.
+    // Atomic path claim: a concurrent create() may have registered this path after this
+    // call's registry lookup; the loser must never add a second row for the same path.
     if (!insertRegistryWorktreeIfPathFree(this.env, record)) {
       return undefined;
     }
@@ -922,23 +933,11 @@ export class ManagedWorktreeService {
         }
         const repository = await resolveRepository(candidate).catch(() => undefined);
         if (repository) {
-          const managedBranch = `openclaw/${name.name}`;
-          if (await findAdoptableOrphan(repository.repoRoot, candidate, managedBranch)) {
-            // Orphaned by a create() that crashed before insertRegistryWorktree(); reclaim it
-            // instead of deleting a live worktree or leaving it invisible to list()/gc() forever.
-            // Registration-only: background gc must not execute repo setup scripts, so a possibly
-            // half-provisioned worktree becomes visible/removable rather than silently trusted.
-            // A lost claim means a concurrent create() registered the path first; skip either way.
-            this.adoptOrphan({
-              repoFingerprint: repository.fingerprint,
-              repoRoot: repository.repoRoot,
-              path: candidate,
-              branch: managedBranch,
-            });
-            continue;
-          }
           const listed = await listGitWorktrees(repository.repoRoot).catch(() => []);
           if (listed.some((entry) => path.resolve(entry.path) === path.resolve(candidate))) {
+            // Live git worktrees are preserved, never adopted: background gc cannot tell a
+            // crash orphan from a legitimate manual worktree without an owner-safe recovery
+            // marker (schema-backed). Retried create() is the supported crash-recovery path.
             continue;
           }
         }
