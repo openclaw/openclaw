@@ -2871,7 +2871,7 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("reports local audio acceleration as information without failing doctor health", async () => {
+  it("keeps local audio acceleration quiet during the normal doctor flow", async () => {
     const contribution = requireDoctorContribution("doctor:local-audio-acceleration");
     mocks.getHealthCheck.mockReturnValue({
       id: "core/doctor/local-audio-acceleration",
@@ -2900,11 +2900,8 @@ describe("doctor health contributions", () => {
     await contribution.run(ctx);
 
     expect(ctx.healthOk).toBe(true);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Local STT auto-selection"),
-      "Doctor information",
-    );
-    expect(mocks.note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
+    expect(mocks.getHealthCheck).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
