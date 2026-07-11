@@ -1,13 +1,14 @@
 export function stateDir(): string;
 export function configPath(): string;
 export function managedNpmRoot(): string;
-export function realPathMaybe(filePath: unknown): string;
-export function assertPathInside(parentPath: unknown, childPath: unknown, label: unknown): void;
-export function readInstallRecords(fallbackRecords?: Record<string, unknown>): unknown;
-export function npmProjectRootForInstalledPackage(
-  installPath: unknown,
-  packageName: unknown,
-): string;
-export function findPackageJson(packageName: unknown, roots: unknown): unknown;
+export function realPathMaybe(filePath: string): string;
+export function assertPathInside(parentPath: string, childPath: string, label: string): void;
+import type { PluginInstallRecord } from "./plugin-index-sqlite.mjs";
+
+export function readInstallRecords(
+  fallbackRecords?: Record<string, PluginInstallRecord>,
+): Record<string, PluginInstallRecord>;
+export function npmProjectRootForInstalledPackage(installPath: string, packageName: string): string;
+export function findPackageJson(packageName: string, roots: string[]): string | undefined;
 export { readJson };
 import { readJson } from "./fixtures/common.mjs";

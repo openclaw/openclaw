@@ -96,9 +96,9 @@ export function validateCandidateCheckout({
   workflowRef: unknown;
 };
 export function candidateCumulativeShippedPullRequests(
-  changelog: unknown,
-  label: unknown,
-): Set<unknown>;
+  changelog: string,
+  label: string,
+): Set<number>;
 export function validateCandidateReleaseNotes({
   changelog,
   repository,
@@ -131,7 +131,7 @@ export function validateCandidateChangelogProvenance({
   | {
       status: string;
       reason: string;
-      shippedBaselines: never[];
+      shippedBaselines: ShippedBaselineExclusion[];
       base?: undefined;
       target?: undefined;
     }
@@ -139,7 +139,7 @@ export function validateCandidateChangelogProvenance({
       status: string;
       base: unknown;
       target: unknown;
-      shippedBaselines: unknown;
+      shippedBaselines: ShippedBaselineExclusion[];
       reason?: undefined;
     };
 /**
@@ -175,3 +175,4 @@ declare function loadCandidateShippedBaseline(ref: unknown): {
   ref: unknown;
   pullRequests: Set<unknown>;
 };
+import type { ShippedBaselineExclusion } from "./render-github-release-notes.mjs";

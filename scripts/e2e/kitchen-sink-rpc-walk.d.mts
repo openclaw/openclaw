@@ -1,4 +1,3 @@
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context */
 export function shouldPrintHelp(argv: string[]): boolean;
 export function validateCliArgs(argv: string[]): void;
 export function readPositiveInt(raw: string | undefined, fallback: number, label?: string): number;

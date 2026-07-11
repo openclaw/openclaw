@@ -53,14 +53,14 @@ export function withAugmentedPluginNpmManifestForPackage(
 ): unknown;
 export function parseRunArgs(argv: unknown):
   | {
-      help: boolean;
+      help: true;
       packageDir: string;
       command: string;
-      args: never[];
+      args: string[];
     }
   | {
-      packageDir: unknown;
-      command: unknown;
-      args: unknown;
+      packageDir: string;
+      command: string;
+      args: string[];
       help?: undefined;
     };

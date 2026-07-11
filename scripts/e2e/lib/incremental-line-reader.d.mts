@@ -1,7 +1,7 @@
-export function resolvePositiveInteger(value: unknown, fallback: unknown): unknown;
+export function resolvePositiveInteger(value: unknown, fallback: number): number;
 export function createIncrementalLineReader(
-  filePath: unknown,
-  options?: Record<string, unknown>,
+  filePath: string,
+  options?: { maxReadBytes?: number },
 ): {
   readLines(): {
     lines: string[];

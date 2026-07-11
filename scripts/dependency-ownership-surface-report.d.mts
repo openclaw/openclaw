@@ -82,9 +82,9 @@ export function collectDependencyOwnershipSurfaceCheckErrors(report: unknown): u
  * Renders a dependency ownership surface report as Markdown.
  */
 export function renderDependencyOwnershipSurfaceMarkdownReport(report: unknown): string;
-export function parseArgs(argv: unknown): {
+export function parseArgs(argv: string[]): {
   asJson: boolean;
   check: boolean;
-  jsonPath: null;
-  markdownPath: null;
+  jsonPath: string | null;
+  markdownPath: string | null;
 };

@@ -50,7 +50,7 @@ declare function runCase(
   status: string;
   exitCode: unknown;
   signal: unknown;
-  error: null;
+  error: string | null;
 };
 declare function runStartupMemoryCheck(
   argv?: string[],
@@ -66,6 +66,6 @@ declare function runStartupMemoryCheck(
     status: string;
     exitCode: unknown;
     signal: unknown;
-    error: null;
+    error: string | null;
   }[];
 };

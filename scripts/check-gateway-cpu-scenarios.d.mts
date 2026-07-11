@@ -7,10 +7,10 @@ export namespace testing {
   export { validateStartupReport };
 }
 declare function hasPrivateQaDist(repoRoot: unknown, fsImpl?: typeof fs): boolean;
-declare function parseArgs(argv: unknown): {
+declare function parseArgs(argv: string[]): {
   outputDir: string;
-  startupCases: never[];
-  qaScenarios: never[];
+  startupCases: string[];
+  qaScenarios: string[];
   runs: number;
   warmup: number;
   skipStartup: boolean;

@@ -36,7 +36,7 @@ export function collectRequiredPluginEntries<T extends PluginGatewayEntry>(
 export function collectGatewayCpuObservations(params: unknown): (
   | {
       kind: string;
-      id: unknown;
+      id: string;
       cpuCoreRatioMax: number;
       wallMsMax: number;
       cpuCoreRatio?: undefined;

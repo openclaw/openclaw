@@ -2,6 +2,7 @@ import type {
   DockerE2eImageKind,
   DockerE2eLane,
   DockerE2eReleaseProfile,
+  DockerE2eReleaseProfileInput,
 } from "./docker-e2e-scenarios.mjs";
 
 export type DockerE2ePlanLane = {
@@ -24,7 +25,7 @@ export type DockerE2ePlanOptions = {
   planReleaseAll: boolean;
   profile: string;
   releaseChunk: string;
-  releaseProfile?: DockerE2eReleaseProfile;
+  releaseProfile?: DockerE2eReleaseProfileInput;
   selectedLaneNames: string[];
   timingStore?: unknown;
   upgradeSurvivorBaselines?: string;

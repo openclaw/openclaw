@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 export function parseArgs(argv: unknown):
   | {
-      help: boolean;
-      packageDirs: never[];
+      help: true;
+      packageDirs: string[];
     }
   | {
-      packageDirs: unknown[];
+      packageDirs: string[];
       help?: undefined;
     };
 /**

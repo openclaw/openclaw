@@ -1,4 +1,4 @@
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context. */
+export function resolveWatchLockPath(cwd: string, args?: string[]): string;
 export function runWatchMain(params?: {
   spawn?: (
     cmd: string,

@@ -1,3 +1,3 @@
-export function extractAgentReplyTexts(text: unknown): unknown[];
-export function assertAgentReplyContainsMarker(marker: unknown, outputPath: unknown): void;
-export function assertOpenAiRequestLogUsed(requestLogPath: unknown, label?: string): void;
+export function extractAgentReplyTexts(text: string): string[];
+export function assertAgentReplyContainsMarker(marker: string, outputPath: string): void;
+export function assertOpenAiRequestLogUsed(requestLogPath: string, label?: string): void;

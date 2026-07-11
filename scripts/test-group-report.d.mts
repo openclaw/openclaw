@@ -1,4 +1,3 @@
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context */
 import type { ChildProcess } from "node:child_process";
 
 export type TestGroupReportArgs = {

@@ -2,19 +2,19 @@
 /**
  * Parses plugin gateway gauntlet CLI arguments and env defaults.
  */
-export function parseArgs(argv: unknown): {
+export function parseArgs(argv: string[]): {
   repoRoot: string;
   outputDir: string;
-  pluginIds: never[];
+  pluginIds: string[];
   shardTotal: number;
   shardIndex: number;
-  limit: undefined;
+  limit: number | undefined;
   skipPrebuild: boolean;
   skipLifecycle: boolean;
   skipQa: boolean;
   qaBaseline: boolean;
   skipSlashHelp: boolean;
-  qaScenarios: never[];
+  qaScenarios: string[];
   qaPluginChunkSize: number;
   cpuCoreWarn: number;
   hotWallWarnMs: number;

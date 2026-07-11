@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context */
 /**
  * Parses extension memory profiler options after pnpm's optional separator.
  */
-export function parseArgs(argv: unknown): {
-  extensions: never[];
+export function parseArgs(argv: string[]): {
+  extensions: string[];
   concurrency: number;
   timeoutMs: number;
   combinedTimeoutMs: number;
   top: number;
-  jsonPath: null;
+  jsonPath: string | null;
   skipCombined: boolean;
 };
 /**

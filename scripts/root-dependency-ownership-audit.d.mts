@@ -19,8 +19,8 @@ export function collectRootDependencyOwnershipAudit(params?: Record<string, unkn
   sections: unknown[];
   fileCount: number;
   sampleFiles: unknown[];
-  declaredInExtensions: never[];
-  internalizedBundledRuntimeOwners: never[];
+  declaredInExtensions: string[];
+  internalizedBundledRuntimeOwners: string[];
   category: string;
   recommendation: string;
 }[];

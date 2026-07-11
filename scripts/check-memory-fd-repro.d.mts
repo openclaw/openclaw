@@ -10,14 +10,14 @@ export function readPositiveNumber(value: unknown, label: unknown): number;
 /**
  * Parses memory FD repro CLI arguments and environment fallbacks.
  */
-export function parseArgs(argv: unknown): {
-  fileCount: undefined;
-  mode: string;
-  maxWorkspaceRegFds: undefined;
-  minLeakedFds: undefined;
-  invokeTimeoutMs: undefined;
-  sampleDelayMs: undefined;
-  settleDelayMs: undefined;
+export function parseArgs(argv: string[]): {
+  fileCount: number;
+  mode: "fixed" | "leak" | "report";
+  maxWorkspaceRegFds: number;
+  minLeakedFds: number;
+  invokeTimeoutMs: number;
+  sampleDelayMs: number;
+  settleDelayMs: number;
   outputDir: string;
   keep: boolean;
   allowNonDarwin: boolean;

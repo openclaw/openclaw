@@ -4,14 +4,14 @@ export function githubReleaseBodySize(body: unknown): {
   bytes: number;
 };
 export function fitsGithubReleaseBody(body: unknown): boolean;
-export function extractChangelogReleaseSections(changelog: unknown): {
-  version: unknown;
-  source: unknown;
+export function extractChangelogReleaseSections(changelog: string): {
+  version: string;
+  source: string;
 }[];
 export function extractChangelogSection(changelog: unknown, version: unknown): unknown;
 export function releaseNotesVersionForTag(tag: unknown): unknown;
-export function formatShippedBaselineExclusions(baselines: unknown): string;
-export function parseShippedBaselineExclusions(section: unknown): unknown;
+export function formatShippedBaselineExclusions(baselines: ShippedBaselineExclusion[]): string;
+export function parseShippedBaselineExclusions(section: string): ShippedBaselineExclusion[];
 export function tagPinnedContributionRecordUrl(repository: unknown, tag: unknown): string;
 export function dedicatedSectionVersionForTag(tag: unknown): unknown;
 export function releaseNotesSectionForTag(
@@ -70,3 +70,8 @@ export function verifyGithubReleaseNotes({
 };
 export const GITHUB_RELEASE_BODY_MAX_CHARACTERS: 125000;
 export const GITHUB_RELEASE_BODY_MAX_BYTES: 125000;
+export type ShippedBaselineExclusion = {
+  ref: string;
+  count: number;
+  pullRequests: number[];
+};

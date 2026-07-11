@@ -1,9 +1,18 @@
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context */
-export function parseArgs(argv: unknown): {
-  help: boolean;
-  iterations: number;
-  methods: string[];
-};
+export function parseArgs(argv: string[]):
+  | {
+      help: true;
+      iterations: number;
+      methods: string[];
+      outputDir?: string;
+      repoRoot?: string;
+    }
+  | {
+      help: false;
+      iterations: number;
+      methods: string[];
+      outputDir: string;
+      repoRoot?: string;
+    };
 /**
  * Polls readiness endpoints while also failing fast if the child exits.
  */

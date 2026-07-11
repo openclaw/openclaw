@@ -216,16 +216,16 @@ export function validateReleaseRunEvidence(
   },
   client?: unknown,
 ): ReleaseRunEvidence;
-export function parseReleaseCiSummaryArgs(argv: unknown): {
+export function parseReleaseCiSummaryArgs(argv: string[]): {
   intervalMs: number;
   json: boolean;
-  manifestPath: undefined;
+  manifestPath: string | undefined;
   repository: string;
-  runId: undefined;
+  runId: string;
   trustedWorkflowRef: string;
   validate: boolean;
-  verifierSourceFile: undefined;
-  verifierSourceSha: undefined;
+  verifierSourceFile: string | undefined;
+  verifierSourceSha: string | undefined;
   watch: boolean;
 };
 export function releaseCiWatchFingerprint(parent: unknown): string;

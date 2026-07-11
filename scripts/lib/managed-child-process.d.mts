@@ -1,4 +1,3 @@
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context */
 /**
  * Return conventional shell exit code for a signal.
  *

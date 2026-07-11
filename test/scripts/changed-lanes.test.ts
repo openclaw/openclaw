@@ -613,6 +613,7 @@ describe("scripts/changed-lanes", () => {
 
   it.each([
     ["test/vitest/foo.config.ts", true, true],
+    ["test/vitest/vitest-runtime-helper.d.mts", true, true],
     ["test/fixtures/foo.ts", false, true],
     ["test/foo.mjs", false, true],
     ["test/tsconfig/tsconfig.test.root.json", true, true],

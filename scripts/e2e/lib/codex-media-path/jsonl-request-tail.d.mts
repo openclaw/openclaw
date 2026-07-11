@@ -3,5 +3,4 @@ export function createJsonlRequestTailer(
   options?: { historyLimit?: number; maxReadBytes?: number; tailLineLimit?: number },
 ): {
   read(): unknown[];
-  reset(): void;
 };

@@ -1,4 +1,3 @@
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context */
 /**
  * Reports whether the caller explicitly opted out of sparse tsgo guard errors.
  */

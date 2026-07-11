@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context */
 export function parseArgs(argv: unknown): {
   artifactDir: string;
   githubOutput: string;
@@ -13,6 +12,7 @@ export function parseArgs(argv: unknown): {
   source: string;
   trustedSourceId: string;
   trustedSourcePolicy: string;
+  help?: true;
 };
 export function validateOpenClawPackageSpec(spec: unknown): void;
 export function resolveNpmPackageCandidatePackRunner(

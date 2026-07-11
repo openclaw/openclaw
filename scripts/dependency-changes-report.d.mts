@@ -53,14 +53,23 @@ export function isDependencyFile(filePath: unknown): boolean;
  * Returns git pathspecs used for dependency diff collection.
  */
 export function dependencyDiffPathspecs(): string[];
-export function parseArgs(argv: unknown): {
-  rootDir: string;
-  baseRef: null;
-  baseLockfile: null;
-  headLockfile: string;
-  jsonPath: null;
-  markdownPath: null;
-};
+export function parseArgs(argv: string[]):
+  | {
+      rootDir: string;
+      baseRef: string;
+      baseLockfile: null;
+      headLockfile: string;
+      jsonPath: string | null;
+      markdownPath: string | null;
+    }
+  | {
+      rootDir: string;
+      baseRef: null;
+      baseLockfile: string;
+      headLockfile: string;
+      jsonPath: string | null;
+      markdownPath: string | null;
+    };
 /**
  * Runs the dependency changes report CLI.
  */

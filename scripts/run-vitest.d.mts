@@ -1,4 +1,3 @@
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context */
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 type VitestFs = {
   existsSync(path: string): boolean;
@@ -73,5 +72,5 @@ export function resolveTestProjectsRunnerSpawnParams(
 export function runTestProjectsDelegation(
   argv: string[],
   env: NodeJS.ProcessEnv,
-  options?: { spawnSync?: (...args: unknown[]) => unknown },
-): never;
+  options?: { runnerPath?: string },
+): ChildProcess;

@@ -1,4 +1,3 @@
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context */
 /**
  * Lists entry-shim artifacts written by scripts/write-plugin-sdk-entry-dts.ts.
  */

@@ -1,8 +1,8 @@
-export function tailText(text: unknown, maxBytes: unknown): unknown;
-export function readTextFileTail(file: unknown, maxBytes: unknown): string;
+export function tailText(text: string, maxBytes: number): string;
+export function readTextFileTail(file: string, maxBytes: number): string;
 export function readTextFileBounded(
-  file: unknown,
-  label: unknown,
-  maxBytes: unknown,
-  options?: Record<string, unknown>,
+  file: string,
+  label: string,
+  maxBytes: number,
+  options?: { tailBytes?: number },
 ): string;

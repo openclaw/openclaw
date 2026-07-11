@@ -1,3 +1,5 @@
+export const GITHUB_API_REQUEST_TIMEOUT_MS: number;
+export const GITHUB_ERROR_BODY_MAX_BYTES: number;
 export const GITHUB_RESPONSE_BODY_MAX_BYTES: number;
 export const allowSecuritySensitiveCommand: string;
 export const securitySensitiveGuardMarker: string;
@@ -62,3 +64,13 @@ export function githubApi(
   token: string,
   options?: { fetchImpl?: typeof fetch; responseMaxBodyBytes?: number; timeoutMs?: number },
 ): { request(path: string, options?: Record<string, unknown>): Promise<unknown> };
+export function readBoundedGitHubErrorText(
+  response: Response,
+  maxBytes?: number,
+  options?: { signal?: AbortSignal },
+): Promise<string>;
+export function readBoundedGitHubJson(
+  response: Response,
+  maxBytes?: number,
+  options?: { signal?: AbortSignal },
+): Promise<unknown>;

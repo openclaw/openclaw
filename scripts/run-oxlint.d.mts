@@ -6,7 +6,7 @@ export function shouldPrepareExtensionPackageBoundaryArtifacts(args: unknown): b
  * Drops tracked-but-missing sparse-checkout targets so narrow sparse checks can pass.
  */
 export function filterSparseMissingOxlintTargets(
-  args: unknown,
+  args: string[],
   {
     cwd,
     fileExists,
@@ -18,21 +18,13 @@ export function filterSparseMissingOxlintTargets(
     isSparseCheckoutEnabled?: ((params: { cwd: string }) => boolean) | undefined;
     isTrackedPath?: ((params: { cwd: string; target: string }) => boolean) | undefined;
   },
-):
-  | {
-      args: unknown;
-      hadExplicitTargets: boolean;
-      remainingExplicitTargets: number;
-      skippedTargets: never[];
-      skippedConfigs: never[];
-    }
-  | {
-      args: unknown[];
-      hadExplicitTargets: boolean;
-      remainingExplicitTargets: number;
-      skippedTargets: unknown[];
-      skippedConfigs: unknown[];
-    };
+): {
+  args: string[];
+  hadExplicitTargets: boolean;
+  remainingExplicitTargets: number;
+  skippedTargets: string[];
+  skippedConfigs: string[];
+};
 /**
  * Applies wrapper policy and runs oxlint with the final argument list.
  */

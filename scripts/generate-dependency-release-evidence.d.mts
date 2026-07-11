@@ -106,26 +106,16 @@ export function renderDependencyEvidenceStepSummary({
   baseRef: unknown;
   counts: unknown;
 }): string;
-export function parseArgs(argv: unknown):
-  | {
-      rootDir: string;
-      outputDir: null;
-      releaseRef: null;
-      npmDistTag: null;
-      baseRef: null;
-      githubOutput: string | undefined;
-      githubStepSummary: string | undefined;
-    }
-  | {
-      help: boolean;
-      rootDir: string;
-      outputDir: null;
-      releaseRef: null;
-      npmDistTag: null;
-      baseRef: null;
-      githubOutput: string | undefined;
-      githubStepSummary: string | undefined;
-    };
+export function parseArgs(argv: string[]): {
+  help?: true;
+  rootDir: string;
+  outputDir: string | null;
+  releaseRef: string | null;
+  npmDistTag: string | null;
+  baseRef: string | null;
+  githubOutput: string | undefined;
+  githubStepSummary: string | undefined;
+};
 /**
  * Runs the dependency release evidence generator CLI.
  */

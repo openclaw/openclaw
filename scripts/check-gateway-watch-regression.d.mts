@@ -122,7 +122,7 @@ export function runTimedWatch(
   stderrPath: string;
   timeFilePath: string;
   watchTriggeredBuild: boolean;
-  watchBuildReason: null;
+  watchBuildReason: string | null;
 }>;
 /**
  * Stops the timed watch child process with TERM/KILL fallback.

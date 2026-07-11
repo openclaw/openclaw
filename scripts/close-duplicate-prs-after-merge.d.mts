@@ -6,15 +6,25 @@ export function parsePrNumberList(value: unknown): number[];
  * Parses duplicate PR close workflow arguments.
  */
 export function parseArgs(
-  argv: unknown,
+  argv: string[],
   env?: NodeJS.ProcessEnv,
-): {
-  apply: boolean;
-  duplicates: never[];
-  labels: string[];
-  landedPr: undefined;
-  repo: string;
-};
+):
+  | {
+      apply: boolean;
+      duplicates: number[];
+      help: true;
+      labels: string[];
+      landedPr?: number;
+      repo: string;
+    }
+  | {
+      apply: boolean;
+      duplicates: number[];
+      help?: undefined;
+      labels: string[];
+      landedPr: number;
+      repo: string;
+    };
 /**
  * Parses changed hunk ranges from unified diff text.
  */

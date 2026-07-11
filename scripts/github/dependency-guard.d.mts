@@ -1,3 +1,4 @@
+export const GITHUB_API_REQUEST_TIMEOUT_MS: number;
 export const GITHUB_ERROR_BODY_MAX_BYTES: number;
 export const GITHUB_RESPONSE_BODY_MAX_BYTES: number;
 export const dependencyChangedLabel: "dependencies-changed";
@@ -35,6 +36,12 @@ export function canAutoscrubPullRequest(options: {
   pullRequest: PullRequest;
 }): boolean;
 export function sanitizeDisplayValue(value: unknown): string;
+export function markdownCode(value: unknown): string;
+export function readBoundedGitHubJson(
+  response: Response,
+  maxBytes?: number,
+  options?: { signal?: AbortSignal },
+): Promise<unknown>;
 export function findDependencyOverrideCommand(options: {
   comments: Comment[];
   expectedSha: string;

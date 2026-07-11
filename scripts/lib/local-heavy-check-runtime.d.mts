@@ -1,4 +1,3 @@
-/* oxlint-disable typescript/no-redundant-type-constituents -- standalone declaration lint lacks the consuming Node type context */
 /** Return whether local-heavy-check safeguards are enabled for an environment. */
 export type LocalHostResources = {
   logicalCpuCount: number;

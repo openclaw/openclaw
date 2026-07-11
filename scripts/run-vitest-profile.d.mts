@@ -1,7 +1,7 @@
-export function parseArgs(argv: unknown): {
-  mode: string;
+export function parseArgs(argv: string[]): {
+  mode: "main" | "runner";
   outputDir: string;
-  vitestArgs: never[];
+  vitestArgs: string[];
 };
 /**
  * Resolves or creates the directory used for profiler artifacts.
