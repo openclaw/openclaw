@@ -1156,7 +1156,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(freshTranscript);
   });
 
-  it("cleans up archived transcripts older than the prune window", async () => {
+  it("keeps archived transcripts by default", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
@@ -1169,6 +1169,41 @@ describe("Integration: saveSessionStore with pruning", () => {
     const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
     await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
 
+    const oldArchived = path.join(
+      testDir,
+      `old-session.jsonl.deleted.${archiveTimestamp(now - 9 * DAY_MS)}`,
+    );
+    const bakArchived = path.join(
+      testDir,
+      `bak-session.jsonl.bak.${archiveTimestamp(now - 20 * DAY_MS)}`,
+    );
+    await fs.writeFile(oldArchived, "old", "utf-8");
+    await fs.writeFile(bakArchived, "bak", "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    // Archives are conversation history: without an explicit retention
+    // duration only the disk budget may evict them.
+    await expectPathExists(oldArchived);
+    await expectPathExists(bakArchived);
+  });
+
+  it("cleans up deleted archives when resetArchiveRetention is configured", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
     const oldArchived = path.join(
       testDir,
       `old-session.jsonl.deleted.${archiveTimestamp(now - 9 * DAY_MS)}`,

@@ -12,6 +12,7 @@ import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-eve
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryLifecycleMutation,
   cleanupSessionLifecycleArtifacts,
@@ -681,8 +682,7 @@ function createTranscriptEventLine(sessionId: string, content: string): string {
 
 function readArchiveLines(archivePath: string | undefined): string[] {
   expect(archivePath).toBeTruthy();
-  return fs
-    .readFileSync(archivePath ?? "", "utf-8")
+  return readSessionArchiveContentSync(archivePath ?? "")
     .trim()
     .split("\n");
 }

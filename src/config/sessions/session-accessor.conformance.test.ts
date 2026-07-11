@@ -15,6 +15,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -504,8 +505,9 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         expect(removedArchive).toBeDefined();
         expect(orphanArchive).toBeDefined();
         expect(
-          fs
-            .readFileSync(path.join(path.dirname(cleanupStorePath), removedArchive ?? ""), "utf8")
+          readSessionArchiveContentSync(
+            path.join(path.dirname(cleanupStorePath), removedArchive ?? ""),
+          )
             .trim()
             .split("\n")
             .map((line) => JSON.parse(line)),
@@ -1547,8 +1549,7 @@ describe("sqlite session normalization", () => {
       .filter((file) => file.startsWith("stale-session.jsonl.deleted."));
     expect(archivedStale).toHaveLength(1);
     expect(
-      fs
-        .readFileSync(path.join(paths.tempDir, archivedStale[0] ?? ""), "utf8")
+      readSessionArchiveContentSync(path.join(paths.tempDir, archivedStale[0] ?? ""))
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line)),
@@ -1700,7 +1701,7 @@ describe("sqlite session normalization", () => {
       .filter((file) => file.startsWith("unshared-budget-session.jsonl.deleted."));
     expect(archivedUnsharedBudget).toHaveLength(1);
     expect(
-      fs.readFileSync(path.join(paths.tempDir, archivedUnsharedBudget[0] ?? ""), "utf8"),
+      readSessionArchiveContentSync(path.join(paths.tempDir, archivedUnsharedBudget[0] ?? "")),
     ).toContain("unshared-budget-event");
   });
 

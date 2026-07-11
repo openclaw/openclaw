@@ -44,14 +44,16 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 
 `session.maintenance` controls automatic maintenance for SQLite session rows, SQLite transcript rows, archive artifacts, and trajectory sidecars:
 
-| Key                     | Default               | Notes                                                                             |
-| ----------------------- | --------------------- | --------------------------------------------------------------------------------- |
-| `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                            |
-| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                            |
-| `maxEntries`            | `500`                 | cap on session entries                                                            |
-| `resetArchiveRetention` | same as `pruneAfter`  | retention for `*.reset.<timestamp>` transcript archives; `false` disables cleanup |
-| `maxDiskBytes`          | unset                 | optional row/artifact budget                                                      |
-| `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                       |
+| Key                     | Default               | Notes                                                                                       |
+| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
+| `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                                      |
+| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
+| `maxEntries`            | `500`                 | cap on session entries                                                                      |
+| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
+| `maxDiskBytes`          | `2gb`                 | per-agent sessions disk budget; `false` disables                                            |
+| `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                 |
+
+Archived transcripts are kept by default and compressed with zstd (`*.jsonl.<reason>.<timestamp>.zst`) when the runtime supports it, so deleting or resetting a session never silently discards conversation history. The disk budget evicts the oldest archives first, before touching live sessions.
 
 Active SQLite enforcement of `maxDiskBytes` measures session-row JSON plus transcript-event JSON bytes per session; legacy offline-maintenance enforcement measures files in the selected sessions directory.
 

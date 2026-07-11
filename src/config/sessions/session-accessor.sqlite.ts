@@ -40,6 +40,11 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import {
+  encodeSessionArchiveContent,
+  readSessionArchiveContentSync,
+  SESSION_ARCHIVE_ZSTD_SUFFIX,
+} from "./archive-compression.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import type { SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
@@ -3274,12 +3279,18 @@ function findMatchingSqliteTranscriptArchive(params: {
       continue;
     }
     const archivePath = path.join(params.archiveDirectory, entry);
+    const compressed = entry.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
     try {
       const stat = fs.statSync(archivePath);
-      if (!stat.isFile() || stat.size !== Buffer.byteLength(params.content, "utf8")) {
+      if (!stat.isFile()) {
         continue;
       }
-      if (fs.readFileSync(archivePath, "utf8") === params.content) {
+      // Compressed size never matches the utf8 length, so the cheap size
+      // precheck only applies to plain archives.
+      if (!compressed && stat.size !== Buffer.byteLength(params.content, "utf8")) {
+        continue;
+      }
+      if (readSessionArchiveContentSync(archivePath) === params.content) {
         return archivePath;
       }
     } catch {
@@ -3300,20 +3311,22 @@ function writeSqliteTranscriptArchive(params: {
   if (existing) {
     return existing;
   }
+  // Archives are the long-lived cold tier; compress when the runtime can so
+  // keep-forever retention stays cheap. Plain JSONL is the Bun/older fallback.
+  const encoded = encodeSessionArchiveContent(params.content);
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const archivePath = resolveSqliteTranscriptArchivePath({
+    const archivePath = `${resolveSqliteTranscriptArchivePath({
       archiveDirectory: params.archiveDirectory,
       reason: params.reason,
       sessionId: params.sessionId,
       nowMs: Date.now() + attempt,
-    });
+    })}${encoded.suffix}`;
     if (fs.existsSync(archivePath)) {
       continue;
     }
     const tempPath = `${archivePath}.${randomUUID()}.tmp`;
     try {
-      fs.writeFileSync(tempPath, params.content, {
-        encoding: "utf8",
+      fs.writeFileSync(tempPath, encoded.bytes, {
         flag: "wx",
         mode: 0o600,
       });
