@@ -7,8 +7,9 @@
 //
 // SECURITY MODEL (normative):
 // - The child's origin is opaque (`null`) because the iframe is sandboxed without
-//   `allow-same-origin`. NEVER compare origin strings; the accept filter is the
-//   IDENTITY check `event.source === iframe.contentWindow`, wired by the host.
+//   `allow-same-origin`. The host accepts one token-bound bootstrap from the
+//   iframe, then all traffic uses that document's MessagePort. Navigation loses
+//   the port, unlike the iframe's stable WindowProxy.
 // - A widget may only request bindings declared in the manifest the operator
 //   approved. Undeclared bindingId → `workspace:error {code:"binding_denied"}`.
 // - `sendPrompt` requires the manifest `prompt:send` capability AND an operator
@@ -164,7 +165,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Well-formedness filter: a valid inbound message is an object with `v === 1` and
  * a known `type`. Anything else is dropped silently (counted for tests). This runs
- * AFTER the host's `event.source === iframe.contentWindow` identity check.
+ * after the host has moved traffic onto the approved document's MessagePort.
  */
 export function isWellFormedInbound(
   data: unknown,

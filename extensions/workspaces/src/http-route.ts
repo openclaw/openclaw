@@ -23,10 +23,15 @@ export function createWidgetHttpRouteHandler(params: {
   return {
     async handleHttpRequest(req, res) {
       const url = new URL(req.url ?? "/", "http://localhost");
-      return await serveWidgetAsset({ method: req.method, pathname: url.pathname }, res, {
-        store: params.store,
-        ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-      });
+      const bridgeToken = url.searchParams.get("bridgeToken") ?? undefined;
+      return await serveWidgetAsset(
+        { method: req.method, pathname: url.pathname, ...(bridgeToken ? { bridgeToken } : {}) },
+        res,
+        {
+          store: params.store,
+          ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+        },
+      );
     },
   };
 }

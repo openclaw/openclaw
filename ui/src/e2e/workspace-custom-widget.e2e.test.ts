@@ -89,8 +89,9 @@ const FIXTURE_WIDGET_HTML = `<!doctype html><html><head><meta charset="utf-8"><t
 <script>
   const valueNode = document.getElementById("value");
   const fetchNode = document.getElementById("fetch");
-  function post(type, payload = {}) { window.parent.postMessage({ v: 1, type, ...payload }, "*"); }
-  window.addEventListener("message", (event) => {
+  const bridge = window.openclawWorkspaceBridge;
+  function post(type, payload = {}) { bridge.postMessage({ v: 1, type, ...payload }); }
+  bridge.addEventListener("message", (event) => {
     const m = event.data;
     if (!m || m.v !== 1) return;
     if (m.type === "workspace:data" || m.type === "workspace:push") {
@@ -130,6 +131,12 @@ async function routeWidgetAssets(page: Page, html: string): Promise<void> {
         }),
       });
     }
+    const bridgeToken = new URL(url).searchParams.get("bridgeToken");
+    const bootstrap = bridgeToken
+      ? `<script>(()=>{const channel=new MessageChannel();const listeners=new Set();const port=channel.port1;port.onmessage=(event)=>{for(const listener of listeners)listener(event)};port.start();Object.defineProperty(window,"openclawWorkspaceBridge",{configurable:false,writable:false,value:Object.freeze({postMessage:(message)=>port.postMessage(message),addEventListener:(type,listener)=>{if(type==="message")listeners.add(listener)},removeEventListener:(type,listener)=>{if(type==="message")listeners.delete(listener)}})});window.parent.postMessage({v:1,type:"workspace:bridge:init",token:"${bridgeToken}"},"*",[channel.port2])})();</script>`
+      : "";
+    const doctype = html.match(/^\uFEFF?(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i)?.[0] ?? "";
+    const body = `${doctype}${bootstrap}${html.slice(doctype.length)}`;
     return route.fulfill({
       status: 200,
       contentType: "text/html; charset=utf-8",
@@ -138,7 +145,7 @@ async function routeWidgetAssets(page: Page, html: string): Promise<void> {
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
       },
-      body: html,
+      body,
     });
   });
 }

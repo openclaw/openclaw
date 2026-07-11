@@ -338,9 +338,11 @@ describe("binding resolution", () => {
     const result = await resolveBinding(client, {
       source: "rpc",
       method: "workspaces.stats",
+      params: { scope: "month" },
       pointer: "/revenue",
     });
     expect(result).toEqual({ value: 1000 });
+    expect(client.request).toHaveBeenCalledWith("workspaces.stats", { scope: "month" });
   });
 
   it("resolves file bindings via workspaces.data.read matching the real gateway contract", async () => {

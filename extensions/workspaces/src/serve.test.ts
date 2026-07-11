@@ -138,6 +138,73 @@ describe("serveWidgetAsset security jail", () => {
     });
   });
 
+  it("injects a document-bound MessageChannel bootstrap before approved html", async () => {
+    await withApprovedWidget(async ({ store, stateDir }) => {
+      const { res, captured } = fakeResponse();
+      const bridgeToken = "11111111-1111-4111-8111-111111111111";
+      await serveWidgetAsset(
+        {
+          method: "GET",
+          pathname: urlFor("revenue-chart", "index.html"),
+          bridgeToken,
+        },
+        res,
+        { store, stateDir },
+      );
+
+      expect(captured.statusCode).toBe(200);
+      expect(captured.body).toContain("new MessageChannel()");
+      expect(captured.body).toContain(`token:"${bridgeToken}"`);
+      expect(captured.body.startsWith("<!doctype html><script>")).toBe(true);
+      expect(captured.body.indexOf("new MessageChannel()")).toBeLessThan(
+        captured.body.indexOf("<h1>ok</h1>"),
+      );
+    });
+  });
+
+  it("does not inject a bootstrap for a malformed bridge token", async () => {
+    await withApprovedWidget(async ({ store, stateDir }) => {
+      const { res, captured } = fakeResponse();
+      await serveWidgetAsset(
+        {
+          method: "GET",
+          pathname: urlFor("revenue-chart", "index.html"),
+          bridgeToken: `bad-token"</script>`,
+        },
+        res,
+        { store, stateDir },
+      );
+
+      expect(captured.body).toBe("<!doctype html><h1>ok</h1>");
+    });
+  });
+
+  it("keeps leading comments and the doctype ahead of the bootstrap", async () => {
+    await withApprovedWidget(async ({ store, stateDir, widgetDir }) => {
+      const html = `<!-- license -->\n<!doctype html><h1>ok</h1>`;
+      await fs.writeFile(path.join(widgetDir, "index.html"), html);
+      const { files: approvedFiles } = await snapshotApprovedWidget("revenue-chart", { stateDir });
+      store.mutate(
+        (draft) => {
+          draft.widgetsRegistry["revenue-chart"]!.approvedFiles = approvedFiles;
+        },
+        { actor: "user" },
+      );
+      const { res, captured } = fakeResponse();
+      await serveWidgetAsset(
+        {
+          method: "GET",
+          pathname: urlFor("revenue-chart", "index.html"),
+          bridgeToken: "11111111-1111-4111-8111-111111111111",
+        },
+        res,
+        { store, stateDir },
+      );
+
+      expect(captured.body.startsWith(`<!-- license -->\n<!doctype html><script>`)).toBe(true);
+    });
+  });
+
   it("serves a .js asset with the allowlisted content type + CSP + nosniff", async () => {
     await withApprovedWidget(async ({ store, stateDir }) => {
       const { res, captured } = fakeResponse();

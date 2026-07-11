@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getWorkspaceState } from "../../lib/workspace/index.ts";
 import { stopWorkspace } from "./workspace-controller.ts";
 import {
+  bumpWorkspaceDataVersion,
   navigateToWorkspaceTab,
   renderWorkspace,
   requestedWorkspaceSlug,
@@ -125,6 +126,71 @@ describe("renderWorkspace", () => {
     state.actionError = "move failed";
     const container = renderView(host);
     expect(container.querySelector(".workspace__toast")?.textContent).toContain("move failed");
+  });
+
+  it("discards a stale binding result after the cache version changes", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    let resolveOld: ((value: unknown) => void) | undefined;
+    let resolveFresh: ((value: unknown) => void) | undefined;
+    const oldResult = new Promise((resolve) => {
+      resolveOld = resolve;
+    });
+    const freshResult = new Promise((resolve) => {
+      resolveFresh = resolve;
+    });
+    const request = vi.fn().mockReturnValueOnce(oldResult).mockReturnValueOnce(freshResult);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const state = getWorkspaceState(host);
+    state.loaded = true;
+    state.activeSlug = "main";
+    state.workspace = {
+      schemaVersion: 1,
+      workspaceVersion: 1,
+      tabs: [
+        {
+          slug: "main",
+          title: "Main",
+          hidden: false,
+          widgets: [
+            {
+              id: "cost",
+              kind: "builtin:stat-card",
+              title: "Cost",
+              grid: { x: 0, y: 0, w: 4, h: 2 },
+              collapsed: false,
+              bindings: { value: { source: "rpc", method: "usage.cost" } },
+            },
+          ],
+        },
+      ],
+      widgetsRegistry: {},
+      prefs: { tabOrder: ["main"] },
+    };
+
+    try {
+      render(renderWorkspace({ host, client, connected: true }), host);
+      expect(request).toHaveBeenCalledTimes(1);
+      bumpWorkspaceDataVersion(host);
+      render(renderWorkspace({ host, client, connected: true }), host);
+      expect(request).toHaveBeenCalledTimes(2);
+
+      resolveFresh?.(2);
+      await freshResult;
+      await vi.waitFor(() => {
+        render(renderWorkspace({ host, client, connected: true }), host);
+        expect(host.querySelector(".workspace-stat__value")?.textContent).toBe("2");
+      });
+
+      resolveOld?.(1);
+      await oldResult;
+      await Promise.resolve();
+      render(renderWorkspace({ host, client, connected: true }), host);
+      expect(host.querySelector(".workspace-stat__value")?.textContent).toBe("2");
+    } finally {
+      stopWorkspace(host);
+      host.remove();
+    }
   });
 
   it("reloads a custom-widget manifest after the workspace version changes", async () => {

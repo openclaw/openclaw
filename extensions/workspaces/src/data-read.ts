@@ -38,7 +38,8 @@ function readBinding(value: unknown): WorkspaceBinding {
         "rpc binding method is required",
       );
     }
-    return { source: "rpc", method: value.method };
+    const params = isRecord(value.params) ? (value.params as Record<string, JsonValue>) : undefined;
+    return { source: "rpc", method: value.method, ...(params ? { params } : {}) };
   }
   if (value.source === "file") {
     if (typeof value.path !== "string") {

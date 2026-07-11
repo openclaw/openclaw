@@ -83,6 +83,11 @@ const BindingSchema = Type.Union([
       method: Type.String({
         description: `Allowlisted gateway read method, one of: ${DATA_READ_RPC_ALLOWLIST.join(", ")}.`,
       }),
+      params: Type.Optional(
+        Type.Record(Type.String(), JsonSchema, {
+          description: "Bounded JSON parameters required by the selected gateway method.",
+        }),
+      ),
     },
     { additionalProperties: false },
   ),

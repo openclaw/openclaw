@@ -1,6 +1,8 @@
 // Static-file serving for approved custom widgets, under the `auth:"plugin"`
 // (unauthenticated) HTTP route. This route is safe ONLY because it is static-file
-// only: no query-selected state, no data, GET only. Every rejection returns 404
+// only: no query-selected state or data, GET only. The sole query value is a
+// per-frame bridge token copied into a document-local MessageChannel bootstrap.
+// Every rejection returns 404
 // (never 403) so the route never leaks whether a widget or file exists.
 //
 // The path jail copies the canvas idiom verbatim (`extensions/canvas/src/
@@ -41,7 +43,26 @@ export type WidgetServeRequest = {
   method: string | undefined;
   /** URL pathname (no query/hash), already URL-decoded per segment by the caller. */
   pathname: string;
+  /** Per-frame capability token; used only to bind the approved document's MessagePort. */
+  bridgeToken?: string;
 };
+
+const BRIDGE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,100}$/;
+
+/**
+ * Runs before approved widget bytes and creates a MessagePort owned by that exact
+ * document. WindowProxy identity survives navigation; a port does not, so a
+ * replacement page can never inherit the parent bridge.
+ */
+function injectBridgeBootstrap(data: Buffer, bridgeToken: string | undefined): Buffer {
+  if (!bridgeToken || !BRIDGE_TOKEN_PATTERN.test(bridgeToken)) {
+    return data;
+  }
+  const bootstrap = `<script>(()=>{const channel=new MessageChannel();const listeners=new Set();const port=channel.port1;port.onmessage=(event)=>{for(const listener of listeners)listener(event)};port.start();Object.defineProperty(window,"openclawWorkspaceBridge",{configurable:false,writable:false,value:Object.freeze({postMessage:(message)=>port.postMessage(message),addEventListener:(type,listener)=>{if(type==="message")listeners.add(listener)},removeEventListener:(type,listener)=>{if(type==="message")listeners.delete(listener)}})});window.parent.postMessage({v:1,type:"workspace:bridge:init",token:"${bridgeToken}"},"*",[channel.port2])})();</script>`;
+  const html = data.toString("utf8");
+  const doctype = html.match(/^\uFEFF?(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i)?.[0] ?? "";
+  return Buffer.from(`${doctype}${bootstrap}${html.slice(doctype.length)}`);
+}
 
 /** Copy of the canvas logical-path normalizer (documents.ts:79). */
 function normalizeLogicalPath(value: string): string {
@@ -249,7 +270,10 @@ export async function serveWidgetAsset(
   if (req.method === "HEAD") {
     res.end();
   } else {
-    res.end(data);
+    const body = contentType.startsWith("text/html")
+      ? injectBridgeBootstrap(data, req.bridgeToken)
+      : data;
+    res.end(body);
   }
   return true;
 }

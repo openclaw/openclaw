@@ -137,6 +137,40 @@ describe("WorkspaceStore", () => {
     });
   });
 
+  it("does not restore a revoked widget approval through undo", async () => {
+    await withStore((store) => {
+      docWithPendingWidget(store);
+      store.mutate(
+        (draft) => {
+          draft.widgetsRegistry.chart = {
+            status: "approved",
+            createdBy: "agent:finance",
+            approvedBy: "user",
+            approvedAt: "2026-07-11T00:00:00.000Z",
+            approvedFiles: { "index.html": "a".repeat(64) },
+          };
+        },
+        { actor: "user" },
+      );
+      store.mutate(
+        (draft) => {
+          draft.widgetsRegistry.chart = {
+            status: "rejected",
+            createdBy: "agent:finance",
+            approvedBy: "user",
+            approvedAt: "2026-07-11T00:01:00.000Z",
+          };
+        },
+        { actor: "user" },
+      );
+
+      const restored = store.undo();
+
+      expect(restored.widgetsRegistry.chart).toMatchObject({ status: "rejected" });
+      expect(restored.widgetsRegistry.chart?.approvedFiles).toBeUndefined();
+    });
+  });
+
   it("replace cannot forge provenance on new or existing entities", async () => {
     await withStore((store) => {
       const seeded = store.read();

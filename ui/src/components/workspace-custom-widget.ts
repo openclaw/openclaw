@@ -7,9 +7,10 @@
 //   never `allow-same-origin`/`allow-forms`/`allow-popups`/`allow-top-navigation`.
 //   The iframe's origin is therefore opaque (`null`).
 // - `referrerpolicy="no-referrer"` — the frame leaks no referrer.
-// - The parent accepts a message ONLY when `event.source === iframe.contentWindow`
-//   (identity check; the sandboxed origin serializes as "null", so origin strings
-//   are never compared). All other windows are dropped.
+// - Window messages are accepted only for the one-time, token-bound MessagePort
+//   bootstrap injected before approved widget bytes. All bridge traffic then uses
+//   that document-owned port; navigation destroys it, while WindowProxy identity
+//   would incorrectly survive.
 // - Parent→child posts use targetOrigin "*" (opaque origin) and carry only static
 //   workspace values / theme tokens the manifest entitles the widget to. Privileged
 //   RPC/file data never enters agent-authored code: sandboxed children can navigate.
@@ -172,69 +173,97 @@ export function attachWidgetBridge(params: {
   widget: WorkspaceWidget;
   manifest: WidgetManifestView;
   context: CustomWidgetHostContext;
+  bridgeToken: string;
 }): () => void {
-  const { iframe, widget, manifest, context } = params;
-  const post = (message: WidgetOutboundMessage): void => {
-    // targetOrigin "*" is required for an opaque (sandboxed) child origin; only
-    // manifest-entitled binding data / theme tokens are ever posted.
-    iframe.contentWindow?.postMessage(message, "*");
-  };
-  const bridge: WidgetBridge = createWidgetBridge({
-    manifest,
-    post,
-    assertBindingAllowed: (bindingId) => {
-      // Agent-authored frames can navigate themselves despite their sandbox/CSP.
-      // Never place privileged RPC/file data in them; built-in widgets own those
-      // bindings. Static values are already agent/operator-authored workspace data.
-      const binding = primaryBindingByManifestId(widget, bindingId);
-      const grant = manifest.bindings[bindingId];
-      if (!binding || !grant || !bindingMatchesManifestGrant(binding, grant)) {
-        return "binding_denied";
-      }
-      return null;
-    },
-    resolveBinding: async (bindingId) => {
-      const binding = primaryBindingByManifestId(widget, bindingId);
-      if (!binding) {
-        throw new Error(`binding not configured: ${bindingId}`);
-      }
-      if (binding.source !== "static") {
-        throw new Error(`binding not allowed: ${bindingId}`);
-      }
-      return binding.value;
-    },
-    resolveTheme: context.readThemeTokens ?? readThemeTokensFromRoot,
-    confirmPrompt: async (text) => {
-      if (context.confirmPrompt) {
-        return await context.confirmPrompt(text);
-      }
-      return typeof window !== "undefined" ? window.confirm(text) : false;
-    },
-    sendPrompt: async (text) => {
-      if (!context.client) {
-        throw new Error("Not connected.");
-      }
-      await context.client.request("chat.send", {
-        sessionKey: context.sessionKey,
-        message: text,
-        deliver: false,
-        idempotencyKey: generateUUID(),
-      });
-    },
-  });
+  // Workspaces has never shipped, so there are no released approved widgets on
+  // the old WindowProxy transport to migrate. Keeping that transport here would
+  // preserve the navigation capability this document-bound channel removes.
+  const { iframe, widget, manifest, context, bridgeToken } = params;
+  let bridge: WidgetBridge | null = null;
+  let port: MessagePort | null = null;
+  let disposed = false;
 
-  const onMessage = (event: MessageEvent): void => {
-    // IDENTITY accept filter — never compare origin strings (opaque origin = null).
-    if (event.source !== iframe.contentWindow) {
+  const createBridge = (connectedPort: MessagePort): WidgetBridge =>
+    createWidgetBridge({
+      manifest,
+      post: (message: WidgetOutboundMessage): void => connectedPort.postMessage(message, []),
+      assertBindingAllowed: (bindingId) => {
+        // Agent-authored frames can navigate themselves despite their sandbox/CSP.
+        // Never place privileged RPC/file data in them; built-in widgets own those
+        // bindings. Static values are already agent/operator-authored workspace data.
+        const binding = primaryBindingByManifestId(widget, bindingId);
+        const grant = manifest.bindings[bindingId];
+        if (!binding || !grant || !bindingMatchesManifestGrant(binding, grant)) {
+          return "binding_denied";
+        }
+        return null;
+      },
+      resolveBinding: async (bindingId) => {
+        const binding = primaryBindingByManifestId(widget, bindingId);
+        if (!binding) {
+          throw new Error(`binding not configured: ${bindingId}`);
+        }
+        if (binding.source !== "static") {
+          throw new Error(`binding not allowed: ${bindingId}`);
+        }
+        return binding.value;
+      },
+      resolveTheme: context.readThemeTokens ?? readThemeTokensFromRoot,
+      confirmPrompt: async (text) => {
+        if (context.confirmPrompt) {
+          return await context.confirmPrompt(text);
+        }
+        return typeof window !== "undefined" ? window.confirm(text) : false;
+      },
+      sendPrompt: async (text) => {
+        if (!context.client) {
+          throw new Error("Not connected.");
+        }
+        await context.client.request("chat.send", {
+          sessionKey: context.sessionKey,
+          message: text,
+          deliver: false,
+          idempotencyKey: generateUUID(),
+        });
+      },
+    });
+
+  const onBootstrap = (event: MessageEvent): void => {
+    if (
+      disposed ||
+      bridge ||
+      event.source !== iframe.contentWindow ||
+      event.ports.length !== 1 ||
+      typeof event.data !== "object" ||
+      event.data === null ||
+      event.data.v !== 1 ||
+      event.data.type !== "workspace:bridge:init" ||
+      event.data.token !== bridgeToken
+    ) {
       return;
     }
-    bridge.handleMessage(event.data);
+    window.removeEventListener("message", onBootstrap);
+    port = event.ports[0] ?? null;
+    if (!port) {
+      return;
+    }
+    bridge = createBridge(port);
+    port.addEventListener("message", (message) => bridge?.handleMessage(message.data));
+    port.start();
   };
-  window.addEventListener("message", onMessage);
-  return () => {
-    window.removeEventListener("message", onMessage);
-    bridge.dispose();
+  const dispose = (): void => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    window.removeEventListener("message", onBootstrap);
+    port?.close();
+    bridge?.dispose();
+    port = null;
+    bridge = null;
   };
+  window.addEventListener("message", onBootstrap);
+  return dispose;
 }
 
 /**
@@ -255,8 +284,8 @@ class CustomWidgetFrameDirective extends AsyncDirective {
     context: CustomWidgetHostContext;
   }): HTMLElement {
     const name = params.widget.kind.slice("custom:".length);
-    const src = widgetAssetUrl(params.context.basePath, name, params.manifest.entrypoint);
-    const nextKey = `${params.widget.id}::${src}`;
+    const assetUrl = widgetAssetUrl(params.context.basePath, name, params.manifest.entrypoint);
+    const nextKey = `${params.widget.id}::${assetUrl}`;
     if (this.iframe && this.key === nextKey) {
       return this.iframe;
     }
@@ -269,13 +298,15 @@ class CustomWidgetFrameDirective extends AsyncDirective {
       iframe.setAttribute("loading", "lazy");
       iframe.className = "workspace-widget__frame";
       iframe.title = params.widget.title;
-      iframe.src = src;
+      const bridgeToken = generateUUID();
+      iframe.src = `${assetUrl}?bridgeToken=${encodeURIComponent(bridgeToken)}`;
       iframe.setAttribute("data-test-id", "workspace-custom-widget-frame");
       this.detach = attachWidgetBridge({
         iframe,
         widget: params.widget,
         manifest: params.manifest,
         context: params.context,
+        bridgeToken,
       });
       this.iframe = iframe;
       this.key = nextKey;

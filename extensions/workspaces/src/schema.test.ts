@@ -58,6 +58,32 @@ describe("Workspaces document schema", () => {
     }, "bindings.sessions.method is not allowlisted");
   });
 
+  it("accepts bounded parameters for parameterized rpc methods", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.bindings = {
+      session: { source: "rpc", method: "sessions.get", params: { key: "agent:main:main" } },
+    };
+
+    expect(validateWorkspaceDoc(doc).tabs[0]?.widgets[0]?.bindings?.session).toEqual({
+      source: "rpc",
+      method: "sessions.get",
+      params: { key: "agent:main:main" },
+    });
+  });
+
+  it("rejects non-object and oversized rpc parameters", () => {
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        session: { source: "rpc", method: "sessions.get", params: [] } as never,
+      };
+    }, "bindings.session.params must be an object");
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        session: { source: "rpc", method: "sessions.get", params: { key: "x".repeat(9_000) } },
+      };
+    }, "bindings.session.params must serialize to 8 KB or less");
+  });
+
   it("rejects tabs and widgets over the caps", () => {
     expectInvalid((doc) => {
       doc.tabs = Array.from({ length: 33 }, (_, index) => ({

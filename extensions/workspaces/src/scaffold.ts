@@ -71,8 +71,9 @@ function widgetHtml(title: string, createdBy: string): string {
   <footer>Built by ${escapeHtml(createdBy)}</footer>
   <script>
     const valueNode = document.getElementById("value");
+    const bridge = window.openclawWorkspaceBridge;
     function post(type, payload = {}) {
-      window.parent.postMessage({ v: 1, type, ...payload }, "*");
+      bridge.postMessage({ v: 1, type, ...payload });
     }
     function render(data) {
       valueNode.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
@@ -86,7 +87,7 @@ function widgetHtml(title: string, createdBy: string): string {
       if (tokens["--text"]) root.setProperty("--wg-text", tokens["--text"]);
       if (tokens["--accent"]) root.setProperty("--wg-accent", tokens["--accent"]);
     }
-    window.addEventListener("message", (event) => {
+    bridge.addEventListener("message", (event) => {
       const message = event.data;
       if (!message || message.v !== 1) return;
       if (message.type === "workspace:data" || message.type === "workspace:push") onData(message);
@@ -106,8 +107,11 @@ function widgetReadme(name: string): string {
   return `# ${name}
 
 This workspace widget runs inside a sandboxed iframe and talks to the parent
-Control UI through the workspace message bridge.
+Control UI through the document-bound workspace message bridge exposed as
+\`window.openclawWorkspaceBridge\`.
 
+- Send messages with \`window.openclawWorkspaceBridge.postMessage(...)\`.
+- Listen with \`window.openclawWorkspaceBridge.addEventListener("message", ...)\`.
 - Send \`{ "v": 1, "type": "workspace:ready" }\` when loaded.
 - Send \`workspace:getData\` with a \`requestId\` and \`bindingId\` to read a declared binding.
 - Re-render on \`workspace:data\` and \`workspace:push\`.

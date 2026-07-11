@@ -300,6 +300,9 @@ function ensureBindings(
     }
     viewState.bindingLoads.add(widget.id);
     void resolveBinding(client, binding).then((result) => {
+      if (viewState.bindingVersion !== key) {
+        return;
+      }
       viewState.bindingResults.set(widget.id, result);
       viewState.bindingLoads.delete(widget.id);
       requestUpdate?.();

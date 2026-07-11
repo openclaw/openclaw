@@ -10,7 +10,11 @@ export type JsonValue =
 
 export type WorkspaceActor = "user" | "system" | `agent:${string}`;
 export type WorkspaceGrid = { x: number; y: number; w: number; h: number };
-export type WorkspaceRpcBinding = { source: "rpc"; method: string };
+export type WorkspaceRpcBinding = {
+  source: "rpc";
+  method: string;
+  params?: Record<string, JsonValue>;
+};
 export type WorkspaceFileBinding = { source: "file"; path: string; pointer?: string };
 export type WorkspaceStaticBinding = { source: "static"; value: JsonValue };
 export type WorkspaceBinding = WorkspaceRpcBinding | WorkspaceFileBinding | WorkspaceStaticBinding;
@@ -72,6 +76,7 @@ const BUILTIN_KINDS = new Set<string>(BUILTIN_WIDGET_KINDS);
 const CUSTOM_KIND_PATTERN = /^custom:[A-Za-z0-9._-]{1,64}$/;
 const CUSTOM_WIDGET_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STATIC_BINDING_BYTES = 8 * 1024;
+const MAX_RPC_BINDING_PARAMS_BYTES = 8 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -197,14 +202,24 @@ function validateBinding(value: unknown, path: string): WorkspaceBinding {
   const record = assertRecord(value, path);
   const source = requireString(record, "source", path);
   if (source === "rpc") {
-    assertKnownKeys(record, ["source", "method"], path);
+    assertKnownKeys(record, ["source", "method", "params"], path);
     const method = requireString(record, "method", path);
     if (!DATA_READ_RPC_ALLOWLIST.includes(method as (typeof DATA_READ_RPC_ALLOWLIST)[number])) {
       throw new Error(
         `${path}.method is not allowlisted; allowed: ${DATA_READ_RPC_ALLOWLIST.join(", ")}`,
       );
     }
-    return { source, method };
+    const params =
+      record.params === undefined
+        ? undefined
+        : (assertJsonValue(
+            assertRecord(record.params, `${path}.params`),
+            `${path}.params`,
+          ) as Record<string, JsonValue>);
+    if (params !== undefined && serializedBytes(params) > MAX_RPC_BINDING_PARAMS_BYTES) {
+      throw new Error(`${path}.params must serialize to 8 KB or less`);
+    }
+    return { source, method, ...(params !== undefined ? { params } : {}) };
   }
   if (source === "file") {
     assertKnownKeys(record, ["source", "path", "pointer"], path);

@@ -205,7 +205,7 @@ export class WorkspaceStore {
    */
   undo(): WorkspaceDoc {
     return this.transact(
-      () => {
+      (current) => {
         const row = this.db
           .prepare("SELECT version, doc FROM undo ORDER BY version DESC LIMIT 1")
           .get() as { version: number; doc: string } | undefined;
@@ -215,7 +215,11 @@ export class WorkspaceStore {
         this.db.prepare("DELETE FROM undo WHERE version = ?").run(row.version);
         // transact() stamps the next version, so the restored document lands as a
         // forward write rather than a rewind.
-        return validateWorkspaceDoc(JSON.parse(row.doc));
+        const snapshot = validateWorkspaceDoc(JSON.parse(row.doc));
+        // Approval state is a separate operator decision, not layout history.
+        // Undo may restore tabs/widgets, but it must never revive a revoked
+        // approval or discard a registry decision made after the snapshot.
+        return { ...snapshot, widgetsRegistry: current.widgetsRegistry };
       },
       // An undo consumes a snapshot; it must not push one, or repeated undo would
       // oscillate between the last two documents instead of walking history back.
