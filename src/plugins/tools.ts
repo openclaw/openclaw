@@ -1236,8 +1236,8 @@ export function resolvePluginTools(params: {
       ),
     ),
   );
-  const explicitlyConfiguredPluginIds = new Set<string>();
   const normalizedPlugins = normalizePluginsConfig(context.config.plugins);
+  const explicitlyConfiguredPluginIds = new Set(normalizedPlugins.allow);
   for (const slotPluginId of [
     normalizedPlugins.slots.memory,
     normalizedPlugins.slots.contextEngine,
@@ -1246,27 +1246,9 @@ export function resolvePluginTools(params: {
       explicitlyConfiguredPluginIds.add(slotPluginId);
     }
   }
-  const pluginsConfig = (context.config as { plugins?: unknown } | undefined)?.plugins as
-    | { allow?: unknown; entries?: unknown }
-    | undefined;
-  if (pluginsConfig) {
-    if (Array.isArray(pluginsConfig.allow)) {
-      for (const id of pluginsConfig.allow) {
-        if (typeof id === "string") {
-          explicitlyConfiguredPluginIds.add(id);
-        }
-      }
-    }
-    if (pluginsConfig.entries && typeof pluginsConfig.entries === "object") {
-      for (const [id, entry] of Object.entries(pluginsConfig.entries as Record<string, unknown>)) {
-        if (
-          entry &&
-          typeof entry === "object" &&
-          (entry as { enabled?: unknown }).enabled === true
-        ) {
-          explicitlyConfiguredPluginIds.add(id);
-        }
-      }
+  for (const [pluginId, entry] of Object.entries(normalizedPlugins.entries)) {
+    if (entry.enabled === true) {
+      explicitlyConfiguredPluginIds.add(pluginId);
     }
   }
   for (const plugin of snapshot.plugins) {
