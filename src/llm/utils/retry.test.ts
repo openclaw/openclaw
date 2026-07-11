@@ -65,7 +65,7 @@ describe("resolveAutoRetryDelayMs", () => {
         retryAfterSeconds: 30,
         maxRetryDelayMs: 60_000,
       }),
-    ).toBe(30_000);
+    ).toEqual({ action: "delay", delayMs: 30_000 });
   });
 
   it("keeps exponential backoff when Retry-After is shorter", () => {
@@ -76,10 +76,10 @@ describe("resolveAutoRetryDelayMs", () => {
         retryAfterSeconds: 1,
         maxRetryDelayMs: 60_000,
       }),
-    ).toBe(8000);
+    ).toEqual({ action: "delay", delayMs: 8000 });
   });
 
-  it("caps Retry-After at the configured provider max delay", () => {
+  it("declines auto-retry when Retry-After exceeds a positive max", () => {
     expect(
       resolveAutoRetryDelayMs({
         attempt: 1,
@@ -87,10 +87,15 @@ describe("resolveAutoRetryDelayMs", () => {
         retryAfterSeconds: 3600,
         maxRetryDelayMs: 60_000,
       }),
-    ).toBe(60_000);
+    ).toEqual({
+      action: "no_auto_retry",
+      reason: "retry_after_exceeds_max",
+      retryAfterMs: 3_600_000,
+      maxRetryDelayMs: 60_000,
+    });
   });
 
-  it("honors cooldowns above 60s when the operator raises maxRetryDelayMs", () => {
+  it("honors cooldowns within a raised positive max", () => {
     expect(
       resolveAutoRetryDelayMs({
         attempt: 1,
@@ -98,6 +103,27 @@ describe("resolveAutoRetryDelayMs", () => {
         retryAfterSeconds: 90,
         maxRetryDelayMs: 120_000,
       }),
-    ).toBe(90_000);
+    ).toEqual({ action: "delay", delayMs: 90_000 });
+  });
+
+  it("treats maxRetryDelayMs 0 as unlimited and honors full Retry-After", () => {
+    expect(
+      resolveAutoRetryDelayMs({
+        attempt: 1,
+        baseDelayMs: 2000,
+        retryAfterSeconds: 3600,
+        maxRetryDelayMs: 0,
+      }),
+    ).toEqual({ action: "delay", delayMs: 3_600_000 });
+  });
+
+  it("uses exponential only when Retry-After is absent", () => {
+    expect(
+      resolveAutoRetryDelayMs({
+        attempt: 2,
+        baseDelayMs: 2000,
+        maxRetryDelayMs: 60_000,
+      }),
+    ).toEqual({ action: "delay", delayMs: 4000 });
   });
 });

@@ -2673,12 +2673,19 @@ export class AgentSession {
     }
 
     const providerRetry = this.settingsManager.getProviderRetrySettings();
-    const delayMs = resolveAutoRetryDelayMs({
+    const delayDecision = resolveAutoRetryDelayMs({
       attempt: this.retryCount,
       baseDelayMs: settings.baseDelayMs,
       retryAfterSeconds: message.retryAfterSeconds,
       maxRetryDelayMs: providerRetry.maxRetryDelayMs,
     });
+    // Over-cap Retry-After: decline silent auto-retry so higher-level handling can
+    // surface the full cooldown (maxRetryDelayMs contract).
+    if (delayDecision.action === "no_auto_retry") {
+      this.retryCount--;
+      return false;
+    }
+    const delayMs = delayDecision.delayMs;
 
     this.emit({
       type: "auto_retry_start",

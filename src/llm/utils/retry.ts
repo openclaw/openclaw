@@ -1,31 +1,63 @@
 import type { AssistantMessage } from "../types.js";
 
 /**
- * Resolve auto-retry sleep using exponential backoff as the floor and a validated
- * server Retry-After as a lower bound, capped by the operator max delay.
+ * Decision for AgentSession auto-retry sleep.
+ *
+ * Contract (matches `maxRetryDelayMs` on StreamOptions / provider retry settings):
+ * - positive max: honor full server Retry-After when it is ≤ max; decline auto-retry
+ *   when the server asks for longer so higher-level handling can surface the wait
+ * - zero max: cap disabled — honor the full server Retry-After (and exponential floor)
+ * - no/invalid Retry-After: exponential backoff only
+ */
+export type AutoRetryDelayDecision =
+  | { action: "delay"; delayMs: number }
+  | {
+      action: "no_auto_retry";
+      reason: "retry_after_exceeds_max";
+      retryAfterMs: number;
+      maxRetryDelayMs: number;
+    };
+
+/**
+ * Resolve AgentSession auto-retry sleep from exponential backoff + server Retry-After.
+ * Returns `no_auto_retry` when a positive max is set and the server cooldown exceeds it.
  */
 export function resolveAutoRetryDelayMs(params: {
   attempt: number;
   baseDelayMs: number;
   retryAfterSeconds?: number;
   maxRetryDelayMs: number;
-}): number {
+}): AutoRetryDelayDecision {
   const attempt = Math.max(1, Math.trunc(params.attempt));
   const baseDelayMs = Math.max(0, params.baseDelayMs);
   const exponentialDelayMs = baseDelayMs * 2 ** (attempt - 1);
-  const maxRetryDelayMs = Math.max(0, params.maxRetryDelayMs);
+  // 0 means "unlimited" (cap disabled). Do not Math.max(0, …) away the zero signal.
+  const maxRetryDelayMs = Number.isFinite(params.maxRetryDelayMs)
+    ? Math.max(0, params.maxRetryDelayMs)
+    : 0;
   const retryAfterSeconds = params.retryAfterSeconds;
   if (
     retryAfterSeconds === undefined ||
     !Number.isFinite(retryAfterSeconds) ||
     retryAfterSeconds < 0
   ) {
-    return exponentialDelayMs;
+    return { action: "delay", delayMs: exponentialDelayMs };
   }
-  // Cap server cooldown at the configured provider max so extreme Retry-After values
-  // cannot stall a session indefinitely; values within the cap are honored in full.
-  const retryAfterDelayMs = Math.min(maxRetryDelayMs, Math.ceil(retryAfterSeconds * 1000));
-  return Math.max(exponentialDelayMs, retryAfterDelayMs);
+  const retryAfterDelayMs = Math.ceil(retryAfterSeconds * 1000);
+  // Positive max: over-cap cooldowns must not auto-retry early.
+  if (maxRetryDelayMs > 0 && retryAfterDelayMs > maxRetryDelayMs) {
+    return {
+      action: "no_auto_retry",
+      reason: "retry_after_exceeds_max",
+      retryAfterMs: retryAfterDelayMs,
+      maxRetryDelayMs,
+    };
+  }
+  // Within cap (or unlimited when max is 0): honor full Retry-After as a floor.
+  return {
+    action: "delay",
+    delayMs: Math.max(exponentialDelayMs, retryAfterDelayMs),
+  };
 }
 
 function buildProviderErrorPattern(patterns: readonly string[]): RegExp {
