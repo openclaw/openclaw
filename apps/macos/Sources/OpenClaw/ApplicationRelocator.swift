@@ -132,8 +132,10 @@ enum ApplicationRelocator {
                 return .continueLaunch(startUpdater: false)
             }
         case .cannotInstall:
-            self.showFailure(
-                "OpenClaw is running from a temporary location. Move it to Applications manually to enable updates and launch at login.")
+            let message =
+                "OpenClaw is running from a temporary location. " +
+                "Move it to Applications manually to enable updates and launch at login."
+            self.showFailure(message)
             return .continueLaunch(startUpdater: false)
         }
     }
