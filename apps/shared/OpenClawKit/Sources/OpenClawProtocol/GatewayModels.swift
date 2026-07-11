@@ -4658,7 +4658,7 @@ public struct CrestodianSetupDetectParams: Codable, Sendable {}
 public struct CrestodianSetupDetectResult: Codable, Sendable {
     public let candidates: [[String: AnyCodable]]
     public let manualproviders: [[String: AnyCodable]]
-    public let authoptions: [[String: AnyCodable]]
+    public let authoptions: [[String: AnyCodable]]?
     public let workspace: String
     public let codexappserverdetected: Bool?
     public let configuredmodel: String?
@@ -4667,7 +4667,7 @@ public struct CrestodianSetupDetectResult: Codable, Sendable {
     public init(
         candidates: [[String: AnyCodable]],
         manualproviders: [[String: AnyCodable]],
-        authoptions: [[String: AnyCodable]],
+        authoptions: [[String: AnyCodable]]? = nil,
         workspace: String,
         codexappserverdetected: Bool? = nil,
         configuredmodel: String? = nil,
