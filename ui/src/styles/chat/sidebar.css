@@ -745,28 +745,64 @@
 .chat-tasks-rail__task {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-elevated) 46%, transparent);
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 62%, transparent);
+}
+
+.chat-tasks-rail__task:hover,
+.chat-tasks-rail__task:focus-within {
+  border-color: color-mix(in srgb, var(--border-strong) 45%, transparent);
 }
 
 .chat-tasks-rail__task-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
   min-width: 0;
 }
 
+/* openclaw-tooltip is display:contents, so the title span itself is the flex
+   item; growing it pins the stop button to the card's right edge even for
+   short titles. */
 .chat-tasks-rail__task-title {
+  display: block;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--control-ui-text-sm);
+  font-weight: 550;
   line-height: 1.25;
+}
+
+/* Live-run indicator: replaces the old status pill for running rows. */
+.chat-tasks-rail__task-pulse {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--warn, #f59e0b);
+  animation: chat-tasks-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes chat-tasks-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-tasks-rail__task-pulse {
+    animation: none;
+  }
 }
 
 .chat-tasks-rail__task-stop {
@@ -796,17 +832,40 @@
   stroke-width: 1.8px;
 }
 
+/* One quiet text line replaces the status/runtime pill chips: colored status
+   word, runtime, relative time, trailing transcript link. */
 .chat-tasks-rail__task-meta {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-}
-
-.chat-tasks-rail__task-time {
+  align-items: baseline;
+  gap: 5px;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-  line-height: 1.2;
+  line-height: 1.3;
+}
+
+.chat-tasks-rail__task-status {
+  font-weight: 560;
+}
+
+.chat-tasks-rail__task-status--ok {
+  color: var(--ok, #22c55e);
+}
+
+.chat-tasks-rail__task-status--warn {
+  color: var(--warn, #f59e0b);
+}
+
+.chat-tasks-rail__task-status--danger {
+  color: var(--danger, #ef4444);
+}
+
+.chat-tasks-rail__task-status--muted {
+  color: var(--muted);
+}
+
+.chat-tasks-rail__task-sep {
+  opacity: 0.6;
 }
 
 .chat-tasks-rail__task-detail {
@@ -820,21 +879,27 @@
   overflow-wrap: anywhere;
 }
 
+/* Quiet by default so a column of rows is not a column of accent links;
+   pushed right to end the meta line like a row action. */
 .chat-tasks-rail__task-transcript {
-  align-self: flex-start;
+  margin-left: auto;
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--muted);
   font: inherit;
   font-size: var(--control-ui-text-xs);
-  line-height: 1.2;
+  line-height: 1.3;
   cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
+  text-underline-offset: 2px;
 }
 
 .chat-tasks-rail__task-transcript:hover,
 .chat-tasks-rail__task-transcript:focus-visible {
-  text-decoration: underline;
+  color: var(--accent);
+  text-decoration-color: currentColor;
 }
 
 @keyframes chat-sidebar-fade-in {

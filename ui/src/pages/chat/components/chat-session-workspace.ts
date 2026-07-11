@@ -47,6 +47,7 @@ export type SessionWorkspaceProps = {
   onSearch: (search: string) => void;
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
+  onToggleBrowser?: () => void;
 };
 
 type SessionWorkspaceState = {
@@ -83,6 +84,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   terminalAvailable?: boolean;
+  browserPanelAvailable?: boolean;
   assistantAgentId?: string | null;
   agentsList?: SessionScopeHost["agentsList"];
   settings?: UiSettings;
@@ -625,6 +627,11 @@ export function createSessionWorkspaceProps(
           );
         }
       : undefined,
+    onToggleBrowser: state.browserPanelAvailable
+      ? () => {
+          window.dispatchEvent(new CustomEvent("openclaw:browser-toggle", {}));
+        }
+      : undefined,
   };
 }
 
@@ -726,6 +733,20 @@ export function renderSessionWorkspaceRail(
             @click=${sessionWorkspace.onToggleTerminal}
           >
             ${icons.terminal}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const browserButton = sessionWorkspace.onToggleBrowser
+    ? html`
+        <openclaw-tooltip .content=${t("browser.toggle")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal"
+            aria-label=${t("browser.toggle")}
+            @click=${sessionWorkspace.onToggleBrowser}
+          >
+            ${icons.globe}
           </button>
         </openclaw-tooltip>
       `
@@ -1019,7 +1040,7 @@ export function renderSessionWorkspaceRail(
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
-          ${terminalButton}
+          ${terminalButton} ${browserButton}
           ${sessionWorkspace.narrowLayout
             ? nothing
             : html`

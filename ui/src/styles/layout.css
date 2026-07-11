@@ -1777,11 +1777,13 @@ openclaw-native-link-menu[popover] {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  /* Reserve space for the docked operator terminal so it reshapes the content
-     area (shrinks it) instead of overlaying the chat. The terminal panel sets
-     these vars; they are 0 when it is closed. */
-  margin-bottom: var(--oc-terminal-reserve-bottom, 0);
-  margin-right: var(--oc-terminal-reserve-right, 0);
+  /* Reserve space for the docked operator terminal and browser panels so they
+     reshape the content area (shrink it) instead of overlaying the chat. The
+     panels set these vars; they are 0 when closed. */
+  margin-bottom: calc(
+    var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px)
+  );
+  margin-right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
   transition:
     margin-bottom 0.16s ease,
     margin-right 0.16s ease;
