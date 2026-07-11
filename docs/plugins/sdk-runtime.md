@@ -220,6 +220,36 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
+    Provider orchestration can also acquire the configured local-service
+    lifecycle before issuing an HTTP request:
+
+    ```typescript
+    const lease = await api.runtime.llm.acquireLocalService(
+      {
+        providerId,
+        baseUrl,
+        headers,
+        service: providerConfig.localService,
+      },
+      signal,
+    );
+    try {
+      // Send and fully consume the provider request.
+    } finally {
+      await lease?.release();
+    }
+    ```
+
+    `acquireLocalService(...)` is a stable, generic provider-service SDK
+    contract. It exposes only host-owned acquisition and release; process
+    spawning, readiness, diagnostics, and idle-stop policy remain internal to
+    the host.
+
+    Pass the exact configured provider id and resolved request base URL. Do not
+    replace aliases with an adapter id: separate aliases can point at separate
+    local GPU hosts. The host owns startup serialization, readiness probes,
+    request leases, abort handling, and idle shutdown.
+
     The helper uses the same simple-completion preparation path as OpenClaw's
     built-in runtime and the host-owned runtime config snapshot. Context engines
     receive a session-bound `llm.complete` capability, so model calls use the
