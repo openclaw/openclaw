@@ -37,6 +37,17 @@ import {
   resolveSessionStoreKey,
 } from "./session-utils.js";
 
+const providerArtifactMocks = vi.hoisted(() => ({
+  resolveBundledProviderPolicySurface: vi.fn<
+    typeof import("../plugins/provider-public-artifacts.js").resolveBundledProviderPolicySurface
+  >(() => null),
+}));
+
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
+}));
+
 function resolveSyncRealpath(filePath: string): string {
   return fs.realpathSync.native(filePath);
 }
