@@ -1310,7 +1310,7 @@ async function importClaudeHistory(params: {
       const message = {
         ...(importedClaudeMessage(item, Date.now() + index) as unknown as Record<string, unknown>),
         idempotencyKey: `claude-catalog:${params.threadId}:${item.uuid ?? index}`,
-      } as AgentMessage;
+      } as unknown as AgentMessage;
       await transcript.appendMessage({
         message,
         idempotencyLookup: "scan",

@@ -362,7 +362,7 @@ function boundedCatalogString(
 type CodexInteractiveThreadSourceKind = (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number];
 
 function isInteractiveThreadSource(
-  source: string | null | undefined,
+  source: CodexThread["source"] | string | null | undefined,
 ): source is CodexInteractiveThreadSourceKind {
   return CODEX_INTERACTIVE_THREAD_SOURCE_KINDS.some((kind) => kind === source);
 }
