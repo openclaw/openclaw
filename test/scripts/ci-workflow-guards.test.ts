@@ -1559,8 +1559,10 @@ describe("ci workflow guards", () => {
 
     for (const installStep of [macosInstallStep, iosInstallStep]) {
       expect(installStep.run).toContain("if [[ -x ./scripts/install-swift-tools.sh ]]; then");
-      expect(installStep.run).toContain("brew install xcodegen swiftlint swiftformat");
     }
+    expect(macosInstallStep.run).toContain("brew install xcodegen swiftlint");
+    expect(macosInstallStep.run).not.toContain("brew install xcodegen swiftlint swiftformat");
+    expect(iosInstallStep.run).toContain("brew install xcodegen swiftlint swiftformat");
     for (const lintStep of [macosLintStep, iosLintStep]) {
       expect(lintStep.run).toContain(
         "if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then",
@@ -1828,7 +1830,27 @@ describe("ci workflow guards", () => {
     const swiftLint = workflow.jobs["macos-swift"].steps.find(
       (step: { name?: string }) => step.name === "Swift lint",
     );
-    expect(swiftInstall.run).toContain("brew install xcodegen swiftlint swiftformat");
+    expect(swiftInstall.run).toContain("brew install xcodegen swiftlint");
+    expect(swiftInstall.run).not.toContain("brew install xcodegen swiftlint swiftformat");
+    expect(swiftInstall.run).toContain(
+      "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip",
+    );
+    expect(swiftInstall.run).toContain(
+      'swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"',
+    );
+    expect(swiftInstall.run).toContain(
+      'swiftformat_checksum="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"',
+    );
+    expect(swiftInstall.run).toContain(
+      'swiftformat_min_version="$(awk \'$1 == "--min-version" { print $2; exit }\' config/swiftformat)"',
+    );
+    expect(swiftInstall.run).toContain(
+      'echo "Unsupported frozen-target SwiftFormat minimum: $swiftformat_min_version" >&2',
+    );
+    expect(swiftInstall.run).toContain('echo "$swift_tools_dir" >> "$GITHUB_PATH"');
+    expect(swiftInstall.run).toContain(
+      '[[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]',
+    );
     expect(workflow.jobs["macos-swift"].env.HISTORICAL_TARGET).toBe(
       "${{ needs.preflight.outputs.compatibility_target }}",
     );
@@ -1845,6 +1867,17 @@ describe("ci workflow guards", () => {
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
     expect(checkShard.run).toContain("pnpm tsgo:strict-ratchet");
     expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
+
+    const uiTest = workflow.jobs["checks-ui"].steps.find(
+      (step: { name?: string }) => step.name === "Test Control UI",
+    );
+    expect(workflow.jobs["checks-ui"].env.COMPATIBILITY_TARGET).toBe(
+      "${{ needs.preflight.outputs.compatibility_target }}",
+    );
+    expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
+    expect(uiTest.run).toContain("pnpm --dir ui test --retry=1 --testTimeout=10000");
+    expect(uiTest.run).not.toContain("pnpm --dir ui test -- --retry");
+    expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 
   it("does not rebuild Control UI after build:ci-artifacts", () => {

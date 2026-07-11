@@ -1526,8 +1526,9 @@ class ChatPane extends OpenClawLightDomElement {
               onLoadOlder: () => void this.loadCatalogSession(catalogKey, true),
             }
           : undefined,
-      sideResult: state.chatSideResult,
-      sideResultPending: state.chatSideResultPending,
+      sideChatTurns: catalogKey ? [] : state.chatSideChatTurns,
+      sideChatPending: catalogKey ? null : state.chatSideResultPending,
+      sideChatHidden: catalogKey ? true : state.chatSideChatHidden,
       toolMessages: catalogKey ? [] : state.chatToolMessages,
       streamSegments: catalogKey ? [] : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
@@ -1655,7 +1656,8 @@ class ChatPane extends OpenClawLightDomElement {
           void this.loadCatalogSession(catalogKey, false);
           return;
         }
-        state.chatSideResult = null;
+        state.chatSideChatTurns = [];
+        state.chatSideChatHidden = false;
         retirePendingChatSideQuestion(state);
         state.resetToolStream();
         void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
@@ -1697,12 +1699,36 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
-      onSideQuestion: (command) => void state.handleSendChat(command),
-      onDismissSideResult: () => {
-        state.chatSideResult = null;
-        // Retire (not just clear) so a dismissed question's still-running
+      onSideQuestion: (command, displayQuestion, onSendRejected) =>
+        void state.handleSendChat(command, {
+          ...(displayQuestion ? { sideQuestionDisplayText: displayQuestion } : {}),
+          ...(onSendRejected ? { onSideQuestionSendRejected: onSendRejected } : {}),
+        }),
+      onSideChatClose: () => {
+        // Hide only: a pending run keeps going and its arriving answer (or a
+        // new question) reopens the panel with the conversation intact.
+        state.chatSideChatHidden = true;
+        state.requestUpdate?.();
+      },
+      onSideChatClear: () => {
+        const pendingRunId = state.chatSideResultPending?.runId;
+        state.chatSideChatTurns = [];
+        state.chatSideChatHidden = false;
+        // Retire (not just clear) so a discarded question's still-running
         // detached run cannot leak its late reply into the transcript.
         retirePendingChatSideQuestion(state);
+        // Best-effort targeted abort: trash means "stop the pending side
+        // question", not just hide it. The retire above already suppresses
+        // the run's late events, so a failed abort needs no fallback.
+        if (pendingRunId && state.client && state.connected) {
+          state.client
+            .request("chat.abort", {
+              sessionKey: state.sessionKey,
+              ...scopedAgentParamsForSession(state, state.sessionKey),
+              runId: pendingRunId,
+            })
+            .catch(() => {});
+        }
         state.requestUpdate?.();
       },
       replyTarget: state.chatReplyTarget ?? null,
