@@ -46,7 +46,11 @@ describe("firecrawl abort signal proof", () => {
       await expect(executePromise).rejects.toThrow("The operation was aborted");
     } finally {
       globalThis.fetch = priorFetch;
-      process.env.FIRECRAWL_API_KEY = priorApiKey;
+      if (priorApiKey === undefined) {
+        delete process.env.FIRECRAWL_API_KEY;
+      } else {
+        process.env.FIRECRAWL_API_KEY = priorApiKey;
+      }
     }
   });
 });
