@@ -27,6 +27,7 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
     params?.hasCronTool
       ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."
       : undefined,
+    "Search safety: do not run broad recursive `rg`, `grep -R`, or `find` over home directories, OpenClaw/Codex state, session archives, repo parents, or external workspace roots; narrow to a repo/task/evidence path, prefer indexed/search tools when available, and cap output with focused flags or head/sed ranges.",
     "Use pty=true for TTY-required commands (terminal UIs, coding agents).",
   ]
     .filter(Boolean)

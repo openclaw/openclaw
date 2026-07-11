@@ -13,7 +13,13 @@ import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 const FOREGROUND_TEST_YIELD_MS = 120_000;
-const ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "PATH", "SHELL", "SSLKEYLOGFILE"] as const;
+const ENV_KEYS = [
+  "OPENCLAW_EXEC_SHELL_SNAPSHOT",
+  "OPENCLAW_STATE_DIR",
+  "PATH",
+  "SHELL",
+  "SSLKEYLOGFILE",
+] as const;
 type GetShellPathFromLoginShell = typeof import("../infra/shell-env.js").getShellPathFromLoginShell;
 const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
@@ -434,6 +440,210 @@ describe("exec host env validation", () => {
         command: "echo ok",
       }),
     ).rejects.toThrow(/requires a sandbox runtime/);
+  });
+
+  it("blocks broad protected-root searches before gateway execution", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-broad-search", {
+        command: "rg timeout",
+        workdir: os.homedir(),
+      }),
+    ).rejects.toThrow(/exec blocked broad recursive rg search over protected root/);
+  });
+
+  it("uses request env overrides when guarding gateway broad searches", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-state-root-"));
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    try {
+      fs.mkdirSync(path.join(stateDir, "sessions"), { recursive: true });
+      await expect(
+        tool.execute("call-env-backed-broad-search", {
+          command: 'rg token "$OPENCLAW_STATE_DIR/sessions"',
+          workdir: "/tmp",
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        }),
+      ).rejects.toThrow(
+        new RegExp(`exec blocked broad recursive rg search over protected root ${stateDir}`, "u"),
+      );
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("checks sandbox broad searches against the container cwd", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-search-"));
+    const repoDir = path.join(workspaceDir, "openclaw");
+    fs.mkdirSync(repoDir, { recursive: true });
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "sandbox-search-test",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-sandbox-broad-search", {
+          command: "rg timeout ..",
+          workdir: "/workspace/openclaw",
+        }),
+      ).rejects.toThrow(/exec blocked broad recursive rg search over protected root \/workspace/u);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("protects configured sandbox workspace roots", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-search-"));
+    const repoDir = path.join(workspaceDir, "openclaw");
+    fs.mkdirSync(repoDir, { recursive: true });
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "sandbox-remote-search-test",
+        workspaceDir,
+        containerWorkdir: "/remote/workspace",
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-sandbox-configured-root-search", {
+          command: "rg timeout ..",
+          workdir: "/remote/workspace/openclaw",
+        }),
+      ).rejects.toThrow(
+        /exec blocked broad recursive rg search over protected root \/remote\/workspace/u,
+      );
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not protect the resolved sandbox cwd itself", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-cwd-search-"));
+    const repoDir = path.join(workspaceDir, "openclaw");
+    fs.mkdirSync(repoDir, { recursive: true });
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "sandbox-current-cwd-search-test",
+        workspaceDir,
+        containerWorkdir: "/remote/workspace",
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-sandbox-current-cwd-search", {
+          command: "rg timeout",
+          workdir: "/remote/workspace/openclaw",
+        }),
+      ).resolves.toBeDefined();
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses sandbox env overrides when guarding sandbox broad searches", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-env-search-"));
+    const repoDir = path.join(workspaceDir, "openclaw");
+    fs.mkdirSync(repoDir, { recursive: true });
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "sandbox-env-search-test",
+        workspaceDir,
+        containerWorkdir: "/remote/workspace",
+        env: { OPENCLAW_STATE_DIR: "/remote/state" },
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-sandbox-env-backed-broad-search", {
+          command: 'rg token "$OPENCLAW_STATE_DIR/sessions"',
+          workdir: "/remote/workspace/openclaw",
+        }),
+      ).rejects.toThrow(
+        /exec blocked broad recursive rg search over protected root \/remote\/state/u,
+      );
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("protects alternate sandbox workdir roots before sandbox execution", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-root-search-"));
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "sandbox-alternate-root-search-test",
+        workspaceDir,
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        workdirRoots: ["/agent"],
+        validateWorkdir: async (workdir) => workdir,
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-sandbox-alternate-root-broad-search", {
+          command: "rg timeout ..",
+          workdir: "/agent/project",
+        }),
+      ).rejects.toThrow(/exec blocked broad recursive rg search over protected root \/agent/u);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("discards prepared sandbox workdirs when broad-search preflight rejects", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-discard-"));
+    const discardedWorkdirs: string[] = [];
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "sandbox-discard-search-test",
+        workspaceDir,
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        workdirRoots: ["/agent"],
+        validateWorkdir: async (workdir) => workdir,
+        discardPreparedWorkdir: (workdir) => {
+          discardedWorkdirs.push(workdir);
+        },
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-sandbox-discard-broad-search", {
+          command: "rg timeout ..",
+          workdir: "/agent/project",
+        }),
+      ).rejects.toThrow(/exec blocked broad recursive rg search over protected root \/agent/u);
+      expect(discardedWorkdirs).toEqual(["/agent/project"]);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it.each([

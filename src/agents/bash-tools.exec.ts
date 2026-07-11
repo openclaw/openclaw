@@ -26,6 +26,7 @@ import {
 } from "../infra/exec-approvals.js";
 import {
   parseOpenClawChannelsLoginShellCommand,
+  rejectUnsafeExecBroadSearchShellCommand,
   rejectUnsafeExecControlShellCommand,
 } from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -1782,27 +1783,56 @@ export function createExecTool(
       } else {
         workdir = workdirResolution.remoteCwd;
       }
+      if (!resolveExecEnvPrepared) {
+        params = await prepareParamsWithResolvedExecEnv(params, {
+          hookContext: deferredResolveExecEnvState?.hookContext,
+        });
+      }
+      const inheritedBaseEnv = coerceEnv(process.env);
+      const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
+      const channelContextEnv = buildChannelContextEnv(defaults?.channelContext);
+      const requestedEnv: Record<string, string> | undefined =
+        params.env !== undefined ||
+        resolvedExecEnvState?.pluginEnv !== undefined ||
+        channelContextEnv !== undefined
+          ? { ...params.env, ...resolvedExecEnvState?.pluginEnv, ...channelContextEnv }
+          : undefined;
+      const searchGuardEnv =
+        host === "sandbox" && sandbox
+          ? buildSandboxEnv({
+              defaultPath: DEFAULT_PATH,
+              paramsEnv: requestedEnv,
+              sandboxEnv: sandbox.env,
+              containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
+            })
+          : requestedEnv === undefined
+            ? inheritedBaseEnv
+            : { ...inheritedBaseEnv, ...requestedEnv };
+      const sandboxProtectedRoots =
+        host === "sandbox" && sandbox
+          ? Array.from(
+              new Set(
+                [sandbox.containerWorkdir, ...(sandbox.workdirRoots ?? [])]
+                  .map((entry) => entry?.trim())
+                  .filter((entry): entry is string => Boolean(entry)),
+              ),
+            )
+          : undefined;
       let run: ExecProcessHandle;
       let effectiveTimeout: number;
       try {
+        if ((host === "gateway" || host === "sandbox") && workdir) {
+          await rejectUnsafeExecBroadSearchShellCommand({
+            command: params.command,
+            workdir: host === "sandbox" ? (containerWorkdir ?? workdir) : workdir,
+            env: searchGuardEnv,
+            additionalProtectedRoots: sandboxProtectedRoots,
+            protectEnvHome: host !== "sandbox",
+          });
+        }
         if (elevatedRequested) {
           logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
         }
-        if (!resolveExecEnvPrepared) {
-          params = await prepareParamsWithResolvedExecEnv(params, {
-            hookContext: deferredResolveExecEnvState?.hookContext,
-          });
-        }
-
-        const inheritedBaseEnv = coerceEnv(process.env);
-        const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
-        const channelContextEnv = buildChannelContextEnv(defaults?.channelContext);
-        const requestedEnv: Record<string, string> | undefined =
-          params.env !== undefined ||
-          resolvedExecEnvState?.pluginEnv !== undefined ||
-          channelContextEnv !== undefined
-            ? { ...params.env, ...resolvedExecEnvState?.pluginEnv, ...channelContextEnv }
-            : undefined;
         const hostEnvResult =
           host === "sandbox"
             ? null
