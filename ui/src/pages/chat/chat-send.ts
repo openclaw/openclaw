@@ -134,6 +134,8 @@ export type ChatHost = ChatInputHistoryState &
     chatSideResultPending?: ChatSideResultPending | null;
     /** Retired/handled BTW run ids whose late events must not reach the transcript. */
     chatSideResultTerminalRuns?: Set<string>;
+    /** Side-chat panel closed via X/Escape; a new question reopens it. */
+    chatSideChatHidden?: boolean;
   };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -2189,11 +2191,9 @@ export async function handleSendChat(
           recordNonTranscriptInputHistory(host, message);
         }
         // BTW runs detached and delivers via chat.side_result only; show a
-        // pending card immediately so the send has visible feedback. The run
-        // id is generated upfront so the card is correlatable before the ack
-        // returns. A new question also supersedes any still-displayed
-        // previous answer — renderSideResult prefers results, so a stale one
-        // would hide the card.
+        // pending turn immediately so the send has visible feedback. The run
+        // id is generated upfront so the turn is correlatable before the ack
+        // returns.
         const btwPending = isBtwCommand(message)
           ? {
               question: extractSideQuestionDisplayText(message),
@@ -2203,11 +2203,11 @@ export async function handleSendChat(
           : null;
         if (btwPending) {
           // The superseded run loses its pending record; retire it so its
-          // late side_result/terminal events cannot reach the card or the
-          // transcript.
+          // late side_result/terminal events cannot reach the panel or the
+          // transcript. Completed turns stay: the panel is a conversation.
           retirePendingChatSideQuestion(host);
-          host.chatSideResult = null;
           host.chatSideResultPending = btwPending;
+          host.chatSideChatHidden = false;
           host.requestUpdate?.();
         }
         const ack = await sendDetachedCommandMessage(host, message, {

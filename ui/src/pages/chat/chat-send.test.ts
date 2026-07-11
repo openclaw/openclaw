@@ -255,7 +255,7 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
     chatAvatarSource: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
-    chatSideResult: null,
+    chatSideChatTurns: [],
     chatSideResultTerminalRuns: new Set<string>(),
     sessionsLoading: false,
     sessionsResult: null,
@@ -6442,15 +6442,17 @@ describe("handleSendChat", () => {
       sessionKey: "main",
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
-      chatSideResult: {
-        kind: "btw",
-        runId: "btw-run-clear",
-        sessionKey: "main",
-        question: "what changed?",
-        text: "Detached BTW result",
-        isError: false,
-        ts: 1,
-      },
+      chatSideChatTurns: [
+        {
+          kind: "btw",
+          runId: "btw-run-clear",
+          sessionKey: "main",
+          question: "what changed?",
+          text: "Detached BTW result",
+          isError: false,
+          ts: 1,
+        },
+      ],
       chatSideResultTerminalRuns: new Set(["btw-run-clear"]),
     });
 
@@ -6458,7 +6460,7 @@ describe("handleSendChat", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.reset", { key: "main" });
     expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatSideResult).toBeNull();
+    expect(host.chatSideChatTurns).toEqual([]);
     expect(host.chatSideResultTerminalRuns?.size).toBe(0);
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();

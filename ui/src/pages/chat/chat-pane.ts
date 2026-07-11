@@ -1319,8 +1319,9 @@ class ChatPane extends OpenClawLightDomElement {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       messages: state.chatMessages,
-      sideResult: state.chatSideResult,
-      sideResultPending: state.chatSideResultPending,
+      sideChatTurns: state.chatSideChatTurns,
+      sideChatPending: state.chatSideResultPending,
+      sideChatHidden: state.chatSideChatHidden,
       toolMessages: state.chatToolMessages,
       streamSegments: state.chatStreamSegments,
       stream: state.chatStream,
@@ -1441,7 +1442,8 @@ class ChatPane extends OpenClawLightDomElement {
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
       onRefresh: () => {
-        state.chatSideResult = null;
+        state.chatSideChatTurns = [];
+        state.chatSideChatHidden = false;
         retirePendingChatSideQuestion(state);
         state.resetToolStream();
         void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
@@ -1483,9 +1485,16 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
       onSideQuestion: (command) => void state.handleSendChat(command),
-      onDismissSideResult: () => {
-        state.chatSideResult = null;
-        // Retire (not just clear) so a dismissed question's still-running
+      onSideChatClose: () => {
+        // Hide only: a pending run keeps going and its arriving answer (or a
+        // new question) reopens the panel with the conversation intact.
+        state.chatSideChatHidden = true;
+        state.requestUpdate?.();
+      },
+      onSideChatClear: () => {
+        state.chatSideChatTurns = [];
+        state.chatSideChatHidden = false;
+        // Retire (not just clear) so a discarded question's still-running
         // detached run cannot leak its late reply into the transcript.
         retirePendingChatSideQuestion(state);
         state.requestUpdate?.();

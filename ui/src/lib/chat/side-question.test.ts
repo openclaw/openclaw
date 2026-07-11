@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildMoreDetailsSideCommand,
   buildSideChatComposerDraft,
+  buildSideChatFollowUpCommand,
   CHAT_SELECTION_SNIPPET_MAX_CHARS,
   collapseChatSelectionSnippet,
   combineSideChatComposerDraft,
@@ -67,10 +68,43 @@ describe("combineSideChatComposerDraft", () => {
   });
 });
 
+describe("buildSideChatFollowUpCommand", () => {
+  it("sends a plain /btw when there is no previous answer", () => {
+    expect(buildSideChatFollowUpCommand(null, "what about tests?")).toBe("/btw what about tests?");
+  });
+
+  it("quotes the previous side answer as carried context", () => {
+    expect(buildSideChatFollowUpCommand("The cert\nis valid.", "until when?")).toBe(
+      '/btw Context, your previous side answer: "The cert is valid." Follow-up: until when?',
+    );
+  });
+
+  it("collapses multiline questions and rejects empty ones", () => {
+    expect(buildSideChatFollowUpCommand("answer", "first\nsecond")).toBe(
+      '/btw Context, your previous side answer: "answer" Follow-up: first second',
+    );
+    expect(buildSideChatFollowUpCommand("answer", "  \n ")).toBeNull();
+  });
+
+  it("caps overlong previous answers", () => {
+    const command = buildSideChatFollowUpCommand("x".repeat(5000), "why?");
+    expect(command).not.toBeNull();
+    expect(command!.length).toBeLessThan(CHAT_SELECTION_SNIPPET_MAX_CHARS + 100);
+  });
+});
+
 describe("extractSideQuestionDisplayText", () => {
   it("drops the /btw and /side prefixes", () => {
     expect(extractSideQuestionDisplayText("/btw what changed?")).toBe("what changed?");
     expect(extractSideQuestionDisplayText("/side: what changed?")).toBe("what changed?");
     expect(extractSideQuestionDisplayText("/btw")).toBe("");
+  });
+
+  it("drops carried follow-up context from follow-up commands", () => {
+    const command = buildSideChatFollowUpCommand("An answer with Follow-up: inside.", "and now?");
+    expect(command).not.toBeNull();
+    expect(extractSideQuestionDisplayText(command!)).toBe("and now?");
+    // Round-trips server-echoed questions that no longer carry the prefix.
+    expect(extractSideQuestionDisplayText(command!.replace(/^\/btw\s+/, ""))).toBe("and now?");
   });
 });
