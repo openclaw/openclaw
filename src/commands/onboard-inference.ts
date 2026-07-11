@@ -102,9 +102,9 @@ async function detectCodexLoginState(
   if (!status.error) {
     return true;
   }
-  return status.error.startsWith("exited ") && status.version === "Not logged in"
-    ? false
-    : undefined;
+  // Codex login status covers its own auth store, not custom model-provider
+  // credentials. Keep failures indeterminate so the live probe decides usability.
+  return undefined;
 }
 
 function randomizeClaudeCodexTie(

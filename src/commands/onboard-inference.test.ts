@@ -153,7 +153,7 @@ describe("detectInferenceBackends", () => {
     ]);
   });
 
-  it("reports a Codex install whose canonical login status is logged out", async () => {
+  it("keeps Codex store logout indeterminate for custom provider credentials", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
       platform: "darwin",
@@ -166,9 +166,8 @@ describe("detectInferenceBackends", () => {
       },
     });
 
-    expect(candidates).toMatchObject([
-      { kind: "codex-cli", credentials: false, detail: "installed, not logged in" },
-    ]);
+    expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
+    expect(candidates[0]?.credentials).toBeUndefined();
   });
 
   it("keeps an indeterminate Codex status error distinct from logout", async () => {
@@ -259,9 +258,8 @@ describe("detectInferenceBackends", () => {
       },
     });
 
-    expect(candidates).toMatchObject([
-      { kind: "codex-cli", credentials: false, detail: "installed, not logged in" },
-    ]);
+    expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
+    expect(candidates[0]?.credentials).toBeUndefined();
     expect(probed).toContainEqual({ command, args: ["login", "status"] });
   });
 
