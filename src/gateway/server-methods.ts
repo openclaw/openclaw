@@ -11,6 +11,7 @@ import {
   isGatewayRestartDraining,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { authorizeGatewayAccess } from "./authorization/kernel.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import {
@@ -849,6 +850,28 @@ export async function handleGatewayRequest(
     respond(false, undefined, authError);
     return;
   }
+  const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
+  if (!handler) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`),
+    );
+    return;
+  }
+  const access = await authorizeGatewayAccess({
+    runtime: context.authorization,
+    policy: methodRegistry.getAccessPolicy(req.method),
+    principal: client?.principal,
+    method: req.method,
+    params: req.params,
+    getConfig: context.getRuntimeConfig,
+  });
+  if (!access.allowed) {
+    context.logGateway.warn(`gateway access denied method=${req.method} reason=${access.reason}`);
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "resource not found"));
+    return;
+  }
   if (context.unavailableGatewayMethods?.has(req.method)) {
     // During startup, methods can be listed before their runtime is ready. Return the protocol
     // retry shape so clients can back off without treating startup as a permanent unknown method.
@@ -896,15 +919,6 @@ export async function handleGatewayRequest(
   const isSuspendPrepare = req.method === "gateway.suspend.prepare";
   if (isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
     // Preparation must stay protected even before it owns the root admission that it closes.
-    return;
-  }
-  const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
-  if (!handler) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`),
-    );
     return;
   }
   const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
