@@ -10,6 +10,8 @@ export type CloudWorkerLifetimePolicyConfig = {
 export type CloudWorkerProfileConfig = {
   /** Worker provider id registered by a plugin. */
   provider: string;
+  /** Worker install method (default: bundle); npm requires a released gateway version. */
+  install?: "bundle" | "npm";
   /** Provider-owned JSON settings; secret-bearing fields use SecretRef objects. */
   settings?: Record<string, unknown>;
   /** Stored lifecycle policy; enforcement is owned by later worker lifecycle support. */
