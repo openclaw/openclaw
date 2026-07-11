@@ -1035,7 +1035,7 @@
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  box-shadow: 0 12px 28px color-mix(in srgb, black 24%, transparent);
+  box-shadow: var(--shadow-md);
 }
 
 .sidebar-file-view__editor-item {

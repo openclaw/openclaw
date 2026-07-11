@@ -208,7 +208,7 @@ openclaw-chat-page {
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--popover) 96%, var(--card));
   color: var(--popover-foreground);
-  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-lg);
   animation: fade-in 150ms var(--ease-out);
 }
 
@@ -1623,7 +1623,7 @@ openclaw-chat-page {
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-elevated) 94%, var(--card));
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--shadow-lg);
   overflow-y: auto;
 }
 
@@ -2256,7 +2256,7 @@ openclaw-chat-page {
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-md);
   overflow-y: auto;
 }
 
@@ -3411,7 +3411,7 @@ openclaw-chat-page {
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-md);
   overflow-y: auto;
 }
 
