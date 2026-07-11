@@ -1000,16 +1000,6 @@ function spawnDaemon(params: {
   return child.pid;
 }
 
-function waitForChildExit(child: ChildProcess) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve(child.exitCode);
-  }
-  return new Promise<number | null>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", resolve);
-  });
-}
-
 /**
  * Capture a ChildProcess exit as a Promise, registering listeners immediately
  * after spawn to avoid missing fast-exit events on some platforms (#104221).
