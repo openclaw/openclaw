@@ -922,4 +922,129 @@ describe("AcpSessionManager runtime config", () => {
       { code: "ACP_INVALID_RUNTIME_OPTION" },
     );
   });
+
+  it("skips unadvertised thinking config key instead of throwing", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      configOptionKeys: ["mode", "model"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "codex" }),
+        runtimeOptions: {
+          model: "codex/latest",
+          thinking: "high",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    // thinking was silently skipped because the backend does not advertise it
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "thinking",
+    });
+    // model was still applied normally
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "model",
+      value: "codex/latest",
+    });
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips unadvertised effort config key instead of throwing", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      configOptionKeys: ["mode", "model"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-2",
+      storeSessionKey: "agent:codex:acp:session-2",
+      acp: {
+        ...readySessionMeta({ agent: "codex" }),
+        runtimeOptions: {
+          model: "codex/latest",
+          effort: "low",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-2",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-2",
+    });
+
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "effort",
+    });
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "model",
+      value: "codex/latest",
+    });
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("still throws for unadvertised keys other than thinking/effort", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      configOptionKeys: ["mode", "model"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-3",
+      storeSessionKey: "agent:codex:acp:session-3",
+      acp: {
+        ...readySessionMeta({ agent: "codex" }),
+        runtimeOptions: {
+          model: "codex/latest",
+          backendExtras: {
+            custom_unknown_key: "value",
+          },
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await expectRejectedRecord(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-3",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-3",
+      }),
+      {
+        code: "ACP_BACKEND_UNSUPPORTED_CONTROL",
+      },
+    );
+
+    expect(runtimeState.runTurn).not.toHaveBeenCalled();
+  });
 });
