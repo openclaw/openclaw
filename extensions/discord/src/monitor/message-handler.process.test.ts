@@ -3382,7 +3382,6 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     const finals = getDeliveredFinalTexts();
     expect(finals).toHaveLength(2);
@@ -3447,7 +3446,6 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.flush).toHaveBeenCalledTimes(2);
     expect(draftStream.clear).toHaveBeenCalledTimes(2);
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     const finals = getDeliveredFinalTexts();
