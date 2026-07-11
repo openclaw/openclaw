@@ -2,9 +2,9 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
-import {
+import type {
   ensureProviderLocalService,
-  type ProviderLocalServiceTarget,
+  ProviderLocalServiceTarget,
 } from "../agents/provider-local-service.js";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
@@ -38,6 +38,7 @@ export type OpenAICompatibleEmbeddingClient = {
   queryInputType?: string;
   documentInputType?: string;
   localServiceTarget?: ProviderLocalServiceTarget;
+  acquireLocalService?: typeof ensureProviderLocalService;
 };
 
 type OpenAICompatibleEmbeddingResponse = {
@@ -55,6 +56,10 @@ type ConfiguredEmbeddingProvider = {
 type ResolvedConfiguredEmbeddingProvider = {
   providerId: string;
   config: ConfiguredEmbeddingProvider;
+};
+
+type LocalServiceAwareEmbeddingOptions = EmbeddingProviderCreateOptions & {
+  acquireLocalService?: typeof ensureProviderLocalService;
 };
 
 function normalizeBaseUrl(value: string | undefined): string {
@@ -349,9 +354,10 @@ async function postEmbeddingRequest(params: {
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
-  const localServiceLease = client.localServiceTarget
-    ? await ensureProviderLocalService(client.localServiceTarget, params.signal)
-    : undefined;
+  const localServiceLease =
+    client.localServiceTarget && client.acquireLocalService
+      ? await client.acquireLocalService(client.localServiceTarget, params.signal)
+      : undefined;
   try {
     const { response, release } = await fetchWithSsrFGuard({
       url: `${client.baseUrl}/embeddings`,
@@ -405,6 +411,7 @@ async function createOpenAICompatibleEmbeddingClient(
       ...options.remote?.headers,
     },
   });
+  const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
   return {
     baseUrl,
     headers,
@@ -421,6 +428,7 @@ async function createOpenAICompatibleEmbeddingClient(
             headers,
             service: configuredProvider.localService,
           },
+          acquireLocalService: localServiceOptions.acquireLocalService,
         }
       : {}),
     ...(options.dimensions !== undefined

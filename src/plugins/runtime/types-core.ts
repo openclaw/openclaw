@@ -449,6 +449,15 @@ export type PluginRuntimeCore = {
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
+    acquireLocalService: (
+      target: {
+        providerId: string;
+        baseUrl: string;
+        headers?: HeadersInit;
+        service?: import("../../config/types.models.js").ModelProviderLocalServiceConfig;
+      },
+      signal?: AbortSignal | null,
+    ) => Promise<{ release: () => Promise<void> } | undefined>;
   };
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */

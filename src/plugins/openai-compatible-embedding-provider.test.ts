@@ -10,18 +10,6 @@ import {
   openAICompatibleEmbeddingProviderAdapter,
 } from "./openai-compatible-embedding-provider.js";
 
-const { ensureProviderLocalServiceMock } = vi.hoisted(() => ({
-  ensureProviderLocalServiceMock: vi.fn(async () => undefined),
-}));
-
-vi.mock("../agents/provider-local-service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/provider-local-service.js")>();
-  return {
-    ...actual,
-    ensureProviderLocalService: ensureProviderLocalServiceMock,
-  };
-});
-
 type CapturedRequest = {
   method: string | undefined;
   url: string | undefined;
@@ -278,8 +266,6 @@ async function startOversizedSuccessEmbeddingServer(): Promise<OversizedStreamSe
 }
 
 afterEach(async () => {
-  ensureProviderLocalServiceMock.mockReset();
-  ensureProviderLocalServiceMock.mockResolvedValue(undefined);
   const pending = servers.splice(0);
   await Promise.all(pending.map((server) => server.close()));
 });
@@ -317,7 +303,7 @@ describe("openai-compatible generic embedding provider", () => {
   it("leases the exact configured provider alias for each embedding request", async () => {
     const server = await startEmbeddingServer();
     const release = vi.fn();
-    ensureProviderLocalServiceMock.mockResolvedValueOnce({ release });
+    const acquireLocalService = vi.fn(async () => ({ release }));
     const service = {
       command: process.execPath,
       args: ["--version"],
@@ -339,12 +325,15 @@ describe("openai-compatible generic embedding provider", () => {
       } as EmbeddingProviderCreateOptions["config"],
       provider: "gpu-spark",
       model: "gpu-spark/nomic-embed-text",
-    });
+    }) as EmbeddingProviderCreateOptions & {
+      acquireLocalService: typeof acquireLocalService;
+    };
+    options.acquireLocalService = acquireLocalService;
 
     const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
     await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
 
-    expect(ensureProviderLocalServiceMock).toHaveBeenCalledWith(
+    expect(acquireLocalService).toHaveBeenCalledWith(
       {
         providerId: "gpu-spark",
         baseUrl: server.baseUrl,

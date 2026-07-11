@@ -15,7 +15,6 @@ const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
 const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => undefined),
 );
-const ensureProviderLocalServiceMock = vi.hoisted(() => vi.fn(async () => undefined));
 const createRemoteEmbeddingProviderMock = vi.hoisted(() =>
   vi.fn(() => ({
     id: "lmstudio",
@@ -31,7 +30,6 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
   return {
     ...actual,
     createRemoteEmbeddingProvider: createRemoteEmbeddingProviderMock,
-    ensureProviderLocalService: ensureProviderLocalServiceMock,
   };
 });
 
@@ -87,8 +85,6 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
   beforeEach(() => {
     ensureLmstudioModelLoadedMock.mockClear();
     createRemoteEmbeddingProviderMock.mockClear();
-    ensureProviderLocalServiceMock.mockReset();
-    ensureProviderLocalServiceMock.mockResolvedValue(undefined);
   });
 
   it.each([
@@ -138,7 +134,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
 
   it("leases the exact configured alias for preload and embedding requests", async () => {
     const release = vi.fn();
-    ensureProviderLocalServiceMock.mockResolvedValue({ release });
+    const acquireLocalService = vi.fn(async (_target: unknown) => ({ release }));
     const service = {
       command: "/usr/bin/lms-spark",
       args: ["server", "start"],
@@ -159,13 +155,14 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       provider: "lmstudio-spark",
       model: `lmstudio-spark/${EMBEDDING_MODEL}`,
       fallback: "none",
+      acquireLocalService,
     };
 
     const { provider } = await createLmstudioEmbeddingProvider(options);
     await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
 
-    expect(ensureProviderLocalServiceMock).toHaveBeenCalledTimes(2);
-    expect(ensureProviderLocalServiceMock).toHaveBeenNthCalledWith(
+    expect(acquireLocalService).toHaveBeenCalledTimes(2);
+    expect(acquireLocalService).toHaveBeenNthCalledWith(
       1,
       {
         providerId: "lmstudio-spark",
@@ -175,7 +172,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       },
       undefined,
     );
-    expect(ensureProviderLocalServiceMock).toHaveBeenNthCalledWith(
+    expect(acquireLocalService).toHaveBeenNthCalledWith(
       2,
       {
         providerId: "lmstudio-spark",

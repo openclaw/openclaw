@@ -3,7 +3,6 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
   createRemoteEmbeddingProvider,
-  ensureProviderLocalService,
   normalizeEmbeddingModelWithPrefixes,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
@@ -31,6 +30,21 @@ type LmstudioEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+};
+type LmstudioProviderConfig = NonNullable<
+  NonNullable<MemoryEmbeddingProviderCreateOptions["config"]["models"]>["providers"]
+>[string];
+type MemoryCoreAcquireLocalService = (
+  target: {
+    providerId: string;
+    baseUrl: string;
+    headers?: HeadersInit;
+    service?: LmstudioProviderConfig["localService"];
+  },
+  signal?: AbortSignal | null,
+) => Promise<{ release: () => Promise<void> } | undefined>;
+type LocalServiceAwareEmbeddingOptions = MemoryEmbeddingProviderCreateOptions & {
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 export const DEFAULT_LMSTUDIO_EMBEDDING_MODEL = LMSTUDIO_DEFAULT_EMBEDDING_MODEL;
 
@@ -185,13 +199,15 @@ export async function createLmstudioEmbeddingProvider(
         service: providerConfig.localService,
       }
     : undefined;
+  const acquireLocalService = (options as LocalServiceAwareEmbeddingOptions).acquireLocalService;
   const withLocalServiceLease = async <T>(
     signal: AbortSignal | undefined,
     action: () => Promise<T>,
   ): Promise<T> => {
-    const lease = localServiceTarget
-      ? await ensureProviderLocalService(localServiceTarget, signal)
-      : undefined;
+    const lease =
+      localServiceTarget && acquireLocalService
+        ? await acquireLocalService(localServiceTarget, signal)
+        : undefined;
     try {
       return await action();
     } finally {

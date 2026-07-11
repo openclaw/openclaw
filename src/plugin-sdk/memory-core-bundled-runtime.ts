@@ -1,4 +1,5 @@
 // Manual facade. Keep loader boundary explicit.
+import { ensureProviderLocalService } from "../agents/provider-local-service.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
@@ -19,6 +20,9 @@ type EmbeddingProviderResult = {
 };
 
 type RuntimeFacadeModule = {
+  configureMemoryCoreEmbeddingLocalService: (
+    acquireLocalService: typeof ensureProviderLocalService,
+  ) => void;
   configureMemoryCoreDreamingState: (
     openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
   ) => void;
@@ -232,6 +236,7 @@ function loadRuntimeFacadeModule(): RuntimeFacadeModule {
   module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
     createPluginStateKeyedStore<T>("memory-core", options),
   );
+  module.configureMemoryCoreEmbeddingLocalService(ensureProviderLocalService);
   return module;
 }
 

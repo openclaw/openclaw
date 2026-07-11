@@ -35,7 +35,6 @@ export {
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
-export { ensureProviderLocalService } from "../agents/provider-local-service.js";
 
 /** Provider batch status payload shared by memory embedding batch helpers. */
 export type EmbeddingBatchStatus = {

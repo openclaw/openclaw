@@ -1,4 +1,3 @@
-import { ensureProviderLocalService } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 // Ollama provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -35,6 +34,17 @@ export type OllamaEmbeddingProvider = {
   embedBatch: (texts: string[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
 };
 
+type OllamaProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
+type MemoryCoreAcquireLocalService = (
+  target: {
+    providerId: string;
+    baseUrl: string;
+    headers?: HeadersInit;
+    service?: OllamaProviderConfig["localService"];
+  },
+  signal?: AbortSignal | null,
+) => Promise<{ release: () => Promise<void> } | undefined>;
+
 type OllamaEmbeddingOptions = {
   config: OpenClawConfig;
   agentDir?: string;
@@ -49,6 +59,7 @@ type OllamaEmbeddingOptions = {
   local?: unknown;
   outputDimensionality?: number;
   taskType?: unknown;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
 export type OllamaEmbeddingClient = {
@@ -57,7 +68,8 @@ export type OllamaEmbeddingClient = {
   ssrfPolicy?: SsrFPolicy;
   model: string;
   outputDimensionality?: number;
-  localServiceTarget?: Parameters<typeof ensureProviderLocalService>[0];
+  localServiceTarget?: Parameters<MemoryCoreAcquireLocalService>[0];
+  acquireLocalService?: MemoryCoreAcquireLocalService;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
@@ -338,6 +350,7 @@ function resolveOllamaEmbeddingClient(
             headers,
             service: localService,
           },
+          acquireLocalService: options.acquireLocalService,
         }
       : {}),
   };
@@ -350,9 +363,10 @@ export async function createOllamaEmbeddingProvider(
   const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embed`;
 
   const embedMany = async (input: string | string[], signal?: AbortSignal): Promise<number[][]> => {
-    const localServiceLease = client.localServiceTarget
-      ? await ensureProviderLocalService(client.localServiceTarget, signal)
-      : undefined;
+    const localServiceLease =
+      client.localServiceTarget && client.acquireLocalService
+        ? await client.acquireLocalService(client.localServiceTarget, signal)
+        : undefined;
     let json: Awaited<ReturnType<typeof readOllamaEmbeddingJsonResponse>>;
     try {
       json = await withRemoteHttpResponse({

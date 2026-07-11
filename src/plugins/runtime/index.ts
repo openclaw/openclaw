@@ -127,6 +127,10 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
       }),
   );
   return {
+    acquireLocalService: async (...args) => {
+      const { ensureProviderLocalService } = await import("../../agents/provider-local-service.js");
+      return await ensureProviderLocalService(...args);
+    },
     complete: async (params) => {
       const llm = await loadLlm();
       return llm.complete(params);
