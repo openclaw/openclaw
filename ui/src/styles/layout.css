@@ -1003,7 +1003,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   --sidebar-sessions-mask: linear-gradient(
     to bottom,
     black 0,
-    black calc(100% - 20px),
+    black calc(100% - 23px),
     transparent 100%
   );
 }
@@ -1012,14 +1012,14 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   --sidebar-sessions-mask: linear-gradient(
     to bottom,
     transparent 0,
-    black 20px,
-    black calc(100% - 20px),
+    black 23px,
+    black calc(100% - 23px),
     transparent 100%
   );
 }
 
 .sidebar-recent-sessions--scroll-bottom {
-  --sidebar-sessions-mask: linear-gradient(to bottom, transparent 0, black 20px, black 100%);
+  --sidebar-sessions-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
 }
 
 .sidebar-recent-sessions--scroll-top,
