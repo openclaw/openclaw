@@ -27,6 +27,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -110,6 +111,9 @@ class ChatController internal constructor(
 
   private val _thinkingLevel = MutableStateFlow("off")
   val thinkingLevel: StateFlow<String> = _thinkingLevel.asStateFlow()
+
+  private val _thinkingLevelSelection = MutableStateFlow(defaultChatThinkingLevelSelection)
+  val thinkingLevelSelection: StateFlow<ChatThinkingLevelSelection> = _thinkingLevelSelection.asStateFlow()
 
   private val _selectedModelRef = MutableStateFlow<String?>(null)
   val selectedModelRef: StateFlow<String?> = _selectedModelRef.asStateFlow()
@@ -261,6 +265,7 @@ class ChatController internal constructor(
       )
       clearLiveHistoryMarker()
       _sessions.value = emptyList()
+      applyThinkingMetadata(null)
       sessionsListArchived = false
       unreadPatchSessionKey = null
       unreadPatchRequested = false
@@ -588,6 +593,10 @@ class ChatController internal constructor(
   /** Persists the normalized thinking level used for subsequent chat sends. */
   fun setThinkingLevel(thinkingLevel: String) {
     val normalized = normalizeThinking(thinkingLevel)
+    val selection = _thinkingLevelSelection.value
+    if (selection.isGatewayProvided && selection.options.none { it.id == normalized }) {
+      return
+    }
     if (normalized == _thinkingLevel.value) return
     _thinkingLevel.value = normalized
   }
@@ -622,8 +631,10 @@ class ChatController internal constructor(
                 put("key", JsonPrimitive(key))
                 put("model", normalizedModelRef?.let(::JsonPrimitive) ?: JsonNull)
               }
-            requestGateway("sessions.patch", params.toString())
+            val response = requestGateway("sessions.patch", params.toString())
+            val resolution = parseSessionModelPatchResolution(response)
             normalizedModelRef?.let(recordModelRecent)
+            applyAcceptedModelPatch(key = key, modelRef = normalizedModelRef, resolution = resolution)
             if (_sessionKey.value == key) {
               modelSelectionGeneration.incrementAndGet()
               _selectedModelRef.value = normalizedModelRef
@@ -669,6 +680,7 @@ class ChatController internal constructor(
   ): Long {
     val generation = historyLoadGeneration.incrementAndGet()
     _sessionKey.value = key
+    applyThinkingMetadata(_sessions.value.firstOrNull { it.key == key })
     _selectedModelRef.value = null
     lastHandledTerminalRunId = null
     val nextAgentId = resolveAgentIdForSessionKey(key)
@@ -762,7 +774,7 @@ class ChatController internal constructor(
     // Applied at enqueue time too so durable rows never persist a level the selected model
     // rejects; reconnect flushes with a cleared catalog fail open, matching pre-gating behavior.
     val thinking =
-      if (thinkingSupportedForSelection(_selectedModelRef.value, _modelCatalog.value)) {
+      if (thinkingSupportedForCurrentSelection()) {
         normalizeThinking(thinkingLevel)
       } else {
         "off"
@@ -1272,6 +1284,9 @@ class ChatController internal constructor(
           if (requestCacheScope != currentCacheScope()) return
           if (requestSequence != sessionsRequestSequence.get()) return
           _sessions.value = result.sessions
+          result.sessions
+            .firstOrNull { it.key == _sessionKey.value }
+            ?.let(::applyThinkingMetadata)
           sessionsListArchived = archived
           val activeSessionKey = _sessionKey.value
           val activeOutsideLocalWindow =
@@ -1593,8 +1608,7 @@ class ChatController internal constructor(
       // open, preserving the thinking level captured when they were enqueued.
       val thinking =
         if (
-          queuedSessionKey == _sessionKey.value &&
-          !thinkingSupportedForSelection(_selectedModelRef.value, _modelCatalog.value)
+          queuedSessionKey == _sessionKey.value && !thinkingSupportedForCurrentSelection()
         ) {
           "off"
         } else {
@@ -2133,6 +2147,13 @@ class ChatController internal constructor(
     val isTruncated: Boolean,
   )
 
+  private data class SessionModelPatchResolution(
+    val modelProvider: String?,
+    val model: String?,
+    val thinkingLevel: String?,
+    val thinkingLevels: List<ChatThinkingLevelOption>?,
+  )
+
   private fun parseSessions(jsonString: String): SessionListResult {
     val root =
       json.parseToJsonElement(jsonString).asObjectOrNull()
@@ -2181,12 +2202,116 @@ class ChatController internal constructor(
       totalTokensFresh = obj["totalTokensFresh"].asBooleanOrNull(),
       modelProvider = obj["modelProvider"].asStringOrNull()?.trim(),
       model = obj["model"].asStringOrNull()?.trim(),
+      thinkingLevel = obj["thinkingLevel"].asStringOrNull()?.trim(),
+      thinkingLevels = parseThinkingLevels(obj["thinkingLevels"]),
+      thinkingDefault = obj["thinkingDefault"].asStringOrNull()?.trim(),
       contextTokens = obj["contextTokens"].asLongOrNull(),
       hasContextUsageMetadata =
         "totalTokens" in obj ||
           "totalTokensFresh" in obj ||
           "contextTokens" in obj,
     )
+  }
+
+  private fun parseSessionModelPatchResolution(jsonString: String): SessionModelPatchResolution? {
+    val root = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return null
+    val resolved = root["resolved"].asObjectOrNull() ?: return null
+    return SessionModelPatchResolution(
+      modelProvider = resolved["modelProvider"].asStringOrNull()?.trim(),
+      model = resolved["model"].asStringOrNull()?.trim(),
+      thinkingLevel = resolved["thinkingLevel"].asStringOrNull()?.trim(),
+      thinkingLevels = parseThinkingLevels(resolved["thinkingLevels"]),
+    )
+  }
+
+  private fun parseThinkingLevels(element: JsonElement?): List<ChatThinkingLevelOption>? {
+    val array = element.asArrayOrNull() ?: return null
+    return array
+      .mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val rawId = obj["id"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+        val id = normalizeThinking(rawId)
+        val label = obj["label"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id
+        ChatThinkingLevelOption(id = id, label = label)
+      }.distinctBy { it.id }
+  }
+
+  private fun applyAcceptedModelPatch(
+    key: String,
+    modelRef: String?,
+    resolution: SessionModelPatchResolution?,
+  ) {
+    val fallbackProvider = modelRef?.substringBefore('/', missingDelimiterValue = "")?.takeIf { it.isNotEmpty() }
+    val fallbackModel =
+      modelRef?.let { ref -> ref.substringAfter('/', missingDelimiterValue = ref) }?.takeIf { it.isNotEmpty() }
+    val current = _sessions.value
+    val index = current.indexOfFirst { it.key == key }
+    val existing = current.getOrNull(index)
+    val applied =
+      (existing ?: ChatSessionEntry(key = key, updatedAtMs = null)).copy(
+        modelProvider = resolution?.modelProvider ?: fallbackProvider ?: existing?.modelProvider,
+        model = resolution?.model ?: fallbackModel ?: existing?.model,
+        thinkingLevel = resolution?.thinkingLevel,
+        thinkingLevels = resolution?.thinkingLevels,
+        thinkingDefault = null,
+      )
+    if (index >= 0) {
+      _sessions.value = current.toMutableList().also { it[index] = applied }
+    }
+    if (_sessionKey.value == key) {
+      applyThinkingMetadata(applied)
+    }
+  }
+
+  private fun applyThinkingMetadata(entry: ChatSessionEntry?) {
+    val advertised = entry?.thinkingLevels
+    if (advertised == null) {
+      _thinkingLevelSelection.value = defaultChatThinkingLevelSelection
+      val requestedLevel =
+        entry
+          ?.thinkingLevel
+          ?.takeIf { it.isNotBlank() }
+          ?.let(::normalizeThinking)
+          ?: normalizeThinking(_thinkingLevel.value)
+      _thinkingLevel.value =
+        requestedLevel.takeIf { candidate ->
+          defaultChatThinkingLevelSelection.options.any { it.id == candidate }
+        } ?: "off"
+      return
+    }
+    val options =
+      advertised
+        .map { option ->
+          val id = normalizeThinking(option.id)
+          ChatThinkingLevelOption(
+            id = id,
+            label = option.label.trim().takeIf { it.isNotEmpty() } ?: id,
+          )
+        }.distinctBy { it.id }
+        .ifEmpty { listOf(ChatThinkingLevelOption(id = "off", label = "off")) }
+    _thinkingLevelSelection.value =
+      ChatThinkingLevelSelection(
+        options = options,
+        isGatewayProvided = true,
+      )
+    val selected = entry.thinkingLevel?.let(::normalizeThinking)
+    val currentLevel = normalizeThinking(_thinkingLevel.value)
+    val defaultLevel = entry.thinkingDefault?.let(::normalizeThinking)
+    // Lightweight picker metadata can omit a Gateway-validated effective level.
+    // Preserve that send state; only local/default fallbacks require picker membership.
+    _thinkingLevel.value =
+      selected
+        ?: listOf(currentLevel, defaultLevel).firstOrNull { candidate -> options.any { it.id == candidate } }
+        ?: options.first().id
+  }
+
+  private fun thinkingSupportedForCurrentSelection(): Boolean {
+    val selection = _thinkingLevelSelection.value
+    return if (selection.isGatewayProvided) {
+      selection.options.any { it.id != "off" }
+    } else {
+      thinkingSupportedForSelection(_selectedModelRef.value, _modelCatalog.value)
+    }
   }
 
   private fun updateSessionFromHistory(history: ChatHistory) {
@@ -2223,6 +2348,9 @@ class ChatController internal constructor(
       } else {
         listOf(entry) + current
       }
+    if (applied.key == _sessionKey.value) {
+      applyThinkingMetadata(applied)
+    }
     acknowledgeUnreadIfNeeded(applied.key, applied, requireActive = true)
   }
 
@@ -2289,13 +2417,7 @@ class ChatController internal constructor(
     return if (gatewayId == scope.gatewayId) scope else scope.copy(gatewayId = gatewayId)
   }
 
-  private fun normalizeThinking(raw: String): String =
-    when (raw.trim().lowercase()) {
-      "low" -> "low"
-      "medium" -> "medium"
-      "high" -> "high"
-      else -> "off"
-    }
+  private fun normalizeThinking(raw: String): String = raw.trim().lowercase(Locale.US).ifEmpty { "off" }
 }
 
 private enum class ChatMetadataLoadState {
@@ -2670,6 +2792,9 @@ internal fun mergeChatSessionEntry(
       },
     modelProvider = next.modelProvider ?: existing.modelProvider,
     model = next.model ?: existing.model,
+    thinkingLevel = next.thinkingLevel ?: existing.thinkingLevel,
+    thinkingLevels = next.thinkingLevels ?: existing.thinkingLevels,
+    thinkingDefault = next.thinkingDefault ?: existing.thinkingDefault,
     contextTokens =
       when {
         preserveExistingContextUsage -> next.contextTokens ?: existing.contextTokens

@@ -784,6 +784,7 @@ export const OpenClawSchema = z
     browser: z
       .object({
         enabled: z.boolean().optional(),
+        allowSystemProfileImport: z.boolean().optional(),
         evaluateEnabled: z.boolean().optional(),
         cdpUrl: z.string().optional(),
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
@@ -1187,6 +1188,7 @@ export const OpenClawSchema = z
             enabled: z.boolean().optional(),
             basePath: z.string().optional(),
             root: z.string().optional(),
+            toolTitles: z.boolean().optional(),
             embedSandbox: z
               .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
               .optional(),

@@ -54,6 +54,7 @@ const {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -182,6 +183,69 @@ function installTelegramStateRuntimeForTest(): void {
     channel: {},
   } as TelegramRuntime);
 }
+
+describe("Telegram send Promise contract", () => {
+  const contextFailureCalls: ReadonlyArray<readonly [string, () => Promise<unknown>]> = [
+    [
+      "sendMessageTelegram",
+      () => sendMessageTelegramImported("123", "hello", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    ["sendTypingTelegram", () => sendTypingTelegram("123", { cfg: TELEGRAM_TEST_CFG })],
+    [
+      "reactMessageTelegram",
+      () => reactMessageTelegram("123", 1, "👍", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    ["deleteMessageTelegram", () => deleteMessageTelegram("123", 1, { cfg: TELEGRAM_TEST_CFG })],
+    ["pinMessageTelegram", () => pinMessageTelegram("123", 1, { cfg: TELEGRAM_TEST_CFG })],
+    [
+      "unpinMessageTelegram",
+      () => unpinMessageTelegram("123", undefined, { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "editForumTopicTelegram",
+      () => editForumTopicTelegram("123", 1, { cfg: TELEGRAM_TEST_CFG, name: "topic" }),
+    ],
+    [
+      "editMessageReplyMarkupTelegram",
+      () => editMessageReplyMarkupTelegram("123", 1, [], { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "editMessageTelegram",
+      () => editMessageTelegram("123", 1, "hello", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "sendStickerTelegram",
+      () => sendStickerTelegram("123", "file-id", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "sendPollTelegram",
+      () =>
+        sendPollTelegram(
+          "123",
+          { question: "Question?", options: ["A", "B"] },
+          { cfg: TELEGRAM_TEST_CFG },
+        ),
+    ],
+    [
+      "createForumTopicTelegram",
+      () => createForumTopicTelegram("123", "topic", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+  ];
+
+  it.each(contextFailureCalls)(
+    "%s reports context failures as Promise rejections",
+    async (_name, invoke) => {
+      let operation: Promise<unknown> | undefined;
+      expect(() => {
+        operation = invoke();
+      }).not.toThrow();
+      if (!operation) {
+        throw new Error("expected Telegram operation promise");
+      }
+      await expect(operation).rejects.toThrow(/Telegram bot token missing/i);
+    },
+  );
+});
 
 async function expectChatNotFoundWithChatId(
   action: Promise<unknown>,
@@ -784,20 +848,25 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("rejects empty topic edits", async () => {
+  it("rejects empty topic edits before creating a Telegram client", async () => {
+    botCtorSpy.mockClear();
+
     await expect(
       editForumTopicTelegram("-1001234567890", 271, {
         cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
         accountId: "default",
       }),
     ).rejects.toThrow("Telegram forum topic update requires a name or iconCustomEmojiId");
     await expect(
       editForumTopicTelegram("-1001234567890", 271, {
         cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
         accountId: "default",
         iconCustomEmojiId: "   ",
       }),
     ).rejects.toThrow("Telegram forum topic icon custom emoji ID is required");
+    expect(botCtorSpy).not.toHaveBeenCalled();
   });
 
   it("applies timeoutSeconds config precedence", async () => {
@@ -3724,12 +3793,15 @@ describe("sendStickerTelegram", () => {
     });
   }
 
-  it("throws error when fileId is blank", async () => {
+  it("rejects a blank fileId before creating a Telegram client", async () => {
+    botCtorSpy.mockClear();
+
     for (const fileId of ["", "   "]) {
       await expect(
         sendStickerTelegram("123", fileId, { cfg: TELEGRAM_TEST_CFG, token: "tok" }),
       ).rejects.toThrow(/file_id is required/i);
     }
+    expect(botCtorSpy).not.toHaveBeenCalled();
   });
 
   it("fails sticker sends instead of retrying without message_thread_id", async () => {
@@ -4507,4 +4579,16 @@ describe("createForumTopicTelegram", () => {
       expect(result).toEqual(testCase.expectedResult);
     });
   }
+
+  it("rejects an invalid topic name before creating a Telegram client", async () => {
+    botCtorSpy.mockClear();
+
+    await expect(
+      createForumTopicTelegram("-1001234567890", "   ", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+      }),
+    ).rejects.toThrow("Forum topic name is required");
+    expect(botCtorSpy).not.toHaveBeenCalled();
+  });
 });

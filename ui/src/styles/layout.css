@@ -1098,8 +1098,12 @@ html.openclaw-native-macos .shell-nav-expand {
   opacity: 0.85;
 }
 
+/* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
+   when rows stream in or grow a second subtitle line after first layout, so a
+   grid list keeps a stale height and the next section paints over its rows. */
 .sidebar-recent-sessions__list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 2px;
   min-height: 12px;
 }
