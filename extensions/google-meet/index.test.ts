@@ -2750,7 +2750,7 @@ describe("google-meet plugin", () => {
                   {
                     targetId: "local-meet-tab",
                     title: "Meet",
-                    url: "https://meet.google.com/abc-defg-hij",
+                    url: "https://meet.google.com/abc-defg-hij?hl=en",
                   },
                 ],
               }
@@ -2761,7 +2761,7 @@ describe("google-meet plugin", () => {
           return {
             targetId: "local-meet-tab",
             title: "Meet",
-            url: request.body?.url ?? "https://meet.google.com/abc-defg-hij",
+            url: request.body?.url ?? "https://meet.google.com/abc-defg-hij?hl=en",
           };
         }
         if (request.path === "/tabs/focus") {
@@ -2770,7 +2770,7 @@ describe("google-meet plugin", () => {
         if (request.path === "/navigate") {
           return {
             targetId: request.body?.targetId ?? "local-meet-tab",
-            url: request.body?.url ?? "https://meet.google.com/abc-defg-hij",
+            url: request.body?.url ?? "https://meet.google.com/abc-defg-hij?hl=en",
           };
         }
         if (request.path === "/act") {
@@ -2875,7 +2875,7 @@ describe("google-meet plugin", () => {
                           {
                             targetId: "tab-1",
                             title: "Meet",
-                            url: "https://meet.google.com/abc-defg-hij",
+                            url: "https://meet.google.com/abc-defg-hij?hl=en",
                           },
                         ]
                       : [],
@@ -2890,7 +2890,7 @@ describe("google-meet plugin", () => {
                   result: {
                     targetId: "tab-1",
                     title: "Meet",
-                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij",
+                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij?hl=en",
                   },
                 },
               };
@@ -2903,7 +2903,7 @@ describe("google-meet plugin", () => {
                 payload: {
                   result: {
                     targetId: raw.body?.targetId ?? "tab-1",
-                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij",
+                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij?hl=en",
                   },
                 },
               };
@@ -3553,7 +3553,7 @@ describe("google-meet plugin", () => {
     ).toEqual({
       method: "POST",
       path: "/tabs/open",
-      timeoutMs: 15000,
+      timeoutMs: 30000,
       body: {
         url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
       },
@@ -4075,7 +4075,7 @@ describe("google-meet plugin", () => {
                     {
                       targetId: "local-meet-tab",
                       title: "Meet",
-                      url: "https://meet.google.com/abc-defg-hij",
+                      url: "https://meet.google.com/abc-defg-hij?hl=en",
                     },
                   ]
                 : [],
@@ -4086,7 +4086,7 @@ describe("google-meet plugin", () => {
             return {
               targetId: "local-meet-tab",
               title: "Meet",
-              url: request.body?.url ?? "https://meet.google.com/abc-defg-hij",
+              url: request.body?.url ?? "https://meet.google.com/abc-defg-hij?hl=en",
             };
           }
           if (request.path === "/tabs/focus" || request.path === "/permissions/grant") {
@@ -4095,7 +4095,7 @@ describe("google-meet plugin", () => {
           if (request.path === "/navigate") {
             return {
               targetId: request.body?.targetId ?? "local-meet-tab",
-              url: request.body?.url ?? "https://meet.google.com/abc-defg-hij",
+              url: request.body?.url ?? "https://meet.google.com/abc-defg-hij?hl=en",
             };
           }
           if (request.path === "/act") {
@@ -4737,7 +4737,7 @@ describe("google-meet plugin", () => {
                           {
                             targetId: "tab-1",
                             title: "Meet",
-                            url: "https://meet.google.com/abc-defg-hij",
+                            url: "https://meet.google.com/abc-defg-hij?hl=en",
                           },
                         ]
                       : [],
@@ -4752,7 +4752,7 @@ describe("google-meet plugin", () => {
                   result: {
                     targetId: "tab-1",
                     title: "Meet",
-                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij",
+                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij?hl=en",
                   },
                 },
               };
@@ -4765,7 +4765,7 @@ describe("google-meet plugin", () => {
                 payload: {
                   result: {
                     targetId: raw.body?.targetId ?? "tab-1",
-                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij",
+                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij?hl=en",
                   },
                 },
               };
