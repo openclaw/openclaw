@@ -624,10 +624,10 @@ describe("qa scenario catalog", () => {
       },
     });
     expect(config?.requiredProvider).toBe("openai");
-    expect(config?.requiredModel).toBe("gpt-5.5");
+    expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
-      "confirms live OpenAI GPT-5.5 web search auto mode",
+      "confirms live OpenAI GPT-5.6 Luna web search auto mode",
       "searches official OpenAI News through the live model",
     ]);
   });
