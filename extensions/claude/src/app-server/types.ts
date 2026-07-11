@@ -135,6 +135,14 @@ export type TurnStartParams = {
    * Bridge >= 0.2.8.
    */
   fastMode?: boolean;
+  /**
+   * Set when this thread is known one-shot (heartbeat/cron/subagent-dispatched
+   * — never reused for a follow-up turn), so the bridge can close its
+   * subprocess immediately after this turn instead of holding it idle until
+   * the query-thread-timeout sweep. Bridge >= 0.3.1; older bridges ignore the
+   * field (JSON passthrough) and fall back to the idle-sweep default.
+   */
+  oneShot?: boolean;
 };
 
 export type TurnInterruptParams = { threadId: string; turnId: string };

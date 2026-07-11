@@ -64,6 +64,11 @@
             "type": "number",
             "minimum": 1,
             "description": "Extended progress watchdog applied only while a native subagent (Agent/Task) is in flight. Belt-and-suspenders for older bridges (< 0.2.16) that don't emit subagentActivity progress during the silent subagent run; the wider budget prevents the progress watch from tearing the turn down mid-subagent. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_SUBAGENT_PROGRESS_IDLE_TIMEOUT_MS); kept below turnTimeoutMs, which remains the hard ceiling."
+          },
+          "queryThreadTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "description": "SERVER-enforced (not a consumer watchdog): how long the bridge server keeps a thread's persistent Query/subprocess alive with no turn feeding it before discarding it. Lower this for deployments with many one-shot sessions (heartbeats, cron, subagents) to bound idle subprocess count/memory. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_QUERY_THREAD_TIMEOUT_MS); requires bridge >= 0.3.1."
           }
         }
       },
