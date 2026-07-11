@@ -63,6 +63,7 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeEnv,
   getActiveSecretsRuntimeConfigSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -133,6 +134,7 @@ import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
+import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import { createWorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
@@ -140,6 +142,9 @@ type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGa
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
+);
+const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
+  () => import("./worker-environments/runtime.js"),
 );
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
@@ -745,12 +750,51 @@ export async function startGatewayServer(
   const shouldStartWorkerEnvironmentService =
     Object.keys(gatewayPluginConfigAtStart.cloudWorkers?.profiles ?? {}).length > 0 ||
     hasWorkerEnvironmentRecords;
+  let workerBundleProducer: WorkerBundleProducer | undefined;
+  let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
+  const prepareWorkerInstallation = async (install: "bundle" | "npm") => {
+    const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
+    workerBundleProducer ??= workerEnvironmentRuntime.createWorkerBundleProducer();
+    const bundle = await workerBundleProducer.prepare();
+    if (install === "bundle") {
+      return bundle;
+    }
+    workerNpmArtifact ??= workerEnvironmentRuntime
+      .resolveWorkerNpmInstallationArtifact({ bundle })
+      .catch((error: unknown) => {
+        workerNpmArtifact = undefined;
+        throw error;
+      });
+    return await workerNpmArtifact;
+  };
   const workerEnvironmentService =
     workerEnvironmentStore && shouldStartWorkerEnvironmentService
       ? createWorkerEnvironmentService({
           store: workerEnvironmentStore,
           getConfig: getRuntimeConfig,
           resolveProvider: (providerId) => resolveWorkerProvider(pluginRegistry, providerId),
+          prepareInstallation: prepareWorkerInstallation,
+          bootstrapWorker: async ({ sshEndpoint, installation, signal }) => {
+            const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
+            return await workerEnvironmentRuntime.bootstrapWorker(
+              {
+                ssh: sshEndpoint,
+                artifact: installation,
+                pinnedHostKey: sshEndpoint.hostKey,
+              },
+              {
+                signal,
+                resolveIdentity: async (keyRef) => ({
+                  kind: "material",
+                  contents: await workerEnvironmentRuntime.resolveSecretRefString(keyRef, {
+                    config:
+                      getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
+                    env: getActiveSecretsRuntimeEnv(),
+                  }),
+                }),
+              },
+            );
+          },
           logger: log.child("worker-environments"),
         })
       : undefined;

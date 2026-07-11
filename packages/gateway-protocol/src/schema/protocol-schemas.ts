@@ -419,6 +419,7 @@ import {
   WizardStatusResultSchema,
   WizardStepSchema,
 } from "./wizard.js";
+import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 import {
   WorktreeRecordSchema,
   WorktreesCreateParamsSchema,
@@ -438,6 +439,7 @@ import {
 export const ProtocolSchemas = {
   // Handshake, transport frames, state snapshots, and shared error envelopes.
   ConnectParams: ConnectParamsSchema,
+  WorkerAdmissionHandshake: WorkerAdmissionHandshakeSchema,
   HelloOk: HelloOkSchema,
   RequestFrame: RequestFrameSchema,
   ResponseFrame: ResponseFrameSchema,

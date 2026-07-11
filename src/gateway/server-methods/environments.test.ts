@@ -58,6 +58,7 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
       host: "worker.example.test",
       port: 22,
       user: "openclaw",
+      hostKey: ["ssh-ed25519", "AAAA"].join(" "),
       keyRef: { source: "file", provider: "default", id: "/worker/private-key" },
     },
     state: "ready",

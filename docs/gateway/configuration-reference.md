@@ -736,6 +736,8 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 
 Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, OpenClaw accepts no new worker creation. Durable records created earlier still reconcile and remain visible; the existing gateway/node projection is unchanged.
 
+Every worker provider must return an SSH `hostKey` from trusted provisioning output. Bootstrap writes that key to an isolated `known_hosts` file, uses `StrictHostKeyChecking=yes`, and fails before opening a connection when the provider omits it. There is no trust-on-first-use fallback.
+
 ### Crabbox profile
 
 The bundled `crabbox` provider provisions an SSH-capable lease through the local Crabbox CLI. The inner `settings.provider` selects the Crabbox backend; it is separate from the outer OpenClaw provider id.
@@ -746,6 +748,7 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
     profiles: {
       production: {
         provider: "crabbox",
+        install: "bundle", // Default; use "npm" only for a released gateway version.
         settings: {
           provider: "aws",
           class: "standard",
@@ -772,7 +775,7 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
 Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
 
 <Warning>
-  This milestone surfaces the SSH endpoint and a file `SecretRef`, but the current generic file-secret contract does not resolve Crabbox's dynamic key path, and Crabbox `inspect` does not expose host-key material. The later tunnel milestone must define direct-file key resolution and host-key pinning before connecting; this profile alone is not yet a complete SSH trust boundary.
+  Worker bootstrap requires a provider-supplied pinned SSH host key and never uses trust on first use. Crabbox `inspect` exposes a dynamic private-key path that the generic `SecretRef` resolver cannot resolve, but it does not expose host-key material. Crabbox profiles therefore fail closed before bootstrap until cloud-worker PR 4 adds host-key exposure and Crabbox-owned key-path resolution.
 </Warning>
 
 ### Static SSH development profile
@@ -787,6 +790,7 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
           host: "worker.example.test",
           port: 22,
           user: "openclaw",
+          hostKey: "ssh-ed25519 <base64-public-host-key>",
           keyRef: {
             source: "env",
             provider: "default",
@@ -805,17 +809,23 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
 
 - `profiles`: named worker profiles with non-empty, whitespace-trimmed ids. Each profile selects a provider registered by a plugin.
 - `provider`: non-empty worker provider id. The examples use the bundled `crabbox` provider and the QA Lab `static-ssh` provider.
+- `install`: worker installation method. `"bundle"` (default) transfers a content-hashed bundle of the gateway's installed build and supports released, development, and unreleased versions. `"npm"` is an opt-in optimization for an unmodified packaged release; it installs `openclaw@<exact gateway version>` from the public npm registry and never installs `latest`.
 - Bundled provider plugins are selected automatically when configured, but explicit disables and `plugins.allow` still apply. Include the provider id (for example, `crabbox`) when an allowlist is configured. External provider plugins must also be installed and explicitly enabled.
-- `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, and `keyRef`; `port` defaults to `22`.
+- `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, `hostKey`, and `keyRef`; `port` defaults to `22`. `hostKey` must be one OpenSSH public host-key line (`algorithm base64`) obtained from the known host or another trusted channel, with no options prefix.
 - `lifetime.idleTimeoutMinutes`: positive integer minutes stored for later idle-reclamation policy.
 - `lifetime.maxLifetimeMinutes`: positive integer minutes stored for later lifecycle policy.
 
-Each durable environment record retains its validated provider settings snapshot for later inspection and destruction. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with their creation-time settings, provided the owning plugin remains available.
+A supported Node runtime (22.19+, 23.11+, or 24+) must already be installed on the worker. The opt-in `"npm"` method also requires `npm` and outbound HTTPS access to the public npm registry. Networked toolchain setup is provider policy; bootstrap reports an actionable error instead of installing toolchains itself.
+
+This foundation installs and verifies the gateway build only. The SSH tunnel and the self-contained worker entry/loop land in the following cloud-worker milestones; bootstrap does not launch the general OpenClaw CLI.
+
+Each durable environment record retains its validated provider settings, resolved install method, and lifetime policy in a creation-time profile snapshot. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with that snapshot, provided the owning plugin remains available.
 
 Lifetime values are data only in the first cloud-worker release; automatic enforcement lands with later lifecycle work. Profile changes require a gateway restart.
 
 <Warning>
   The `static-ssh` provider is a source-tree QA Lab development harness and is excluded from packaged distributions. A worker running on its shared host can read unrelated host data, so do not use this provider as a production isolation boundary.
+  Its operator must supply the expected `hostKey`; OpenClaw will not learn or accept a key from the first connection.
   Destroying its lease only releases OpenClaw's logical record; it does not stop or clean the host.
 </Warning>
 

@@ -146,6 +146,28 @@ public struct ConnectParams: Codable, Sendable {
     }
 }
 
+public struct WorkerAdmissionHandshake: Codable, Sendable {
+    public let bundlehash: String
+    public let openclawversion: String
+    public let protocolfeatures: [String]
+
+    public init(
+        bundlehash: String,
+        openclawversion: String,
+        protocolfeatures: [String])
+    {
+        self.bundlehash = bundlehash
+        self.openclawversion = openclawversion
+        self.protocolfeatures = protocolfeatures
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case bundlehash = "bundleHash"
+        case openclawversion = "openclawVersion"
+        case protocolfeatures = "protocolFeatures"
+    }
+}
+
 public struct HelloOk: Codable, Sendable {
     public let type: String
     public let _protocol: Int
