@@ -208,6 +208,20 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))
         .every((shard) => shard.timeoutMinutes === 120),
     ).toBe(true);
+    const smallWholeJobs = compact.filter((shard) =>
+      shard.checkName.startsWith("checks-node-compact-small-whole-"),
+    );
+    const wholeGroupCounts = smallWholeJobs.map((shard) => shard.groups.length);
+    expect(Math.max(...wholeGroupCounts) - Math.min(...wholeGroupCounts)).toBeLessThanOrEqual(1);
+    const toolingJob = smallWholeJobs.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "core-tooling"),
+    );
+    const tuiPtyJob = smallWholeJobs.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "core-runtime-tui-pty"),
+    );
+    expect(toolingJob).toBeDefined();
+    expect(tuiPtyJob).toBeDefined();
+    expect(toolingJob?.checkName).not.toBe(tuiPtyJob?.checkName);
   });
 
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
