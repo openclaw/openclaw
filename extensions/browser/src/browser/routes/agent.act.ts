@@ -597,15 +597,19 @@ export function registerBrowserAgentActRoutes(
                 });
                 return await jsonOk();
               case "wait":
-                await waitForExistingSessionCondition({
-                  ...existingSessionTarget,
-                  timeMs: action.timeMs,
-                  text: action.text,
-                  textGone: action.textGone,
-                  selector: action.selector,
-                  url: action.url,
-                  loadState: action.loadState,
-                  fn: action.fn,
+                await runExistingSessionActionWithNavigationGuard({
+                  execute: () =>
+                    waitForExistingSessionCondition({
+                      ...existingSessionTarget,
+                      timeMs: action.timeMs,
+                      text: action.text,
+                      textGone: action.textGone,
+                      selector: action.selector,
+                      url: action.url,
+                      loadState: action.loadState,
+                      fn: action.fn,
+                    }),
+                  guard: existingSessionNavigationGuard,
                 });
                 return await jsonOk();
               case "evaluate": {

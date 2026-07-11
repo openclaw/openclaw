@@ -198,6 +198,13 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
 
+  it("checks navigation after an existing-session wait", async () => {
+    const response = await runAction({ kind: "wait", timeMs: 1 });
+
+    expect(response.statusCode).toBe(200);
+    expectNavigationProbeUrls(Array.from({ length: 4 }, () => "https://example.com"));
+  });
+
   it("rechecks the page url after delayed navigation-triggering interactions", async () => {
     chromeMcpMocks.evaluateChromeMcpScript
       .mockResolvedValueOnce(42 as never)
