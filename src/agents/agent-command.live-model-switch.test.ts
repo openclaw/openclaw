@@ -3145,11 +3145,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       sessionId: "session-1",
       sessionFile: "/tmp/openclaw-internal-model-run-success.jsonl",
       storePath: "/tmp/openclaw-internal-model-run-success.jsonl",
+      disposal: { mode: "delete" },
     });
     expect(state.removeSessionTrajectoryArtifactsMock).toHaveBeenCalledWith({
       sessionId: "rotated-model-run-session",
       sessionFile: "/tmp/openclaw-internal-rotated.jsonl",
       storePath: "/tmp/openclaw-internal-rotated.jsonl",
+      disposal: { mode: "delete" },
     });
     expect(state.removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
       "/tmp/openclaw-internal-model-run-success.jsonl",
