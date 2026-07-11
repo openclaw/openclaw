@@ -9,6 +9,7 @@ import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,
+  countRunningBackgroundSessions,
   drainSession,
   listFinishedSessions,
   markBackgrounded,
@@ -199,6 +200,54 @@ describe("bash process registry", () => {
       resetProcessRegistryForTests();
       vi.useRealTimers();
     }
+  });
+
+  describe("countRunningBackgroundSessions", () => {
+    it("returns 0 when no sessions are registered", () => {
+      expect(countRunningBackgroundSessions()).toBe(0);
+    });
+
+    it("counts only backgrounded sessions that have not exited", () => {
+      const running = createRegistrySession({
+        id: "running-bg",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: true,
+      });
+      const foreground = createRegistrySession({
+        id: "foreground",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: false,
+      });
+      const backgroundedButExited = createRegistrySession({
+        id: "bg-exited",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: true,
+      });
+
+      addSession(running);
+      addSession(foreground);
+      addSession(backgroundedButExited);
+      markExited(backgroundedButExited, 0, null, "completed");
+
+      expect(countRunningBackgroundSessions()).toBe(1);
+    });
+
+    it("returns 0 after a running backgrounded session exits", () => {
+      const session = createRegistrySession({
+        id: "sess",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: true,
+      });
+      addSession(session);
+      expect(countRunningBackgroundSessions()).toBe(1);
+
+      markExited(session, 0, null, "completed");
+      expect(countRunningBackgroundSessions()).toBe(0);
+    });
   });
 });
 

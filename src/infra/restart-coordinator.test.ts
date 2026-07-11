@@ -30,6 +30,7 @@ describe("safe gateway restart coordinator", () => {
         embeddedRuns: 0,
         cronRuns: 0,
         activeTasks: 0,
+        backgroundExec: 0,
         totalActive: 0,
       },
       blockers: [],
@@ -44,6 +45,7 @@ describe("safe gateway restart coordinator", () => {
       getEmbeddedRuns: () => 1,
       getCronRuns: () => 1,
       getActiveTasks: () => 1,
+      getBackgroundExecCount: () => 1,
       getTaskBlockers: () => [
         {
           taskId: "task-1",
@@ -57,12 +59,14 @@ describe("safe gateway restart coordinator", () => {
     });
 
     expect(preflight.safe).toBe(false);
-    expect(preflight.counts.totalActive).toBe(6);
+    expect(preflight.counts.totalActive).toBe(7);
+    expect(preflight.counts.backgroundExec).toBe(1);
     expect(preflight.blockers.map((blocker) => blocker.kind)).toEqual([
       "queue",
       "reply",
       "embedded-run",
       "cron-run",
+      "background-exec",
       "task",
     ]);
     expect(preflight.summary).toContain("restart deferred");

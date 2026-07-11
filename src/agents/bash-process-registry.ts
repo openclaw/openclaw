@@ -325,6 +325,19 @@ export function listRunningSessions() {
   return Array.from(runningSessions.values()).filter((s) => s.backgrounded);
 }
 
+/** Returns the number of backgrounded sessions that are still running.
+ *  This is a sanitized count suitable for Gateway active-work snapshots:
+ *  no command, PID, output, scope, or session identifiers are exposed. */
+export function countRunningBackgroundSessions(): number {
+  let count = 0;
+  for (const session of runningSessions.values()) {
+    if (session.backgrounded && !session.exited) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /** Lists retained finished background sessions. */
 export function listFinishedSessions() {
   return Array.from(finishedSessions.values());

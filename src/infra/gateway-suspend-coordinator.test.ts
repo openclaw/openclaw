@@ -1,6 +1,12 @@
 // Covers atomic refuse-only suspension preparation, renewal, and release.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  addSession,
+  countRunningBackgroundSessions,
+  resetProcessRegistryForTests,
+} from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import {
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -31,6 +37,7 @@ function inspectors(
     getQueuedTurns: () => 0,
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
+    getBackgroundExecCount: () => 0,
     ...overrides,
   };
 }
@@ -38,11 +45,13 @@ function inspectors(
 beforeEach(() => {
   resetGatewaySuspendCoordinatorForTest();
   resetGatewayWorkAdmission();
+  resetProcessRegistryForTests();
 });
 
 afterEach(() => {
   resetGatewaySuspendCoordinatorForTest();
   resetGatewayWorkAdmission();
+  resetProcessRegistryForTests();
 });
 
 describe("gateway suspend coordinator", () => {
@@ -82,6 +91,33 @@ describe("gateway suspend coordinator", () => {
 
     expect(result.status).toBe("busy");
     expect(events).toEqual(["pause", "inspect", "resume"]);
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
+  it("blocks preparation while a background exec session is running", () => {
+    const session = createProcessSessionFixture({
+      id: "bg-sess",
+      command: "sleep 99",
+      backgrounded: true,
+    });
+    addSession(session);
+    expect(countRunningBackgroundSessions()).toBe(1);
+
+    const result = prepareGatewaySuspend({
+      requestId: "request-bg-busy",
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+      inspect: inspectors({ getBackgroundExecCount: () => countRunningBackgroundSessions() }),
+    });
+
+    expect(result.status).toBe("busy");
+    expect(result).toMatchObject({
+      reason: "active-work",
+      activeCount: 1,
+    });
+    expect(result.blockers).toEqual([
+      { kind: "background-exec", count: 1, message: "1 running background exec session(s)" },
+    ]);
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 

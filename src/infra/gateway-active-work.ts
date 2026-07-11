@@ -1,4 +1,5 @@
 // Collects process activity shared by restart and host-suspension decisions.
+import { countRunningBackgroundSessions } from "../agents/bash-process-registry.js";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
@@ -28,6 +29,7 @@ export type GatewayActiveWorkCounts = {
   queuedTurns: number;
   terminalPersistence: number;
   terminalSessions: number;
+  backgroundExec: number;
   /** Compatibility aggregate. Categories can overlap; use individual counts for diagnostics. */
   totalActive: number;
 };
@@ -45,7 +47,8 @@ export type GatewayActiveWorkBlocker = {
     | "chat-run"
     | "queued-turn"
     | "terminal-persistence"
-    | "terminal-session";
+    | "terminal-session"
+    | "background-exec";
   count: number;
   message: string;
   task?: ActiveTaskRestartBlocker;
@@ -71,6 +74,7 @@ export type GatewayActiveWorkInspectors = {
   getQueuedTurns: () => number;
   getTerminalPersistence: () => number;
   getTerminalSessions: () => number;
+  getBackgroundExecCount: () => number;
 };
 
 const defaultInspectors: GatewayActiveWorkInspectors = {
@@ -87,6 +91,7 @@ const defaultInspectors: GatewayActiveWorkInspectors = {
   getQueuedTurns: () => 0,
   getTerminalPersistence: () => 0,
   getTerminalSessions: () => 0,
+  getBackgroundExecCount: countRunningBackgroundSessions,
 };
 
 function normalizeCount(value: number): number {
@@ -110,6 +115,7 @@ export function createGatewayActiveWorkSnapshot(
     queuedTurns: normalizeCount(resolved.getQueuedTurns()),
     terminalPersistence: normalizeCount(resolved.getTerminalPersistence()),
     terminalSessions: normalizeCount(resolved.getTerminalSessions()),
+    backgroundExec: normalizeCount(resolved.getBackgroundExecCount()),
     totalActive: 0,
   };
   counts.totalActive = Object.entries(counts).reduce(
@@ -153,6 +159,11 @@ export function createGatewayActiveWorkSnapshot(
     counts.terminalSessions,
     "terminal-session",
     `${counts.terminalSessions} open terminal session(s)`,
+  );
+  add(
+    counts.backgroundExec,
+    "background-exec",
+    `${counts.backgroundExec} running background exec session(s)`,
   );
 
   if (counts.activeTasks > 0) {

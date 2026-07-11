@@ -36,6 +36,7 @@ export const GatewaySuspendBlockerSchema = Type.Object(
       Type.Literal("queued-turn"),
       Type.Literal("terminal-persistence"),
       Type.Literal("terminal-session"),
+      Type.Literal("background-exec"),
     ]),
     count: CountSchema,
     message: Type.String(),

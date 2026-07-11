@@ -13,10 +13,11 @@ export type SafeGatewayRestartCounts = {
   embeddedRuns: number;
   cronRuns: number;
   activeTasks: number;
+  backgroundExec: number;
   totalActive: number;
 };
 export type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
-  kind: "queue" | "reply" | "embedded-run" | "cron-run" | "task";
+  kind: "queue" | "reply" | "embedded-run" | "cron-run" | "task" | "background-exec";
 };
 
 type SafeRestartInspectors = Pick<
@@ -27,6 +28,7 @@ type SafeRestartInspectors = Pick<
   | "getCronRuns"
   | "getActiveTasks"
   | "getTaskBlockers"
+  | "getBackgroundExecCount"
 >;
 
 export type SafeGatewayRestartPreflight = {
@@ -62,14 +64,24 @@ export function createSafeGatewayRestartPreflight(
     embeddedRuns: snapshot.counts.embeddedRuns,
     cronRuns: snapshot.counts.cronRuns,
     activeTasks: snapshot.counts.activeTasks,
+    backgroundExec: snapshot.counts.backgroundExec,
     totalActive:
       snapshot.counts.queueSize +
       snapshot.counts.pendingReplies +
       snapshot.counts.embeddedRuns +
       snapshot.counts.cronRuns +
-      snapshot.counts.activeTasks,
+      snapshot.counts.activeTasks +
+      snapshot.counts.backgroundExec,
   };
-  const blockers = snapshot.blockers as SafeGatewayRestartBlocker[];
+  const blockers = snapshot.blockers.filter(
+    (b): b is SafeGatewayRestartBlocker =>
+      b.kind === "queue" ||
+      b.kind === "reply" ||
+      b.kind === "embedded-run" ||
+      b.kind === "cron-run" ||
+      b.kind === "task" ||
+      b.kind === "background-exec",
+  );
 
   const summary =
     blockers.length === 0
