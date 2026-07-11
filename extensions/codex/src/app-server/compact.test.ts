@@ -204,7 +204,7 @@ describe("maybeCompactCodexAppServerSession", () => {
 
   it("uses the exact prepared Platform key for native compaction", async () => {
     const fake = createFakeCodexClient();
-    const factory = vi.fn(async () => fake.client);
+    const factory = vi.fn<CodexAppServerClientFactory>(async () => fake.client);
     const sessionFile = await writeTestBinding();
 
     const result = requireCompactResult(
