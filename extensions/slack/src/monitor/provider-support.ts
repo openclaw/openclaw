@@ -460,9 +460,10 @@ function formatSlackResolvedLabel(params: {
 }): string | null {
   const extras = params.extra?.filter(Boolean) ?? [];
   const display = params.name ?? params.id;
-  if (params.input === display && extras.length === 0) {
+  if (params.input === params.id && !params.name && extras.length === 0) {
     // An id that resolved to itself with no display name says nothing; omit it
-    // so startup summaries only list lookups that translated something.
+    // so startup summaries only list lookups that translated something. Bare
+    // names that resolved to an id stay logged even when name === input.
     return null;
   }
   // Show the raw id only when neither the input nor the display already is it.

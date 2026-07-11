@@ -87,6 +87,17 @@ describe("slack allowlist log formatting", () => {
       }),
     ).toBeNull();
   });
+
+  it("keeps bare-name lookups that resolved to an id, even when the name matches the input", () => {
+    expect(
+      formatSlackChannelResolved({
+        input: "general",
+        resolved: true,
+        id: "C123",
+        name: "general",
+      }),
+    ).toBe("general→general (id:C123)");
+  });
 });
 
 describe("slack startup user allowlist resolution", () => {
