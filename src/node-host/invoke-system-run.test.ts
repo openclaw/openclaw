@@ -188,6 +188,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       approvalDecision?: string | null;
       approvalSource?: string | null;
       policySnapshot?: unknown;
+      denylistBinding?: unknown;
     };
   } {
     const call = firstMockCallArg(runViaMacAppExecHost, "runViaMacAppExecHost", 0);
@@ -200,6 +201,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         approvalDecision?: string | null;
         approvalSource?: string | null;
         policySnapshot?: unknown;
+        denylistBinding?: unknown;
       };
     };
   }
@@ -510,6 +512,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     resolveExecAsk?: HandleSystemRunInvokeOptions["resolveExecAsk"];
     autoReviewer?: ExecAutoReviewer;
     commitExecAuthorization?: HandleSystemRunInvokeOptions["commitExecAuthorization"];
+    getRuntimeConfig?: HandleSystemRunInvokeOptions["getRuntimeConfig"];
     prepareDelayedApprovalPlan?: boolean;
   }): Promise<{
     runCommand: MockedRunCommand;
@@ -615,7 +618,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       sendInvokeResult,
       sendExecFinishedEvent,
       preferMacAppExecHost: params.preferMacAppExecHost,
-      getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? {},
+      getRuntimeConfig: params.getRuntimeConfig ?? (() => getRuntimeConfigSnapshot() ?? {}),
       autoReviewer: params.autoReviewer,
       commitExecAuthorization: params.commitExecAuthorization,
     });
@@ -3657,6 +3660,51 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it("denies mac companion delegation when tools.exec.denylist tightens while approval is pending", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+        },
+        agents: {},
+      },
+      run: async () => {
+        let configReads = 0;
+        const { runViaMacAppExecHost, runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: true,
+          command: ["echo", "ok"],
+          security: "full",
+          ask: "off",
+          approvalDecision: "allow-once",
+          approved: true,
+          runViaResponse: createMacExecHostSuccess(),
+          getRuntimeConfig: () => {
+            configReads += 1;
+            return configReads === 1
+              ? {}
+              : {
+                  tools: {
+                    exec: {
+                      denylist: [{ pattern: "echo *", reason: "tightened before companion" }],
+                    },
+                  },
+                };
+          },
+        });
+
+        expect(runViaMacAppExecHost).not.toHaveBeenCalled();
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval state could not be persisted",
+          exact: true,
+        });
+      },
+    });
+  });
+
   it("downgrades denylist-approved allow-always to one-shot before mac companion delegation", async () => {
     await withTempApprovalsHome({
       approvals: {
@@ -3688,6 +3736,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         // The macOS exec host persists .allowAlways in allowlist mode, so a
         // denylist-approved command must cross the companion boundary as one-shot.
         expect(forwardedDecision).toBe("allow-once");
+        expect(macHostCall.request?.denylistBinding).toMatchObject({
+          denylisted: true,
+        });
         expectInvokeOk(sendInvokeResult, { payloadContains: "app-ok" });
         expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
       },

@@ -138,6 +138,38 @@ struct ExecApprovalsSocketAuthTests {
     }
 
     @Test
+    func `socket decodes forwarded denylist provenance`() throws {
+        let requestJSON = Data(#"""
+        {
+          "command": ["/bin/echo", "ok"],
+          "approvalDecision": "allow-once",
+          "policySnapshot": {
+            "security": "full",
+            "ask": "off",
+            "askFallback": "deny",
+            "autoAllowSkills": false,
+            "allowlistRules": []
+          },
+          "denylistBinding": {
+            "command": "echo ok",
+            "analysisOk": true,
+            "configDenylist": [{"pattern": "echo *", "reason": "stop"}],
+            "approvedRuleKeys": ["echo *\u0000stop"],
+            "denylisted": true
+          }
+        }
+        """#.utf8)
+
+        let decoded = try JSONDecoder().decode(ExecHostRequest.self, from: requestJSON)
+        #expect(decoded.denylistBinding == ExecHostDenylistAuthorizationSnapshot(
+            command: "echo ok",
+            analysisOk: true,
+            configDenylist: [ExecHostDenylistEntry(pattern: "echo *", reason: "stop")],
+            approvedRuleKeys: ["echo *\u{0}stop"],
+            denylisted: true))
+    }
+
+    @Test
     func `socket decodes TypeScript auto review policy snapshot`() throws {
         let requestJSON = Data(#"""
         {

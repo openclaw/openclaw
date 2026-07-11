@@ -2196,7 +2196,7 @@ export type ExecApprovalUsageAuthorization = {
  * unanalyzable command unscreenable — fails the commit closed so the
  * already-pending approval cannot reach dispatch.
  */
-function assertCurrentDenylistAuthorization(params: {
+export function assertCurrentDenylistAuthorization(params: {
   file: ExecApprovalsFile;
   agentId: string | undefined;
   binding: ExecDenylistAuthorizationBinding | undefined;

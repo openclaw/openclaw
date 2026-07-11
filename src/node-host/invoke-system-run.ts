@@ -15,11 +15,13 @@ import {
   resolveEffectiveExecDenylist,
 } from "../infra/exec-approvals-denylist.js";
 import {
+  assertCurrentDenylistAuthorization,
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
   createExecApprovalPolicySnapshot,
   hasDurableExecApproval,
   isExecApprovalPolicySnapshotCurrent,
+  loadExecApprovals,
   maxAsk,
   minSecurity,
   resolveApprovalAuditTrustPath,
@@ -28,6 +30,7 @@ import {
   resolveExecApprovalsLocked,
   resolveExecModePolicy,
   type ExecAllowlistEntry,
+  type ExecDenylistAuthorizationBinding,
   type ExecApprovalUsageAuthorization,
   type ExecApprovalPolicySnapshot,
   type ExecApprovalsResolved,
@@ -39,7 +42,12 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
-import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
+import type {
+  ExecHostDenylistAuthorizationSnapshot,
+  ExecHostRequest,
+  ExecHostResponse,
+  ExecHostRunResult,
+} from "../infra/exec-host.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
@@ -343,6 +351,33 @@ function resolveCurrentSystemRunConfigDenylist(
   return resolveEffectiveExecDenylist({
     layers: [cfg.tools?.exec?.denylist, agentExec?.denylist],
   });
+}
+
+function buildSystemRunDenylistBinding(
+  phase: SystemRunPolicyPhase,
+  getConfig: () => OpenClawConfig,
+): ExecDenylistAuthorizationBinding {
+  return {
+    command: phase.commandText,
+    segments: phase.segments,
+    analysisOk: phase.analysisOk,
+    configDenylist: phase.denylistConfigEntries,
+    resolveCurrentConfigDenylist: () =>
+      resolveCurrentSystemRunConfigDenylist(getConfig, phase.agentId),
+    approvedRuleKeys: phase.approvedDenylistRuleKeys,
+  };
+}
+
+function toPortableDenylistBinding(
+  phase: SystemRunPolicyPhase,
+): ExecHostDenylistAuthorizationSnapshot {
+  return {
+    command: phase.commandText,
+    analysisOk: phase.analysisOk,
+    configDenylist: [...phase.denylistConfigEntries],
+    approvedRuleKeys: [...phase.approvedDenylistRuleKeys],
+    denylisted: phase.denylisted,
+  };
 }
 
 async function sendSystemRunDenied(
@@ -1029,7 +1064,26 @@ async function executeSystemRunPhase(
   }
 
   const useMacAppExec = opts.preferMacAppExecHost;
+  const getCurrentRuntimeConfig = await resolveRuntimeConfigAccessor(opts);
+  const denylistBinding = buildSystemRunDenylistBinding(phase, getCurrentRuntimeConfig);
   if (useMacAppExec) {
+    try {
+      assertCurrentDenylistAuthorization({
+        file: loadExecApprovals(),
+        agentId: phase.agentId,
+        binding: denylistBinding,
+      });
+    } catch {
+      logWarn(
+        `security: system.run approval changed before companion launch (runId=${phase.runId})`,
+      );
+      await sendSystemRunDenied(opts, phase.execution, {
+        reason: "approval-state-write-failed",
+        message: APPROVAL_STATE_WRITE_FAILED_MESSAGE,
+      });
+      return;
+    }
+
     const macApprovalSource =
       phase.approvalSource ??
       (phase.approvalGrantSource === "auto-review" ? "auto-review" : undefined);
@@ -1062,6 +1116,7 @@ async function executeSystemRunPhase(
       approvalDecision: macApprovalDecision,
       approvalSource: macApprovalSource,
       ...(phase.approvalGrantSource ? { policySnapshot: phase.evaluationPolicySnapshot } : {}),
+      ...(phase.approvalGrantSource ? { denylistBinding: toPortableDenylistBinding(phase) } : {}),
     };
     const response = await opts.runViaMacAppExecHost({
       approvals: phase.approvals,
@@ -1117,7 +1172,6 @@ async function executeSystemRunPhase(
         : (phase.approvalGrantSource ?? "current-policy");
   const delayedAuthorization =
     authorizationSource === "explicit-approval" || authorizationSource === "auto-review";
-  const getCurrentRuntimeConfig = await resolveRuntimeConfigAccessor(opts);
   const authorization: ExecApprovalUsageAuthorization = {
     source: authorizationSource,
     security: phase.security,
@@ -1129,15 +1183,7 @@ async function executeSystemRunPhase(
     requireDurableAllowlistApproval: phase.durableApprovalRequirement === "segment-allowlist",
     // Deny-over-allow TOCTOU guard: re-screen the denylist under the approvals
     // lock so a STOP rule added while this approval was pending blocks dispatch.
-    denylistBinding: {
-      command: phase.commandText,
-      segments: phase.segments,
-      analysisOk: phase.analysisOk,
-      configDenylist: phase.denylistConfigEntries,
-      resolveCurrentConfigDenylist: () =>
-        resolveCurrentSystemRunConfigDenylist(getCurrentRuntimeConfig, phase.agentId),
-      approvedRuleKeys: phase.approvedDenylistRuleKeys,
-    },
+    denylistBinding,
   };
 
   try {

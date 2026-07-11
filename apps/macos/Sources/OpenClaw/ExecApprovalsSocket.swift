@@ -115,6 +115,19 @@ private struct ExecHostSocketRequest: Codable {
     var requestJson: String
 }
 
+struct ExecHostDenylistEntry: Codable, Equatable {
+    var pattern: String
+    var reason: String?
+}
+
+struct ExecHostDenylistAuthorizationSnapshot: Codable, Equatable {
+    var command: String
+    var analysisOk: Bool
+    var configDenylist: [ExecHostDenylistEntry]
+    var approvedRuleKeys: [String]
+    var denylisted: Bool?
+}
+
 struct ExecHostRequest: Codable {
     var command: [String]
     var rawCommand: String?
@@ -127,6 +140,35 @@ struct ExecHostRequest: Codable {
     var approvalDecision: ExecApprovalDecision?
     var approvalSource: String?
     var policySnapshot: OpenClawSystemRunApprovalPolicySnapshot?
+    var denylistBinding: ExecHostDenylistAuthorizationSnapshot?
+
+    init(
+        command: [String],
+        rawCommand: String?,
+        cwd: String?,
+        env: [String: String]?,
+        timeoutMs: Int?,
+        needsScreenRecording: Bool?,
+        agentId: String?,
+        sessionKey: String?,
+        approvalDecision: ExecApprovalDecision?,
+        approvalSource: String? = nil,
+        policySnapshot: OpenClawSystemRunApprovalPolicySnapshot? = nil,
+        denylistBinding: ExecHostDenylistAuthorizationSnapshot? = nil)
+    {
+        self.command = command
+        self.rawCommand = rawCommand
+        self.cwd = cwd
+        self.env = env
+        self.timeoutMs = timeoutMs
+        self.needsScreenRecording = needsScreenRecording
+        self.agentId = agentId
+        self.sessionKey = sessionKey
+        self.approvalDecision = approvalDecision
+        self.approvalSource = approvalSource
+        self.policySnapshot = policySnapshot
+        self.denylistBinding = denylistBinding
+    }
 }
 
 private struct ExecHostRunResult: Codable {
@@ -775,6 +817,9 @@ private enum ExecHostExecutor {
             request.approvalDecision == .allowOnce ||
             request.approvalDecision == .allowAlways
         var persistAllowlist = request.approvalDecision == .allowAlways
+        if request.denylistBinding?.denylisted == true {
+            persistAllowlist = false
+        }
 
         switch ExecHostRequestEvaluator.evaluate(
             context: context,
@@ -817,7 +862,8 @@ private enum ExecHostExecutor {
                 explicitlyApproved = true
                 followupDecision = .allowOnce
             }
-            persistAllowlist = followupDecision == .allowAlways
+            persistAllowlist = followupDecision == .allowAlways &&
+                request.denylistBinding?.denylisted != true
 
             switch ExecHostRequestEvaluator.evaluate(
                 context: context,
