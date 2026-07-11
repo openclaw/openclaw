@@ -165,6 +165,15 @@ describe("OpenClaw performance workflow", () => {
     expect(workflowText).not.toContain("https://x-access-token:");
   });
 
+  it("builds only the QA and startup artifacts required by source probes", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+    const build = "OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance";
+
+    expect(run).toContain(build);
+    expect(run).not.toContain("pnpm build");
+    expect(run.indexOf(build)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+  });
+
   it("isolates required publication in a fresh artifact-consuming job", () => {
     const workflow = readWorkflow();
     const publisher = workflow.jobs?.publish;

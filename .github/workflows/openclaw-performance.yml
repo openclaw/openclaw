@@ -676,7 +676,7 @@ jobs:
             exit 0
           fi
 
-          pnpm build
+          OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance
 
           pnpm test:gateway:cpu-scenarios \
             --output-dir "$SOURCE_PERF_DIR/gateway-cpu" \
