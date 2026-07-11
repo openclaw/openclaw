@@ -4371,7 +4371,9 @@ describe("activateSetupInference Codex configuration", () => {
       status: "unavailable",
       error: expect.stringContaining("blocked by denylist"),
     });
-    expect(refreshPluginRegistry).toHaveBeenCalledOnce();
+    // The Codex probe loads staged policy, then restores the persisted denied
+    // policy after the pre-commit rejection.
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
     expect(transformConfig).toHaveBeenCalledOnce();
   });
 });
