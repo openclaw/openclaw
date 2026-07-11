@@ -407,6 +407,26 @@ describe("firecrawl tools", () => {
     });
   });
 
+  it("forwards the execution abort signal to the Firecrawl client", async () => {
+    const provider = createFirecrawlWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+
+    await tool.execute({ query: "openclaw docs" }, { signal: controller.signal });
+
+    expect(runFirecrawlSearch).toHaveBeenCalledWith({
+      cfg: { test: true },
+      query: "openclaw docs",
+      count: undefined,
+      signal: controller.signal,
+    });
+  });
+
   it("normalizes generic firecrawl search count before dispatch", async () => {
     const provider = createFirecrawlWebSearchProvider();
     const tool = provider.createTool({

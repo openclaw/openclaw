@@ -81,6 +81,7 @@ type FirecrawlSearchParams = {
   sources?: string[];
   categories?: string[];
   scrapeResults?: boolean;
+  signal?: AbortSignal;
 };
 
 type FirecrawlScrapeParams = {
@@ -188,6 +189,7 @@ async function postFirecrawlJson<T>(
     apiKey?: string;
     body: Record<string, unknown>;
     errorLabel: string;
+    signal?: AbortSignal;
   },
   parse: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -199,6 +201,7 @@ async function postFirecrawlJson<T>(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -417,6 +420,7 @@ export async function runFirecrawlSearch(
       apiKey,
       body,
       errorLabel: "Firecrawl Search",
+      signal: params.signal,
     },
     async (response) => {
       const payloadValue = await readFirecrawlJsonResponse(response, "Firecrawl Search API error");

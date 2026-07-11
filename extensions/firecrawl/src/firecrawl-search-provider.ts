@@ -27,7 +27,7 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
       parameters: GenericFirecrawlSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
         const { runFirecrawlSearch } = await loadFirecrawlClientModule();
         return await runFirecrawlSearch({
           cfg: ctx.config,
@@ -36,6 +36,7 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
             message: "count must be an integer from 1 to 10",
             max: 10,
           }),
+          signal: context?.signal,
         });
       },
     }),
