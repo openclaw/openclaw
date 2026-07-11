@@ -188,10 +188,11 @@ export function insertRegistryWorktreeIfPathFree(
             eb.val(row.last_active_at).as("last_active_at"),
             eb.val(row.removed_at).as("removed_at"),
           ])
-          .where(({ not, exists, selectFrom }) =>
-            not(
-              exists(
-                selectFrom("worktrees")
+          .where((eb) =>
+            eb.not(
+              eb.exists(
+                eb
+                  .selectFrom("worktrees")
                   .select("id")
                   .where("path", "=", row.path)
                   .where("removed_at", "is", null),
