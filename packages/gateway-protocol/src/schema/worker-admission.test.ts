@@ -267,6 +267,28 @@ describe("worker protocol schemas", () => {
     });
   });
 
+  it("rejects non-finite numbers parsed from worker JSON", () => {
+    const candidate = JSON.parse(`{
+      "runEpoch": 2,
+      "seq": 1,
+      "baseLeafId": null,
+      "messages": [{
+        "role": "toolResult",
+        "toolCallId": "call-non-finite",
+        "toolName": "probe",
+        "content": [],
+        "details": { "value": 1e400 },
+        "isError": false,
+        "timestamp": 1
+      }]
+    }`) as unknown;
+
+    expect(validateWorkerTranscriptCommitParams(candidate)).toBe(false);
+    expect(validateWorkerTranscriptCommitParams.errors?.[0]).toMatchObject({
+      keyword: "finite",
+    });
+  });
+
   it("keeps worker close reasons closed", () => {
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);

@@ -15,6 +15,7 @@ import {
   WORKER_PROTOCOL_MAX_METHOD_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_PROTOCOL_METHODS,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   validateRequestFrame,
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
@@ -134,6 +135,10 @@ async function dispatchWorkerRequest(params: {
     return;
   }
   if (params.request.method === WORKER_PROTOCOL_METHODS[1]) {
+    if (!params.identity.protocolFeatures.includes(WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE)) {
+      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      return;
+    }
     if (!validateWorkerTranscriptCommitParams(params.request.params)) {
       params.respond(false, undefined, workerTranscriptCommitError("invalid-batch"));
       return;

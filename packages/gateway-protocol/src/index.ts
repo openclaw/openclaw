@@ -432,6 +432,7 @@ import {
   WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
   WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   type SystemInfoParams,
   SystemInfoParamsSchema,
   type SystemInfoResult,
@@ -902,7 +903,7 @@ export const validateWorkerHeartbeatParams = lazyCompile<WorkerHeartbeatParams>(
   WorkerHeartbeatParamsSchema,
 );
 
-function checkWorkerTranscriptCommitJsonDepth(data: unknown): ValidationError | undefined {
+function checkWorkerTranscriptCommitJson(data: unknown): ValidationError | undefined {
   const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
   const seen = new WeakSet<object>();
   while (stack.length > 0) {
@@ -917,8 +918,21 @@ function checkWorkerTranscriptCommitJsonDepth(data: unknown): ValidationError | 
         message: `must not exceed JSON nesting depth ${WORKER_TRANSCRIPT_MAX_JSON_DEPTH}`,
       };
     }
-    if (!current.value || typeof current.value !== "object") {
+    if (
+      current.value === null ||
+      typeof current.value === "string" ||
+      typeof current.value === "boolean"
+    ) {
       continue;
+    }
+    if (typeof current.value === "number") {
+      if (!Number.isFinite(current.value)) {
+        return { keyword: "finite", message: "must contain only finite JSON numbers" };
+      }
+      continue;
+    }
+    if (typeof current.value !== "object") {
+      return { keyword: "jsonValue", message: "must contain only JSON values" };
     }
     if (seen.has(current.value)) {
       return { keyword: "acyclic", message: "must be an acyclic JSON value" };
@@ -936,7 +950,7 @@ function checkWorkerTranscriptCommitJsonDepth(data: unknown): ValidationError | 
 
 export const validateWorkerTranscriptCommitParams = lazyCompile<WorkerTranscriptCommitParams>(
   WorkerTranscriptCommitParamsSchema,
-  checkWorkerTranscriptCommitJsonDepth,
+  checkWorkerTranscriptCommitJson,
 );
 export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
   GatewaySuspendPrepareParamsSchema,
@@ -1553,6 +1567,7 @@ export {
   WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
   WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   EnvironmentStatusSchema,
   WorkerEnvironmentStateSchema,
   WorkerTunnelStatusSchema,

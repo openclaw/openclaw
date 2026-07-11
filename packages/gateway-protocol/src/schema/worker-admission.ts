@@ -1,12 +1,14 @@
 import { Type, type Static } from "typebox";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 
+// Additive RPCs require exact build-bound features; bump only for an incompatible base set.
 export const WORKER_RPC_SET_VERSION = 1;
 export const WORKER_HEARTBEAT_INTERVAL_MS = 15_000;
 export const WORKER_PROTOCOL_METHODS = ["worker.heartbeat", "worker.transcript.commit"] as const;
+export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_PROTOCOL_FEATURES = [
   "worker-heartbeat-v1",
-  "worker-transcript-commit-v1",
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
 ] as const;
 export const WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH = 256;
 export const WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH = 128;

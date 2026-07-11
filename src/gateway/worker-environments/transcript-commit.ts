@@ -11,9 +11,8 @@ import {
   loadSessionEntry,
   publishTranscriptUpdate,
   replaceSessionEntrySync,
-  resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptWriteScope,
-  withTranscriptWriteLock,
+  withTranscriptWriteTransaction,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -304,18 +303,20 @@ async function applyWorkerTranscriptCommit(params: {
   sessionId: string;
   target: ResolvedWorkerTranscriptTarget;
 }): Promise<ApplyTranscriptCommitResult> {
-  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(params.target);
-  const applied = await withTranscriptWriteLock(params.target, () => {
+  const redactedMessages = params.messages.map(
+    (message) => redactTranscriptMessage(message, params.config) as CommittedAgentMessage,
+  );
+  const applied = await withTranscriptWriteTransaction(params.target, ({ sessionFile }) => {
     const currentEntry = loadSessionEntry(params.target);
     if (!currentEntry || currentEntry.sessionId !== params.sessionId) {
       return { ok: false as const, reason: "session-not-attached" as const };
     }
 
-    const manager = SessionManager.open(runtimeTarget.sessionFile);
+    const manager = SessionManager.open(sessionFile);
     const prefix = resolveActiveCommitPrefix({
       baseLeafId: params.requestedBaseLeafId,
       manager,
-      messages: params.messages,
+      messages: redactedMessages,
     });
     if (!prefix.ok) {
       return { ok: false as const, reason: "stale-base-leaf" as const };
@@ -323,9 +324,8 @@ async function applyWorkerTranscriptCommit(params: {
 
     const messages = [...prefix.recoveredMessages];
     let nextMessageSeq = prefix.activeVisibleEntryCount;
-    for (const message of params.messages.slice(prefix.recoveredMessages.length)) {
-      const redacted = redactTranscriptMessage(message, params.config) as CommittedAgentMessage;
-      const messageId = manager.appendMessage(redacted, {
+    for (const message of redactedMessages.slice(prefix.recoveredMessages.length)) {
+      const messageId = manager.appendMessage(message, {
         config: params.config,
         // Active-path recovery owns dedupe. A global key scan could reuse an
         // id from an abandoned branch while SessionManager advances another id.
@@ -334,7 +334,7 @@ async function applyWorkerTranscriptCommit(params: {
       nextMessageSeq += 1;
       messages.push({
         appended: true,
-        message: redacted,
+        message,
         messageId,
         messageSeq: nextMessageSeq,
       });
@@ -347,7 +347,7 @@ async function applyWorkerTranscriptCommit(params: {
     const appendedCount = messages.filter((message) => message.appended).length;
     const nextEntry = {
       ...freshEntry,
-      sessionFile: runtimeTarget.sessionFile,
+      sessionFile,
       ...(appendedCount > 0 ? { updatedAt: Math.max(freshEntry.updatedAt ?? 0, Date.now()) } : {}),
     };
     replaceSessionEntrySync(params.target, nextEntry);

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptMessage,
@@ -238,11 +238,21 @@ describe("worker transcript commit application", () => {
         )
         .map((event) => event.id),
     ).toEqual(entryIds);
-    expect(loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY, storePath })).toMatchObject(
-      {
-        sessionFile,
-        sessionId: SESSION_ID,
-      },
+    const persistedEntry = loadSessionEntry({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      storePath,
+    });
+    expect(persistedEntry).toMatchObject({ sessionId: SESSION_ID });
+    expect(persistedEntry?.sessionFile).toBe(
+      (
+        await resolveSessionTranscriptRuntimeTarget({
+          agentId: "main",
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          storePath,
+        })
+      ).sessionFile,
     );
     expect(updates).toEqual(
       entryIds.map((entryId, index) =>
@@ -383,6 +393,67 @@ describe("worker transcript commit application", () => {
     const reopened = SessionManager.open(sessionFile);
     expect(reopened.getEntries()).toHaveLength(request.messages.length + 1);
     expect(reopened.getLeafId()).toBe(laterLeafId);
+  });
+
+  it("rolls back every transcript row when a batch append is interrupted", async () => {
+    type AppendMessage = (
+      this: SessionManager,
+      ...args: Parameters<SessionManager["appendMessage"]>
+    ) => ReturnType<SessionManager["appendMessage"]>;
+    const appendMessage = Object.getOwnPropertyDescriptor(SessionManager.prototype, "appendMessage")
+      ?.value as AppendMessage | undefined;
+    if (!appendMessage) {
+      throw new Error("SessionManager.appendMessage implementation is unavailable");
+    }
+    let appendCount = 0;
+    const appendSpy = vi
+      .spyOn(SessionManager.prototype, "appendMessage")
+      .mockImplementation(function (this: SessionManager, message, options) {
+        const messageId = appendMessage.call(this, message, options);
+        appendCount += 1;
+        if (appendCount === 2) {
+          throw new Error("simulated mid-batch interruption");
+        }
+        return messageId;
+      });
+    const request = createRequest();
+    const entryBeforeFailure = loadSessionEntry({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      storePath,
+    });
+
+    try {
+      await expect(committer.commit({ identity: IDENTITY, request })).rejects.toThrow(
+        "simulated mid-batch interruption",
+      );
+    } finally {
+      appendSpy.mockRestore();
+    }
+    expect(SessionManager.open(sessionFile).getEntries()).toEqual([]);
+    const entryAfterFailure = loadSessionEntry({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      storePath,
+    });
+    expect(entryAfterFailure).toEqual(entryBeforeFailure);
+
+    const manager = SessionManager.open(sessionFile);
+    const localLeafId = manager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "Local activity after interruption" }],
+      timestamp: 400,
+    });
+    const retry = await committer.commit({ identity: IDENTITY, request });
+
+    expect(retry).toEqual({ ok: false, reason: "stale-base-leaf" });
+    const reopened = SessionManager.open(sessionFile);
+    expect(reopened.getEntries()).toEqual([
+      expect.objectContaining({
+        id: localLeafId,
+        message: expect.objectContaining({ role: "user" }),
+      }),
+    ]);
   });
 
   it("does not reuse an idempotency key from an abandoned transcript branch", async () => {

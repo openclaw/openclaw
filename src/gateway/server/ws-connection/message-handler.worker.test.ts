@@ -9,6 +9,7 @@ import {
   type WorkerAdmissionFailureReason,
   type WorkerConnectParams,
   type WorkerTranscriptCommitErrorReason,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   resetGatewayWorkAdmission,
@@ -23,7 +24,7 @@ const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 const HANDSHAKE = {
   bundleHash: "a".repeat(64),
   openclawVersion: "2026.7.11",
-  protocolFeatures: ["worker-heartbeat-v1"],
+  protocolFeatures: ["worker-heartbeat-v1", WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE],
 };
 const WORKER_CONNECT: WorkerConnectParams = {
   minProtocol: PROTOCOL_VERSION,
@@ -76,6 +77,7 @@ function attachHarness(
   options: {
     admissionFailure?: WorkerAdmissionFailureReason;
     commitFailure?: WorkerTranscriptCommitErrorReason;
+    identity?: WorkerConnectionIdentity;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
   } = {},
 ) {
@@ -86,7 +88,7 @@ function attachHarness(
     admitWorker: vi.fn(async () =>
       options.admissionFailure
         ? { ok: false as const, reason: options.admissionFailure }
-        : { ok: true as const, identity: IDENTITY },
+        : { ok: true as const, identity: options.identity ?? IDENTITY },
     ),
     commitTranscript: vi.fn(async () =>
       options.commitFailure
@@ -221,6 +223,17 @@ describe("dedicated worker websocket protocol", () => {
       method: "worker.transcript.commit",
     });
     expect(harness.close).not.toHaveBeenCalled();
+  });
+
+  it("rejects transcript commits when the admitted worker lacks the feature", async () => {
+    const harness = attachHarness({
+      identity: { ...IDENTITY, protocolFeatures: ["worker-heartbeat-v1"] },
+    });
+    await admit(harness);
+    harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
+
+    await vi.waitFor(() => expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"));
+    expect(harness.service.commitTranscript).not.toHaveBeenCalled();
   });
 
   it("returns closed transcript errors without closing the worker connection", async () => {

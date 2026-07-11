@@ -1915,6 +1915,21 @@ export async function withSqliteTranscriptWriteLock<T>(
   });
 }
 
+/** Runs synchronous transcript work under one writer queue and SQLite transaction. */
+export async function withSqliteTranscriptWriteTransaction<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: { sessionFile: string }) => T,
+): Promise<T> {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  return await runExclusiveSqliteSessionWrite(resolved, async () =>
+    runOpenClawAgentWriteTransaction(
+      () => run({ sessionFile: formatSqliteSessionMarkerForScope(resolved) }),
+      toDatabaseOptions(resolved),
+      { operationLabel: "session.transcript.batch" },
+    ),
+  );
+}
+
 function appendSqliteTranscriptMessageInTransaction<TMessage>(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
