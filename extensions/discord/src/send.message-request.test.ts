@@ -4,6 +4,7 @@ import { buildDiscordMessageRequest } from "./send.message-request.js";
 describe("buildDiscordMessageRequest", () => {
   it("enforces a supplied nonce across retries", () => {
     const body = buildDiscordMessageRequest({
+      endpoint: "create-message",
       text: "hello",
       nonce: "stable-create-nonce",
     });
@@ -16,12 +17,18 @@ describe("buildDiscordMessageRequest", () => {
   });
 
   it("adds a nonce for each logical create", () => {
-    const body = buildDiscordMessageRequest({ text: "hello" });
+    const body = buildDiscordMessageRequest({ endpoint: "create-message", text: "hello" });
 
     expect(body).toMatchObject({
       content: "hello",
       enforce_nonce: true,
     });
     expect(body.nonce).toMatch(/^[0-9a-f]{24}$/);
+  });
+
+  it("omits create-message nonce fields from forum thread starters", () => {
+    const body = buildDiscordMessageRequest({ endpoint: "forum-thread", text: "hello" });
+
+    expect(body).toEqual({ content: "hello" });
   });
 });

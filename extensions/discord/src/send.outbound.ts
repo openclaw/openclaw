@@ -224,6 +224,7 @@ export async function sendMessageDiscord(
       suppressEmbeds: suppressEmbeds && !starterEmbeds?.length,
     });
     const starterBody = buildDiscordMessageRequest({
+      endpoint: "forum-thread",
       text: starterContent,
       components: starterComponents,
       embeds: starterEmbeds,

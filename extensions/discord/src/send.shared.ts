@@ -362,6 +362,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
       suppressEmbeds: suppressEmbeds && !chunkEmbeds?.length,
     });
     const body = buildDiscordMessageRequest({
+      endpoint: "create-message",
       text: chunk,
       components: chunkComponents,
       embeds: chunkEmbeds,
@@ -454,6 +455,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     suppressEmbeds: suppressEmbeds && !captionEmbeds?.length,
   });
   const body = buildDiscordMessageRequest({
+    endpoint: "create-message",
     text: caption,
     components: captionComponents,
     embeds: captionEmbeds,

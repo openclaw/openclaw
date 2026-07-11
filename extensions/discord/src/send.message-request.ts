@@ -97,7 +97,7 @@ export function resolveDiscordMessageFlags(params: {
   return flags || undefined;
 }
 
-export function buildDiscordMessageRequest(params: {
+type DiscordMessageRequestParams = {
   text: string;
   components?: TopLevelComponents[];
   embeds?: Embed[];
@@ -105,16 +105,21 @@ export function buildDiscordMessageRequest(params: {
   files?: MessagePayloadFile[];
   flags?: number;
   replyTo?: string;
-  nonce?: string;
-}) {
+} & ({ endpoint: "create-message"; nonce?: string } | { endpoint: "forum-thread"; nonce?: never });
+
+export function buildDiscordMessageRequest(params: DiscordMessageRequestParams) {
   const payload = buildDiscordMessagePayload(params);
+  const nonce =
+    params.endpoint === "create-message"
+      ? (params.nonce ?? createDiscordMessageNonce())
+      : undefined;
   return stripUndefinedFields({
     ...serializePayload(payload),
     ...(params.replyTo
       ? { message_reference: { message_id: params.replyTo, fail_if_not_exists: false } }
       : {}),
-    nonce: params.nonce ?? createDiscordMessageNonce(),
-    enforce_nonce: true,
+    nonce,
+    enforce_nonce: nonce ? true : undefined,
   });
 }
 
