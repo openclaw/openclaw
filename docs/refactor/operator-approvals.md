@@ -335,13 +335,17 @@ Final strict behavior:
 - malformed trusted verdict -> `denied`, deny;
 - only an allowed explicit allow decision -> `allowed`.
 
-Current shipped behavior conflicts with this contract:
+Current shipped exec behavior still conflicts with this contract:
 
 - `src/agents/bash-tools.exec-host-shared.ts` may apply `askFallback`.
-- `src/agents/agent-tools.before-tool-call.ts` may honor `timeoutBehavior: "allow"`.
-- `docs/tools/exec-approvals.md`, `docs/cli/approvals.md`, and `docs/plugins/plugin-permission-requests.md` document those surfaces.
+- `docs/tools/exec-approvals.md` and `docs/cli/approvals.md` document that surface.
 
-Do not silently change them in the storage PR. The strict-semantics PR must update code, types, docs, tests, and changelog together, with explicit owner/security review. `askFallback` may continue to describe pre-gate policy selection during migration, but it must not turn a created pending record's timeout into approval.
+Plugin approvals now fail closed on timeout and malformed verdicts; the legacy
+`timeoutBehavior` field remains accepted but ignored. The exec strict-semantics
+follow-up must update code, types, docs, tests, and changelog together, with
+explicit owner/security review. `askFallback` may continue to describe
+pre-gate policy selection during migration, but it must not turn a created
+pending record's timeout into approval.
 
 ## Compatibility plan
 
@@ -460,5 +464,5 @@ A committed transition is success even if later event delivery fails. Lifecycle 
 ## Open decisions
 
 1. **Externally reachable Control UI origin.** Every snapshot carries the stable relative `urlPath`. An absolute URL may be advertised only from a cached Tailscale Serve/Funnel location after Gateway exposure succeeds; `allowedOrigins`, request Host headers, `gateway.remote.url`, and display-only loopback/LAN candidates are not canonical origins. Telegram can use its authenticated Mini App wrapper to retain the approval path through bootstrap. Arbitrary reverse proxies remain relative-only until a separately reviewed explicit public-URL contract exists. Never let a channel guess the origin.
-2. **Strict timeout compatibility cutover.** The target is fail-closed, but `askFallback` and plugin `timeoutBehavior: "allow"` are shipped contracts. Recommended: make the behavior change in PR 6 with explicit owner/security approval, changelog, docs, and a migration/deprecation decision rather than hiding it in PR 1.
+2. **Exec strict timeout compatibility cutover.** Plugin approval timeouts now fail closed and `timeoutBehavior` is deprecated. The remaining shipped `askFallback` contract needs explicit owner/security review, changelog, docs, and a migration/deprecation decision before it stops authorizing execution after a pending ask times out.
 3. **Gatewayless embedded mode.** Recommended: keep it local-only initially, then make it a client of the canonical service when a Gateway exists. Do not advertise a deep link that no server can resolve.
