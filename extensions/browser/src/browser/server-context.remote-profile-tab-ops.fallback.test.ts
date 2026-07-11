@@ -181,9 +181,23 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     await expect(remote.openTab("about:blank")).rejects.toBeInstanceOf(
       deps.BrowserCdpEndpointBlockedError,
     );
+    expect(state.profiles.get("remote")?.lastTargetId).not.toBe("T_BLOCKED");
   });
 
-  it("rejects non-selectable targets returned by raw tab creation", async () => {
+  it.each([
+    {
+      id: "WORKER",
+      title: "Worker",
+      url: "https://example.com/worker.js",
+      type: "worker",
+    },
+    {
+      id: "INTERNAL",
+      title: "Settings",
+      url: "chrome://settings/",
+      type: "page",
+    },
+  ])("rejects non-selectable $type target $id returned by raw tab creation", async (created) => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
       new Error("Target.createTarget unavailable"),
@@ -196,18 +210,15 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
       return {
         ok: true,
         json: async () => ({
-          id: "WORKER",
-          title: "Worker",
-          url: "https://example.com/worker.js",
-          webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/WORKER",
-          type: "worker",
+          ...created,
+          webSocketDebuggerUrl: `wss://1.1.1.1:9222/devtools/page/${created.id}`,
         }),
       } as unknown as Response;
     });
     const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
 
     await expect(remote.openTab("https://example.com")).rejects.toThrow(/non-selectable target/);
-    expect(state.profiles.get("remote")?.lastTargetId).not.toBe("WORKER");
+    expect(state.profiles.get("remote")?.lastTargetId).not.toBe(created.id);
   });
 
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
