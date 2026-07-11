@@ -1,3 +1,7 @@
+import {
+  createNonExitingRuntimeEnv,
+  createQueuedWizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 
 const qrConnect = vi.hoisted(() => vi.fn());
@@ -15,21 +19,18 @@ registerPlatformAdapter({
   hasConfiguredSecret: () => false,
 } as never);
 
-function createParams(beforePersistentEffect: () => Promise<void>) {
+type FinalizeParams = Parameters<typeof finalizeQQBotSetup>[0];
+
+function createParams(beforePersistentEffect: () => Promise<void>): FinalizeParams {
+  const { prompter } = createQueuedWizardPrompter({ selectValues: ["qr"] });
   return {
     cfg: {},
     accountId: "default",
     forceAllowFrom: false,
-    prompter: {
-      note: vi.fn(async () => {}),
-      select: vi.fn(async () => "qr"),
-    },
-    runtime: {
-      error: vi.fn(),
-      log: vi.fn(),
-    },
+    prompter,
+    runtime: createNonExitingRuntimeEnv(),
     options: { beforePersistentEffect },
-  } as never;
+  };
 }
 
 describe("QQ Bot setup persistent effects", () => {

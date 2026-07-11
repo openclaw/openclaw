@@ -57,6 +57,25 @@ async function runCrestodianGatewayTask(task: () => Promise<void>): Promise<void
   );
 }
 
+let crestodianSetupActivationInProgress = false;
+
+class CrestodianSetupActivationBusyError extends Error {}
+
+/** Admit one setup mutation without queueing work past a caller timeout. */
+export async function runExclusiveCrestodianSetupActivation<T>(task: () => Promise<T>): Promise<T> {
+  if (crestodianSetupActivationInProgress) {
+    throw new CrestodianSetupActivationBusyError(
+      "Crestodian setup is already in progress; try again when it finishes.",
+    );
+  }
+  crestodianSetupActivationInProgress = true;
+  try {
+    return await task();
+  } finally {
+    crestodianSetupActivationInProgress = false;
+  }
+}
+
 async function evictOldestSession(sessions: Map<string, CrestodianChatSession>): Promise<void> {
   if (sessions.size < MAX_CRESTODIAN_SESSIONS) {
     return;
@@ -112,8 +131,10 @@ export const crestodianHandlers: GatewayRequestHandlers = {
   },
   /**
    * Structured onboarding: live-test one candidate and persist it on success.
-   * Serialized per gateway process by runCrestodianGatewayTask; a failed
-   * attempt never mutates config (see setup-inference.ts).
+   * Single-flight per gateway process because testing and persistence span
+   * multiple config/plugin mutations. Concurrent callers fail fast instead of
+   * queueing work that could outlive their RPC timeout. A failed attempt never
+   * commits a broken model, managed plugin install, or setup state.
    */
   "crestodian.setup.activate": async ({ params, respond }) => {
     if (
@@ -126,26 +147,40 @@ export const crestodianHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    await runCrestodianGatewayTask(async () => {
-      const { activateSetupInference } = await import("../../crestodian/setup-inference.js");
-      const runtime = {
-        ...defaultRuntime,
-        // Setup runs inside the gateway process; a failing sub-step must reject
-        // the RPC, never exit the daemon.
-        exit: (code: number | undefined): never => {
-          throw new Error(`setup step exited with code ${String(code)}`);
-        },
-      };
-      const result = await activateSetupInference({
-        kind: params.kind,
-        ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
-        ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
-        ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
-        surface: "gateway",
-        runtime,
+    try {
+      await runExclusiveCrestodianSetupActivation(async () => {
+        await runCrestodianGatewayTask(async () => {
+          const { activateSetupInference } = await import("../../crestodian/setup-inference.js");
+          const runtime = {
+            ...defaultRuntime,
+            // Setup runs inside the gateway process; a failing sub-step must reject
+            // the RPC, never exit the daemon.
+            exit: (code: number | undefined): never => {
+              throw new Error(`setup step exited with code ${String(code)}`);
+            },
+          };
+          const result = await activateSetupInference({
+            kind: params.kind,
+            ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
+            ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
+            ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
+            ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
+            surface: "gateway",
+            runtime,
+          });
+          respond(true, result, undefined);
+        });
       });
-      respond(true, result, undefined);
-    });
+    } catch (error) {
+      if (!(error instanceof CrestodianSetupActivationBusyError)) {
+        throw error;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true }),
+      );
+    }
   },
   "crestodian.chat": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateCrestodianChatParams, "crestodian.chat", respond)) {

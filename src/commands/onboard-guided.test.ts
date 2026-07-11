@@ -19,7 +19,13 @@ vi.mock("./onboard-interactive-runner.js", async (importActual) => {
 });
 
 const readConfigFileSnapshot = vi.hoisted(() =>
-  vi.fn(async () => ({ exists: false, valid: true, config: {} })),
+  vi.fn(async () => ({
+    exists: false,
+    valid: true,
+    path: "/tmp/openclaw.json",
+    issues: [] as Array<{ path?: string; message: string }>,
+    config: {},
+  })),
 );
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
@@ -45,7 +51,18 @@ function candidate(kind: "claude-cli" | "codex-cli", label: string) {
     label,
     detail: "logged in",
     modelRef: kind === "claude-cli" ? "claude-cli/opus" : "openai/gpt-5.5",
-    recommended: kind === "claude-cli",
+    recommended: false,
+    credentials: true,
+  } as const;
+}
+
+function existingModelCandidate() {
+  return {
+    kind: "existing-model",
+    label: "Current model",
+    detail: "already configured",
+    modelRef: "acme/workspace-model",
+    recommended: false,
     credentials: true,
   } as const;
 }
@@ -94,7 +111,13 @@ describe("runGuidedOnboarding", () => {
   beforeEach(() => {
     restoreTerminalState.mockClear();
     readConfigFileSnapshot.mockReset();
-    readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: true, config: {} });
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config: {},
+    });
   });
 
   afterEach(() => {
@@ -119,7 +142,12 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
     expect(deps.activate).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "claude-cli", workspace: "/tmp/work", surface: "cli" }),
+      expect.objectContaining({
+        kind: "claude-cli",
+        modelRef: "claude-cli/opus",
+        workspace: "/tmp/work",
+        surface: "cli",
+      }),
     );
     expect(text).not.toHaveBeenCalled();
     expect(select).not.toHaveBeenCalled();
@@ -133,6 +161,8 @@ describe("runGuidedOnboarding", () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
       config: { agents: { defaults: { workspace: "/tmp/configured" } } },
     });
     const text = vi.fn(async () => "unexpected");
@@ -168,7 +198,7 @@ describe("runGuidedOnboarding", () => {
     const unverified = {
       ...candidate("claude-cli", "Claude Code"),
       detail: "installed",
-      recommended: false,
+      recommended: false as const,
       credentials: undefined,
     };
     const select = vi.fn(async () => "unexpected") as unknown as WizardPrompter["select"];
@@ -193,6 +223,7 @@ describe("runGuidedOnboarding", () => {
 
     expect(activate).toHaveBeenCalledWith({
       kind: "claude-cli",
+      modelRef: "claude-cli/opus",
       workspace: "/tmp/work",
       surface: "cli",
       runtime,
@@ -235,14 +266,7 @@ describe("runGuidedOnboarding", () => {
   });
 
   it("never replaces a configured model by fallthrough when its check fails", async () => {
-    const existingModel = {
-      kind: "existing-model",
-      label: "Current model",
-      detail: "already configured",
-      modelRef: "acme/workspace-model",
-      recommended: true,
-      credentials: true,
-    } as const;
+    const existingModel = existingModelCandidate();
     const select = vi.fn(async (params: WizardSelectParams) => {
       expect(params.options.map((option) => option.value)).toEqual([
         "candidate:existing-model",
@@ -285,6 +309,10 @@ describe("runGuidedOnboarding", () => {
     expect(activate.mock.calls.map(([call]) => call.kind)).toEqual([
       "existing-model",
       "existing-model",
+    ]);
+    expect(activate.mock.calls.map(([call]) => call.modelRef)).toEqual([
+      "acme/workspace-model",
+      "acme/workspace-model",
     ]);
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("kept unchanged");
@@ -503,24 +531,29 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).not.toHaveBeenCalled();
   });
 
-  it("fails closed with doctor guidance when config is invalid", async () => {
+  it("shows copyable repair commands without opening AI when config is invalid", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: false,
+      path: "/tmp/broken-openclaw.json",
+      issues: [{ path: "agents.defaults.model", message: "Expected a model reference" }],
       config: {},
     });
     const prompter = createWizardPrompter();
-    const runCrestodianChat = vi.fn(async () => {});
-    const deps = setupDeps({ prompter, runCrestodianChat });
+    const deps = setupDeps({ prompter });
     const runtime = makeRuntime();
 
     await runGuidedOnboarding({ workspace: "/tmp/repair" }, runtime, deps);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "OpenClaw configuration is invalid. Run openclaw doctor --fix before onboarding.",
+    const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
+    expect(notes).toContain("/tmp/broken-openclaw.json");
+    expect(notes).toContain("agents.defaults.model: Expected a model reference");
+    expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+    expect(prompter.outro).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw config validate"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runCrestodianChat).not.toHaveBeenCalled();
+    expect(deps.runCrestodianChat).not.toHaveBeenCalled();
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
   });

@@ -97,6 +97,10 @@ const CLAUDE_CRESTODIAN_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
+type ClaudeCliEffortArgAction =
+  | { mode: "preserve" }
+  | { mode: "omit" }
+  | { mode: "set"; effort: ClaudeCliEffort };
 
 /** Explicit thinking opt-out for Claude CLI routes unsupported by Claude Code. */
 export const CLAUDE_CLI_OFF_THINKING_PROFILE = {
@@ -213,25 +217,25 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
   return normalized;
 }
 
-/** Map OpenClaw thinking levels to Claude CLI effort flags for a model id. */
-function mapClaudeCliThinkingLevelToEffort(
-  thinkingLevel?: string | null,
-): ClaudeCliEffort | undefined {
+/** Resolve whether a run preserves, removes, or sets a Claude CLI effort override. */
+function resolveClaudeCliEffortArgAction(thinkingLevel?: string | null): ClaudeCliEffortArgAction {
   switch (normalizeOptionalLowercaseString(thinkingLevel)) {
     case "minimal":
     case "low":
-      return "low";
+      return { mode: "set", effort: "low" };
     case "adaptive":
+      // Adaptive runs delegate effort to Claude Code, so no static override may survive.
+      return { mode: "omit" };
     case "medium":
-      return "medium";
+      return { mode: "set", effort: "medium" };
     case "high":
-      return "high";
+      return { mode: "set", effort: "high" };
     case "xhigh":
-      return "xhigh";
+      return { mode: "set", effort: "xhigh" };
     case "max":
-      return "max";
+      return { mode: "set", effort: "max" };
     default:
-      return undefined;
+      return { mode: "preserve" };
   }
 }
 
@@ -446,11 +450,17 @@ export function resolveClaudeCliExecutionArgs(
     if (context.executionMode === "side-question") {
       return resolveClaudeCliSideQuestionExecutionArgs(context.baseArgs);
     }
-    const effort = mapClaudeCliThinkingLevelToEffort(context.thinkingLevel);
-    if (!effort) {
-      return [...context.baseArgs];
+    const action = resolveClaudeCliEffortArgAction(context.thinkingLevel);
+    switch (action.mode) {
+      case "preserve":
+        return [...context.baseArgs];
+      case "omit":
+        return stripClaudeEffortArgs(context.baseArgs);
+      case "set":
+        return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, action.effort];
+      default:
+        return action satisfies never;
     }
-    return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, effort];
   })();
   if (!context.toolAvailability) {
     return executionArgs;

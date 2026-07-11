@@ -4,6 +4,7 @@
  * per-run scope, and every action funnels through Crestodian's typed operation
  * union with approval assertions and the audit log.
  */
+import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import {
   executeCrestodianOperation,
@@ -12,6 +13,7 @@ import {
 } from "../../crestodian/operations.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stringEnum } from "../schema/typebox.js";
+import { stableStringify } from "../stable-stringify.js";
 import { textResult, ToolInputError, readStringParam, type AnyAgentTool } from "./common.js";
 
 export type CrestodianToolOptions = {
@@ -54,7 +56,7 @@ type CrestodianHostNavigationDirective = Exclude<
 
 /** Canonical operation fingerprint used to bind "yes" to one exact mutation. */
 export function hashCrestodianOperation(operation: CrestodianOperation): string {
-  return JSON.stringify(operation, Object.keys(operation).toSorted());
+  return createHash("sha256").update(stableStringify(operation)).digest("hex");
 }
 
 /** Result markers shared with out-of-process hosts (CLI MCP runs). */
@@ -137,7 +139,13 @@ export function resolveCrestodianProposalTransition(params: {
     return { proposal: undefined };
   }
   if (params.resultText.startsWith(CRESTODIAN_NEEDS_APPROVAL_PREFIX)) {
-    return { proposal: hashCrestodianOperation(operation) };
+    const markerLine = params.resultText.split("\n", 1)[0] ?? "";
+    const carriedHash = markerLine.slice(CRESTODIAN_NEEDS_APPROVAL_PREFIX.length).trim();
+    return {
+      proposal: /^[a-f0-9]{64}$/.test(carriedHash)
+        ? carriedHash
+        : hashCrestodianOperation(operation),
+    };
   }
   // Executed or errored mutation: an armed approval is single-use either way.
   return { proposal: undefined };
@@ -346,6 +354,7 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
       "connect_channel(channel) and open_setup(target=channels, channel=...) start guided channel setup in this chat; open_agent hands off to the normal agent.",
       "configure_model_provider and open_setup(target=guided|classic) cannot change or reconfigure the active inference route inside Crestodian. Tell the user to exit Crestodian and run `openclaw onboard`; never ask for provider credentials here.",
       "Mutating actions (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install) REQUIRE approved=true, which you may only set after the user clearly agreed to that exact change in this conversation. The host applies an approved action after this turn so it can re-check the live inference owner first.",
+      "Setup preserves the verified default inference route. To change providers, credentials, or the default model, exit Crestodian and run `openclaw onboard`.",
       "Before writing an unfamiliar config path, call config_schema for it — the schema is the source of truth. Secrets go through config_set_ref (env var), never plaintext echoes. Raw writes under auth/models/env/secrets/plugins/tools/agent-route paths or $include are refused; use typed workflows. Plugin uninstall is refused because it could remove active inference; exit Crestodian and use the CLI.",
       "Doctor repairs are unavailable because they can change the active inference route; exit Crestodian and run `openclaw doctor --fix`.",
       "Every applied write is validated; if the result reports CONFIG INVALID, fix it immediately. All writes are audited.",
@@ -401,7 +410,7 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
             options.proposalRef.current = operationHash;
           }
           return textResult(
-            `${CRESTODIAN_NEEDS_APPROVAL_PREFIX} this action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the identical call with approved=true).`,
+            `${CRESTODIAN_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).`,
             { needsApproval: true },
           );
         }

@@ -86,7 +86,9 @@ const probeGatewayConfiguredModelMock = vi.hoisted(() =>
     }>
   >(async () => ({ kind: "configured" })),
 );
-const readActiveGatewayLockPortMock = vi.hoisted(() => vi.fn(async () => undefined));
+const readActiveGatewayLockPortMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<number | undefined> => undefined),
+);
 const loadGatewayTlsRuntimeMock = vi.hoisted(() =>
   vi.fn<
     () => Promise<{

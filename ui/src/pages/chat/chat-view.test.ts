@@ -239,6 +239,7 @@ vi.mock("../../lib/agents/display.ts", () => ({
 function renderQueue(params: {
   queue: ChatQueueItem[];
   canAbort?: boolean;
+  onQueueRemove?: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
 }) {
@@ -247,9 +248,9 @@ function renderQueue(params: {
     renderChatQueue({
       queue: params.queue,
       canAbort: params.canAbort ?? true,
+      onQueueRemove: params.onQueueRemove ?? (() => undefined),
       onQueueRetry: params.onQueueRetry,
       onQueueSteer: params.onQueueSteer,
-      onQueueRemove: () => undefined,
     }),
     container,
   );
@@ -685,6 +686,192 @@ describe("chat compaction divider", () => {
   });
 });
 
+describe("direct thread avatar mode", () => {
+  function sessionsListWithKind(sessionKey: string, kind: "direct" | "group" | "global") {
+    return {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: 200_000 },
+      sessions: [{ key: sessionKey, kind, updatedAt: 1 }],
+    };
+  }
+
+  const labeledHistory = [
+    { role: "user", content: "hi", timestamp: 1 },
+    { role: "assistant", content: "hello", timestamp: 2 },
+    { role: "user", content: "me too", senderLabel: "Mario", timestamp: 3 },
+  ];
+
+  it("classifies by canonical session kind even when DM rows carry sender labels", () => {
+    const direct = renderChatView({
+      sessionKey: "kind-direct",
+      sessions: sessionsListWithKind("kind-direct", "direct"),
+      messages: labeledHistory,
+    });
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+
+    const group = renderChatView({
+      sessionKey: "kind-group",
+      sessions: sessionsListWithKind("kind-group", "group"),
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(group, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps avatars in global sessions, which can aggregate group senders", () => {
+    const globalThread = renderChatView({
+      sessionKey: "global",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(globalThread, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches session metadata across equivalent alias keys", () => {
+    // Default session travels as "main" or "agent:main:main" depending on caller.
+    const aliased = renderChatView({
+      sessionKey: "main",
+      sessions: sessionsListWithKind("agent:main:main", "direct"),
+      messages: labeledHistory,
+    });
+    expect(
+      requireElement(aliased, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+  });
+
+  it("falls back to session-key shape when session metadata is missing", () => {
+    // Labeled DM rows must not flip the mode: sanitization labels 1:1 DMs too.
+    const direct = renderChatView({
+      sessionKey: "agent:main:telegram:direct:2",
+      messages: labeledHistory,
+    });
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+
+    const group = renderChatView({
+      sessionKey: "agent:main:telegram:group:42",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(group, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps avatars when a main alias selects the canonical global row", () => {
+    // scope=global: sessions.list only carries the literal "global" row while
+    // the pane navigates via agent:<id>:main; the host resolves the alias.
+    const aliasedGlobal = renderChatView({
+      sessionKey: "agent:work:main",
+      sessions: sessionsListWithKind("global", "global"),
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "global" },
+        hello: null,
+      },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(aliasedGlobal, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("classifies global-scope main aliases without a listed global row", () => {
+    // The capped list can omit the canonical global row (or it may not exist
+    // before the first persisted turn); configured scope alone decides.
+    const aliased = renderChatView({
+      sessionKey: "agent:work:main",
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "global" },
+        hello: null,
+      },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(aliased, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores stray global rows for main aliases outside global scope", () => {
+    // per-sender scope: a listed global row must not reclassify a direct main
+    // thread whose exact row is missing from the capped list.
+    const direct = renderChatView({
+      sessionKey: "agent:work:main",
+      sessions: sessionsListWithKind("global", "global"),
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "per-sender" },
+        hello: null,
+      },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+  });
+
+  it("prefers the equivalent direct row over a global row for main aliases", () => {
+    const sessions = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: 200_000 },
+      sessions: [
+        { key: "global", kind: "global" as const, updatedAt: 2 },
+        { key: "agent:work:main", kind: "direct" as const, updatedAt: 1 },
+      ],
+    };
+    const direct = renderChatView({
+      sessionKey: "agent:work:main",
+      sessions,
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "global" },
+        hello: null,
+      },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats explicit agent global keys as global even without a session row", () => {
+    const globalAlias = renderChatView({
+      sessionKey: "agent:work:global",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(globalAlias, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("chat code-block copy", () => {
   it("copies decoded QR block-art boundary spaces from the delegated button handler", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -1091,6 +1278,31 @@ describe("chat goal status", () => {
 });
 
 describe("chat composer workbench", () => {
+  it("queues ordinary input offline while keeping live commands disabled", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      connected: false,
+      draft: "queue this offline",
+      getDraft: () => "queue this offline",
+      onSend,
+    });
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    expect(container.querySelector<HTMLInputElement>(".agent-chat__file-input")?.disabled).toBe(
+      false,
+    );
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]');
+    expect(send?.disabled).toBe(false);
+    send?.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    const commandContainer = renderChatView({ connected: false, draft: "/status" });
+    expect(
+      commandContainer.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')
+        ?.disabled,
+    ).toBe(true);
+  });
+
   it("renders session controls in the composer and workspace files in the expanded rail", () => {
     const onToggleCollapsed = vi.fn();
     const onRefresh = vi.fn();
@@ -1138,6 +1350,7 @@ describe("chat composer workbench", () => {
         error: null,
         activeId: "file:/workspace/AGENTS.md",
         dock: "right",
+        narrowLayout: false,
         dockDragging: false,
         dockDragZone: null,
         onToggleCollapsed,
@@ -1233,6 +1446,7 @@ describe("chat composer workbench", () => {
         error: null,
         activeId: null,
         dock: "right",
+        narrowLayout: false,
         dockDragging: false,
         dockDragZone: null,
         onToggleCollapsed,
@@ -1271,6 +1485,7 @@ describe("chat composer workbench", () => {
         error: null,
         activeId: null,
         dock: "right",
+        narrowLayout: false,
         dockDragging: false,
         dockDragZone: null,
         onToggleCollapsed: () => undefined,
@@ -1287,6 +1502,57 @@ describe("chat composer workbench", () => {
 
     expect(container.querySelector(".chat-workspace-open")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail")).toBeNull();
+  });
+
+  it("stacks the detail sidebar under the thread with a horizontal divider on narrow panes", () => {
+    const sidebarProps = {
+      sidebarOpen: true,
+      sidebarContent: { kind: "markdown", content: "Stacked detail" } as const,
+      onCloseSidebar: () => undefined,
+    };
+    const wide = renderChatView(sidebarProps);
+    const wideContainer = wide.querySelector(".chat-split-container");
+    expect(wideContainer?.classList.contains("chat-split-container--open")).toBe(true);
+    expect(wideContainer?.classList.contains("chat-split-container--stacked")).toBe(false);
+    // Attribute reflection is async; the property binding lands synchronously.
+    expect(wide.querySelector("resizable-divider")?.orientation).toBe("vertical");
+
+    const stacked = renderChatView({ ...sidebarProps, sidebarStacked: true });
+    const stackedContainer = stacked.querySelector(".chat-split-container");
+    expect(stackedContainer?.classList.contains("chat-split-container--stacked")).toBe(true);
+    expect(stacked.querySelector("resizable-divider")?.orientation).toBe("horizontal");
+  });
+
+  it("forces the workspace rail to the bottom dock and drops side-dock controls on narrow panes", () => {
+    const container = renderChatView({
+      sessionWorkspace: {
+        collapsed: false,
+        sessionKey: "agent:main",
+        list: null,
+        loading: false,
+        error: null,
+        activeId: null,
+        dock: "right",
+        narrowLayout: true,
+        dockDragging: false,
+        dockDragZone: null,
+        onToggleCollapsed: () => undefined,
+        onSetDock: () => undefined,
+        onDockDragStart: () => undefined,
+        onRefresh: () => undefined,
+        onBrowsePath: () => undefined,
+        onCopyPath: () => undefined,
+        onOpenFile: () => undefined,
+        onSearch: () => undefined,
+        onOpenArtifact: () => undefined,
+      },
+    });
+
+    const workbench = container.querySelector(".chat-workbench");
+    expect(workbench?.classList.contains("chat-workbench--dock-bottom")).toBe(true);
+    expect(container.querySelector(".chat-workspace-rail")).not.toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__dock")).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
@@ -2509,6 +2775,41 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
+  it("does not submit a stale slash argument menu after disconnect", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const container = document.createElement("div");
+    const renderCurrent = (connected: boolean) => {
+      render(
+        renderChat(
+          createChatProps({
+            connected,
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onSend,
+          }),
+        ),
+        container,
+      );
+    };
+
+    renderCurrent(true);
+    inputDraft(container, "/tools ");
+    renderCurrent(true);
+    expect(container.querySelector(".slash-menu")).not.toBeNull();
+
+    renderCurrent(false);
+    expect(container.querySelector(".slash-menu")).toBeNull();
+    keydownComposer(container, "Enter");
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(draft).toBe("/tools ");
+  });
+
   it("clears the visible local draft immediately when send clears the host draft", () => {
     let draft = "";
     const container = document.createElement("div");
@@ -3110,17 +3411,31 @@ describe("chat queue", () => {
         { id: "queued-1", text: "tighten the plan", createdAt: 1 },
         { id: "steered-1", text: "already sent", createdAt: 2, kind: "steered" },
         { id: "local-1", text: "/status", createdAt: 3, localCommandName: "status" },
+        {
+          id: "waiting-idle-1",
+          text: "queued during the run",
+          createdAt: 4,
+          sendState: "waiting-idle",
+        },
+        {
+          id: "steering-1",
+          text: "already steering",
+          createdAt: 5,
+          sendState: "steering",
+        },
       ],
     });
 
     const steerButtons = container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer");
-    expect(steerButtons).toHaveLength(1);
+    expect(steerButtons).toHaveLength(2);
     expect(steerButtons[0].textContent?.trim()).toBe("Steer");
     expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe("Steered");
 
     steerButtons[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onQueueSteer).toHaveBeenCalledWith("queued-1");
+    steerButtons[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onQueueSteer).toHaveBeenCalledWith("waiting-idle-1");
 
     const inactiveContainer = renderQueue({
       canAbort: false,
@@ -3157,6 +3472,32 @@ describe("chat queue", () => {
     retry?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onQueueRetry).toHaveBeenCalledWith("failed-1");
+  });
+
+  it("renders a running local command without retry or remove affordances", () => {
+    const onQueueRemove = vi.fn();
+    const onQueueRetry = vi.fn();
+    const container = renderQueue({
+      onQueueRemove,
+      onQueueRetry,
+      queue: [
+        {
+          id: "running-command",
+          text: "/compact",
+          createdAt: 1,
+          localCommandName: "compact",
+          sendState: "executing-command",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
+      "Running command",
+    );
+    expect(container.querySelector(".chat-queue__retry")).toBeNull();
+    expect(container.querySelector(".chat-queue__remove")).toBeNull();
+    expect(onQueueRetry).not.toHaveBeenCalled();
+    expect(onQueueRemove).not.toHaveBeenCalled();
   });
 });
 

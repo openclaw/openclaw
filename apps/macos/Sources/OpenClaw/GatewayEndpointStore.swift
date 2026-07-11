@@ -734,7 +734,7 @@ actor GatewayEndpointStore {
         guard self.kickRemoteEnsureIfNeeded(detail: detail) else {
             throw CancellationError()
         }
-        guard let ensure = remoteEnsure else {
+        guard let ensure = self.remoteEnsure else {
             throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
         }
 

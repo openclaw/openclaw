@@ -6,6 +6,14 @@ import {
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 
+function ringZeroTool(name: string) {
+  return {
+    ...stubTool(name),
+    label: name,
+    execute: async () => ({ content: [], details: {} }),
+  };
+}
+
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((resolvePromise) => {
@@ -24,8 +32,8 @@ function deferredValue<T>() {
 
 describe("agent ring-zero tool context", () => {
   it("isolates concurrent async runs and clears the scope after settlement", async () => {
-    const firstTool = stubTool("first-ring-zero");
-    const secondTool = stubTool("second-ring-zero");
+    const firstTool = ringZeroTool("first-ring-zero");
+    const secondTool = ringZeroTool("second-ring-zero");
     const firstReady = deferred();
     const secondReady = deferred();
     const release = deferred();
@@ -51,7 +59,7 @@ describe("agent ring-zero tool context", () => {
   });
 
   it("lets nested normal runs explicitly clear inherited authority", () => {
-    const tool = stubTool("ring-zero");
+    const tool = ringZeroTool("ring-zero");
 
     runWithAgentRingZeroTools([tool], () => {
       expect(getActiveAgentRingZeroTools().map((activeTool) => activeTool.name)).toEqual([
@@ -69,7 +77,7 @@ describe("agent ring-zero tool context", () => {
   });
 
   it("revokes authority from detached callbacks after the run settles", async () => {
-    const tool = stubTool("ring-zero");
+    const tool = ringZeroTool("ring-zero");
     const detachedResult = deferredValue<readonly { name: string }[]>();
 
     await runWithAgentRingZeroTools([tool], async () => {
@@ -87,7 +95,7 @@ describe("agent ring-zero tool context", () => {
 
   it("revokes retained executable handles after the run settles", async () => {
     const execute = vi.fn(async () => ({ content: [], details: {} }));
-    const tool = { ...stubTool("ring-zero"), execute };
+    const tool = { ...ringZeroTool("ring-zero"), execute };
     let retainedTool: AnyAgentTool | undefined;
 
     await runWithAgentRingZeroTools([tool], async () => {

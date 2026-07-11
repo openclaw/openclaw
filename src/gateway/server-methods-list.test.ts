@@ -53,6 +53,10 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("wizard.start")).toBe(methods.indexOf("crestodian.setup.activate") + 1);
   });
 
+  it("advertises Control UI session pull request detection", () => {
+    expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");

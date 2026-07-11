@@ -1915,6 +1915,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       allow: normalized.allow,
       warningCacheKey: cacheKey,
       warningCache: pluginLoaderCacheState,
+      explicitlyEnabledPluginIds: new Set(
+        Object.entries(normalized.entries)
+          .filter(([, entry]) => entry.enabled === true)
+          .map(([pluginId]) => pluginId),
+      ),
       // Keep warning input scoped as well so partial snapshot loads only mention the
       // plugins that were intentionally requested for this registry.
       discoverablePlugins: manifestRegistry.plugins
@@ -2905,6 +2910,11 @@ export async function loadOpenClawPluginCliRegistry(
     allow: normalized.allow,
     warningCacheKey: `${cacheKey}::cli-metadata`,
     warningCache: pluginLoaderCacheState,
+    explicitlyEnabledPluginIds: new Set(
+      Object.entries(normalized.entries)
+        .filter(([, entry]) => entry.enabled === true)
+        .map(([pluginId]) => pluginId),
+    ),
     discoverablePlugins: manifestRegistry.plugins
       .filter((plugin) => !onlyPluginIdSet || onlyPluginIdSet.has(plugin.id))
       .map((plugin) => ({

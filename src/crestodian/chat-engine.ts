@@ -280,11 +280,37 @@ function redactSensitiveCommandText(text: string): string {
   return text;
 }
 
+function formatPendingOperationForAssistant(operation: CrestodianOperation): string {
+  const description = describeCrestodianPersistentOperation(operation);
+  return operation.kind === "setup"
+    ? `${description}. Exact setup JSON: ${JSON.stringify(operation)}. Keep the verified model unless the user explicitly asks to leave Crestodian and reconfigure inference.`
+    : description;
+}
+
+function preservePendingSetupModel(
+  pending: CrestodianOperation | null,
+  operation: CrestodianOperation,
+): CrestodianOperation {
+  if (pending?.kind !== "setup" || operation.kind !== "setup") {
+    return operation;
+  }
+  const pendingModel = pending.model?.trim();
+  const requestedModel = operation.model?.trim();
+  if (requestedModel && requestedModel !== pendingModel) {
+    return operation;
+  }
+  return {
+    ...operation,
+    ...(requestedModel ? {} : pendingModel ? { model: pendingModel } : {}),
+  };
+}
+
 export class CrestodianChatEngine {
   private pending: CrestodianOperation | null = null;
   private wizardBridge: ActiveWizardBridge | null = null;
   private lastSensitiveChannel: string | undefined;
   private awaitingSetupChannel = false;
+  private hostProposalResolution: "approved" | "declined" | undefined;
   private readonly history: CrestodianAssistantTurn[] = [];
   private readonly agentSession: CrestodianAgentSession;
   private readonly verifiedInference: CrestodianVerifiedInferenceBinding;
@@ -425,6 +451,7 @@ export class CrestodianChatEngine {
       if (intent === "decline") {
         const skippedModelSetup = this.pending.kind === "model-setup";
         this.clearPendingProposals();
+        this.hostProposalResolution = "declined";
         return {
           text: skippedModelSetup
             ? "Skipped. The current inference route is unchanged."
@@ -461,6 +488,7 @@ export class CrestodianChatEngine {
   private async applyPendingProposal(): Promise<CrestodianChatReply> {
     const pending = this.pending;
     this.clearPendingProposals();
+    this.hostProposalResolution = "approved";
     if (!pending) {
       return { text: "", action: "none" };
     }
@@ -525,15 +553,20 @@ export class CrestodianChatEngine {
     // persistent session). It acts through audited tool calls, so its reply is
     // final — no engine-side command extraction or approval bookkeeping.
     const agentTurn = this.opts.runAgentTurn ?? runCrestodianAgentTurn;
+    const resolutionMarker = this.hostProposalResolution
+      ? `[host-proposal-resolved] The previously host-seeded proposal was ${this.hostProposalResolution}. Do not present it as pending.\n`
+      : "";
     let agentFailure: unknown;
     let loopReply: Awaited<ReturnType<CrestodianAgentTurnRunner>>;
     try {
       loopReply = await agentTurn({
-        input: this.pending
-          ? // Hand a host-seeded proposal (onboarding welcome) to the loop so
-            // the conversation can reshape it through the tool handshake.
-            `[pending-proposal] Awaiting the user's approval: ${describeCrestodianPersistentOperation(this.pending)}. If they want it (or a variant), drive it through the crestodian tool yourself.\n${text}`
-          : text,
+        input: `${resolutionMarker}${
+          this.pending
+            ? // Hand a host-seeded proposal (onboarding welcome) to the loop so
+              // the conversation can reshape it through the tool handshake.
+              `[pending-proposal] Awaiting the user's approval: ${formatPendingOperationForAssistant(this.pending)}. It is already host-seeded; if they want it (or a variant), drive it through the crestodian tool yourself.\n${text}`
+            : text
+        }`,
         overview,
         surface: this.opts.surface ?? "cli",
         // Mutations unlock only on host-verified approval of THIS message;
@@ -546,9 +579,16 @@ export class CrestodianChatEngine {
       loopReply = null;
     }
     if (loopReply?.text) {
-      // The loop owns the conversation now. A stale engine-side proposal must
-      // not survive it, or a later approval could apply an obsolete operation.
-      this.pending = null;
+      // The native loop saw this marker. Keep it queued across planner fallback
+      // so a recovered persistent session cannot resurrect resolved host work.
+      this.hostProposalResolution = undefined;
+      // A plain answer does not discard the host-seeded approval transaction.
+      // Clear it only once the loop registers a replacement or takes a handoff.
+      if (loopReply.directive) {
+        this.clearPendingProposals();
+      } else if (this.agentSession.proposalRef.current !== undefined) {
+        this.pending = null;
+      }
       // Directive/wizard failures are host failures, not inference failures;
       // never replay them through a second model path.
       return await this.applyAgentTurnReply(loopReply);
@@ -564,7 +604,7 @@ export class CrestodianChatEngine {
         overview,
         history: this.history,
         ...(this.pending
-          ? { pendingOperation: describeCrestodianPersistentOperation(this.pending) }
+          ? { pendingOperation: formatPendingOperationForAssistant(this.pending) }
           : {}),
         verifiedInference: this.verifiedInference,
       });
@@ -591,7 +631,10 @@ export class CrestodianChatEngine {
       }
       return { text: replyText, action: "none" };
     }
-    const operation = parseCrestodianOperation(plan.command);
+    const operation = preservePendingSetupModel(
+      this.pending,
+      parseCrestodianOperation(plan.command),
+    );
     if (operation.kind === "none") {
       if (!replyText.trim()) {
         throw new CrestodianInferenceUnavailableError("planner", [agentFailure]);
@@ -824,6 +867,7 @@ export class CrestodianChatEngine {
     // may still be referenced by a host, so leave no proposal, wizard, or CLI
     // continuation that a later call could revive.
     this.pending = null;
+    this.hostProposalResolution = undefined;
     this.agentSession.proposalRef.current = undefined;
     delete this.agentSession.cliSession;
     if (cancelWizard) {

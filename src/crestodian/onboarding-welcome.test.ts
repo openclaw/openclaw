@@ -57,7 +57,10 @@ describe("buildOnboardingWelcome", () => {
 
     const welcome = await buildOnboardingWelcome({ engine: engine as never });
 
-    expect(propose).toHaveBeenCalledWith({ kind: "setup", workspace: "/existing/workspace" });
+    expect(propose).toHaveBeenCalledWith({
+      kind: "setup",
+      workspace: "/existing/workspace",
+    });
     expect(welcome).toContain("Workspace: /existing/workspace");
     expect(welcome).toContain("AI: openai/gpt-5.5 — already verified with a real reply");
   });
@@ -105,7 +108,10 @@ describe("buildOnboardingWelcome", () => {
 
     await buildOnboardingWelcome({ engine: engine as never });
 
-    expect(propose).toHaveBeenCalledWith({ kind: "setup", workspace: "/default/workspace" });
+    expect(propose).toHaveBeenCalledWith({
+      kind: "setup",
+      workspace: "/default/workspace",
+    });
   });
 
   it("honors an explicit workspace override on an authored setup", async () => {

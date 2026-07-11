@@ -6,7 +6,7 @@ import SwiftUI
 
 extension OnboardingView {
     @ViewBuilder
-    func pageView(for pageIndex: Int) -> some View {
+    func pageView(for pageIndex: Int, contentHeight: CGFloat) -> some View {
         switch pageIndex {
         case 0:
             self.welcomePage()
@@ -15,9 +15,9 @@ extension OnboardingView {
         case 2:
             self.cliPage()
         case 3:
-            aiSetupPage()
+            self.aiSetupPage(contentHeight: contentHeight)
         case 5:
-            self.permissionsPage()
+            self.permissionsPage(contentHeight: contentHeight)
         case 9:
             self.readyPage()
         default:
@@ -144,7 +144,8 @@ extension OnboardingView {
                     .multilineTextAlignment(.center)
             }
         }
-        .onChange(of: state.connectionMode) { _, newValue in
+        .disabled(self.installingCLI)
+        .onChange(of: self.state.connectionMode) { _, newValue in
             // The root view's mode observer calls handleConnectionModeChange(), which
             // retires route-owned AI/Crestodian state. This nested observer owns probe copy only.
             guard Self.shouldResetRemoteProbeFeedback(
@@ -709,7 +710,7 @@ extension OnboardingView {
         .buttonStyle(.plain)
     }
 
-    func permissionsPage() -> some View {
+    func permissionsPage(contentHeight: CGFloat) -> some View {
         // Fixed layout (no ScrollView): sorted by importance and sized so all
         // permissions stay visible at once — no scrollbars during onboarding.
         VStack(spacing: 12) {
@@ -743,7 +744,7 @@ extension OnboardingView {
             }
         }
         .padding(.horizontal, 28)
-        .frame(width: pageWidth, height: contentHeight, alignment: .top)
+        .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
     }
 
     func cliPage() -> some View {
@@ -783,7 +784,11 @@ extension OnboardingView {
                         docsSlug: "platforms/mac/bundled-gateway",
                         retryTitle: "Try again")
                     {
-                        self.startCLIInstall()
+                        if self.cliExecutableReady {
+                            self.startExistingCLIActivationIfNeeded()
+                        } else {
+                            self.startCLIInstall()
+                        }
                     }
                 } else if let cliStatus, !self.cliInstalled {
                     Text(cliStatus)
@@ -801,28 +806,20 @@ extension OnboardingView {
     /// Exactly one spinner at a time: the install row finishes before the
     /// service row starts, mirroring the actual runCLIInstall phases.
     private var installStepStateForInstall: InstallStepState {
-        if cliInstalled {
-            return .done
+        if self.cliInstalled { return .done }
+        if self.installingCLI {
+            return self.cliInstallPhase == .startingService ? .done : .running
         }
-        if installingCLI {
-            return cliInstallPhase == .startingService ? .done : .running
-        }
-        if self.installFailed {
-            return .failed
-        }
+        if self.installFailed { return .failed }
         return .running // status probe still deciding
     }
 
     private var installStepStateForService: InstallStepState {
-        if cliInstalled {
-            return .done
+        if self.cliInstalled { return .done }
+        if self.installingCLI {
+            return self.cliInstallPhase == .startingService ? .running : .pending
         }
-        if installingCLI {
-            return cliInstallPhase == .startingService ? .running : .pending
-        }
-        if self.installFailed {
-            return .failed
-        }
+        if self.installFailed { return .failed }
         return .pending
     }
 
@@ -951,14 +948,10 @@ extension OnboardingView {
     }
 
     private func maybeLoadOnboardingSkills() async {
-        if onboardingSkillsModel.isLoading {
-            return
-        }
-        if didLoadOnboardingSkills, onboardingSkillsModel.error == nil {
-            return
-        }
-        didLoadOnboardingSkills = true
-        await onboardingSkillsModel.refresh()
+        if self.onboardingSkillsModel.isLoading { return }
+        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil { return }
+        self.didLoadOnboardingSkills = true
+        await self.onboardingSkillsModel.refresh()
     }
 
     private var skillsOverview: some View {

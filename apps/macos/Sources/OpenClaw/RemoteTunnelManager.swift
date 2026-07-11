@@ -114,10 +114,10 @@ actor RemoteTunnelManager {
             "ensure SSH tunnel target=\(configuration.target.host, privacy: .public) " +
                 "identitySet=\(identitySet, privacy: .public)")
 
-        if let route = await controlTunnelRouteIfRunning(configuration: configuration) {
+        if let route = await self.controlTunnelRouteIfRunning(configuration: configuration) {
             return route
         }
-        if let create = createInFlight {
+        if let create = self.createInFlight {
             if create.configuration == configuration {
                 self.logger.info("control tunnel create in flight; joining")
                 let tunnel: RemotePortTunnel

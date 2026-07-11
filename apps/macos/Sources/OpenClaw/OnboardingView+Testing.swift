@@ -35,10 +35,11 @@ extension OnboardingView {
         view.cliInstallLocation = "/usr/local/bin/openclaw"
         view.cliStatus = "Installed"
         view.state.connectionMode = .local
+        let contentHeight = view.contentHeight(for: OnboardingView.windowHeight)
         _ = view.welcomePage()
         _ = view.connectionPage()
-        _ = view.aiSetupPage()
-        _ = view.permissionsPage()
+        _ = view.aiSetupPage(contentHeight: contentHeight)
+        _ = view.permissionsPage(contentHeight: contentHeight)
         _ = view.cliPage()
         _ = view.readyPage()
 

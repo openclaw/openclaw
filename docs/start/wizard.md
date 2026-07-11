@@ -76,7 +76,7 @@ Plain `openclaw onboard` follows this path:
 1. Accept the security notice.
 2. Detect configured models, API-key environment variables, and supported local
    AI CLIs.
-3. Test the recommended candidate with a real completion. On failure, show the
+3. Test the first detected candidate with a real completion. On failure, show the
    reason and continue to the next usable candidate.
 4. If detection is exhausted, retry a detected candidate or enter a provider
    API key in a masked prompt. Guided onboarding

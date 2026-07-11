@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 // Guided onboarding: detect AI access, live-test it, then persist only a working route.
 import type {
   ActivateSetupInferenceResult,
@@ -8,7 +9,7 @@ import type {
 } from "../crestodian/setup-inference.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
@@ -105,6 +106,7 @@ async function tryCandidate(params: {
   const result = await withConsoleSubsystemsSuppressed(() =>
     params.activate({
       kind: params.candidate.kind,
+      modelRef: params.candidate.modelRef,
       workspace: params.workspace,
       surface: "cli",
       runtime: params.runtime,
@@ -225,22 +227,35 @@ async function runGuidedOnboardingFlow(
   deps: GuidedOnboardingDeps,
 ): Promise<GuidedOnboardingHandoff | null> {
   const onboardHelpers = await import("./onboard-helpers.js");
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (snapshot.exists && !snapshot.valid) {
-    runtime.error(
-      `OpenClaw configuration is invalid. Run ${formatCliCommand("openclaw doctor --fix")} before onboarding.`,
-    );
-    runtime.exit(1);
-    return null;
-  }
-
   const prompter = await (deps.createPrompter?.() ??
     import("../wizard/clack-prompter.js").then(({ createClackPrompter }) => createClackPrompter()));
   onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.guided.intro"));
   await prompter.note(t("wizard.guided.escapeHatches"), t("wizard.guided.welcomeTitle"));
 
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  if (snapshot.exists && !snapshot.valid) {
+    const issues =
+      snapshot.issues.length > 0
+        ? formatConfigIssueLines(snapshot.issues, "-").join("\n")
+        : t("wizard.guided.invalidConfigUnknown");
+    await prompter.note(
+      t("wizard.guided.invalidConfigDetails", {
+        path: shortenHomePath(snapshot.path),
+        issues,
+      }),
+      t("wizard.setup.invalidConfigTitle"),
+    );
+    await prompter.outro(
+      t("wizard.guided.invalidConfigRepair", {
+        fixCommand: formatCliCommand("openclaw doctor --fix"),
+        inspectCommand: formatCliCommand("openclaw config validate"),
+      }),
+    );
+    runtime.exit(1);
+    return null;
+  }
   const existingConfig =
     snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
   await requireRiskAcknowledgement({ opts, prompter, config: existingConfig });
@@ -262,15 +277,10 @@ async function runGuidedOnboardingFlow(
   if (detection.candidates.length === 0) {
     await prompter.note(t("wizard.guided.foundNothing"), t("wizard.guided.detectedTitle"));
   } else {
-    const orderedCandidates = [
-      ...detection.candidates.filter((candidate) => candidate.recommended),
-      ...detection.candidates.filter((candidate) => !candidate.recommended),
-    ];
-    const candidates = orderedCandidates.map((candidate) =>
+    const candidates = detection.candidates.map((candidate) =>
       t("wizard.guided.detectedCandidate", {
         label: candidate.label,
         detail: candidate.detail,
-        recommended: candidate.recommended ? t("wizard.guided.recommendedSuffix") : "",
       }),
     );
     await prompter.note(candidates.join("\n"), t("wizard.guided.detectedTitle"));

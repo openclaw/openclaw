@@ -10,6 +10,7 @@ import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
+import "../components/browser/browser-panel.ts";
 import "../components/resizable-divider.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
@@ -22,6 +23,7 @@ import {
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
 import { icons } from "../components/icons.ts";
+import "../components/new-session-dialog.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
@@ -39,6 +41,7 @@ import {
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "./context.ts";
+import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
@@ -118,6 +121,16 @@ function isTerminalAvailable(
   return (
     hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
     isGatewayMethodAdvertised(snapshot, "terminal.open") === true
+  );
+}
+
+function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapshot"]): boolean {
+  if (!snapshot.connected) {
+    return false;
+  }
+  return (
+    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+    isGatewayMethodAdvertised(snapshot, "browser.request") === true
   );
 }
 
@@ -364,6 +377,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
 
   @state() private navDrawerOpen = false;
+  @state() private newSessionDraft: { agentId: string } | null = null;
   @state() private activeSessionKey = "";
   @state() private settingsSearchQuery = "";
   @state() private routeState: ShellRouteState = {};
@@ -631,13 +645,13 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.exitSettings();
       return;
     }
-    if (
-      event.altKey ||
-      event.shiftKey ||
-      !event.metaKey ||
-      event.ctrlKey ||
-      event.key.toLowerCase() !== "b"
-    ) {
+    const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
+    if (commandKey && event.shiftKey && event.code === "Comma") {
+      event.preventDefault();
+      this.navigate("config");
+      return;
+    }
+    if (!commandKey || event.shiftKey || event.key.toLowerCase() !== "b") {
       return;
     }
     event.preventDefault();
@@ -803,6 +817,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       gatewaySnapshot,
       context.config.current.terminalEnabled ?? false,
     );
+    const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
     const activeRoute = this.routeState.routeId ?? "chat";
     // Plugin tabs share one route; the search picks the active item.
     const activePluginTabId =
@@ -827,6 +842,18 @@ class OpenClawShell extends OpenClawLightDomElement {
         }}
         .onSlashCommand=${this.handleCommandPaletteSlashCommand}
       ></openclaw-command-palette>
+      <openclaw-new-session-dialog
+        .open=${this.newSessionDraft !== null}
+        .initialAgentId=${this.newSessionDraft?.agentId ?? ""}
+        .onClose=${() => {
+          this.newSessionDraft = null;
+        }}
+        .onCreated=${(sessionKey: string) => {
+          this.newSessionDraft = null;
+          context.gateway.setSessionKey(sessionKey);
+          this.navigate("chat", { search: searchForSession(sessionKey) });
+        }}
+      ></openclaw-new-session-dialog>
       <div
         class="shell ${activeRoute === "chat" ? "shell--chat" : ""} ${navCollapsed
           ? "shell--nav-collapsed"
@@ -904,6 +931,10 @@ class OpenClawShell extends OpenClawLightDomElement {
                 null}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
+                .onOpenNewSession=${(agentId: string) => {
+                  this.newSessionDraft = { agentId };
+                }}
+                .draftSessionAgentId=${this.newSessionDraft?.agentId ?? ""}
                 .onToggleMore=${() =>
                   context.navigation.update({
                     sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,
@@ -967,6 +998,16 @@ class OpenClawShell extends OpenClawLightDomElement {
           .available=${terminalAvailable}
           .themeMode=${resolveTerminalThemeMode()}
         ></openclaw-terminal-panel>
+        <openclaw-browser-panel
+          .client=${gatewaySnapshot.connected ? gatewaySnapshot.client : null}
+          .available=${browserPanelAvailable}
+          .basePath=${context.basePath}
+          .authToken=${resolveControlUiAuthToken({
+            hello: gatewaySnapshot.hello,
+            settings: { token: context.gateway.connection.token },
+            password: context.gateway.connection.password,
+          })}
+        ></openclaw-browser-panel>
         <openclaw-exec-approval
           .props=${{
             queue: overlaySnapshot.approvalQueue,

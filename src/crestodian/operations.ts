@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
@@ -728,14 +729,22 @@ async function applyPersistentOperation(params: {
   };
   const outcome = await params.run({ runtime, deps: opts.deps, commit });
   const after = await readConfigFileSnapshot();
-  await appendCrestodianAuditEntry({
-    operation: auditOperation,
-    summary: outcome.summary,
-    configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
-    configHashBefore: before.hash ?? null,
-    configHashAfter: after.hash ?? null,
-    details: { ...opts.auditDetails, ...outcome.details },
-  });
+  try {
+    await appendCrestodianAuditEntry({
+      operation: auditOperation,
+      summary: outcome.summary,
+      configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
+      configHashBefore: before.hash ?? null,
+      configHashAfter: after.hash ?? null,
+      details: { ...opts.auditDetails, ...outcome.details },
+    });
+  } catch (error) {
+    // The mutation already committed. Keep success truthful while making the
+    // missing audit record visible to every CLI/chat capture surface.
+    runtime.error(
+      `${outcome.summary}, but OpenClaw could not record its audit entry: ${formatErrorMessage(error)}`,
+    );
+  }
   runtime.log(`[crestodian] done: ${auditOperation}`);
   return { applied: true };
 }
@@ -993,6 +1002,7 @@ async function executeSetDefaultModel(
         );
       }
       let persistedVerification = initialVerification;
+      let selectedRouteForCommit = verifiedRoute;
       const selectModel = await createCrestodianModelSelectionUpdater({
         model: operation.model,
       });
@@ -1001,9 +1011,9 @@ async function executeSetDefaultModel(
         writeOptions: {
           preCommitRuntimePreflight: async (sourceConfig) => {
             const commitRoute = await projectDefaultInferenceRoute(sourceConfig);
-            if (!sameDefaultInferenceRoute(commitRoute, verifiedRoute)) {
+            if (!sameDefaultInferenceRoute(commitRoute, selectedRouteForCommit)) {
               throw new Error(
-                "The verified inference route changed while preparing the config write, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
+                "The selected inference route changed while preparing the config write, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
               );
             }
             await opts.beforePersistentApply?.();
@@ -1039,11 +1049,15 @@ async function executeSetDefaultModel(
           }
           const selected = selectModel(cfg);
           const selectedRoute = await projectDefaultInferenceRoute(selected);
-          if (!sameDefaultInferenceRoute(selectedRoute, verifiedRoute)) {
+          if (selectedRoute.route?.modelLabel !== verifiedModelRef) {
             throw new Error(
-              "The verified inference route no longer matches the model selection that would be saved. Review the current model/auth/runtime settings and retry.",
+              "The model selection no longer resolves to the exact model that passed live inference. Review the current model/auth/runtime settings and retry.",
             );
           }
+          // Unrelated concurrent edits can change how the selected model is
+          // represented. Bind the commit gate to this deterministic projection;
+          // the final live probe below verifies these exact bytes before write.
+          selectedRouteForCommit = selectedRoute;
           cfg.agents = selected.agents;
         },
       });

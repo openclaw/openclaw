@@ -15,7 +15,13 @@ import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { legacyModelKey, modelKey, normalizeProviderId } from "../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  legacyModelKey,
+  modelKey,
+  normalizeProviderId,
+  resolveModelRefFromString,
+} from "../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import {
@@ -35,6 +41,7 @@ import {
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
@@ -51,6 +58,7 @@ import type { ProviderAuthMethod, ProviderAuthResult } from "../plugins/types.js
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { appendCrestodianAuditEntry } from "./audit.js";
 import {
   projectDefaultInferenceRoute,
   resolveCrestodianConfiguredRouteFromConfig,
@@ -91,7 +99,8 @@ export type SetupInferenceCandidate = {
   label: string;
   detail: string;
   modelRef: string;
-  recommended: boolean;
+  /** @deprecated Gateway wire compatibility for older macOS clients. Always false. */
+  recommended: false;
   credentials?: boolean;
 };
 
@@ -152,12 +161,16 @@ export type BoundVerifySetupInferenceResult =
 
 export type ActivateSetupInferenceParams = {
   kind: InferenceBackendKind | "api-key";
+  /** Exact explicit model to probe and persist instead of the route's starter model. */
+  modelRef?: string;
   /** Manual step only: provider-auth choice returned by detection. */
   authChoice?: string;
   /** Manual step only: the pasted API key or token. Never logged. */
   apiKey?: string;
   workspace?: string;
   surface: "cli" | "gateway";
+  /** False when an enclosing persistent-operation boundary owns the setup audit. */
+  recordSetupAudit?: boolean;
   runtime: RuntimeEnv;
   deps?: ActivateSetupInferenceDeps;
 };
@@ -207,6 +220,15 @@ export type DetectSetupInferenceDeps = {
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
 };
 
+function invalidSetupConfigError(snapshot: {
+  path: string;
+  issues?: Array<{ path?: string; message: string }>;
+}): string {
+  const issue = snapshot.issues?.[0];
+  const detail = issue ? ` (${issue.path ? `${issue.path}: ` : ""}${issue.message})` : "";
+  return `OpenClaw config ${snapshot.path} is invalid${detail}. Fix it before running setup.`;
+}
+
 async function resolveSetupInferenceWorkspace(params: {
   configExists: boolean;
   configValid: boolean;
@@ -254,24 +276,27 @@ export async function detectSetupInference(
 ): Promise<SetupInferenceDetection> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
+  if (snapshot.exists && !snapshot.valid) {
+    throw new Error(invalidSetupConfigError(snapshot));
+  }
   const cfg = snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
   const detected = await detectInferenceBackends({ config: cfg });
   // Gemini CLI has no hard tool-off mode: wildcard exclusions can be
   // overridden by admin policy and do not stop discovery or MCP startup.
   // Keep normal agent support, but never offer it for the setup safety probe.
   const raw = detected.filter((candidate) => candidate.kind !== "gemini-cli");
-  // Recommended = the first candidate setup itself would bootstrap with; a
-  // definitively logged-out CLI never gets the badge.
-  const recommendedIndex = raw.findIndex((candidate) => candidate.credentials !== false);
-  const candidates = raw.map((candidate, index) => ({
-    ...candidate,
-    recommended: index === recommendedIndex,
-  }));
+  const candidates = raw.map((candidate) =>
+    // Released macOS clients require this field. Keep it false so the wire
+    // contract remains decodable without expressing a provider preference.
+    Object.assign(candidate, { recommended: false as const }),
+  );
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
   });
-  const configuredModel = raw.find((candidate) => candidate.kind === "existing-model")?.modelRef;
+  const configuredModel = candidates.find(
+    (candidate) => candidate.kind === "existing-model",
+  )?.modelRef;
   const authChoices = (
     deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
   )({
@@ -664,8 +689,27 @@ function projectManualInferenceConfig(params: {
   return config;
 }
 
+function canonicalizeSetupModelRef(params: {
+  cfg: OpenClawConfig;
+  raw: string;
+  defaultProvider: string;
+}): string {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    raw: params.raw,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+  });
+  return resolved ? `${resolved.ref.provider}/${resolved.ref.model}` : params.raw;
+}
+
 async function buildTestPlan(params: {
   kind: InferenceBackendKind | "api-key";
+  modelRef?: string;
   authChoice?: string;
   apiKey?: string;
   cfg: OpenClawConfig;
@@ -676,11 +720,36 @@ async function buildTestPlan(params: {
   deps: ActivateSetupInferenceDeps;
 }): Promise<SetupInferenceTestPlan | { error: string }> {
   const { kind, cfg, workspaceDir } = params;
+  const resolveRouteModelRef = (defaultModelRef: string): string | { error: string } => {
+    const modelRef = params.modelRef?.trim() || defaultModelRef;
+    const selected = parseRef(modelRef);
+    const expected = parseRef(defaultModelRef);
+    if (
+      !selected.model ||
+      normalizeProviderId(selected.provider) !== normalizeProviderId(expected.provider)
+    ) {
+      return { error: `${modelRef} is not compatible with the ${kind} inference route.` };
+    }
+    return modelRef;
+  };
   switch (kind) {
     case "existing-model": {
       const route = await resolveCrestodianConfiguredRouteFromConfig(cfg);
       if (!route) {
         return { error: "No configured default-agent inference route is available." };
+      }
+      const requestedModelRef = params.modelRef?.trim();
+      const requestedTarget = requestedModelRef
+        ? canonicalizeSetupModelRef({
+            cfg,
+            raw: requestedModelRef,
+            defaultProvider: route.provider,
+          })
+        : undefined;
+      if (requestedModelRef && requestedTarget !== route.modelLabel) {
+        return {
+          error: `The configured default model changed from ${requestedModelRef} to ${route.modelLabel}. Try setup again.`,
+        };
       }
       return {
         runner: route.runner,
@@ -698,65 +767,85 @@ async function buildTestPlan(params: {
       };
     }
     case "claude-cli": {
-      const ref = parseRef(CLAUDE_CLI_DEFAULT_MODEL_REF);
+      const modelRef = resolveRouteModelRef(CLAUDE_CLI_DEFAULT_MODEL_REF);
+      if (typeof modelRef !== "string") {
+        return modelRef;
+      }
+      const ref = parseRef(modelRef);
       return {
         runner: "cli",
         ...ref,
-        modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
+        modelRef,
         config: cfg,
         agentId: "crestodian",
         routeAgentId: resolveDefaultAgentId(cfg),
-        persistModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
+        persistModelRef: modelRef,
       };
     }
     case "gemini-cli": {
-      const ref = parseRef(GEMINI_CLI_DEFAULT_MODEL_REF);
+      const modelRef = resolveRouteModelRef(GEMINI_CLI_DEFAULT_MODEL_REF);
+      if (typeof modelRef !== "string") {
+        return modelRef;
+      }
+      const ref = parseRef(modelRef);
       return {
         runner: "cli",
         ...ref,
-        modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
+        modelRef,
         config: cfg,
         agentId: "crestodian",
         routeAgentId: resolveDefaultAgentId(cfg),
-        persistModelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
+        persistModelRef: modelRef,
       };
     }
     case "codex-cli": {
-      const ref = parseRef(CODEX_APP_SERVER_DEFAULT_MODEL_REF);
+      const modelRef = resolveRouteModelRef(CODEX_APP_SERVER_DEFAULT_MODEL_REF);
+      if (typeof modelRef !== "string") {
+        return modelRef;
+      }
+      const ref = parseRef(modelRef);
       return {
         runner: "embedded",
         ...ref,
-        modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
+        modelRef,
         config: cfg,
         agentId: "crestodian",
         routeAgentId: resolveDefaultAgentId(cfg),
         agentDir: params.agentDir,
         cleanupBundleMcpOnRunEnd: true,
-        persistModelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
+        persistModelRef: modelRef,
       };
     }
     case "openai-api-key": {
-      const ref = parseRef(OPENAI_API_DEFAULT_MODEL_REF);
+      const modelRef = resolveRouteModelRef(OPENAI_API_DEFAULT_MODEL_REF);
+      if (typeof modelRef !== "string") {
+        return modelRef;
+      }
+      const ref = parseRef(modelRef);
       return {
         runner: "embedded",
         ...ref,
-        modelRef: OPENAI_API_DEFAULT_MODEL_REF,
+        modelRef,
         config: cfg,
         agentId: "crestodian",
         routeAgentId: resolveDefaultAgentId(cfg),
-        persistModelRef: OPENAI_API_DEFAULT_MODEL_REF,
+        persistModelRef: modelRef,
       };
     }
     case "anthropic-api-key": {
-      const ref = parseRef(ANTHROPIC_API_DEFAULT_MODEL_REF);
+      const modelRef = resolveRouteModelRef(ANTHROPIC_API_DEFAULT_MODEL_REF);
+      if (typeof modelRef !== "string") {
+        return modelRef;
+      }
+      const ref = parseRef(modelRef);
       return {
         runner: "embedded",
         ...ref,
-        modelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
+        modelRef,
         config: cfg,
         agentId: "crestodian",
         routeAgentId: resolveDefaultAgentId(cfg),
-        persistModelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
+        persistModelRef: modelRef,
       };
     }
     case "api-key": {
@@ -837,9 +926,10 @@ async function buildTestPlan(params: {
           result = prepared.result;
           preparedConfig = prepared.config;
         }
-      } catch {
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
         return {
-          error: `${resolved.provider.label} could not prepare this credential for app-guided setup.`,
+          error: `${resolved.provider.label} could not prepare this credential for app-guided setup: ${detail}`,
         };
       }
       const modelRef = result.defaultModel
@@ -977,7 +1067,8 @@ async function runProviderManualSecretMethod(params: {
 /**
  * Test one candidate with a real completion, then persist it as the setup
  * default. Manual credentials are tested from a temporary auth store and
- * copied into the real agent store only after success, so failures leave no trace.
+ * copied into the real agent store only after success. A managed Codex install
+ * record may remain after a failed probe because the installed package already exists.
  */
 export async function activateSetupInference(
   params: ActivateSetupInferenceParams,
@@ -985,7 +1076,12 @@ export async function activateSetupInference(
   try {
     const result = await activateSetupInferenceUnredacted(params);
     if (result.ok) {
-      return result;
+      return {
+        ...result,
+        lines: await Promise.all(
+          result.lines.map((line) => redactSetupInferenceError(line, params.apiKey)),
+        ),
+      };
     }
     return {
       ...result,
@@ -1009,10 +1105,13 @@ async function activateSetupInferenceUnredacted(
   const readSnapshot =
     deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
   const snapshot = await readSnapshot();
-  const cfg: OpenClawConfig =
-    snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
-  const sourceCfg: OpenClawConfig =
-    snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
+  if (snapshot.exists && !snapshot.valid) {
+    throw new Error(invalidSetupConfigError(snapshot));
+  }
+  const cfg: OpenClawConfig = snapshot.exists ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const sourceCfg: OpenClawConfig = snapshot.exists
+    ? (snapshot.sourceConfig ?? snapshot.config)
+    : {};
   const workspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace)
     : (
@@ -1028,12 +1127,12 @@ async function activateSetupInferenceUnredacted(
   const testAgentDir = path.join(tempDir, "agent");
   let pendingCodexInstall: PluginInstallRecord | undefined;
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
-  let codexInstallRetained = false;
   let codexRegistryNeedsReload = false;
   let codexRegistryReloaded = false;
   try {
     const plan = await buildTestPlan({
       kind: params.kind,
+      ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
       ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
       ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
       cfg,
@@ -1107,7 +1206,7 @@ async function activateSetupInferenceUnredacted(
       if (pendingCodexInstall) {
         // The managed package exists before inference can run. Mark this
         // generation retained now so a process exit cannot strand unowned bytes.
-        codexInstallRetained = await retainUnownedCodexInstall({
+        const codexInstallRetained = await retainUnownedCodexInstall({
           record: pendingCodexInstall,
           verifyOwnership: false,
           deps,
@@ -1593,11 +1692,31 @@ async function activateSetupInferenceUnredacted(
         );
       }
     }
+    let lines = [`Inference verified: ${plan.modelRef}`];
+    if (params.surface === "gateway" && params.recordSetupAudit !== false) {
+      const after = await readSnapshot().catch(() => null);
+      try {
+        await appendCrestodianAuditEntry({
+          operation: "crestodian.setup",
+          summary: "Verified and configured AI access through Crestodian setup",
+          configPath: after?.path ?? snapshot.path,
+          configHashBefore: snapshot.hash ?? null,
+          configHashAfter: after?.hash ?? null,
+          details: { modelRef: plan.modelRef, inferenceKind: params.kind },
+        });
+      } catch (error) {
+        // Inference is already verified and its route may already be durable.
+        // Surface audit failure as a warning instead of misreporting setup failure.
+        const warning = `Inference setup completed, but OpenClaw could not record its audit entry: ${formatErrorMessage(error)}`;
+        params.runtime.error?.(warning);
+        lines = [...lines, warning];
+      }
+    }
     return {
       ok: true,
       modelRef: plan.modelRef,
       latencyMs: test.latencyMs,
-      lines: [`Inference verified: ${plan.modelRef}`],
+      lines,
     };
   } finally {
     let codexCleanupError: SetupInferenceActivationIndeterminateError | undefined;
@@ -1629,8 +1748,9 @@ async function activateSetupInferenceUnredacted(
         );
       }
     }
-    await cleanupSetupInferenceTempDir({ tempDir, deps });
+    await cleanupSetupInferenceTempDir({ tempDir, deps, runtime: params.runtime });
     if (codexCleanupError) {
+      // oxlint-disable-next-line no-unsafe-finally -- an indeterminate plugin cleanup must supersede a stale success result
       throw codexCleanupError;
     }
   }
@@ -1708,8 +1828,8 @@ export async function verifySetupInference(
   if (!snapshot.valid) {
     return {
       ok: false,
-      status: "unavailable",
-      error: "OpenClaw config is invalid. Run `openclaw doctor --fix` before continuing.",
+      status: "format",
+      error: invalidSetupConfigError(snapshot),
     };
   }
   const cfg: OpenClawConfig = snapshot.runtimeConfig ?? snapshot.config;
@@ -1982,13 +2102,14 @@ export async function verifySetupInferenceConfig(params: {
       error: await redactSetupInferenceError(test.error),
     };
   } finally {
-    await cleanupSetupInferenceTempDir({ tempDir, deps });
+    await cleanupSetupInferenceTempDir({ tempDir, deps, runtime: params.runtime });
   }
 }
 
 async function cleanupSetupInferenceTempDir(params: {
   tempDir: string;
   deps: ActivateSetupInferenceDeps;
+  runtime?: RuntimeEnv;
 }): Promise<void> {
   try {
     const disposeDatabase =
@@ -2004,9 +2125,12 @@ async function cleanupSetupInferenceTempDir(params: {
     await (
       params.deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true }))
     )(params.tempDir);
-  } catch {
+  } catch (error) {
     // Cleanup happens after the inference result or durable activation. It must
     // never turn a verified/committed route into a failed client RPC.
+    params.runtime?.error?.(
+      `Could not remove temporary AI setup files: ${formatErrorMessage(error)}`,
+    );
     log.warn("Could not remove the temporary inference test directory.");
   }
 }

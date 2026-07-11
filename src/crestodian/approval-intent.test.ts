@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   classifyCrestodianApprovalIntent,
   classifyCrestodianApprovalText,
+  type CrestodianApprovalIntentDeps,
 } from "./approval-intent.js";
 import { createCrestodianVerifiedInferenceTestFixture } from "./crestodian.test-helpers.js";
 import type { CrestodianVerifiedInferenceBinding } from "./verified-inference.js";
@@ -34,21 +35,33 @@ async function verifiedInference(
 function completionDeps(replyText: string, binding: CrestodianVerifiedInferenceBinding) {
   const route = binding.execution;
   return {
-    resolveVerifiedInferenceRoute: vi.fn(async () => route),
-    prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
-      model: {},
-      auth: { profileId: route.authProfileId },
-      sourceAuthFingerprint: binding.auth.authFingerprint,
-      selection: {
-        provider: route.modelLabel.split("/", 1)[0],
-        modelId: route.model,
-        profileId: route.authProfileId,
-        agentDir: route.agentDir,
-      },
-    })) as never,
-    completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
-      content: [{ type: "text", text: replyText }],
-    })) as never,
+    resolveVerifiedInferenceRoute: vi.fn<
+      NonNullable<CrestodianApprovalIntentDeps["resolveVerifiedInferenceRoute"]>
+    >(async () => route),
+    prepareSimpleCompletionModelForAgent: vi.fn<
+      NonNullable<CrestodianApprovalIntentDeps["prepareSimpleCompletionModelForAgent"]>
+    >(
+      async () =>
+        ({
+          model: {},
+          auth: { profileId: route.authProfileId },
+          sourceAuthFingerprint: binding.auth.authFingerprint,
+          selection: {
+            provider: route.provider,
+            modelId: route.model,
+            profileId: route.authProfileId,
+            agentDir: route.agentDir,
+          },
+        }) as never,
+    ),
+    completeWithPreparedSimpleCompletionModel: vi.fn<
+      NonNullable<CrestodianApprovalIntentDeps["completeWithPreparedSimpleCompletionModel"]>
+    >(
+      async () =>
+        ({
+          content: [{ type: "text", text: replyText }],
+        }) as never,
+    ),
   };
 }
 

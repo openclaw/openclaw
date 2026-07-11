@@ -879,7 +879,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
     const copilotAuthStore = {
-      version: 1,
+      version: 1 as const,
       profiles: {
         "github-copilot:work": {
           type: "oauth" as const,
@@ -1197,7 +1197,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
     const codexAuthStore = {
-      version: 1,
+      version: 1 as const,
       runtimePersistedProfileIds: ["anthropic:work", "openai:other", "openai:work", "xai:work"],
       profiles: {
         "openai:work": {
@@ -2988,6 +2988,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
 
     mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError }));
     mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
       profiles: {
         "test-profile": {
           provider: "anthropic",

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { CrestodianChatEngine } from "./chat-engine.js";
 import { createCrestodianVerifiedInferenceTestFixture } from "./crestodian.test-helpers.js";
 import {
@@ -24,16 +24,22 @@ const verifiedInferenceConfig = {
 let verifiedInference: CrestodianVerifiedInferenceBinding;
 let verifiedInferenceDeps: CrestodianVerifiedInferenceDeps;
 
-function verifiedConfigSnapshot() {
+function verifiedConfigSnapshot(): ConfigFileSnapshot {
+  const config = structuredClone(verifiedInferenceConfig);
   return {
     exists: true,
     valid: true,
     path: "/tmp/openclaw.json",
     hash: "hash",
-    config: structuredClone(verifiedInferenceConfig),
-    runtimeConfig: structuredClone(verifiedInferenceConfig),
-    sourceConfig: structuredClone(verifiedInferenceConfig),
+    raw: null,
+    parsed: config,
+    config,
+    runtimeConfig: config,
+    sourceConfig: config,
+    resolved: config,
     issues: [],
+    warnings: [],
+    legacyIssues: [],
   };
 }
 

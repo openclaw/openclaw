@@ -10,6 +10,7 @@ import {
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginOrigin } from "../plugins/types.js";
 import { resolveCrestodianConfiguredRouteFromConfig } from "./inference-route.js";
 import { resolveCrestodianInferenceForPersistentApply } from "./setup-inference.js";
 import {
@@ -76,7 +77,23 @@ const profile = {
 
 const runtime = { log: () => {}, error: () => {}, exit: () => {} } as never;
 
-function pluginRecord(pluginId: string, overrides: Record<string, unknown> = {}) {
+type TestPluginRecord = {
+  pluginId: string;
+  origin: PluginOrigin;
+  rootDir: string;
+  manifestPath: string;
+  manifestHash: string;
+  source: string;
+  packageName: string;
+  packageVersion: string;
+  installRecordHash?: string;
+  packageJson: { path: string; hash: string };
+};
+
+function pluginRecord(
+  pluginId: string,
+  overrides: Partial<TestPluginRecord> = {},
+): TestPluginRecord {
   const rootDir = `/plugins/${pluginId}`;
   return {
     pluginId,
@@ -324,7 +341,7 @@ describe("verified Crestodian inference binding", () => {
     if (!route || route.runner !== "cli") {
       throw new Error("missing test CLI route");
     }
-    const resolveOwner = vi.fn(() => "opaque-cli-owner");
+    const resolveOwner = vi.fn(async () => "opaque-cli-owner");
     const binding = await createCrestodianVerifiedInferenceBinding({
       configuredRoute: route,
       executionRoute: route,
@@ -357,7 +374,7 @@ describe("verified Crestodian inference binding", () => {
       }),
     ).resolves.toBe(binding.execution);
 
-    resolveOwner.mockReturnValue("replacement-owner");
+    resolveOwner.mockResolvedValue("replacement-owner");
     await expect(
       resolveCrestodianVerifiedInferenceRoute(binding, {
         readConfigFileSnapshot: vi.fn(async () => ({
@@ -404,7 +421,7 @@ describe("verified Crestodian inference binding", () => {
       deps: {
         ...pluginArtifactDeps(),
         ...cliRuntimeArtifactDeps(),
-        resolveCliRuntimeOwnerFingerprint: vi.fn(() => "opaque-cli-owner"),
+        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
       },
     });
 
@@ -415,7 +432,7 @@ describe("verified Crestodian inference binding", () => {
           valid: true,
           config: changedConfig,
         })) as never,
-        resolveCliRuntimeOwnerFingerprint: vi.fn(() => "opaque-cli-owner"),
+        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
       }),
     ).resolves.toBeNull();
   });
@@ -1271,14 +1288,14 @@ describe("verified Crestodian inference binding", () => {
   it.each([
     {
       name: "path/dev executable",
-      origin: "config",
+      origin: "config" as const,
       sourcePath: "src/index.ts",
       runtimePath: "dist/index.js",
       installRecordHash: undefined,
     },
     {
       name: "installed executable",
-      origin: "global",
+      origin: "global" as const,
       sourcePath: "dist/index.js",
       runtimePath: "dist/index.js",
       installRecordHash: "provider-owner-install-v1",

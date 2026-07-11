@@ -5,7 +5,7 @@ extension OnboardingView {
     /// best option live, fall through automatically, offer an API-key form
     /// when nothing works. Crestodian becomes available only after inference
     /// has completed a live round-trip.
-    func aiSetupPage() -> some View {
+    func aiSetupPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
             Text("Connect your AI")
                 .font(.largeTitle.weight(.semibold))
@@ -28,7 +28,8 @@ extension OnboardingView {
             .scrollIndicators(.automatic)
         }
         .padding(.horizontal, 28)
-        .frame(width: pageWidth, height: contentHeight, alignment: .top)
+        .padding(.top, 48)
+        .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
     }
 
     private var aiSetupSubtitle: String {
@@ -54,9 +55,7 @@ extension OnboardingView {
     func prepareCrestodianHandoff() {
         crestodianState.chat.onAgentHandoff = { [self] in self.finish() }
         aiSetup.onPendingActivationDeadline = { [self] deadline, routeIdentity in
-            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
-                state: self.state,
-                preferredGatewayID: self.effectivePreferredGatewayID)
+            let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
             guard currentRouteIdentity == routeIdentity else { return }
             self.configuredGatewayProbe.schedulePendingActivationRecheck(deadline: deadline) {
                 self.probeConfiguredGatewayForDashboard(startAISetupWhenMissing: true)
@@ -74,9 +73,7 @@ extension OnboardingView {
     @discardableResult
     func resumePendingCrestodian(modelRef: String) -> Task<Void, Never> {
         self.prepareCrestodianHandoff()
-        let expectedRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
-            state: state,
-            preferredGatewayID: effectivePreferredGatewayID)
+        let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
         aiSetup.resumeConfiguredInference(modelRef: modelRef)
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
@@ -85,9 +82,7 @@ extension OnboardingView {
             let outcome = await self.aiSetup.verifyPendingConfiguredInference()
             // The outcome belongs to the exact attempt and route captured by
             // verification. Never infer success from newer mutable UI state.
-            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
-                state: self.state,
-                preferredGatewayID: self.effectivePreferredGatewayID)
+            let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
             guard outcome == .connected,
                   self.aiSetup.connected,
                   currentRouteIdentity == expectedRouteIdentity,

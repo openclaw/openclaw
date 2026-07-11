@@ -179,7 +179,6 @@ vi.mock("../config/config.js", () => ({
   mutateConfigFile: mockConfig.mutateConfigFile,
   readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
 }));
-
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("parseCrestodianOperation", () => {
@@ -606,6 +605,29 @@ describe("parseCrestodianOperation", () => {
     );
   });
 
+  it("reports an audit failure without claiming the committed operation failed", async () => {
+    const tempDir = opTempDirs.make("crestodian-audit-warning-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const redirectedAuditDir = path.join(tempDir, "redirected-audit");
+    await fs.mkdir(redirectedAuditDir);
+    await fs.symlink(redirectedAuditDir, path.join(tempDir, "audit"), "dir");
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runConfigSet = vi.fn(async () => {});
+
+    const result = await executeCrestodianOperation(
+      { kind: "config-set", path: "gateway.port", value: "19001" },
+      runtime,
+      { approved: true, deps: { runConfigSet } },
+    );
+
+    expect(result.applied).toBe(true);
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(lines.join("\n")).toContain(
+      "Set config gateway.port, but OpenClaw could not record its audit entry:",
+    );
+    expect(lines.join("\n")).toContain("[crestodian] done: config.set");
+  });
+
   it("applies SecretRef config set through typed deps and writes an audit entry", async () => {
     const tempDir = opTempDirs.make("crestodian-config-ref-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
@@ -878,6 +900,8 @@ describe("parseCrestodianOperation", () => {
     mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
     const applySetup = vi.fn(async () => ({
       configPath: path.join(tempDir, "openclaw.json"),
+      configHashBefore: "mock-hash-0",
+      configHashAfter: "mock-hash-1",
       lines: ["Workspace: /tmp/work"],
     }));
     const deps = {
@@ -1028,7 +1052,12 @@ describe("parseCrestodianOperation", () => {
       gateway: { port: 18789 },
     });
     const { runtime } = createCrestodianTestRuntime();
-    const applySetup = vi.fn(async () => ({ configPath: "/tmp/openclaw.json", lines: [] }));
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: "mock-hash-0",
+      configHashAfter: "mock-hash-1",
+      lines: [],
+    }));
 
     const result = await executeCrestodianOperation(
       { kind: "setup", workspace: "/tmp/work" },
@@ -1087,6 +1116,8 @@ describe("parseCrestodianOperation", () => {
     mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
     const applySetup = vi.fn(async () => ({
       configPath: path.join(tempDir, "openclaw.json"),
+      configHashBefore: "mock-hash-0",
+      configHashAfter: "mock-hash-1",
       lines: ["Workspace: /tmp/work"],
     }));
 

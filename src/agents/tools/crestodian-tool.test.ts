@@ -139,6 +139,58 @@ describe("crestodian tool", () => {
     expect(proposalRef.current).toBeUndefined();
   });
 
+  it("binds setup approval to the exact verified model and workspace", async () => {
+    const proposalRef: { current?: string } = {};
+    const args = {
+      action: "setup",
+      workspace: "/tmp/work",
+      model: "openai/gpt-5.5",
+    };
+    const result = await createCrestodianTool({ surface: "gateway", proposalRef }).execute(
+      "setup-proposal",
+      args,
+    );
+
+    expect(toolText(result)).toContain("needs-approval");
+    expect(proposalRef.current).toBe(
+      hashCrestodianOperation({
+        kind: "setup",
+        workspace: "/tmp/work",
+        model: "openai/gpt-5.5",
+      }),
+    );
+    expect(
+      resolveCrestodianProposalTransition({
+        args: { action: "setup", workspace: "/tmp/work" },
+        resultText: toolText(result),
+      }),
+    ).toEqual({ proposal: proposalRef.current });
+  });
+
+  it("voids setup approval when the requested model changes", async () => {
+    const proposalRef = {
+      current: hashCrestodianOperation({
+        kind: "setup",
+        model: "openai/gpt-5.5",
+      }),
+    };
+    const tool = createCrestodianTool({
+      surface: "gateway",
+      approvalArmed: true,
+      proposalRef,
+    });
+
+    const result = await tool.execute("changed-model", {
+      action: "setup",
+      model: "anthropic/claude-sonnet-4-6",
+      approved: true,
+    });
+
+    expect(toolText(result)).toContain("approval-mismatch");
+    expect(proposalRef.current).toBeUndefined();
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
+  });
+
   it("refuses an armed call that differs from the proposed operation", async () => {
     const proposalRef: { current?: string } = {};
     const proposingTool = createCrestodianTool({ surface: "cli", proposalRef });
@@ -339,6 +391,12 @@ describe("crestodian tool", () => {
       resolveCrestodianProposalTransition({
         args,
         resultText: "needs-approval: this action changes state.",
+      }),
+    ).toEqual({ proposal: hash });
+    expect(
+      resolveCrestodianProposalTransition({
+        args,
+        resultText: `needs-approval:${hash}\nThis action changes state.`,
       }),
     ).toEqual({ proposal: hash });
     // A voided approval clears it.

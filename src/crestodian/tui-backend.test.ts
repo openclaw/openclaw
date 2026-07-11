@@ -92,12 +92,15 @@ describe("runCrestodianTui", () => {
     const planWithAssistant = vi.fn(async () => ({ reply: "ready" }));
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
     const runChannelsAdd = vi.fn(async () => undefined);
-    const options = {
+    const fixture = await createCrestodianVerifiedInferenceTestFixture(verifiedConfig);
+    const options: CrestodianTuiOptions = {
+      verifiedInference: fixture.binding,
       deps: { loadOverview },
       planWithAssistant,
       runTui,
       runChannelsAdd,
-    } as CrestodianTuiOptions;
+    };
+    Reflect.deleteProperty(options, "verifiedInference");
 
     await expect(runCrestodianTui(options, createRuntime())).rejects.toBeInstanceOf(
       CrestodianInferenceUnavailableError,

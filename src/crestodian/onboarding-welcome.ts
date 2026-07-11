@@ -82,7 +82,6 @@ export async function buildOnboardingWelcome(params: {
   const workspace = resolveUserPath(requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE);
 
   params.engine.propose({ kind: "setup", workspace });
-
   const welcome = [
     "## Hi, I'm Crestodian — let's hatch your agent.",
     "",

@@ -8,7 +8,7 @@ import {
   fingerprintOpaqueRuntimeOwner,
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { runCrestodianAgentTurnWithDeps } from "./agent-turn.js";
 import { classifyCrestodianApprovalText } from "./approval-intent.js";
@@ -102,16 +102,21 @@ function useTempStateDir(): string {
   return dir;
 }
 
-function configSnapshot(config: OpenClawConfig) {
+function configSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
   return {
     exists: true,
     valid: true,
     path: "/tmp/openclaw.json",
     hash: "h",
+    raw: null,
+    parsed: config,
     config,
     runtimeConfig: config,
     sourceConfig: config,
+    resolved: config,
     issues: [],
+    warnings: [],
+    legacyIssues: [],
   };
 }
 
@@ -336,6 +341,8 @@ describe("CrestodianChatEngine", () => {
     useTempStateDir();
     const applySetup = vi.fn(async () => ({
       configPath: "/tmp/openclaw.json",
+      configHashBefore: null,
+      configHashAfter: "after",
       lines: ["Workspace: /tmp/work"],
     }));
     expect(
@@ -578,7 +585,6 @@ describe("CrestodianChatEngine", () => {
       deps: {
         loadOverview: fakeOverviewLoader(),
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-        validateAgentHarnessRuntimeArtifact: vi.fn(async () => true),
       },
     });
 
@@ -654,7 +660,6 @@ describe("CrestodianChatEngine", () => {
       deps: {
         loadOverview: fakeOverviewLoader(),
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-        validateAgentHarnessRuntimeArtifact: vi.fn(async () => true),
       },
     });
 
@@ -1172,7 +1177,10 @@ describe("CrestodianChatEngine", () => {
 
   it("clears a stale host proposal once the agent loop owns the conversation", async () => {
     const engine = new CrestodianChatEngine({
-      runAgentTurn: async () => ({ text: "loop reply" }),
+      runAgentTurn: async (params) => {
+        params.session.proposalRef.current = "agent-proposal";
+        return { text: "loop reply" };
+      },
       classifyApproval: async () => "other",
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -1182,6 +1190,180 @@ describe("CrestodianChatEngine", () => {
 
     // A later approval must arm the loop's own proposal, not the stale one.
     expect(engine.hasPendingProposal()).toBe(false);
+  });
+
+  it("keeps a host setup proposal when the loop only answers a question", async () => {
+    let observedInput = "";
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        observedInput = params.input;
+        return { text: "A workspace is where your agent keeps its project files." };
+      },
+      classifyApproval: async () => "other",
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose({
+      kind: "setup",
+      workspace: "/tmp/work",
+      model: "openai/gpt-5.5",
+    });
+
+    await engine.handle("what does workspace mean?");
+
+    expect(engine.hasPendingProposal()).toBe(true);
+    expect(observedInput).toContain('"model":"openai/gpt-5.5"');
+    expect(observedInput).toContain("Keep the verified model");
+  });
+
+  it("preserves the verified setup model when planner fallback changes only the workspace", async () => {
+    useTempStateDir();
+    const verifyInferenceConfig = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 100,
+    }));
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: "before",
+      configHashAfter: "after",
+      lines: ["Workspace: /tmp/new-work"],
+    }));
+    let pendingOperation = "";
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async (params) => {
+        pendingOperation = params.pendingOperation ?? "";
+        return {
+          reply: "I'll use the new workspace and keep the selected AI route.",
+          command: "setup workspace /tmp/new-work",
+          modelLabel: "planner",
+        };
+      },
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: {
+        applySetup,
+        verifyInferenceConfig,
+        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
+      },
+    });
+    engine.propose({
+      kind: "setup",
+      workspace: "/tmp/old-work",
+      model: "openai/gpt-5.5",
+    });
+
+    const revised = await engine.handle("put the workspace under /tmp/new-work instead");
+    expect(revised.text).toContain("Model choice: keep verified default openai/gpt-5.5.");
+    expect(pendingOperation).toContain('"model":"openai/gpt-5.5"');
+
+    await engine.handle("yes");
+
+    expect(verifyInferenceConfig).toHaveBeenCalledOnce();
+    expect(applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace: "/tmp/new-work",
+        expectedInferenceRoute: expect.objectContaining({
+          route: expect.objectContaining({ modelLabel: "openai/gpt-5.5" }),
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("tells the agent loop when a preserved host proposal was resolved", async () => {
+    const observedInputs: string[] = [];
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        observedInputs.push(params.input);
+        return { text: "answer" };
+      },
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: { loadOverview: fakeOverviewLoader(), runConfigSet },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("why that port?");
+    await engine.handle("yes");
+    await engine.handle("what next?");
+
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(observedInputs).toHaveLength(2);
+    expect(observedInputs[1]).toContain("[host-proposal-resolved]");
+    expect(observedInputs[1]).toContain("was approved");
+  });
+
+  it("keeps a host-resolution marker queued across planner fallback", async () => {
+    const observedInputs: string[] = [];
+    const runConfigSet = vi.fn(async () => {});
+    const runAgentTurn = vi.fn(async (params: { input: string }) => {
+      observedInputs.push(params.input);
+      return observedInputs.length === 1 ? null : { text: "native reply" };
+    });
+    const planner = vi.fn(async () => ({ reply: "planner fallback", modelLabel: "planner" }));
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner,
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: { loadOverview: fakeOverviewLoader(), runConfigSet },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("yes");
+    await engine.handle("what next?");
+    await engine.handle("try the native session again");
+    await engine.handle("and now?");
+
+    expect(planner).toHaveBeenCalledOnce();
+    expect(observedInputs).toHaveLength(3);
+    expect(observedInputs[0]).toContain("was approved");
+    expect(observedInputs[1]).toContain("was approved");
+    expect(observedInputs[2]).not.toContain("host-proposal-resolved");
+  });
+
+  it("clears both proposal stores when the agent takes a directive", async () => {
+    const armedFlags: boolean[] = [];
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        armedFlags.push(params.approvalArmed);
+        if (armedFlags.length === 1) {
+          params.session.proposalRef.current = "agent-proposal";
+          return {
+            text: "Opening setup.",
+            directive: { kind: "open-setup" as const, target: "guided" as const },
+          };
+        }
+        return { text: "No pending change." };
+      },
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("use the wizard instead");
+    await engine.handle("yes");
+
+    expect(engine.hasPendingProposal()).toBe(false);
+    expect(armedFlags).toEqual([false, false]);
+  });
+
+  it("never injects exact sensitive config JSON into a follow-up model turn", async () => {
+    let observedInput = "";
+    const secret = "123:very-secret";
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        observedInput = params.input;
+        return { text: "That is the Telegram bot credential." };
+      },
+      classifyApproval: async () => "other",
+      deps: { loadOverview: fakeOverviewLoader(), runConfigSet: vi.fn(async () => {}) },
+    });
+
+    await engine.handle(`config set channels.telegram.botToken ${secret}`);
+    await engine.handle("what is that setting?");
+
+    expect(observedInput).not.toContain(secret);
+    expect(observedInput).toContain("<redacted>");
   });
 
   it("keeps an exact sensitive config set away from every model path", async () => {
@@ -1529,7 +1711,7 @@ describe("Crestodian agent loop backends", () => {
       agents: {
         defaults: {
           model: { primary: "claude-cli/claude-opus-4-8" },
-          cliBackends: { "claude-cli": {} },
+          cliBackends: { "claude-cli": { command: "claude" } },
         },
       },
     } satisfies OpenClawConfig;
@@ -1587,7 +1769,7 @@ describe("Crestodian agent loop backends", () => {
       agents: {
         defaults: {
           model: { primary: "claude-cli/claude-opus-4-8" },
-          cliBackends: { "claude-cli": {} },
+          cliBackends: { "claude-cli": { command: "claude" } },
         },
       },
     } satisfies OpenClawConfig;

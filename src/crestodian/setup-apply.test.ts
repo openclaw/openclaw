@@ -1,67 +1,136 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { projectDefaultInferenceRoute, sameDefaultInferenceRoute } from "./inference-route.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { projectDefaultInferenceRoute } from "./inference-route.js";
 
-const setupMocks = vi.hoisted(() => ({
-  readConfigFileSnapshot: vi.fn(),
-  readSetupConfigFileSnapshot: vi.fn(),
-  writeWizardConfigFile: vi.fn(),
-  resolveQuickstartGatewayDefaults: vi.fn(),
-  applyLocalSetupWorkspaceConfig: vi.fn(),
-  ensureWorkspaceAndSessions: vi.fn(),
-  configureGatewayForSetup: vi.fn(),
-  ensureGatewayServiceForOnboarding: vi.fn(),
-  resolveLocalControlUiProbeLinks: vi.fn(),
-  waitForGatewayReachable: vi.fn(),
-  loadExecApprovals: vi.fn(() => ({ agents: {} })),
-  saveExecApprovals: vi.fn(),
+type ConfigSnapshot = {
+  exists: boolean;
+  valid: boolean;
+  path: string;
+  hash: string | null;
+  config: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
+  issues: Array<{ path?: string; message: string }>;
+};
+
+type CommitTransform = (
+  currentConfig: OpenClawConfig,
+  context: {
+    previousHash: string | null;
+    snapshot: ConfigSnapshot;
+    attempt: number;
+  },
+) =>
+  | { nextConfig: OpenClawConfig; result?: unknown }
+  | Promise<{ nextConfig: OpenClawConfig; result?: unknown }>;
+
+const mocks = vi.hoisted(() => ({
+  state: {
+    initialSnapshot: {} as ConfigSnapshot,
+    commitConfig: {} as OpenClawConfig,
+    commitSnapshot: {} as ConfigSnapshot,
+    commitPreviousHash: "probe" as string | null,
+    persistedConfig: undefined as OpenClawConfig | undefined,
+  },
+  events: [] as string[],
+  readSnapshot: vi.fn<() => Promise<ConfigSnapshot>>(),
+  readVerifiedSnapshot: vi.fn<() => Promise<ConfigSnapshot>>(),
+  commit: vi.fn(),
+  configureGateway: vi.fn(),
+  ensureWorkspace: vi.fn(),
+  ensureGatewayService: vi.fn(),
+  refreshPluginRegistry: vi.fn(),
+  updateExecApprovals: vi.fn(),
 }));
 
-vi.mock("../config/config.js", async (importActual) => ({
-  ...(await importActual<typeof import("../config/config.js")>()),
-  readConfigFileSnapshot: setupMocks.readConfigFileSnapshot,
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: mocks.readVerifiedSnapshot,
 }));
 
-vi.mock("../wizard/setup.shared.js", () => ({
-  readSetupConfigFileSnapshot: setupMocks.readSetupConfigFileSnapshot,
-  writeWizardConfigFile: setupMocks.writeWizardConfigFile,
-  resolveQuickstartGatewayDefaults: setupMocks.resolveQuickstartGatewayDefaults,
+vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../wizard/setup.shared.js")>()),
+  readSetupConfigFileSnapshot: mocks.readSnapshot,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
-  DEFAULT_WORKSPACE: "/tmp/workspace",
-  applyWizardMetadata: (config: OpenClawConfig) => config,
-  ensureWorkspaceAndSessions: setupMocks.ensureWorkspaceAndSessions,
-  resolveLocalControlUiProbeLinks: setupMocks.resolveLocalControlUiProbeLinks,
-  waitForGatewayReachable: setupMocks.waitForGatewayReachable,
+  applyWizardMetadata: (config: OpenClawConfig) => ({
+    ...config,
+    wizard: {
+      ...config.wizard,
+      lastRunAt: "2026-07-10T00:00:00.000Z",
+      lastRunVersion: "test",
+      lastRunCommand: "onboard",
+      lastRunMode: "local",
+    },
+  }),
+  ensureWorkspaceAndSessions: mocks.ensureWorkspace,
+  resolveLocalControlUiProbeLinks: ({ port }: { port: number }) => ({
+    wsUrl: `ws://127.0.0.1:${port}`,
+  }),
+  waitForGatewayReachable: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("../commands/onboard-config.js", () => ({
-  applyLocalSetupWorkspaceConfig: setupMocks.applyLocalSetupWorkspaceConfig,
+vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/install-record-commit.js")>()),
+  transformConfigWithPendingPluginInstalls: mocks.commit,
 }));
 
 vi.mock("../wizard/setup.gateway-config.js", () => ({
-  configureGatewayForSetup: setupMocks.configureGatewayForSetup,
+  configureGatewayForSetup: mocks.configureGateway,
 }));
 
 vi.mock("../wizard/setup.finalize.js", () => ({
-  ensureGatewayServiceForOnboarding: setupMocks.ensureGatewayServiceForOnboarding,
+  ensureGatewayServiceForOnboarding: mocks.ensureGatewayService,
+}));
+
+vi.mock("../plugins/registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistry,
 }));
 
 vi.mock("../infra/exec-approvals.js", () => ({
-  loadExecApprovals: setupMocks.loadExecApprovals,
-  saveExecApprovals: setupMocks.saveExecApprovals,
+  updateExecApprovals: mocks.updateExecApprovals,
+}));
+
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
+  resolveAgentDir: (config: OpenClawConfig, agentId: string) =>
+    config.agents?.list?.find((agent) => agent.id === agentId)?.agentDir ?? `/agents/${agentId}`,
 }));
 
 import { applyCrestodianModelSelection, applyCrestodianSetup } from "./setup-apply.js";
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+const runtime: RuntimeEnv = {
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
+};
+
+function snapshot(hash: string | null, config: OpenClawConfig): ConfigSnapshot {
+  return {
+    exists: hash !== null,
+    valid: true,
+    path: "/tmp/openclaw.json",
+    hash,
+    config,
+    sourceConfig: config,
+    runtimeConfig: config,
+    issues: [],
+  };
+}
+
+function baseParams(overrides: Partial<Parameters<typeof applyCrestodianSetup>[0]> = {}) {
+  return {
+    workspace: "/tmp/openclaw-workspace",
+    surface: "gateway" as const,
+    runtime,
+    ...overrides,
+  };
+}
 
 describe("applyCrestodianModelSelection", () => {
-  it("clears stale harness pins when switching to a native provider route", async () => {
+  it("clears stale harness pins in both model scopes for a native route", async () => {
     const config = {
       agents: {
         defaults: {
@@ -94,439 +163,379 @@ describe("applyCrestodianModelSelection", () => {
     expect(result.agents?.list?.[0]?.models?.["openai/gpt-5.5"]).toEqual({ alias: "primary" });
     expect(result.agents?.list?.[0]?.model).toBe("openai/gpt-5.5");
   });
+
+  it("pins the verified credential without creating a global visibility map", async () => {
+    const result = await applyCrestodianModelSelection({
+      config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      model: "openai/gpt-5.5",
+      authProfileId: "openai:verified",
+    });
+
+    expect(result.agents?.defaults?.model).toBe("openai/gpt-5.5@openai:verified");
+    expect(result.agents?.defaults?.models).toBeUndefined();
+  });
 });
 
-describe("applyCrestodianSetup", () => {
-  it.each([
-    ["missing", false, true],
-    ["invalid", true, false],
-  ])(
-    "rejects a %s config snapshot before rebuilding setup from an empty config",
-    async (_label, exists, valid) => {
-      setupMocks.readSetupConfigFileSnapshot.mockResolvedValue({
-        exists,
-        valid,
-        hash: "unusable",
-        config: {},
-        sourceConfig: {},
-        runtimeConfig: {},
+describe("applyCrestodianSetup transaction boundaries", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.events.length = 0;
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    };
+    mocks.state.initialSnapshot = snapshot("probe", config);
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = snapshot("probe", config);
+    mocks.state.commitPreviousHash = "probe";
+    mocks.state.persistedConfig = undefined;
+    mocks.readSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+    mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+    mocks.commit.mockImplementation(async (params: { transform: CommitTransform }) => {
+      const result = await params.transform(structuredClone(mocks.state.commitConfig), {
+        previousHash: mocks.state.commitPreviousHash,
+        snapshot: mocks.state.commitSnapshot,
+        attempt: 0,
       });
+      mocks.events.push("commit");
+      mocks.state.persistedConfig = result.nextConfig;
+      return {
+        nextConfig: result.nextConfig,
+        path: "/tmp/openclaw.json",
+        previousHash: mocks.state.commitPreviousHash,
+        persistedHash: "persisted",
+        result: result.result,
+      };
+    });
+    mocks.configureGateway.mockImplementation(
+      async ({
+        nextConfig,
+        quickstartGateway,
+      }: {
+        nextConfig: OpenClawConfig;
+        quickstartGateway: {
+          authMode: "token" | "password";
+          bind: "loopback" | "lan";
+          customBindHost?: string;
+          port: number;
+          token?: string;
+        };
+      }) => ({
+        nextConfig,
+        settings: {
+          authMode: quickstartGateway.authMode,
+          bind: quickstartGateway.bind,
+          customBindHost: quickstartGateway.customBindHost,
+          gatewayToken: quickstartGateway.token,
+          port: quickstartGateway.port,
+        },
+      }),
+    );
+    mocks.ensureWorkspace.mockImplementation(async () => {
+      mocks.events.push("workspace");
+    });
+    mocks.ensureGatewayService.mockResolvedValue({ installDaemon: false });
+    mocks.refreshPluginRegistry.mockResolvedValue(undefined);
+    mocks.updateExecApprovals.mockResolvedValue(undefined);
+  });
+
+  it.each([
+    { expected: null, actual: "present" },
+    { expected: "probe", actual: "different" },
+  ])(
+    "rejects initial $expected -> $actual revision drift before writing",
+    async ({ expected, actual }) => {
+      mocks.state.initialSnapshot = snapshot(actual, {});
 
       await expect(
-        applyCrestodianSetup({
-          workspace: "/tmp/work",
-          surface: "gateway",
-          runtime: { log: () => {}, error: () => {}, exit: () => {} },
-        }),
-      ).rejects.toThrow("missing or invalid");
+        applyCrestodianSetup(baseParams({ expectedConfigHash: expected })),
+      ).rejects.toThrow("config changed while AI access was being tested");
 
-      expect(setupMocks.applyLocalSetupWorkspaceConfig).not.toHaveBeenCalled();
-      expect(setupMocks.configureGatewayForSetup).not.toHaveBeenCalled();
-      expect(setupMocks.writeWizardConfigFile).not.toHaveBeenCalled();
-      expect(setupMocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
-      expect(setupMocks.saveExecApprovals).not.toHaveBeenCalled();
+      expect(mocks.commit).not.toHaveBeenCalled();
+      expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
     },
   );
 
-  it("rejects a configured user agent that collides with Crestodian's privileged id", async () => {
+  it("preserves fresh-setup behavior for an explicitly verified absent revision", async () => {
+    const absent = snapshot(null, {});
+    mocks.state.initialSnapshot = absent;
+    mocks.state.commitConfig = {};
+    mocks.state.commitSnapshot = absent;
+    mocks.state.commitPreviousHash = null;
+
+    const result = await applyCrestodianSetup(baseParams({ expectedConfigHash: null }));
+
+    expect(result.configHashBefore).toBeNull();
+    expect(mocks.state.persistedConfig).toMatchObject({
+      agents: { defaults: { workspace: "/tmp/openclaw-workspace" } },
+    });
+  });
+
+  it("rejects invalid config before any setup mutation", async () => {
+    mocks.state.initialSnapshot = {
+      ...snapshot("invalid", {}),
+      valid: false,
+      issues: [{ path: "agents", message: "bad agent config" }],
+    };
+
+    await expect(applyCrestodianSetup(baseParams())).rejects.toThrow("bad agent config");
+
+    expect(mocks.commit).not.toHaveBeenCalled();
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("rejects a configured user agent that collides with the privileged id", async () => {
     const config = {
       agents: {
         defaults: { model: "openai/gpt-5.5" },
         list: [{ id: "Crestodian" }],
       },
     } satisfies OpenClawConfig;
-    setupMocks.readSetupConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      hash: "reserved-agent",
-      config,
-      sourceConfig: config,
-      runtimeConfig: config,
-    });
+    mocks.state.initialSnapshot = snapshot("reserved", config);
 
-    await expect(
-      applyCrestodianSetup({
-        workspace: "/tmp/work",
-        surface: "gateway",
-        runtime: { log: () => {}, error: () => {}, exit: () => {} },
-      }),
-    ).rejects.toThrow('Agent id "crestodian" is reserved');
-
-    expect(setupMocks.writeWizardConfigFile).not.toHaveBeenCalled();
-    expect(setupMocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
-    expect(setupMocks.saveExecApprovals).not.toHaveBeenCalled();
-  });
-
-  it("rejects config drift before workspace or Gateway mutation", async () => {
-    const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    const snapshot = {
-      exists: true,
-      valid: true,
-      hash: "changed-after-verification",
-      config,
-      sourceConfig: config,
-      runtimeConfig: config,
-    };
-    setupMocks.readSetupConfigFileSnapshot.mockResolvedValue(snapshot);
-    setupMocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
-
-    const expectedInferenceRoute = await projectDefaultInferenceRoute({
-      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
-    });
-
-    await expect(
-      applyCrestodianSetup({
-        workspace: "/tmp/work",
-        expectedInferenceRoute,
-        surface: "gateway",
-        runtime: { log: () => {}, error: () => {}, exit: () => {} },
-      }),
-    ).rejects.toThrow("changed before setup could start");
-
-    expect(setupMocks.applyLocalSetupWorkspaceConfig).not.toHaveBeenCalled();
-    expect(setupMocks.writeWizardConfigFile).not.toHaveBeenCalled();
-    expect(setupMocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
-  });
-
-  it("compares the verified route with fully validated plugin defaults", async () => {
-    const sourceConfig = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.6-sol",
-          models: {
-            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
-          },
-        },
-      },
-      plugins: { entries: { codex: { enabled: true } } },
-    } satisfies OpenClawConfig;
-    const runtimeConfig = structuredClone(sourceConfig);
-    runtimeConfig.plugins!.entries!.codex!.config = {
-      codexDynamicToolsLoading: "searchable",
-    };
-    const setupSnapshot = {
-      path: "/tmp/openclaw.json",
-      exists: true,
-      valid: true,
-      hash: "same-authored-config",
-      config: sourceConfig,
-      sourceConfig,
-      runtimeConfig: sourceConfig,
-    };
-    setupMocks.readSetupConfigFileSnapshot.mockResolvedValue(setupSnapshot);
-    setupMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...setupSnapshot,
-      config: runtimeConfig,
-      runtimeConfig,
-    });
-    setupMocks.applyLocalSetupWorkspaceConfig.mockImplementation(
-      (config: OpenClawConfig, workspace: string) => ({
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: { ...config.agents?.defaults, workspace },
-        },
-      }),
+    await expect(applyCrestodianSetup(baseParams())).rejects.toThrow(
+      'Agent id "crestodian" is reserved',
     );
-    setupMocks.resolveQuickstartGatewayDefaults.mockReturnValue({
-      hasExisting: false,
-      port: 18789,
-      bind: "loopback",
-      authMode: "token",
-      tailscaleMode: "off",
-      tailscaleResetOnExit: false,
-    });
-    setupMocks.configureGatewayForSetup.mockImplementation(
-      async (opts: { nextConfig: OpenClawConfig }) => ({
-        nextConfig: opts.nextConfig,
-        settings: {
-          port: 18789,
-          bind: "loopback",
-          authMode: "token",
-          tailscaleMode: "off",
-          tailscaleResetOnExit: false,
-        },
-      }),
-    );
-    setupMocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
 
-    await expect(
-      applyCrestodianSetup({
-        workspace: "/tmp/work",
-        expectedInferenceRoute: await projectDefaultInferenceRoute(runtimeConfig),
-        surface: "gateway",
-        runtime: { log: () => {}, error: () => {}, exit: () => {} },
-      }),
-    ).resolves.toMatchObject({ lines: expect.arrayContaining(["Workspace: /tmp/work"]) });
-
-    expect(setupMocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
-    expect(setupMocks.writeWizardConfigFile).toHaveBeenCalledOnce();
-    expect(setupMocks.ensureWorkspaceAndSessions).toHaveBeenCalledOnce();
+    expect(mocks.commit).not.toHaveBeenCalled();
   });
 
-  it("rejects resolved source drift hidden behind an unchanged root hash", async () => {
-    const staleConfig = {
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-      gateway: { port: 18789 },
-    } satisfies OpenClawConfig;
-    const currentConfig = {
-      ...staleConfig,
-      gateway: { port: 19000 },
-    } satisfies OpenClawConfig;
-    setupMocks.readSetupConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      valid: true,
-      hash: "unchanged-root-file",
-      config: staleConfig,
-      sourceConfig: staleConfig,
-      runtimeConfig: staleConfig,
-    });
-    setupMocks.readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      valid: true,
-      hash: "unchanged-root-file",
-      config: currentConfig,
-      sourceConfig: currentConfig,
-      runtimeConfig: currentConfig,
-    });
+  it("rechecks the probed revision inside the final transform", async () => {
+    mocks.state.commitPreviousHash = "concurrent";
 
-    await expect(
-      applyCrestodianSetup({
-        workspace: "/tmp/work",
-        expectedInferenceRoute: await projectDefaultInferenceRoute(currentConfig),
-        surface: "gateway",
-        runtime: { log: () => {}, error: () => {}, exit: () => {} },
-      }),
-    ).rejects.toThrow("changed before setup could start");
+    await expect(applyCrestodianSetup(baseParams({ expectedConfigHash: "probe" }))).rejects.toThrow(
+      "config changed while AI access was being tested",
+    );
 
-    expect(setupMocks.applyLocalSetupWorkspaceConfig).not.toHaveBeenCalled();
-    expect(setupMocks.writeWizardConfigFile).not.toHaveBeenCalled();
-    expect(setupMocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
+    expect(mocks.state.persistedConfig).toBeUndefined();
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["missing", false, true],
-    ["invalid", true, false],
-  ])(
-    "rejects a %s config snapshot after a retryable CAS conflict",
-    async (_label, exists, valid) => {
-      const config = {
-        agents: { defaults: { model: "openai/gpt-5.5" } },
-        gateway: { port: 19000, bind: "lan" },
-      } satisfies OpenClawConfig;
-      setupMocks.readSetupConfigFileSnapshot
-        .mockResolvedValueOnce({
-          exists: true,
-          valid: true,
-          hash: "hash-1",
-          config,
-          sourceConfig: config,
-          runtimeConfig: config,
-        })
-        .mockResolvedValueOnce({
-          exists,
-          valid,
-          hash: "hash-2",
-          config,
-          sourceConfig: config,
-          runtimeConfig: config,
-        });
-      setupMocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: true,
-        valid: true,
-        hash: "hash-1",
-        config,
-        sourceConfig: config,
-        runtimeConfig: config,
-      });
-      setupMocks.applyLocalSetupWorkspaceConfig.mockImplementation(
-        (current: OpenClawConfig, workspace: string) => ({
-          ...current,
-          agents: {
-            ...current.agents,
-            defaults: { ...current.agents?.defaults, workspace },
-          },
-        }),
-      );
-      setupMocks.resolveQuickstartGatewayDefaults.mockReturnValue({
-        hasExisting: true,
-        port: 19000,
-        bind: "lan",
-        authMode: "token",
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
-      });
-      setupMocks.configureGatewayForSetup.mockImplementation(
-        async (opts: { nextConfig: OpenClawConfig }) => ({
-          nextConfig: opts.nextConfig,
-          settings: {
-            port: 19000,
-            bind: "lan",
-            authMode: "token",
-            tailscaleMode: "off",
-            tailscaleResetOnExit: false,
-          },
-        }),
-      );
-      setupMocks.writeWizardConfigFile.mockRejectedValueOnce(
-        new ConfigMutationConflictError("config changed since last load", {
-          currentHash: "hash-2",
-        }),
-      );
-      const expectedInferenceRoute = await projectDefaultInferenceRoute(config);
-
-      await expect(
-        applyCrestodianSetup({
-          workspace: "/tmp/work",
-          expectedInferenceRoute,
-          surface: "gateway",
-          runtime: { log: () => {}, error: () => {}, exit: () => {} },
-        }),
-      ).rejects.toThrow("missing or invalid");
-
-      expect(setupMocks.configureGatewayForSetup).toHaveBeenCalledTimes(1);
-      expect(setupMocks.writeWizardConfigFile).toHaveBeenCalledTimes(1);
-      expect(setupMocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
-      expect(setupMocks.saveExecApprovals).not.toHaveBeenCalled();
+    {
+      name: "default agent",
+      runtimeConfig: {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.5" } },
+          list: [{ id: "other", default: true }],
+        },
+      },
+      error: "default agent changed",
     },
-  );
+    {
+      name: "default model",
+      runtimeConfig: {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+      },
+      error: "default model changed",
+    },
+  ])("rechecks the probed $name inside the final transform", async ({ runtimeConfig, error }) => {
+    mocks.state.commitSnapshot = snapshot("probe", runtimeConfig);
 
-  it("rebuilds Gateway settings from the config that wins a CAS retry", async () => {
-    const initialConfig = {
+    await expect(
+      applyCrestodianSetup(
+        baseParams({
+          expectedConfigHash: "probe",
+          expectedAgentId: "main",
+          expectedModelRef: "openai/gpt-5.5",
+        }),
+      ),
+    ).rejects.toThrow(error);
+
+    expect(mocks.state.persistedConfig).toBeUndefined();
+  });
+
+  it("rejects same-revision agent credential directory drift in the final snapshot", async () => {
+    mocks.state.commitSnapshot = snapshot("probe", {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        list: [{ id: "main", default: true, agentDir: "/agents/moved" }],
+      },
+    });
+
+    await expect(
+      applyCrestodianSetup(
+        baseParams({
+          expectedConfigHash: "probe",
+          expectedAgentId: "main",
+          expectedAgentDir: "/agents/main",
+        }),
+      ),
+    ).rejects.toThrow("agent credential location changed");
+
+    expect(mocks.state.persistedConfig).toBeUndefined();
+  });
+
+  it("folds plugin and auth config into one commit while preserving concurrent edits", async () => {
+    mocks.state.commitConfig = {
+      ...mocks.state.commitConfig,
+      logging: { level: "debug" },
+    };
+    mocks.state.commitSnapshot = snapshot("probe", mocks.state.commitConfig);
+
+    const result = await applyCrestodianSetup(
+      baseParams({
+        expectedConfigHash: "probe",
+        expectedAgentId: "main",
+        expectedModelRef: "openai/gpt-5.5",
+        enablePluginId: "codex",
+        configPatch: { agents: { defaults: { maxConcurrent: 7 } } },
+      }),
+    );
+
+    expect(mocks.commit).toHaveBeenCalledOnce();
+    expect(mocks.state.persistedConfig).toMatchObject({
+      agents: {
+        defaults: {
+          workspace: "/tmp/openclaw-workspace",
+          maxConcurrent: 7,
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+      logging: { level: "debug" },
+      plugins: { entries: { codex: { enabled: true } } },
+    });
+    expect(result.configPath).toBe("/tmp/openclaw.json");
+  });
+
+  it("rejects route drift before opening the config transaction", async () => {
+    const current = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } satisfies OpenClawConfig;
+    const verified = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("probe", current);
+    mocks.readVerifiedSnapshot.mockResolvedValue(snapshot("probe", current));
+
+    await expect(
+      applyCrestodianSetup(
+        baseParams({ expectedInferenceRoute: await projectDefaultInferenceRoute(verified) }),
+      ),
+    ).rejects.toThrow("changed before setup could start");
+
+    expect(mocks.commit).not.toHaveBeenCalled();
+  });
+
+  it("rejects resolved source drift hidden behind an unchanged root hash", async () => {
+    const stale = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      gateway: { port: 18789 },
+    } satisfies OpenClawConfig;
+    const current = {
+      ...stale,
+      gateway: { port: 19000 },
+    } satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("same-root", stale);
+    mocks.readVerifiedSnapshot.mockResolvedValue(snapshot("same-root", current));
+
+    await expect(
+      applyCrestodianSetup(
+        baseParams({ expectedInferenceRoute: await projectDefaultInferenceRoute(current) }),
+      ),
+    ).rejects.toThrow("changed before setup could start");
+
+    expect(mocks.commit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a setup candidate that changes the exact verified route identity", async () => {
+    const initial = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } satisfies OpenClawConfig;
+    const initialSnapshot = snapshot("probe", initial);
+    mocks.state.initialSnapshot = initialSnapshot;
+    mocks.state.commitConfig = initial;
+    mocks.state.commitSnapshot = initialSnapshot;
+    mocks.readVerifiedSnapshot.mockResolvedValue(initialSnapshot);
+
+    await expect(
+      applyCrestodianSetup(
+        baseParams({
+          model: "anthropic/claude-opus-4-8",
+          expectedInferenceRoute: await projectDefaultInferenceRoute(initial),
+        }),
+      ),
+    ).rejects.toThrow("no longer preserves the exact verified inference route");
+
+    expect(mocks.state.persistedConfig).toBeUndefined();
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds Gateway settings from the snapshot that wins a transaction retry", async () => {
+    const initial = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
       gateway: {
         port: 18789,
         bind: "loopback",
         auth: { mode: "token", token: "initial-token" },
-        tailscale: { mode: "off" },
       },
     } satisfies OpenClawConfig;
-    const concurrentConfig = {
-      ...initialConfig,
+    const concurrent = {
+      ...initial,
       gateway: {
-        ...initialConfig.gateway,
+        ...initial.gateway,
         port: 19000,
         bind: "lan",
         auth: { mode: "token" as const, token: "concurrent-token" },
       },
     } satisfies OpenClawConfig;
-    setupMocks.readSetupConfigFileSnapshot
-      .mockResolvedValueOnce({
-        exists: true,
-        valid: true,
-        hash: "hash-1",
-        config: initialConfig,
-        sourceConfig: initialConfig,
-        runtimeConfig: initialConfig,
-      })
-      .mockResolvedValueOnce({
-        exists: true,
-        valid: true,
-        hash: "hash-2",
-        config: concurrentConfig,
-        sourceConfig: concurrentConfig,
-        runtimeConfig: concurrentConfig,
-      });
-    setupMocks.readConfigFileSnapshot
-      .mockResolvedValueOnce({
-        exists: true,
-        valid: true,
-        hash: "hash-1",
-        config: initialConfig,
-        sourceConfig: initialConfig,
-        runtimeConfig: initialConfig,
-      })
-      .mockResolvedValueOnce({
-        exists: true,
-        valid: true,
-        hash: "hash-2",
-        config: concurrentConfig,
-        sourceConfig: concurrentConfig,
-        runtimeConfig: concurrentConfig,
-      });
-    setupMocks.applyLocalSetupWorkspaceConfig.mockImplementation(
-      (config: OpenClawConfig, workspace: string) => ({
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: { ...config.agents?.defaults, workspace },
-        },
-      }),
-    );
-    setupMocks.resolveQuickstartGatewayDefaults.mockImplementation((config: OpenClawConfig) => ({
-      hasExisting: true,
-      port: config.gateway?.port ?? 18789,
-      bind: config.gateway?.bind ?? "loopback",
-      authMode: config.gateway?.auth?.mode ?? "token",
-      tailscaleMode: config.gateway?.tailscale?.mode ?? "off",
-      token: config.gateway?.auth?.token,
-      tailscaleResetOnExit: false,
-    }));
-    setupMocks.configureGatewayForSetup.mockImplementation(
-      async (opts: {
-        nextConfig: OpenClawConfig;
-        quickstartGateway: {
-          port: number;
-          bind: "loopback" | "lan";
-          authMode: "token";
-          token?: string;
-          tailscaleMode: "off";
-        };
-      }) => ({
-        nextConfig: opts.nextConfig,
-        settings: {
-          port: opts.quickstartGateway.port,
-          bind: opts.quickstartGateway.bind,
-          authMode: opts.quickstartGateway.authMode,
-          gatewayToken: opts.quickstartGateway.token,
-          tailscaleMode: opts.quickstartGateway.tailscaleMode,
-          tailscaleResetOnExit: false,
-        },
-      }),
-    );
-    setupMocks.writeWizardConfigFile
-      .mockRejectedValueOnce(
-        new ConfigMutationConflictError("config changed since last load", {
-          currentHash: "hash-2",
-        }),
-      )
-      .mockImplementationOnce(async (config: OpenClawConfig) => config);
-    setupMocks.ensureGatewayServiceForOnboarding.mockResolvedValue({
-      installDaemon: true,
-      containerWithoutUserSystemd: false,
+    const initialSnapshot = snapshot("hash-1", initial);
+    const concurrentSnapshot = snapshot("hash-2", concurrent);
+    mocks.state.initialSnapshot = initialSnapshot;
+    mocks.state.commitConfig = initial;
+    mocks.state.commitSnapshot = initialSnapshot;
+    let setupReads = 0;
+    mocks.readSnapshot.mockImplementation(async () => {
+      if (setupReads++ === 0) {
+        return initialSnapshot;
+      }
+      return snapshot("persisted", mocks.state.persistedConfig ?? concurrent);
     });
-    setupMocks.resolveLocalControlUiProbeLinks.mockImplementation(({ port }: { port: number }) => ({
-      wsUrl: `ws://127.0.0.1:${port}`,
-    }));
-    setupMocks.waitForGatewayReachable.mockResolvedValue({ ok: true });
-    const expectedInferenceRoute = await projectDefaultInferenceRoute(initialConfig);
-
-    await applyCrestodianSetup({
-      workspace: "/tmp/work",
-      expectedInferenceRoute,
-      surface: "cli",
-      runtime: { log: () => {}, error: () => {}, exit: () => {} },
+    let verifiedReads = 0;
+    mocks.readVerifiedSnapshot.mockImplementation(async () => {
+      verifiedReads += 1;
+      if (verifiedReads <= 2) {
+        return initialSnapshot;
+      }
+      if (verifiedReads === 3) {
+        return concurrentSnapshot;
+      }
+      return snapshot("persisted", mocks.state.persistedConfig ?? concurrent);
     });
+    mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
+      await params.transform(initial, {
+        previousHash: "hash-1",
+        snapshot: initialSnapshot,
+        attempt: 0,
+      });
+      const result = await params.transform(concurrent, {
+        previousHash: "hash-2",
+        snapshot: concurrentSnapshot,
+        attempt: 1,
+      });
+      mocks.events.push("commit");
+      mocks.state.persistedConfig = result.nextConfig;
+      return {
+        nextConfig: result.nextConfig,
+        path: "/tmp/openclaw.json",
+        previousHash: "hash-2",
+        persistedHash: "persisted",
+        result: result.result,
+      };
+    });
+    const expectedInferenceRoute = await projectDefaultInferenceRoute(initial);
 
-    expect(setupMocks.configureGatewayForSetup).toHaveBeenCalledTimes(2);
-    expect(setupMocks.configureGatewayForSetup).toHaveBeenLastCalledWith(
+    await applyCrestodianSetup(baseParams({ expectedInferenceRoute, surface: "cli" }));
+
+    expect(mocks.configureGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.configureGateway).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        baseConfig: concurrentConfig,
+        baseConfig: concurrent,
         localPort: 19000,
         quickstartGateway: expect.objectContaining({ port: 19000, bind: "lan" }),
       }),
     );
-    expect(setupMocks.writeWizardConfigFile).toHaveBeenLastCalledWith(
-      expect.objectContaining({ gateway: expect.objectContaining({ port: 19000, bind: "lan" }) }),
-      expect.objectContaining({ baseHash: "hash-2", migrationBaseConfig: concurrentConfig }),
-    );
-    expect(setupMocks.ensureGatewayServiceForOnboarding).toHaveBeenCalledWith(
+    expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
       expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          gateway: expect.objectContaining({ port: 19000, bind: "lan" }),
-        }),
         settings: expect.objectContaining({
           port: 19000,
           bind: "lan",
@@ -534,108 +543,136 @@ describe("applyCrestodianSetup", () => {
         }),
       }),
     );
-    expect(setupMocks.resolveLocalControlUiProbeLinks).toHaveBeenCalledWith(
-      expect.objectContaining({ port: 19000, bind: "lan" }),
-    );
-    expect(setupMocks.waitForGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "ws://127.0.0.1:19000", token: "concurrent-token" }),
-    );
   });
 
-  it("allows setup-owned config changes but stops before the next effect after route drift", async () => {
-    const initialConfig = {
+  it("revalidates the verified route after the config write", async () => {
+    const initial = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } satisfies OpenClawConfig;
+    const drifted = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    const initialSnapshot = snapshot("probe", initial);
+    const driftedSnapshot = snapshot("persisted", drifted);
+    mocks.state.initialSnapshot = initialSnapshot;
+    mocks.state.commitConfig = initial;
+    mocks.state.commitSnapshot = initialSnapshot;
+    mocks.readSnapshot
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(driftedSnapshot);
+    mocks.readVerifiedSnapshot
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(driftedSnapshot);
+    mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
+      const result = await params.transform(initial, {
+        previousHash: "probe",
+        snapshot: initialSnapshot,
+        attempt: 0,
+      });
+      mocks.state.persistedConfig = drifted;
+      return {
+        nextConfig: drifted,
+        path: "/tmp/openclaw.json",
+        previousHash: "probe",
+        persistedHash: "persisted",
+        result: result.result,
+      };
+    });
+
+    await expect(
+      applyCrestodianSetup(
+        baseParams({ expectedInferenceRoute: await projectDefaultInferenceRoute(initial) }),
+      ),
+    ).rejects.toThrow("changed after the config write");
+
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("stops stale continuation before the next persistent effect", async () => {
+    const initial = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
       auth: { order: { openai: ["openai:verified"] } },
-      gateway: { port: 18789 },
     } satisfies OpenClawConfig;
-    const expectedInferenceRoute = await projectDefaultInferenceRoute(initialConfig);
-    let currentConfig: OpenClawConfig = initialConfig;
-    setupMocks.readSetupConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      hash: "hash-1",
-      config: initialConfig,
-      sourceConfig: initialConfig,
-      runtimeConfig: initialConfig,
-    });
-    setupMocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      hash: "hash-1",
-      config: initialConfig,
-      sourceConfig: initialConfig,
-      runtimeConfig: initialConfig,
-    });
-    setupMocks.applyLocalSetupWorkspaceConfig.mockImplementation(
-      (config: OpenClawConfig, workspace: string) => ({
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: { ...config.agents?.defaults, workspace },
-        },
-      }),
+    const initialSnapshot = snapshot("probe", initial);
+    const expectedInferenceRoute = await projectDefaultInferenceRoute(initial);
+    let currentConfig: OpenClawConfig = initial;
+    let currentHash = "probe";
+    mocks.state.initialSnapshot = initialSnapshot;
+    mocks.state.commitConfig = initial;
+    mocks.state.commitSnapshot = initialSnapshot;
+    let setupReads = 0;
+    mocks.readSnapshot.mockImplementation(async () =>
+      setupReads++ === 0 ? initialSnapshot : snapshot(currentHash, currentConfig),
     );
-    setupMocks.resolveQuickstartGatewayDefaults.mockReturnValue({
-      hasExisting: true,
-      port: 18789,
-      bind: "loopback",
-      authMode: "token",
-      tailscaleMode: "off",
-      tailscaleResetOnExit: false,
+    mocks.readVerifiedSnapshot.mockImplementation(async () => snapshot(currentHash, currentConfig));
+    mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
+      const result = await params.transform(currentConfig, {
+        previousHash: currentHash,
+        snapshot: snapshot(currentHash, currentConfig),
+        attempt: 0,
+      });
+      currentConfig = result.nextConfig;
+      currentHash = "persisted";
+      mocks.state.persistedConfig = result.nextConfig;
+      mocks.events.push("commit");
+      return {
+        nextConfig: result.nextConfig,
+        path: "/tmp/openclaw.json",
+        previousHash: "probe",
+        persistedHash: currentHash,
+        result: result.result,
+      };
     });
-    setupMocks.configureGatewayForSetup.mockImplementation(
-      async (opts: { nextConfig: OpenClawConfig }) => ({
-        nextConfig: {
-          ...opts.nextConfig,
-          gateway: { ...opts.nextConfig.gateway, port: 19000 },
-          wizard: { securityAcknowledgedAt: "setup-owned" },
-        },
-        settings: {
-          port: 19000,
-          bind: "loopback",
-          authMode: "token",
-          tailscaleMode: "off",
-          tailscaleResetOnExit: false,
-        },
-      }),
-    );
-    setupMocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => {
-      currentConfig = config;
-      return config;
-    });
-    setupMocks.ensureWorkspaceAndSessions.mockImplementation(async () => {
+    mocks.ensureWorkspace.mockImplementationOnce(async () => {
       currentConfig = {
         ...currentConfig,
         auth: { order: { openai: ["openai:rotated"] } },
       };
+      authorityValid = false;
     });
     let guardCalls = 0;
-    const commit = async <T>(effect: () => Promise<T> | T): Promise<T> => {
+    let authorityValid = true;
+    const authorityCommit = async <T>(effect: () => Promise<T> | T): Promise<T> => {
       guardCalls += 1;
-      const currentRoute = await projectDefaultInferenceRoute(currentConfig);
-      if (!sameDefaultInferenceRoute(currentRoute, expectedInferenceRoute)) {
+      if (!authorityValid) {
         throw new Error("verified inference binding changed");
       }
       return await effect();
     };
 
     await expect(
-      applyCrestodianSetup(
-        {
-          workspace: "/tmp/work",
-          expectedInferenceRoute,
-          surface: "gateway",
-          runtime: { log: () => {}, error: () => {}, exit: () => {} },
-        },
-        { commit },
-      ),
+      applyCrestodianSetup(baseParams({ expectedInferenceRoute }), { commit: authorityCommit }),
     ).rejects.toThrow("verified inference binding changed");
 
-    // Config + workspace crossed their guards. Workspace/gateway/wizard are
-    // excluded from the immutable route, so the second guard still passed.
     expect(guardCalls).toBe(3);
-    expect(setupMocks.writeWizardConfigFile).toHaveBeenCalledOnce();
-    expect(setupMocks.ensureWorkspaceAndSessions).toHaveBeenCalledOnce();
-    expect(setupMocks.saveExecApprovals).not.toHaveBeenCalled();
+    expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
+    expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
+  });
+
+  it("returns visible post-commit workspace, approval, registry, and service failures", async () => {
+    mocks.ensureWorkspace.mockRejectedValueOnce(new Error("workspace exploded"));
+    mocks.updateExecApprovals.mockRejectedValueOnce(new Error("approval exploded"));
+    mocks.refreshPluginRegistry.mockRejectedValueOnce(new Error("registry exploded"));
+    mocks.ensureGatewayService.mockRejectedValueOnce(new Error("service exploded"));
+
+    const result = await applyCrestodianSetup(
+      baseParams({
+        expectedConfigHash: "probe",
+        enablePluginId: "codex",
+        refreshPluginRegistry: true,
+        surface: "cli",
+      }),
+    );
+
+    expect(mocks.events).toEqual(["commit"]);
+    expect(result.lines).toEqual(
+      expect.arrayContaining([
+        "Workspace files: workspace exploded",
+        "Crestodian exec approval: approval exploded; local model harnesses may ask again.",
+        "Plugin registry refresh failed: registry exploded",
+        "Gateway service: service exploded",
+      ]),
+    );
   });
 });

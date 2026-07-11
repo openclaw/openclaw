@@ -862,6 +862,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Media, chunking, and delivery
   - H2: Commands and slash behavior
   - H2: Native charts
+  - H2: Native tables
   - H2: Interactive replies
   - H3: Plugin-owned modal submissions
   - H2: Native approvals in Slack
@@ -1715,6 +1716,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway auth for node host
   - H2: Service (background)
   - H2: Pairing
+  - H3: Identity and pairing state
   - H2: Exec approvals
   - H2: Related
 
@@ -3339,6 +3341,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: What is available today
   - H2: Recommended path
+  - H2: Cooperative host suspension
   - H2: App code vs plugin code
   - H2: Related
 
@@ -3587,6 +3590,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: API surface (gateway protocol)
   - H2: Node command gating (2026.3.31+)
   - H2: Node event trust boundaries (2026.3.31+)
+  - H2: SSH-verified device auto-approval (default)
   - H2: Auto-approval (macOS app)
   - H2: Trusted-CIDR device auto-approval
   - H2: Silent pairing supersede cleanup
@@ -3669,6 +3673,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H4: Step 5: load the LaunchAgent
   - H4: Troubleshooting
   - H2: Related
+
+## gateway/restart-recovery.md
+
+- Route: /gateway/restart-recovery
+- Headings:
+  - H2: What survives a restart
+  - H2: Graceful restarts drain first
+  - H2: How interrupted work is detected
+  - H2: Automatic resume
+  - H3: Subagents
+  - H3: Background tasks
+  - H3: Agent-requested restarts
+  - H2: Safety valves and observability
+  - H2: What is not resumed
 
 ## gateway/sandbox-vs-tool-policy-vs-elevated.md
 
@@ -4108,6 +4126,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /
 - Headings:
   - H1: OpenClaw 🦞
+  - H2: Browse docs
   - H2: What is OpenClaw?
   - H2: How it works
   - H2: Key capabilities
@@ -4661,6 +4680,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Provider-only (SenseAudio)
   - H3: Echo transcript to chat (opt-in)
   - H2: Notes and limits
+  - H3: Resident local STT
   - H3: Proxy environment support
   - H2: Mention detection in groups
   - H2: Gotchas
@@ -4722,6 +4742,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Remote gateway via SSH tunnel (loopback bind)
   - H3: Start a node host (service)
   - H3: Pair + name
+  - H3: Headless identity state
   - H3: Allowlist the commands
   - H3: Point exec at the node
   - H3: Local model inference
@@ -5544,6 +5565,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message hooks
   - H2: Install hooks
   - H2: Gateway lifecycle
+  - H3: Safe external cron projection
   - H2: Upcoming deprecations
   - H2: Related
 
@@ -9929,10 +9951,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Appearance themes
   - H2: Manage plugins
   - H2: Sidebar navigation
+  - H2: New session dialog
   - H2: What it can do (today)
   - H2: MCP page
   - H2: Activity tab
   - H2: Operator terminal
+  - H2: Browser panel
   - H2: Chat behavior
   - H2: Connection loss and reconnect
   - H2: PWA install and web push

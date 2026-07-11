@@ -282,7 +282,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.toolsAllow = ["crestodian"];
     let nextThread = 1;
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "config/read") {
         return {
           layers: [],
@@ -334,15 +334,17 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "thread/resume",
       "mcpServerStatus/list",
     ]);
-    const startCalls = request.mock.calls.filter(([method]) => method === "thread/start") as Array<
-      [string, { config?: { mcp_servers?: Record<string, { enabled?: boolean }> } }]
-    >;
-    for (const [, startParams] of startCalls) {
-      expect(startParams.config?.mcp_servers).toEqual({
-        "arbitrary.server": { enabled: false },
-        "local helper": { enabled: false },
-      });
-    }
+    const startCalls = request.mock.calls.filter(([method]) => method === "thread/start");
+    expect(startCalls.map(([, startParams]) => startParams)).toEqual([
+      expect.objectContaining({
+        config: expect.objectContaining({
+          mcp_servers: {
+            "arbitrary.server": { enabled: false },
+            "local helper": { enabled: false },
+          },
+        }),
+      }),
+    ]);
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-ring-zero-1");
     expect(binding?.ringZeroConfigFingerprint).toEqual(expect.any(String));
@@ -355,7 +357,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.toolsAllow = ["crestodian"];
     let nextThread = 1;
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "config/read") {
         return { config: {}, layers: [] };
       }
@@ -386,11 +388,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(first.lifecycle.action).toBe("started");
     expect(second.lifecycle.action).toBe("started");
     expect(request.mock.calls.map(([method]) => method)).not.toContain("thread/resume");
-    const startCalls = request.mock.calls.filter(([method]) => method === "thread/start") as Array<
-      [string, { environments?: unknown[] }]
-    >;
+    const startCalls = request.mock.calls.filter(([method]) => method === "thread/start");
     expect(startCalls).toHaveLength(2);
-    expect(startCalls.map(([, startParams]) => startParams.environments)).toEqual([[], []]);
+    expect(startCalls.map(([, startParams]) => startParams)).toEqual([
+      expect.objectContaining({ environments: [] }),
+      expect.objectContaining({ environments: [] }),
+    ]);
     expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-ring-zero-2");
   });
 

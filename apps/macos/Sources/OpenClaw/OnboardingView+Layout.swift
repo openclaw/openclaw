@@ -2,32 +2,46 @@ import AppKit
 import SwiftUI
 
 extension OnboardingView {
+    /// The inference-first flow has no full-page chat; Crestodian opens in its own sheet.
+    var usesCompactHero: Bool { false }
+
     var body: some View {
-        VStack(spacing: 0) {
-            GlowingOpenClawIcon(size: self.heroSize)
-                .offset(y: 10)
-                .frame(height: self.heroFrameHeight)
+        GeometryReader { windowGeometry in
+            let contentHeight = self.contentHeight(for: windowGeometry.size.height)
+            VStack(spacing: 0) {
+                // Chat-heavy pages shrink the mascot so the content gets the room.
+                GlowingOpenClawIcon(size: self.heroSize)
+                    .offset(y: self.usesCompactHero ? 4 : 10)
+                    .frame(height: self.heroFrameHeight)
+                    .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
 
-            GeometryReader { _ in
-                HStack(spacing: 0) {
-                    ForEach(self.pageOrder, id: \.self) { pageIndex in
-                        self.pageView(for: pageIndex)
-                            .frame(width: self.pageWidth)
+                GeometryReader { _ in
+                    HStack(spacing: 0) {
+                        ForEach(self.pageOrder, id: \.self) { pageIndex in
+                            self.pageView(for: pageIndex, contentHeight: contentHeight)
+                                .frame(width: self.pageWidth)
+                        }
                     }
+                    .offset(x: CGFloat(-self.currentPage) * self.pageWidth)
+                    .animation(
+                        .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
+                        value: self.currentPage)
+                    .frame(height: contentHeight, alignment: .top)
+                    .clipped()
                 }
-                .offset(x: CGFloat(-self.currentPage) * self.pageWidth)
-                .animation(
-                    .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
-                    value: self.currentPage)
-                .frame(height: self.contentHeight, alignment: .top)
-                .clipped()
-            }
-            .frame(height: self.contentHeight)
+                .frame(height: contentHeight)
+                .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
 
-            Spacer(minLength: 0)
-            self.navigationBar
+                Spacer(minLength: 0)
+                self.navigationBar
+            }
+            .frame(maxHeight: .infinity)
         }
-        .frame(width: pageWidth, height: Self.windowHeight)
+        .frame(
+            minWidth: pageWidth,
+            maxWidth: pageWidth,
+            minHeight: Self.windowHeight,
+            maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             self.onboardingDidAppear()
@@ -101,6 +115,7 @@ extension OnboardingView {
         self.resetGatewayBoundAIState()
         let oldActive = self.activePageIndex
         self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
+        self.startExistingCLIActivationIfNeeded()
         self.returnToInferenceSetupIfNeeded()
         if let updatePageMonitoring {
             updatePageMonitoring(self.activePageIndex)
@@ -140,9 +155,7 @@ extension OnboardingView {
         // route, so an immediate probe cannot attach to the previous endpoint.
         guard gatewaySelectionPersister() else { return nil }
         let expectedMode = state.connectionMode
-        let expectedRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
-            state: state,
-            preferredGatewayID: effectivePreferredGatewayID)
+        let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
         let expectedPendingState = OnboardingCrestodianResumeStore.pendingState(
             for: expectedRouteIdentity,
             defaults: crestodianDefaults)
@@ -160,9 +173,7 @@ extension OnboardingView {
                       await self.configuredGatewayProbe.isCurrent(boundRoute)
                 else { return }
             }
-            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
-                state: self.state,
-                preferredGatewayID: self.effectivePreferredGatewayID)
+            let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
             guard self.configuredGatewayProbe.isCurrent(probeAttempt),
                   Self.isCurrentConfiguredGatewayProbe(
                       onboardingVisible: knownVisible || self.onboardingVisible,
@@ -379,19 +390,21 @@ extension OnboardingView {
         .frame(minHeight: 60, alignment: .bottom)
     }
 
-    func onboardingPage(@ViewBuilder _ content: () -> some View) -> some View {
+    func onboardingPage(@ViewBuilder _ content: @escaping () -> some View) -> some View {
         let scrollIndicatorGutter: CGFloat = 18
-        return ScrollView {
-            VStack(spacing: 16) {
-                content()
-                Spacer(minLength: 0)
+        return GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 16) {
+                    content()
+                }
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: geometry.size.height, alignment: .center)
+                .padding(.trailing, scrollIndicatorGutter)
             }
-            .frame(maxWidth: .infinity, alignment: .top)
-            .padding(.trailing, scrollIndicatorGutter)
+            .scrollIndicators(.automatic)
+            .padding(.horizontal, 28)
+            .frame(width: pageWidth, alignment: .top)
         }
-        .scrollIndicators(.automatic)
-        .padding(.horizontal, 28)
-        .frame(width: pageWidth, alignment: .top)
     }
 
     func onboardingCard(

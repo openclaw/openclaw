@@ -379,8 +379,18 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("keeps the injected ring-zero tool under policy and rejects a same-name replacement", () => {
-    const injectedTool = { ...stubTool("crestodian"), description: "trusted ring-zero tool" };
-    const duplicateTool = { ...stubTool("crestodian"), description: "duplicate plugin tool" };
+    const injectedTool = {
+      ...stubTool("crestodian"),
+      label: "Crestodian",
+      description: "trusted ring-zero tool",
+      execute: async () => ({ content: [], details: {} }),
+    };
+    const duplicateTool = {
+      ...stubTool("crestodian"),
+      label: "Crestodian",
+      description: "duplicate plugin tool",
+      execute: async () => ({ content: [], details: {} }),
+    };
     vi.mocked(createOpenClawTools).mockReturnValueOnce([duplicateTool]);
 
     const tools = runWithAgentRingZeroTools([injectedTool], () =>
@@ -728,7 +738,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
   });
 
-  it("forwards active model metadata to plugin-only tool construction", () => {
+  it("forwards prepared run facts to plugin-only tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
     const resolvePluginToolsSpy = vi
@@ -742,6 +752,7 @@ describe("createOpenClawCodingTools", () => {
         runtimeToolAllowlist: ["memory_search"],
         modelProvider: "openrouter",
         modelId: "openrouter/auto",
+        nativeChannelId: "oc_native_chat",
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -756,6 +767,7 @@ describe("createOpenClawCodingTools", () => {
       const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
+      expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }
@@ -786,6 +798,24 @@ describe("createOpenClawCodingTools", () => {
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }
+  });
+
+  it("forwards the native channel id through standard tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      chatType: "group",
+      nativeChannelId: "oc_native_chat",
+      messageActionTurnCapability: "turn-capability-1",
+    });
+
+    expect(latestCreateOpenClawToolsOptions().nativeChannelId).toBe("oc_native_chat");
+    expect(latestCreateOpenClawToolsOptions().currentChatType).toBe("group");
+    expect(latestCreateOpenClawToolsOptions().messageActionTurnCapability).toBe(
+      "turn-capability-1",
+    );
   });
 
   it("forwards auth profiles to plugin-only tool construction", () => {
