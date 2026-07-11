@@ -508,8 +508,7 @@ export const it: TranslationMap = {
     pending: "{count} in sospeso",
     allowOnce: "Consenti una volta",
     alwaysAllow: "Consenti sempre",
-    allowAlwaysUnavailable:
-      "Il criterio di approvazione effettivo richiede l’approvazione ogni volta, quindi Consenti sempre non è disponibile.",
+    allowAlwaysUnavailable: "Consenti sempre non è disponibile per questo comando.",
     deny: "Nega",
     labels: {
       host: "Host",
@@ -806,6 +805,7 @@ export const it: TranslationMap = {
     artifactDetails: "Dettagli della build di Control UI",
     version: "Versione",
     commit: "Commit",
+    branch: "Branch",
     built: "Creato",
     unavailable: "Non disponibile",
     copyCommit: "Copia hash completo del commit",
@@ -1069,6 +1069,100 @@ export const it: TranslationMap = {
       title: "Ask your day",
       placeholder: "When did I review the gateway PR?",
       submit: "Ask",
+    },
+  },
+  workspaces: {
+    tabs: {
+      label: "Workspaces",
+      hidden: "Hidden ({count})",
+    },
+    error: {
+      title: "Couldn't load your workspaces",
+      subtitle: "Something went wrong loading your workspaces. Try reloading.",
+      detailSummary: "Show details",
+    },
+    header: {
+      subtitle: "Arrange widgets and tabs for this workspace.",
+    },
+    onboarding: {
+      title: "Build your first workspace tab",
+      primary: "Ask your agent to build a tab.",
+      secondary: "Or create one from the command line:",
+    },
+    empty: {
+      onboardingTitle: "No workspaces yet",
+      onboardingSubtitle:
+        "Ask your agent to build a workspace, or create one from the command line.",
+      onboardingCommand: "openclaw workspaces tabs create --title Main",
+      tabTitle: "This workspace is empty",
+      tabSubtitle: "Ask your agent to add a widget, or add one yourself.",
+      noVisibleTabs: "Every workspace tab is hidden. Restore one from the hidden menu.",
+    },
+    widget: {
+      collapse: "Collapse widget",
+      expand: "Expand widget",
+      moveHandle: "Move widget",
+      resizeHandle: "Resize widget",
+      menuLabel: "Widget options",
+      provenanceChip: "AI",
+      provenanceTooltip: "Built by {agent}",
+      errorTitle: "This widget couldn't load",
+      errorHumane: "This widget ran into a problem while rendering.",
+      errorDetailSummary: "Show details",
+      customPlaceholder: "Custom widget — coming soon.",
+      customLoading: "Loading custom widget…",
+      approval: {
+        title: "Custom widget awaiting approval",
+        byAgent: "Built by {agent}",
+        byUnknown: "Built by an unknown agent",
+        approve: "Approve",
+        reject: "Reject",
+        unavailable:
+          "This custom widget isn't available. Ask your agent to rebuild it, or remove it.",
+      },
+      markdownEmpty: "No content yet.",
+      unknownKind: "Unknown widget type: {kind}",
+      editTitleTitle: "Edit widget title",
+      editTitleLabel: "Widget title",
+      moveToTabTitle: "Move to tab",
+      moveToTabEmpty: "There are no other tabs to move this widget to.",
+      menu: {
+        editTitle: "Edit title",
+        moveToTab: "Move to tab…",
+        hide: "Hide",
+        remove: "Remove",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "No rows to show.",
+        more: "+{count} more",
+      },
+      sessions: {
+        empty: "No sessions yet.",
+      },
+      usage: {
+        cost: "Cost",
+        tokens: "Tokens",
+      },
+      cron: {
+        empty: "No scheduled jobs.",
+        next: "Next {time}",
+        noNext: "Not scheduled",
+      },
+      instances: {
+        empty: "No connected instances.",
+        idle: "Idle for {duration}",
+      },
+      activity: {
+        empty: "No recent activity.",
+      },
+      embed: {
+        missing: "This embed has no URL yet.",
+        blockedExternal: "External embeds are disabled by your gateway policy.",
+        blockedScheme: "This embed URL uses an unsupported scheme.",
+      },
     },
   },
   workboard: {
@@ -2008,10 +2102,7 @@ export const it: TranslationMap = {
     commandPaletteTitle: "Cerca o passa a… (⌘K)",
     openCommandPalette: "Apri tavolozza comandi",
     docsOpensInNewTab: "{label} (si apre in una nuova scheda)",
-    updateAvailable: "Aggiornamento disponibile:",
-    runningVersion: "in esecuzione v{version}",
     updating: "Aggiornamento…",
-    updateNow: "Aggiorna ora",
     dismissUpdateBanner: "Ignora banner di aggiornamento",
     switchedSession: "Passato a {session}",
     splitView: {
@@ -2023,6 +2114,7 @@ export const it: TranslationMap = {
       dropOpenHere: "Apri qui",
     },
     sidebar: {
+      updateAvailable: "Aggiornamento disponibile",
       allSessions: "Tutte le sessioni",
       chats: "Chat",
       openSessionMenu: "Open session menu",

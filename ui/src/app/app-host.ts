@@ -12,6 +12,7 @@ import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
 import "../components/browser/browser-panel.ts";
 import "../components/resizable-divider.ts";
+import "../components/sidebar-update-card.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
@@ -135,6 +136,32 @@ function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapsh
 
 function isMobileNavLayout(): boolean {
   return globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false;
+}
+
+export function navigationSurfaceIsHidden(params: {
+  navCollapsed: boolean;
+  navDrawerOpen: boolean;
+  mobileNavLayout: boolean;
+}): boolean {
+  return params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed;
+}
+
+export function renderFloatingUpdateCard(params: {
+  navigationSurfaceHidden: boolean;
+  onboarding: boolean;
+  updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
+  updateRunning: boolean;
+  onUpdate: () => void;
+}) {
+  if (!params.navigationSurfaceHidden || params.onboarding) {
+    return nothing;
+  }
+  return html`<openclaw-sidebar-update-card
+    class="sidebar-update-card--floating"
+    .updateAvailable=${params.updateAvailable}
+    .updateRunning=${params.updateRunning}
+    .onUpdate=${params.onUpdate}
+  ></openclaw-sidebar-update-card>`;
 }
 
 class OpenClawApp extends OpenClawLightDomElement {
@@ -466,12 +493,14 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
+    window.addEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
   }
 
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.removeEventListener("keydown", this.handleDocumentKeydown);
     window.removeEventListener("resize", this.handleWindowResize);
+    window.removeEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
     this.resetShellEpochState();
     super.disconnectedCallback();
   }
@@ -598,6 +627,13 @@ class OpenClawShell extends OpenClawLightDomElement {
     );
     context.navigation.update({ navWidth });
   }
+
+  /** The macOS app's titlebar sidebar button dispatches this window event
+   * (DashboardWindowController) because AppKit drag regions cover the row
+   * where an in-page control would live. */
+  private readonly handleNativeToggleSidebar = () => {
+    this.toggleNavigationSurface();
+  };
 
   private readonly handleWindowResize = () => {
     const dismissedHiddenMenus =
@@ -836,6 +872,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     // stays persisted for when the viewport returns to the desktop layout.
     // The settings sidebar has a fixed width, so the collapse state pauses too.
     const navCollapsed = navigationSnapshot.navCollapsed && !navDrawerOpen && !settingsTakeover;
+    const navigationSurfaceHidden = navigationSurfaceIsHidden({
+      navCollapsed,
+      navDrawerOpen,
+      mobileNavLayout: isMobileNavLayout(),
+    });
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
     // One storage read per render; theme.refresh() re-renders on pref changes.
     const uiSettings = loadSettings();
@@ -897,6 +938,9 @@ class OpenClawShell extends OpenClawLightDomElement {
                   context.config.current.serverVersion ??
                   gatewaySnapshot.hello?.server?.version ??
                   "",
+                updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+                updateRunning: overlaySnapshot.updateRunning,
+                onUpdate: () => void context.overlays.runUpdate(),
                 searchQuery: this.settingsSearchQuery,
                 onExit: () => this.exitSettings(),
                 onNavigate: (routeId) => this.navigate(routeId),
@@ -924,6 +968,9 @@ class OpenClawShell extends OpenClawLightDomElement {
                 gatewaySnapshot.hello?.server?.version ??
                 null}
                 .devGitBranch=${context.config.current.devGitBranch}
+                .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
+                .updateRunning=${overlaySnapshot.updateRunning}
+                .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onOpenNewSession=${(agentId: string) => {
@@ -977,13 +1024,15 @@ class OpenClawShell extends OpenClawLightDomElement {
           <openclaw-update-banner
             .props=${{
               statusBanner: overlaySnapshot.updateStatusBanner,
-              updateAvailable: overlaySnapshot.updateAvailable,
-              updateRunning: overlaySnapshot.updateRunning,
-              connected: gatewaySnapshot.connected,
-              onUpdate: () => context.overlays.runUpdate(),
-              onDismiss: () => context.overlays.dismissUpdate(),
             }}
           ></openclaw-update-banner>
+          ${renderFloatingUpdateCard({
+            navigationSurfaceHidden,
+            onboarding: this.onboarding,
+            updateAvailable: overlaySnapshot.updateAvailable,
+            updateRunning: overlaySnapshot.updateRunning,
+            onUpdate: () => void context.overlays.runUpdate(),
+          })}
           <openclaw-router-outlet
             .router=${runtime.router}
             .retryContext=${context}

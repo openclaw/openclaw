@@ -501,8 +501,7 @@ export const ko: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
-    allowAlwaysUnavailable:
-      "유효한 승인 정책이 매번 승인을 요구하므로, 항상 허용을 사용할 수 없습니다.",
+    allowAlwaysUnavailable: "이 명령에는 항상 허용을 사용할 수 없습니다.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -796,6 +795,7 @@ export const ko: TranslationMap = {
     artifactDetails: "Control UI 빌드 세부 정보",
     version: "버전",
     commit: "커밋",
+    branch: "브랜치",
     built: "빌드됨",
     unavailable: "사용할 수 없음",
     copyCommit: "전체 커밋 해시 복사",
@@ -1057,6 +1057,100 @@ export const ko: TranslationMap = {
       title: "Ask your day",
       placeholder: "When did I review the gateway PR?",
       submit: "Ask",
+    },
+  },
+  workspaces: {
+    tabs: {
+      label: "Workspaces",
+      hidden: "Hidden ({count})",
+    },
+    error: {
+      title: "Couldn't load your workspaces",
+      subtitle: "Something went wrong loading your workspaces. Try reloading.",
+      detailSummary: "Show details",
+    },
+    header: {
+      subtitle: "Arrange widgets and tabs for this workspace.",
+    },
+    onboarding: {
+      title: "Build your first workspace tab",
+      primary: "Ask your agent to build a tab.",
+      secondary: "Or create one from the command line:",
+    },
+    empty: {
+      onboardingTitle: "No workspaces yet",
+      onboardingSubtitle:
+        "Ask your agent to build a workspace, or create one from the command line.",
+      onboardingCommand: "openclaw workspaces tabs create --title Main",
+      tabTitle: "This workspace is empty",
+      tabSubtitle: "Ask your agent to add a widget, or add one yourself.",
+      noVisibleTabs: "Every workspace tab is hidden. Restore one from the hidden menu.",
+    },
+    widget: {
+      collapse: "Collapse widget",
+      expand: "Expand widget",
+      moveHandle: "Move widget",
+      resizeHandle: "Resize widget",
+      menuLabel: "Widget options",
+      provenanceChip: "AI",
+      provenanceTooltip: "Built by {agent}",
+      errorTitle: "This widget couldn't load",
+      errorHumane: "This widget ran into a problem while rendering.",
+      errorDetailSummary: "Show details",
+      customPlaceholder: "Custom widget — coming soon.",
+      customLoading: "Loading custom widget…",
+      approval: {
+        title: "Custom widget awaiting approval",
+        byAgent: "Built by {agent}",
+        byUnknown: "Built by an unknown agent",
+        approve: "Approve",
+        reject: "Reject",
+        unavailable:
+          "This custom widget isn't available. Ask your agent to rebuild it, or remove it.",
+      },
+      markdownEmpty: "No content yet.",
+      unknownKind: "Unknown widget type: {kind}",
+      editTitleTitle: "Edit widget title",
+      editTitleLabel: "Widget title",
+      moveToTabTitle: "Move to tab",
+      moveToTabEmpty: "There are no other tabs to move this widget to.",
+      menu: {
+        editTitle: "Edit title",
+        moveToTab: "Move to tab…",
+        hide: "Hide",
+        remove: "Remove",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "No rows to show.",
+        more: "+{count} more",
+      },
+      sessions: {
+        empty: "No sessions yet.",
+      },
+      usage: {
+        cost: "Cost",
+        tokens: "Tokens",
+      },
+      cron: {
+        empty: "No scheduled jobs.",
+        next: "Next {time}",
+        noNext: "Not scheduled",
+      },
+      instances: {
+        empty: "No connected instances.",
+        idle: "Idle for {duration}",
+      },
+      activity: {
+        empty: "No recent activity.",
+      },
+      embed: {
+        missing: "This embed has no URL yet.",
+        blockedExternal: "External embeds are disabled by your gateway policy.",
+        blockedScheme: "This embed URL uses an unsupported scheme.",
+      },
     },
   },
   workboard: {
@@ -1980,10 +2074,7 @@ export const ko: TranslationMap = {
     commandPaletteTitle: "검색하거나 이동… (⌘K)",
     openCommandPalette: "명령 팔레트 열기",
     docsOpensInNewTab: "{label}(새 탭에서 열림)",
-    updateAvailable: "업데이트 사용 가능:",
-    runningVersion: "실행 중 v{version}",
     updating: "업데이트 중…",
-    updateNow: "지금 업데이트",
     dismissUpdateBanner: "업데이트 배너 닫기",
     switchedSession: "{session}(으)로 전환됨",
     splitView: {
@@ -1995,6 +2086,7 @@ export const ko: TranslationMap = {
       dropOpenHere: "여기에서 열기",
     },
     sidebar: {
+      updateAvailable: "업데이트 가능",
       allSessions: "모든 세션",
       chats: "채팅",
       openSessionMenu: "Open session menu",

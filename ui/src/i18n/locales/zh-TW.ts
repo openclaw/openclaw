@@ -500,7 +500,7 @@ export const zh_TW: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
-    allowAlwaysUnavailable: "有效的核准政策要求每次都需核准，因此「一律允許」無法使用。",
+    allowAlwaysUnavailable: "「一律允許」無法用於此指令。",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -785,6 +785,7 @@ export const zh_TW: TranslationMap = {
     artifactDetails: "Control UI 建置詳細資訊",
     version: "版本",
     commit: "Commit",
+    branch: "分支",
     built: "建置時間",
     unavailable: "無法使用",
     copyCommit: "複製完整 commit 雜湊",
@@ -1044,6 +1045,100 @@ export const zh_TW: TranslationMap = {
       title: "Ask your day",
       placeholder: "When did I review the gateway PR?",
       submit: "Ask",
+    },
+  },
+  workspaces: {
+    tabs: {
+      label: "Workspaces",
+      hidden: "Hidden ({count})",
+    },
+    error: {
+      title: "Couldn't load your workspaces",
+      subtitle: "Something went wrong loading your workspaces. Try reloading.",
+      detailSummary: "Show details",
+    },
+    header: {
+      subtitle: "Arrange widgets and tabs for this workspace.",
+    },
+    onboarding: {
+      title: "Build your first workspace tab",
+      primary: "Ask your agent to build a tab.",
+      secondary: "Or create one from the command line:",
+    },
+    empty: {
+      onboardingTitle: "No workspaces yet",
+      onboardingSubtitle:
+        "Ask your agent to build a workspace, or create one from the command line.",
+      onboardingCommand: "openclaw workspaces tabs create --title Main",
+      tabTitle: "This workspace is empty",
+      tabSubtitle: "Ask your agent to add a widget, or add one yourself.",
+      noVisibleTabs: "Every workspace tab is hidden. Restore one from the hidden menu.",
+    },
+    widget: {
+      collapse: "Collapse widget",
+      expand: "Expand widget",
+      moveHandle: "Move widget",
+      resizeHandle: "Resize widget",
+      menuLabel: "Widget options",
+      provenanceChip: "AI",
+      provenanceTooltip: "Built by {agent}",
+      errorTitle: "This widget couldn't load",
+      errorHumane: "This widget ran into a problem while rendering.",
+      errorDetailSummary: "Show details",
+      customPlaceholder: "Custom widget — coming soon.",
+      customLoading: "Loading custom widget…",
+      approval: {
+        title: "Custom widget awaiting approval",
+        byAgent: "Built by {agent}",
+        byUnknown: "Built by an unknown agent",
+        approve: "Approve",
+        reject: "Reject",
+        unavailable:
+          "This custom widget isn't available. Ask your agent to rebuild it, or remove it.",
+      },
+      markdownEmpty: "No content yet.",
+      unknownKind: "Unknown widget type: {kind}",
+      editTitleTitle: "Edit widget title",
+      editTitleLabel: "Widget title",
+      moveToTabTitle: "Move to tab",
+      moveToTabEmpty: "There are no other tabs to move this widget to.",
+      menu: {
+        editTitle: "Edit title",
+        moveToTab: "Move to tab…",
+        hide: "Hide",
+        remove: "Remove",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "No rows to show.",
+        more: "+{count} more",
+      },
+      sessions: {
+        empty: "No sessions yet.",
+      },
+      usage: {
+        cost: "Cost",
+        tokens: "Tokens",
+      },
+      cron: {
+        empty: "No scheduled jobs.",
+        next: "Next {time}",
+        noNext: "Not scheduled",
+      },
+      instances: {
+        empty: "No connected instances.",
+        idle: "Idle for {duration}",
+      },
+      activity: {
+        empty: "No recent activity.",
+      },
+      embed: {
+        missing: "This embed has no URL yet.",
+        blockedExternal: "External embeds are disabled by your gateway policy.",
+        blockedScheme: "This embed URL uses an unsupported scheme.",
+      },
     },
   },
   workboard: {
@@ -1942,10 +2037,7 @@ export const zh_TW: TranslationMap = {
     commandPaletteTitle: "搜尋或跳至… (⌘K)",
     openCommandPalette: "開啟命令面板",
     docsOpensInNewTab: "{label}（在新分頁開啟）",
-    updateAvailable: "有可用更新：",
-    runningVersion: "執行中版本 v{version}",
     updating: "正在更新…",
-    updateNow: "立即更新",
     dismissUpdateBanner: "關閉更新橫幅",
     switchedSession: "已切換至 {session}",
     splitView: {
@@ -1957,6 +2049,7 @@ export const zh_TW: TranslationMap = {
       dropOpenHere: "在此開啟",
     },
     sidebar: {
+      updateAvailable: "有可用的更新",
       allSessions: "所有工作階段",
       chats: "聊天",
       openSessionMenu: "Open session menu",
