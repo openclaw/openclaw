@@ -239,6 +239,23 @@ describe("createReplyDispatcher", () => {
     }
   });
 
+  it("rejects non-positive and non-finite beforeDeliver budgets", () => {
+    for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() =>
+        createReplyDispatcher({
+          deliver: async () => {},
+          beforeDeliver: (payload) => payload,
+          beforeDeliverOptions: { timeoutMs },
+        }),
+      ).toThrow("beforeDeliver timeoutMs must be a positive finite number");
+
+      const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+      expect(() => dispatcher.appendBeforeDeliver?.((payload) => payload, { timeoutMs })).toThrow(
+        "beforeDeliver timeoutMs must be a positive finite number",
+      );
+    }
+  });
+
   it("honors owner-declared budgets for constructor and appended callbacks", async () => {
     vi.useFakeTimers();
     try {
