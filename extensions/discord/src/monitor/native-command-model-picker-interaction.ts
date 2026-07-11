@@ -138,11 +138,20 @@ function resolveSubmittedModelRef(params: {
   if (params.parsed.action === "reset") {
     return `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   }
+  if (params.parsed.modelToken) {
+    return resolveDiscordModelPickerModelRefByToken(params.data, params.parsed.modelToken);
+  }
   if (params.parsed.action === "quick") {
+    if (params.requireModelToken) {
+      return null;
+    }
     const slot = params.parsed.recentSlot ?? 0;
     return slot >= 1 ? (params.quickModels[slot - 1] ?? null) : null;
   }
   if (params.parsed.view === "recents") {
+    if (params.requireModelToken) {
+      return null;
+    }
     const defaultModelRef = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
     const dedupedRecents = params.quickModels.filter((ref) => ref !== defaultModelRef);
     const slot = params.parsed.recentSlot ?? 0;
@@ -194,6 +203,21 @@ function listDiscordModelPickerProviderModels(
     return [];
   }
   return [...modelSet].toSorted();
+}
+
+function resolveDiscordModelPickerModelRefByToken(
+  data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>,
+  modelToken: string,
+): string | null {
+  const matchingRefs: string[] = [];
+  for (const [provider, models] of data.byProvider) {
+    for (const model of models) {
+      if (createDiscordModelPickerModelToken(provider, model) === modelToken) {
+        matchingRefs.push(`${provider}/${model}`);
+      }
+    }
+  }
+  return matchingRefs.length === 1 ? (matchingRefs[0] ?? null) : null;
 }
 
 function resolveDiscordModelPickerModelIndex(params: {

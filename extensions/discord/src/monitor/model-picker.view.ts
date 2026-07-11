@@ -900,6 +900,11 @@ function formatRecentsButtonLabel(modelRef: string, suffix?: string): string {
   return trimmed;
 }
 
+function createModelRefToken(modelRef: string): string | undefined {
+  const parsed = parseCurrentModelRef(modelRef);
+  return parsed ? createDiscordModelPickerModelToken(parsed.provider, parsed.model) : undefined;
+}
+
 export function renderDiscordModelPickerRecentsView(
   params: DiscordModelPickerRecentsViewParams,
 ): DiscordModelPickerRenderedView {
@@ -920,6 +925,7 @@ export function renderDiscordModelPickerRecentsView(
           action: "submit",
           view: "recents",
           recentSlot: 1,
+          modelToken: createModelRefToken(defaultModelRef),
           provider: params.provider,
           runtime: params.runtime,
           runtimeIndex: params.runtimeIndex,
@@ -944,6 +950,7 @@ export function renderDiscordModelPickerRecentsView(
             action: "submit",
             view: "recents",
             recentSlot: i + 2,
+            modelToken: createModelRefToken(modelRef),
             provider: params.provider,
             runtime: params.runtime,
             runtimeIndex: params.runtimeIndex,

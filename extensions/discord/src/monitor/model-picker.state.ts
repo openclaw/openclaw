@@ -265,13 +265,15 @@ export function buildDiscordModelPickerCustomId(params: {
   }
   if (modelToken) {
     parts.push(`m=${modelToken}`);
-  } else if (modelIndex) {
-    // Legacy index-only state is accepted until the next render. New pending
-    // selections use the stable token so catalog reordering cannot retarget them.
-    parts.push(`mi=${String(modelIndex)}`);
-  }
-  if (recentSlot) {
-    parts.push(`rs=${String(recentSlot)}`);
+  } else {
+    // Legacy positional state is accepted until the next render. New model
+    // components use the stable token so catalog reordering cannot retarget them.
+    if (modelIndex) {
+      parts.push(`mi=${String(modelIndex)}`);
+    }
+    if (recentSlot) {
+      parts.push(`rs=${String(recentSlot)}`);
+    }
   }
   const providerBucket = params.providerBucket?.trim().toLowerCase();
   if (providerBucket) {

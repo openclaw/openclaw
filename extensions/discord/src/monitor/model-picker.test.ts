@@ -1292,7 +1292,7 @@ describe("Discord model picker recents view", () => {
     });
     expect(rows).toHaveLength(4);
 
-    // First row: default model button (slot 1).
+    // First row: default model button.
     const defaultBtn = requireValue(
       rows[0]?.components?.[0],
       "recents view should render a default model button",
@@ -1304,9 +1304,10 @@ describe("Discord model picker recents view", () => {
     );
     expect(defaultState.action).toBe("submit");
     expect(defaultState.view).toBe("recents");
-    expect(defaultState.recentSlot).toBe(1);
+    expect(defaultState.recentSlot).toBeUndefined();
+    expect(defaultState.modelToken).toBe(createDiscordModelPickerModelToken("openai", "gpt-4.1"));
 
-    // Second row: first recent (slot 2).
+    // Second row: first recent.
     const recentBtn1 = requireValue(
       rows[1]?.components?.[0],
       "recents view should render first recent button",
@@ -1315,9 +1316,10 @@ describe("Discord model picker recents view", () => {
       parseDiscordModelPickerCustomId(recentBtn1.custom_id ?? ""),
       "first recent custom id should parse",
     );
-    expect(recentState1.recentSlot).toBe(2);
+    expect(recentState1.recentSlot).toBeUndefined();
+    expect(recentState1.modelToken).toBe(createDiscordModelPickerModelToken("openai", "gpt-4o"));
 
-    // Third row: second recent (slot 3).
+    // Third row: second recent.
     const recentBtn2 = requireValue(
       rows[2]?.components?.[0],
       "recents view should render second recent button",
@@ -1326,7 +1328,10 @@ describe("Discord model picker recents view", () => {
       parseDiscordModelPickerCustomId(recentBtn2.custom_id ?? ""),
       "second recent custom id should parse",
     );
-    expect(recentState2.recentSlot).toBe(3);
+    expect(recentState2.recentSlot).toBeUndefined();
+    expect(recentState2.modelToken).toBe(
+      createDiscordModelPickerModelToken("anthropic", "claude-sonnet-4-5"),
+    );
 
     // Fourth row (after divider): Back button.
     const backBtn = requireValue(

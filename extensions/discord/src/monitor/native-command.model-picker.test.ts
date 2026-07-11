@@ -833,6 +833,56 @@ describe("Discord model picker interactions", () => {
     expectDispatchedModelSelection({ dispatchSpy, model: "openai/gpt-4o" });
   });
 
+  it("keeps a recent model stable when hot reload shifts its slot", async () => {
+    const context = createModelPickerContext();
+    const runtimeCfg = { ...context.cfg } as OpenClawConfig;
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(runtimeCfg);
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSourceSnapshot").mockReturnValue(
+      runtimeCfg,
+    );
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
+      createModelsProviderData({ openai: ["a", "b"] }),
+    );
+    vi.spyOn(modelPickerPreferencesModule, "readDiscordModelPickerRecentModels").mockResolvedValue([
+      "openai/a",
+      "openai/b",
+    ]);
+    mockModelCommandPipeline(createModelCommandDefinition());
+    const dispatchSpy = createDispatchSpy();
+
+    await runSubmitButton({
+      context,
+      data: {
+        cmd: "model",
+        act: "submit",
+        view: "recents",
+        u: "owner",
+        pg: "1",
+        m: modelPickerModule.createDiscordModelPickerModelToken("openai", "b"),
+      },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+    expectDispatchedModelSelection({ dispatchSpy, model: "openai/b" });
+
+    dispatchSpy.mockClear();
+    const legacyInteraction = await runSubmitButton({
+      context,
+      data: {
+        cmd: "model",
+        act: "submit",
+        view: "recents",
+        u: "owner",
+        pg: "1",
+        rs: "1",
+      },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(
+      JSON.stringify(firstMockArg(legacyInteraction.editReply, "interaction.editReply")),
+    ).toContain("selection expired");
+  });
+
   it("does not decode compact recents runtime against another provider", async () => {
     const context = createModelPickerContext();
     const pickerData = createModelsProviderData({
