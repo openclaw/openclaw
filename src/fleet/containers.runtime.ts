@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -50,12 +51,14 @@ const DELIBERATE_STREAM_STOP_SIGNALS = new Set<NodeJS.Signals>([
 export type FleetContainerStreamExecutor = (
   runtime: FleetContainerRuntimeName,
   args: string[],
+  options: { redactValues: readonly string[] },
 ) => Promise<FleetContainerStreamResult>;
 
 export type FleetContainerLogsOptions = {
   follow?: boolean;
   tail?: number;
   since?: string;
+  redactValues: readonly string[];
 };
 
 export type FleetContainerInspectResult =
@@ -69,6 +72,15 @@ export type FleetContainerInspectResult =
       memory: string;
       cpus: string;
       pidsLimit: number | undefined;
+      storageOpt: Record<string, string>;
+      capDrop: string[];
+      // Podman-only top-level inspect field: null means every capability is
+      // dropped, a list means caps remain, and Docker omits the field entirely.
+      effectiveCaps: string[] | undefined;
+      securityOpt: string[];
+      init: boolean | undefined;
+      restartPolicy: string | undefined;
+      portBindings: Array<{ containerPort: string; hostIp: string; hostPort: string }>;
       user?: string;
       usernsMode?: string;
     }
@@ -80,6 +92,7 @@ export type FleetNetworkInspectResult =
       kind: "ok";
       labels: Record<string, string>;
       attachedContainers: Array<{ id: string; name?: string }>;
+      internal: boolean;
     }
   | { kind: "missing" }
   | { kind: "unavailable"; error: string };
@@ -150,6 +163,66 @@ function readLabels(value: unknown): Record<string, string> {
     labels[key] = label;
   }
   return labels;
+}
+
+function readStringRecord(value: unknown): Record<string, string> {
+  if (value === undefined || value === null) {
+    return {};
+  }
+  const record = requireRecord(value);
+  for (const entry of Object.values(record)) {
+    if (typeof entry !== "string") {
+      throw new InvalidInspectOutputError();
+    }
+  }
+  return record as Record<string, string>;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+    throw new InvalidInspectOutputError();
+  }
+  return value;
+}
+
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return requireBoolean(value);
+}
+
+function readRestartPolicy(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return readOptionalString(requireRecord(value).Name);
+}
+
+function readPortBindings(
+  value: unknown,
+): Array<{ containerPort: string; hostIp: string; hostPort: string }> {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  const bindings: Array<{ containerPort: string; hostIp: string; hostPort: string }> = [];
+  for (const [containerPort, rawEntries] of Object.entries(requireRecord(value))) {
+    if (!containerPort || !Array.isArray(rawEntries)) {
+      throw new InvalidInspectOutputError();
+    }
+    for (const rawEntry of rawEntries) {
+      const entry = requireRecord(rawEntry);
+      bindings.push({
+        containerPort,
+        hostIp: requireString(entry.HostIp),
+        hostPort: requireString(entry.HostPort),
+      });
+    }
+  }
+  return bindings;
 }
 
 function readNetworkAttachments(value: unknown): Array<{ id: string; name?: string }> {
@@ -230,6 +303,14 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
     memory: String(requireNonNegativeNumber(hostConfig.Memory)),
     cpus: String(nanoCpus / 1_000_000_000),
     pidsLimit: readPidsLimit(hostConfig.PidsLimit),
+    storageOpt: readStringRecord(hostConfig.StorageOpt),
+    capDrop: readStringArray(hostConfig.CapDrop),
+    effectiveCaps:
+      inspected.EffectiveCaps === undefined ? undefined : readStringArray(inspected.EffectiveCaps),
+    securityOpt: readStringArray(hostConfig.SecurityOpt),
+    init: readOptionalBoolean(hostConfig.Init),
+    restartPolicy: readRestartPolicy(hostConfig.RestartPolicy),
+    portBindings: readPortBindings(hostConfig.PortBindings),
     ...(user ? { user } : {}),
     ...(usernsMode ? { usernsMode } : {}),
   };
@@ -253,6 +334,7 @@ function parseNetworkInspectOutput(
     kind: "ok",
     labels: readLabels(inspected.Labels ?? inspected.labels),
     attachedContainers: readNetworkAttachments(inspected.Containers ?? inspected.containers),
+    internal: readOptionalBoolean(inspected.Internal ?? inspected.internal) ?? false,
   };
 }
 
@@ -408,19 +490,85 @@ const defaultFleetContainerCommandExecutor: FleetContainerCommandExecutor = asyn
   return normalized;
 };
 
-const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (runtime, args) =>
+// Line-buffered so a secret can never straddle an emitted chunk boundary;
+// unterminated lines flush at 64 KiB, far larger than any redacted value.
+const STREAM_REDACT_FLUSH_BYTES = 64 * 1024;
+
+function createRedactingStreamWriter(
+  target: NodeJS.WriteStream,
+  redactValues: readonly string[],
+): { write: (chunk: Buffer) => void; flush: () => void } {
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  const redact = (text: string): string => {
+    let redacted = text;
+    for (const value of redactValues) {
+      if (value) {
+        redacted = redacted.replaceAll(value, "<redacted>");
+      }
+    }
+    return redacted;
+  };
+  const emit = (text: string): void => {
+    if (text) {
+      target.write(redact(text));
+    }
+  };
+  return {
+    write: (chunk) => {
+      pending += decoder.write(chunk);
+      const lastNewline = pending.lastIndexOf("\n");
+      if (lastNewline >= 0) {
+        emit(pending.slice(0, lastNewline + 1));
+        pending = pending.slice(lastNewline + 1);
+      }
+      if (pending.length >= STREAM_REDACT_FLUSH_BYTES) {
+        emit(pending);
+        pending = "";
+      }
+    },
+    flush: () => {
+      emit(pending + decoder.end());
+      pending = "";
+    },
+  };
+}
+
+const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
+  runtime,
+  args,
+  options,
+) =>
   new Promise<FleetContainerStreamResult>((resolve, reject) => {
-    // Logs carry no environment or token arguments, so this narrow inherited-stdio seam needs no redaction.
-    const child = spawn(runtime, args, { stdio: ["ignore", "inherit", "inherit"] });
+    // Pipe instead of inheriting stdio so the cell's Gateway token can be
+    // redacted from live log content; argv itself carries no secrets.
+    const child = spawn(runtime, args, { stdio: ["ignore", "pipe", "pipe"] });
     // Forward every termination signal (SIGINT/SIGTERM/SIGHUP/...), not just Ctrl-C:
-    // a supervisor signaling only the CLI PID must never orphan a follow stream that
-    // holds the inherited stdio descriptors. The bridge detaches itself on child exit.
+    // a supervisor signaling only the CLI PID must never orphan a follow stream.
+    // The bridge detaches itself on child exit.
     attachChildProcessBridge(child);
+    const stdout = createRedactingStreamWriter(process.stdout, options.redactValues);
+    const stderr = createRedactingStreamWriter(process.stderr, options.redactValues);
+    // A downstream reader closing our stdout (e.g. `| head`) surfaces as a
+    // stream error here rather than SIGPIPE on the child; end the child so a
+    // follow stream terminates instead of writing into a broken pipe forever.
+    const onTargetError = (): void => {
+      child.kill("SIGTERM");
+    };
+    process.stdout.once("error", onTargetError);
+    child.stdout?.on("data", stdout.write);
+    child.stderr?.on("data", stderr.write);
     child.once("error", reject);
     child.once("close", (code, signal) => {
+      stdout.flush();
+      stderr.flush();
+      process.stdout.removeListener("error", onTargetError);
       resolve({ code, signal });
     });
   });
+
+const testApi = { createRedactingStreamWriter };
+export { testApi as __test };
 
 function isMissingContainerError(stderr: string): boolean {
   const normalized = stderr.toLowerCase();
@@ -450,6 +598,14 @@ function validateNetworkName(networkName: string): string {
   return normalized;
 }
 
+function validateContainerName(containerName: string): string {
+  const normalized = containerName.trim();
+  if (!normalized || normalized.startsWith("-")) {
+    throw new Error("Fleet container name is invalid.");
+  }
+  return normalized;
+}
+
 function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions): string[] {
   const args = ["logs"];
   if (options.follow) {
@@ -469,10 +625,9 @@ function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions
     }
     args.push("--since", options.since);
   }
-  args.push(containerName);
+  args.push(validateContainerName(containerName));
   return args;
 }
-
 export function createFleetContainerRuntime(
   executor: FleetContainerCommandExecutor = defaultFleetContainerCommandExecutor,
   streamExecutor: FleetContainerStreamExecutor = defaultFleetContainerStreamExecutor,
@@ -518,7 +673,7 @@ export function createFleetContainerRuntime(
       runtime: FleetContainerRuntimeName,
       containerName: string,
     ): Promise<FleetContainerInspectResult> {
-      const args = ["container", "inspect", containerName];
+      const args = ["container", "inspect", validateContainerName(containerName)];
       let result: FleetContainerCommandResult;
       try {
         result = await execute(runtime, args, { allowFailure: true });
@@ -617,6 +772,7 @@ export function createFleetContainerRuntime(
       runtime: FleetContainerRuntimeName,
       networkName: string,
       labels: Readonly<Record<string, string>>,
+      options: { internal: boolean },
     ): Promise<void> {
       const labelArgs = Object.entries(labels)
         .toSorted(([left], [right]) => left.localeCompare(right))
@@ -626,6 +782,7 @@ export function createFleetContainerRuntime(
         "create",
         "--driver",
         "bridge",
+        ...(options.internal ? ["--internal"] : []),
         ...labelArgs,
         validateNetworkName(networkName),
       ]);
@@ -636,15 +793,15 @@ export function createFleetContainerRuntime(
     },
 
     async start(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["start", containerName]);
+      await execute(runtime, ["start", validateContainerName(containerName)]);
     },
 
     async stop(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["stop", containerName]);
+      await execute(runtime, ["stop", validateContainerName(containerName)]);
     },
 
     async restart(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["restart", containerName]);
+      await execute(runtime, ["restart", validateContainerName(containerName)]);
     },
 
     async logs(
@@ -652,7 +809,9 @@ export function createFleetContainerRuntime(
       containerName: string,
       options: FleetContainerLogsOptions,
     ): Promise<void> {
-      const result = await streamExecutor(runtime, buildLogsArgs(containerName, options));
+      const result = await streamExecutor(runtime, buildLogsArgs(containerName, options), {
+        redactValues: options.redactValues,
+      });
       if (result.code === 0) {
         return;
       }
@@ -676,7 +835,11 @@ export function createFleetContainerRuntime(
       containerName: string,
       force: boolean,
     ): Promise<void> {
-      await execute(runtime, ["rm", ...(force ? ["--force"] : []), containerName]);
+      await execute(runtime, [
+        "rm",
+        ...(force ? ["--force"] : []),
+        validateContainerName(containerName),
+      ]);
     },
   };
 }
