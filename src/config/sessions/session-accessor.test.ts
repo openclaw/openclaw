@@ -2098,13 +2098,16 @@ describe("session accessor file-backed seam", () => {
 
       // A late straggler write for the reset session (e.g. an async
       // post-turn hook, such as a memory-reflection cascade, still finishing
-      // against the old identity) must not resurrect the tombstoned
-      // canonical path by freshly re-acquiring under the same session id.
+      // against the old identity) must not resurrect the tombstoned canonical
+      // path. Reset mints a new session id for the continuation, so a claim
+      // under the OLD id on its retired path is a straggler racing its own
+      // disposal — it is rejected outright, not disambiguated to a fresh
+      // sibling that would recreate a live pair for a session that is gone.
       const lateLease = await acquireTrajectoryWriterLease({
         sessionId: previousEntry.sessionId,
         candidatePath: runtimeFile,
       });
-      expect(lateLease.filePath).not.toBe(runtimeFile);
+      expect(lateLease.status).toBe("retired");
       expect(fs.existsSync(runtimeFile)).toBe(false);
     } finally {
       clearTrajectoryWriterLifecycleRegistryForTest();

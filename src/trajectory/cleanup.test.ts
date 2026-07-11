@@ -14,6 +14,7 @@ import {
   acquireTrajectoryWriterLease,
   canonicalizeTrajectoryPath,
   clearTrajectoryWriterLifecycleRegistryForTest,
+  getTrajectoryPathRegistryEntryForTest,
   withTrajectoryPathLock,
 } from "./writer-lifecycle.js";
 
@@ -310,6 +311,9 @@ describe("trajectory cleanup", () => {
       // the rollback restores the prior entry verbatim, it does not re-claim.
       const canonicalPath = canonicalizeTrajectoryPath(runtimeFile);
       const lease = await acquireTrajectoryWriterLease({ sessionId, candidatePath: runtimeFile });
+      if (lease.status !== "acquired") {
+        throw new Error("expected a fresh live claim to be acquired");
+      }
       const liveIncarnation = lease.incarnation;
 
       // Fail ONLY the runtime file's archive rename (the commit point);
@@ -420,6 +424,9 @@ describe("trajectory cleanup", () => {
         sessionId: sessionBId,
         candidatePath: resolveTrajectoryFilePath({ env, sessionId: sessionBId }),
       });
+      if (leaseA.status !== "acquired" || leaseB.status !== "acquired") {
+        throw new Error("expected both sibling claims to be acquired");
+      }
       expect(leaseA.filePath).not.toBe(leaseB.filePath);
 
       await fs.mkdir(trajectoryDir, { recursive: true });
@@ -461,6 +468,9 @@ describe("trajectory cleanup", () => {
         sessionId: sessionBId,
         candidatePath: resolveTrajectoryFilePath({ env, sessionId: sessionBId }),
       });
+      if (leaseA.status !== "acquired" || leaseB.status !== "acquired") {
+        throw new Error("expected both sibling claims to be acquired");
+      }
       expect(leaseA.filePath).not.toBe(leaseB.filePath);
 
       await fs.mkdir(trajectoryDir, { recursive: true });
@@ -553,13 +563,12 @@ describe("trajectory cleanup", () => {
 
         expect(order.indexOf("archive-done")).toBeLessThan(order.indexOf("acquire-done"));
         // The claim was only admitted after delete's archive rename fully
-        // committed and observed the path retired — it disambiguates to a
-        // fresh sibling path rather than reclaiming the tombstoned canonical
-        // one (same-owner reclaim of a *retired* path is never admitted at
-        // the original path: retired is set exclusively by disposal, so this
-        // claim is indistinguishable at the registry from a late straggler
-        // write racing that exact disposal, not a legitimate continuation).
-        expect(lease.filePath).not.toBe(runtimeFile);
+        // committed and observed the path retired. A same-owner claim on a
+        // *retired* path is a late straggler racing its own session's disposal
+        // (retired is set exclusively by disposal), so it is rejected outright —
+        // it does NOT disambiguate to a fresh sibling, which would resurrect the
+        // deleted session as a live artifact pair after its deletion.
+        expect(lease.status).toBe("retired");
         await expectTombstoned(runtimeFile, "deleted");
       } finally {
         renameSpy.mockRestore();
@@ -567,7 +576,7 @@ describe("trajectory cleanup", () => {
     });
   });
 
-  it("keeps a queued re-acquisition's fresh runtime and pointer intact against a racing delete's pointer archive", async () => {
+  it("rejects a queued same-owner re-acquisition after a racing delete retires the path", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-8";
       const storePath = path.join(dir, "sessions.json");
@@ -576,6 +585,10 @@ describe("trajectory cleanup", () => {
       const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
       await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
       await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
+      // Snapshot the canonical key while the file still exists (realpath
+      // resolves); once the delete tombstones it, the lookup below falls back to
+      // path.resolve, which would diverge on a symlinked tmp root.
+      const canonicalPath = canonicalizeTrajectoryPath(runtimeFile);
 
       const order: string[] = [];
       const originalRename = nodeFs.promises.rename.bind(nodeFs.promises);
@@ -634,11 +647,13 @@ describe("trajectory cleanup", () => {
 
         releasePointerArchive();
         const [, recorder] = await Promise.all([deletePromise, recorderPromise]);
-        if (!recorder) {
-          throw new Error("expected trajectory runtime recorder");
-        }
-        recorder.recordEvent("prompt.submitted", { marker: "post-race-owner" });
-        await recorder.flush();
+
+        // The re-acquisition is for the SAME session the delete just retired, so
+        // it is a straggler racing its own deletion: createTrajectoryRuntimeRecorder
+        // returns null and mints nothing. Publishing a fresh pair here (the old
+        // behavior) would leave a live, bare artifact pair after the session was
+        // deleted — the orphan this lifecycle exists to prevent.
+        expect(recorder).toBeNull();
 
         // Delete's OWN pair tombstoned (the runtime rename already completed
         // unpaused, before this test even started polling for pointer-archive-start).
@@ -649,16 +664,69 @@ describe("trajectory cleanup", () => {
           expect(tombstone).toBeDefined(),
         );
 
-        // The NEW owner's fresh pair is live at the original (now-vacant) paths.
-        const pointerContent = JSON.parse(nodeFs.readFileSync(pointerPath, "utf8")) as {
-          runtimeFile?: string;
-        };
-        expect(pointerContent.runtimeFile).toBe(recorder.filePath);
-        expect(nodeFs.existsSync(recorder.filePath)).toBe(true);
-        expect(nodeFs.readFileSync(recorder.filePath, "utf8")).toContain("post-race-owner");
+        // No fresh pair was minted: neither the runtime path nor its pointer has
+        // a live file (only their tombstones), and the rejected claim left the
+        // registry entry retired and still owned by the deleted session.
+        expect(nodeFs.existsSync(runtimeFile)).toBe(false);
+        expect(nodeFs.existsSync(pointerPath)).toBe(false);
+        const entry = getTrajectoryPathRegistryEntryForTest(canonicalPath);
+        expect(entry?.retired).toBe(true);
+        expect(entry?.ownerSessionId).toBe(sessionId);
       } finally {
         renameSpy.mockRestore();
       }
+    });
+  });
+
+  it("disables a straggler recorder acquiring its own path after the session was deleted", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      // realpath the tmp root so the post-tombstone canonicalization (which falls
+      // back to path.resolve once the file is gone) matches the retire-time key
+      // on a symlinked tmp root (e.g. macOS /var -> /private/var).
+      const cdir = await fs.realpath(dir);
+      const sessionId = "session-late-delete";
+      const storePath = path.join(cdir, "sessions.json");
+      const sessionFile = path.join(cdir, `${sessionId}.jsonl`);
+      const runtimeFile = resolveTrajectoryFilePath({ env: {}, sessionFile, sessionId });
+      const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+      await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
+      await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
+      const canonicalPath = canonicalizeTrajectoryPath(runtimeFile);
+
+      // Delete tombstones the pair and retires the canonical path.
+      await removeSessionTrajectoryArtifacts({
+        sessionId,
+        sessionFile,
+        storePath,
+        restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
+      });
+      await expectTombstoned(runtimeFile, "deleted");
+      await expectTombstoned(pointerPath, "deleted");
+      const retired = getTrajectoryPathRegistryEntryForTest(canonicalPath);
+      expect(retired?.retired).toBe(true);
+      const retiredIncarnation = retired?.incarnation;
+
+      // A late straggler for the SAME session (e.g. an async post-turn hook that
+      // captured the pre-delete identity) opens a recorder against its own, now
+      // tombstoned, path. OPENCLAW_TRAJECTORY=1 forces capture on so a null
+      // recorder can only mean the retired-path rejection, never a disabled env.
+      const recorder = await createTrajectoryRuntimeRecorder({
+        sessionId,
+        sessionFile,
+        env: { OPENCLAW_TRAJECTORY: "1" },
+      });
+      expect(recorder).toBeNull();
+
+      // Nothing minted: no republished pointer, no runtime file, no sibling.
+      expect(nodeFs.existsSync(runtimeFile)).toBe(false);
+      expect(nodeFs.existsSync(pointerPath)).toBe(false);
+      // The rejected claim never touched the registry: same retired entry, same
+      // incarnation, same owner (no fresh claim, no disambiguated reclaim).
+      const afterReject = getTrajectoryPathRegistryEntryForTest(canonicalPath);
+      expect(afterReject?.retired).toBe(true);
+      expect(afterReject?.incarnation).toBe(retiredIncarnation);
+      expect(afterReject?.ownerSessionId).toBe(sessionId);
     });
   });
 });

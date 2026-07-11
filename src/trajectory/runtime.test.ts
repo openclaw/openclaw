@@ -513,12 +513,14 @@ describe("trajectory runtime", () => {
       maxRuntimeFileBytes: 2_400,
     });
     await expectTrajectoryRuntimeRecorder(recorderA);
-    const incarnationAfterA = (
-      await acquireTrajectoryWriterLease({
-        sessionId: "reuse-session",
-        candidatePath: runtimeFile,
-      })
-    ).incarnation;
+    const leaseAfterA = await acquireTrajectoryWriterLease({
+      sessionId: "reuse-session",
+      candidatePath: runtimeFile,
+    });
+    if (leaseAfterA.status !== "acquired") {
+      throw new Error("expected reconnecting owner to reuse its acquired lease");
+    }
+    const incarnationAfterA = leaseAfterA.incarnation;
 
     for (let index = 0; index < 100; index += 1) {
       await expectTrajectoryRuntimeRecorder(
@@ -536,12 +538,14 @@ describe("trajectory runtime", () => {
       maxRuntimeFileBytes: 2_400,
     });
     const runtimeRecorderB = await expectTrajectoryRuntimeRecorder(recorderB);
-    const incarnationAfterB = (
-      await acquireTrajectoryWriterLease({
-        sessionId: "reuse-session",
-        candidatePath: runtimeFile,
-      })
-    ).incarnation;
+    const leaseAfterB = await acquireTrajectoryWriterLease({
+      sessionId: "reuse-session",
+      candidatePath: runtimeFile,
+    });
+    if (leaseAfterB.status !== "acquired") {
+      throw new Error("expected reconnecting owner to reuse its acquired lease");
+    }
+    const incarnationAfterB = leaseAfterB.incarnation;
 
     // Eviction+recreation for the *same* still-live session must not spuriously
     // claim a fresh incarnation — it is the same owner reconnecting, not a new epoch.
@@ -591,6 +595,9 @@ describe("trajectory runtime", () => {
       sessionId: "post-reap-owner",
       candidatePath: runtimeFile,
     });
+    if (freshLease.status !== "acquired") {
+      throw new Error("expected a fresh claim on the reaped path to be acquired");
+    }
     expect(freshLease.filePath).toBe(runtimeFile);
 
     await runtimeRecorder.flush();
