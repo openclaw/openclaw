@@ -9,11 +9,11 @@ import {
 import { buildProviderModelAuthSourcePlan } from "./provider-model-auth-source-plan.js";
 
 describe("OpenAI model route adapter", () => {
-  it("normalizes provider and profile-qualified model ids", () => {
+  it("normalizes profile-qualified model ids", () => {
     expect(
       resolveOpenAIModelRoutes({
         provider: "OpenAI",
-        modelId: "openai/gpt-5.5@work",
+        modelId: "gpt-5.5@work",
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
         env: {},

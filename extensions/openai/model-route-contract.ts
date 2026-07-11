@@ -63,7 +63,11 @@ export function normalizeOpenAIModelRouteId(value: string | undefined): string {
   const modelId = value?.trim() ?? "";
   // OpenAI-compatible model ids are case-sensitive. Collapse only the shipped
   // legacy alias; configured custom ids must retain their authored identity.
-  return modelId.toLowerCase() === OPENAI_GPT_54_LEGACY_MODEL_ID ? OPENAI_GPT_54_MODEL_ID : modelId;
+  const normalized = modelId.toLowerCase();
+  return normalized === OPENAI_GPT_54_LEGACY_MODEL_ID ||
+    normalized === `openai/${OPENAI_GPT_54_LEGACY_MODEL_ID}`
+    ? OPENAI_GPT_54_MODEL_ID
+    : modelId;
 }
 
 function normalizeOpenAIRouteMembershipId(value: string | undefined): string {

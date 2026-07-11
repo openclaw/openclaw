@@ -29,6 +29,9 @@ describe("OpenAI provider policy artifact", () => {
       kind: "routes",
       routes: [{ api: "openai-responses" }, { api: "openai-chatgpt-responses" }],
     });
+    expect(normalizeModelCatalogId({ provider: "openai", modelId: "openai/acme-model" })).toBe(
+      "openai/acme-model",
+    );
   });
 
   it("keeps OpenAI thinking policy for openai refs", () => {

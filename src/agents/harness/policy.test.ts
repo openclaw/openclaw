@@ -200,12 +200,12 @@ describe("resolveAgentHarnessPolicy", () => {
       runtime: "openclaw",
     },
     {
-      name: "the first provider-qualified adapter stays authoritative",
+      name: "a provider-looking native id stays distinct",
       models: [
         { id: "openai/gpt-5.5", api: "openai-responses" },
         { id: "gpt-5.5", api: "openai-completions" },
       ],
-      runtime: "codex",
+      runtime: "openclaw",
     },
     {
       name: "an authored empty header map stays authoritative",
