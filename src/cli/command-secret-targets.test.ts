@@ -143,7 +143,36 @@ vi.mock("../secrets/channel-contract-api.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: vi.fn(() => []),
+  listReadOnlyChannelPluginsForConfig: vi.fn((config: {
+    channels?: Record<string, { accounts?: Record<string, unknown>; defaultAccount?: string }>;
+  }) => {
+    const plugins = [] as Array<{
+      id: string;
+      config: {
+        listAccountIds: (cfg: typeof config) => string[];
+        defaultAccountId: (cfg: typeof config) => string | undefined;
+      };
+    }>;
+    if (config?.channels?.discord) {
+      plugins.push({
+        id: "discord",
+        config: {
+          listAccountIds: (cfg) => Object.keys(cfg.channels?.discord?.accounts ?? {}),
+          defaultAccountId: (cfg) => cfg.channels?.discord?.defaultAccount,
+        },
+      });
+    }
+    if (config?.channels?.matrix) {
+      plugins.push({
+        id: "matrix",
+        config: {
+          listAccountIds: (cfg) => Object.keys(cfg.channels?.matrix?.accounts ?? {}),
+          defaultAccountId: (cfg) => cfg.channels?.matrix?.defaultAccount,
+        },
+      });
+    }
+    return plugins;
+  }),
 }));
 
 vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
