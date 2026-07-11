@@ -849,8 +849,8 @@ function renderOverrideSelect(params: {
   onChange: (value: string) => void;
   tooltip?: string;
 }) {
-  return html`
-    <label class="session-override-field" title=${ifDefined(params.tooltip)}>
+  const field = html`
+    <label class="session-override-field">
       <span class="session-override-field__label">${params.label}</span>
       <select
         class="session-override-field__control"
@@ -867,6 +867,13 @@ function renderOverrideSelect(params: {
       </select>
     </label>
   `;
+  // openclaw-tooltip shows on keyboard focus as well as hover (a native title
+  // attribute never appears on focus) and renders display:contents, so the
+  // grid layout is unchanged. The label keeps the accessible name; the select
+  // keeps the tooltip text as its accessible description.
+  return params.tooltip
+    ? html`<openclaw-tooltip .content=${params.tooltip}>${field}</openclaw-tooltip>`
+    : field;
 }
 
 export function renderSessions(props: SessionsProps) {

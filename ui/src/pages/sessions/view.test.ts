@@ -1011,18 +1011,29 @@ describe("sessions view", () => {
       );
     const thinkingField = fieldByLabel("Thinking");
     const reasoningField = fieldByLabel("Reasoning");
-    expect(thinkingField?.getAttribute("title")).toContain("thinking level override");
+    // The tooltip rides the focus-capable openclaw-tooltip component (hover +
+    // keyboard focus), not a native title attribute that never shows on focus.
+    const tooltipContent = (field: HTMLLabelElement | undefined) => {
+      const wrapper = field?.parentElement;
+      return wrapper?.tagName.toLowerCase() === "openclaw-tooltip"
+        ? (wrapper as HTMLElement & { content?: string }).content
+        : undefined;
+    };
+    expect(tooltipContent(thinkingField)).toContain("thinking level override");
+    expect(tooltipContent(reasoningField)).toContain("display");
     // The wrapping label stays the accessible NAME; the tooltip is exposed as
     // the accessible DESCRIPTION so screen readers keep the short control name.
     const thinkingSelect = thinkingField?.querySelector("select");
     expect(thinkingSelect?.hasAttribute("aria-label")).toBe(false);
     expect(thinkingSelect?.getAttribute("aria-description")).toContain("provider profile");
     const reasoningSelect = reasoningField?.querySelector("select");
-    expect(reasoningField?.getAttribute("title")).toContain("display");
     expect(reasoningSelect?.hasAttribute("aria-label")).toBe(false);
     expect(reasoningSelect?.getAttribute("aria-description")).toContain("display");
-    // Fields without a tooltip stay untitled.
-    expect(fieldByLabel("Fast")?.hasAttribute("title")).toBe(false);
+    // Fields without a tooltip get neither wrapper nor description.
+    expect(tooltipContent(fieldByLabel("Fast"))).toBeUndefined();
+    expect(fieldByLabel("Fast")?.querySelector("select")?.hasAttribute("aria-description")).toBe(
+      false,
+    );
   });
 
   it("opens details for sessions without checkpoints but ignores nested control clicks", async () => {
