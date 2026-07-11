@@ -1719,7 +1719,7 @@ describe("activateSetupInference", () => {
         status: "installed" as const,
       };
     });
-    const runEmbeddedAgent = vi.fn(async () => {
+    const runEmbeddedAgent = vi.fn(async (_params: unknown) => {
       events.push("live-test");
       return { meta: { finalAssistantVisibleText: "OK" } };
     });

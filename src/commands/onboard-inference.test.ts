@@ -241,6 +241,30 @@ describe("detectInferenceBackends", () => {
     ).resolves.toEqual({ command, found: true });
   });
 
+  it("checks login status with the Codex executable discovered in a macOS app", async () => {
+    const command = "/Applications/ChatGPT.app/Contents/Resources/codex";
+    const probed: Array<{ command: string; args: string[] }> = [];
+    const candidates = await detectInferenceBackends({
+      env: { HOME: "/Users/tester" },
+      platform: "darwin",
+      deps: {
+        probeLocalCommand: async (probedCommand, args = ["--version"]) => {
+          probed.push({ command: probedCommand, args });
+          return {
+            command: probedCommand,
+            found: probedCommand === command,
+            ...(args[0] === "login" ? { version: "Not logged in", error: "exited 1" } : {}),
+          };
+        },
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      { kind: "codex-cli", credentials: false, detail: "installed, not logged in" },
+    ]);
+    expect(probed).toContainEqual({ command, args: ["login", "status"] });
+  });
+
   it.each([
     ["system ChatGPT", "/Applications/ChatGPT.app/Contents/Resources/codex", "/Users/tester"],
     [

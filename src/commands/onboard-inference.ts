@@ -96,8 +96,9 @@ function describeCliDetail(credentials: boolean | undefined): string {
 
 async function detectCodexLoginState(
   probe: typeof probeLocalCommand,
+  command: string,
 ): Promise<boolean | undefined> {
-  const status = await probe("codex", ["login", "status"], { timeoutMs: 3_000 });
+  const status = await probe(command, ["login", "status"], { timeoutMs: 3_000 });
   if (!status.error) {
     return true;
   }
@@ -250,7 +251,7 @@ export async function detectInferenceBackends(
           hasStoredCredentials: options.deps.readCodexCliCredentials() !== null,
           platform,
         })
-      : await detectCodexLoginState(probe);
+      : await detectCodexLoginState(probe, codexProbe.command);
     cliCandidates.push({
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
