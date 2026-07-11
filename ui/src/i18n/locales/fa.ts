@@ -258,9 +258,12 @@ export const fa: TranslationMap = {
     goal: "هدف",
     goalNote: "یادداشت هدف",
     thinking: "تفکر",
+    thinkingTooltip:
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "سریع",
     verbose: "پرگویی",
     reasoning: "استدلال",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "اقدامات",
     addToWorkboard: "افزودن به Workboard",
     openWorkboardCard: "باز کردن کارت Workboard",

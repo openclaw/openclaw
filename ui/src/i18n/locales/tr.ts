@@ -260,9 +260,12 @@ export const tr: TranslationMap = {
     goal: "Hedef",
     goalNote: "Hedef notu",
     thinking: "Düşünme",
+    thinkingTooltip:
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "Hızlı",
     verbose: "Ayrıntılı",
     reasoning: "Akıl yürütme",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "Eylemler",
     addToWorkboard: "Workboard'a ekle",
     openWorkboardCard: "Workboard kartını aç",

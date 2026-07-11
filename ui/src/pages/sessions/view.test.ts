@@ -982,6 +982,60 @@ describe("sessions view", () => {
     ).toBe("123,456 to 38,920 tokens");
   });
 
+  it("renders explanatory tooltips on the Thinking and Reasoning override selects", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:tooltip-check:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            thinkingLevel: "high",
+            reasoningLevel: "stream",
+          }),
+        ),
+        expandedSessionKey: "agent:tooltip-check:main",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const fields = Array.from(
+      container.querySelectorAll<HTMLLabelElement>(".session-override-field"),
+    );
+    const fieldByLabel = (label: string) =>
+      fields.find(
+        (field) =>
+          field.querySelector(".session-override-field__label")?.textContent?.trim() === label,
+      );
+    const thinkingField = fieldByLabel("Thinking");
+    const reasoningField = fieldByLabel("Reasoning");
+    // The tooltip rides the focus-capable openclaw-tooltip component (hover +
+    // keyboard focus), not a native title attribute that never shows on focus.
+    const tooltipContent = (field: HTMLLabelElement | undefined) => {
+      const wrapper = field?.parentElement;
+      return wrapper?.tagName.toLowerCase() === "openclaw-tooltip"
+        ? (wrapper as HTMLElement & { content?: string }).content
+        : undefined;
+    };
+    expect(tooltipContent(thinkingField)).toContain("thinking level override");
+    expect(tooltipContent(reasoningField)).toContain("display");
+    // The wrapping label stays the accessible NAME; the tooltip is exposed as
+    // the accessible DESCRIPTION so screen readers keep the short control name.
+    const thinkingSelect = thinkingField?.querySelector("select");
+    expect(thinkingSelect?.hasAttribute("aria-label")).toBe(false);
+    expect(thinkingSelect?.getAttribute("aria-description")).toContain("provider profile");
+    const reasoningSelect = reasoningField?.querySelector("select");
+    expect(reasoningSelect?.hasAttribute("aria-label")).toBe(false);
+    expect(reasoningSelect?.getAttribute("aria-description")).toContain("display");
+    // Fields without a tooltip get neither wrapper nor description.
+    expect(tooltipContent(fieldByLabel("Fast"))).toBeUndefined();
+    expect(fieldByLabel("Fast")?.querySelector("select")?.hasAttribute("aria-description")).toBe(
+      false,
+    );
+  });
+
   it("opens details for sessions without checkpoints but ignores nested control clicks", async () => {
     const container = document.createElement("div");
     const onToggleDetails = vi.fn();

@@ -255,9 +255,12 @@ export const th: TranslationMap = {
     goal: "เป้าหมาย",
     goalNote: "หมายเหตุเป้าหมาย",
     thinking: "Thinking",
+    thinkingTooltip:
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "เร็ว",
     verbose: "ละเอียด",
     reasoning: "การให้เหตุผล",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "การดำเนินการ",
     addToWorkboard: "เพิ่มไปยัง Workboard",
     openWorkboardCard: "เปิดการ์ด Workboard",

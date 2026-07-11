@@ -1,5 +1,6 @@
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -846,13 +847,15 @@ function renderOverrideSelect(params: {
   options: readonly { value: string; label: string }[];
   current: string;
   onChange: (value: string) => void;
+  tooltip?: string;
 }) {
-  return html`
+  const field = html`
     <label class="session-override-field">
       <span class="session-override-field__label">${params.label}</span>
       <select
         class="session-override-field__control"
         ?disabled=${params.disabled}
+        aria-description=${ifDefined(params.tooltip)}
         @change=${(e: Event) => params.onChange((e.target as HTMLSelectElement).value)}
       >
         ${params.options.map(
@@ -864,6 +867,13 @@ function renderOverrideSelect(params: {
       </select>
     </label>
   `;
+  // openclaw-tooltip shows on keyboard focus as well as hover (a native title
+  // attribute never appears on focus) and renders display:contents, so the
+  // grid layout is unchanged. The label keeps the accessible name; the select
+  // keeps the tooltip text as its accessible description.
+  return params.tooltip
+    ? html`<openclaw-tooltip .content=${params.tooltip}>${field}</openclaw-tooltip>`
+    : field;
 }
 
 export function renderSessions(props: SessionsProps) {
@@ -1513,6 +1523,7 @@ function renderSessionDetailsRow(params: {
             </label>
             ${renderOverrideSelect({
               label: t("sessionsView.thinking"),
+              tooltip: t("sessionsView.thinkingTooltip"),
               disabled: props.loading,
               options: thinkLevels,
               current: thinking,
@@ -1538,6 +1549,7 @@ function renderSessionDetailsRow(params: {
             })}
             ${renderOverrideSelect({
               label: t("sessionsView.reasoning"),
+              tooltip: t("sessionsView.reasoningTooltip"),
               disabled: props.loading,
               options: reasoningLevels.map((level) => ({
                 value: level,

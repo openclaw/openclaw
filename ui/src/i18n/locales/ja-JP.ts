@@ -262,9 +262,12 @@ export const ja_JP: TranslationMap = {
     goal: "目標",
     goalNote: "目標メモ",
     thinking: "Thinking",
+    thinkingTooltip:
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "高速",
     verbose: "詳細",
     reasoning: "推論",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "アクション",
     addToWorkboard: "Workboardに追加",
     openWorkboardCard: "Workboardカードを開く",

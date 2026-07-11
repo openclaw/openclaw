@@ -257,9 +257,12 @@ export const id: TranslationMap = {
     goal: "Tujuan",
     goalNote: "Catatan tujuan",
     thinking: "Thinking",
+    thinkingTooltip:
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "Cepat",
     verbose: "Verbose",
     reasoning: "Penalaran",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "Tindakan",
     addToWorkboard: "Tambahkan ke Workboard",
     openWorkboardCard: "Buka kartu Workboard",

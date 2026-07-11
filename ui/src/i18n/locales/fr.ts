@@ -262,9 +262,12 @@ export const fr: TranslationMap = {
     goal: "Objectif",
     goalNote: "Note d’objectif",
     thinking: "Réflexion",
+    thinkingTooltip:
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "Rapide",
     verbose: "Détaillé",
     reasoning: "Raisonnement",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "Actions",
     addToWorkboard: "Ajouter au Workboard",
     openWorkboardCard: "Ouvrir la carte Workboard",

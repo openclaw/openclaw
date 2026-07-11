@@ -257,9 +257,12 @@ export const vi: TranslationMap = {
     goal: "Mục tiêu",
     goalNote: "Ghi chú mục tiêu",
     thinking: "Suy nghĩ",
+    thinkingTooltip:
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "Nhanh",
     verbose: "Chi tiết",
     reasoning: "Suy luận",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "Hành động",
     addToWorkboard: "Thêm vào Workboard",
     openWorkboardCard: "Mở thẻ Workboard",

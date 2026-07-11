@@ -258,9 +258,12 @@ export const uk: TranslationMap = {
     goal: "Мета",
     goalNote: "Примітка до мети",
     thinking: "Обмірковування",
+    thinkingTooltip:
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "Швидко",
     verbose: "Докладно",
     reasoning: "Міркування",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "Дії",
     addToWorkboard: "Додати до Workboard",
     openWorkboardCard: "Відкрити картку Workboard",

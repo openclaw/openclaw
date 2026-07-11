@@ -255,9 +255,12 @@ export const zh_CN: TranslationMap = {
     goal: "目标",
     goalNote: "目标备注",
     thinking: "思考",
+    thinkingTooltip:
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "快速",
     verbose: "详细",
     reasoning: "推理",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "操作",
     addToWorkboard: "添加到 Workboard",
     openWorkboardCard: "打开 Workboard 卡片",
