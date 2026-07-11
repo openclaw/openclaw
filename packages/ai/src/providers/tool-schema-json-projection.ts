@@ -43,11 +43,18 @@ function isNonFiniteNumberValue(value: unknown): boolean {
   if (typeof value === "number") {
     return !Number.isFinite(value);
   }
-  if (
-    value === null ||
-    typeof value !== "object" ||
-    (!(value instanceof Number) && Object.prototype.toString.call(value) !== "[object Number]")
-  ) {
+  if (value === null || typeof value !== "object") {
+    return false;
+  }
+  let isNumberObject = value instanceof Number;
+  if (!isNumberObject) {
+    try {
+      isNumberObject = Object.prototype.toString.call(value) === "[object Number]";
+    } catch {
+      return false;
+    }
+  }
+  if (!isNumberObject) {
     return false;
   }
   try {
