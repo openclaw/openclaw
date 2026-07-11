@@ -1,5 +1,6 @@
 // Control UI tests cover chat behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import {
   registerChatAttachmentPayload,
   resetChatAttachmentPayloadStoreForTest,
@@ -260,8 +261,11 @@ describe("chat side result gateway events", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
-  it("ignores a stale side result while a newer side question is pending", () => {
+  it("ignores side results from retired (superseded or dismissed) runs", () => {
     const state = createState();
+    // A newer question retired the old pending run before its result arrived.
+    state.chatSideResultPending = { question: "older question", ts: 1, runId: "btw-run-old" };
+    retirePendingChatSideQuestion(state);
     state.chatSideResultPending = { question: "newer question", ts: 2, runId: "btw-run-new" };
 
     expect(
@@ -277,7 +281,26 @@ describe("chat side result gateway events", () => {
 
     expect(state.chatSideResult).toBeNull();
     expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-new" });
+    // The entry stays so the retired run's terminal chat event is swallowed too.
     expect(state.chatSideResultTerminalRuns?.has("btw-run-old")).toBe(true);
+  });
+
+  it("keeps a dismissed pending run's terminal reply out of the transcript", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "dismissed question", ts: 1, runId: "btw-run-5" };
+    retirePendingChatSideQuestion(state);
+    expect(state.chatSideResultPending).toBeNull();
+
+    const result = handleChatGatewayEvent(state, {
+      runId: "btw-run-5",
+      sessionKey: "main",
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "Late reply." }] },
+    });
+
+    expect(result).toBeNull();
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatSideResult).toBeNull();
   });
 
   it("keeps the pending side question when an unrelated run terminates", () => {

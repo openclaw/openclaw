@@ -330,12 +330,12 @@ export function handleChatSideResultGatewayEvent(state: ChatState, payload: unkn
   if (!chatScopedEventSessionMatches(state, sideResult.sessionKey, sideResult.agentId)) {
     return false;
   }
-  // Detached BTW sends can overlap: a stale result must not replace a newer
-  // question's pending card. Pending without a runId means its send is not
-  // acked yet; treat an arriving result as its own so the card cannot hang.
-  const pendingRunId = state.chatSideResultPending?.runId;
-  if (pendingRunId && pendingRunId !== sideResult.runId) {
-    state.chatSideResultTerminalRuns?.add(sideResult.runId);
+  // Runs retired before display (superseded by a newer question or dismissed)
+  // enter chatSideResultTerminalRuns via retirePendingChatSideQuestion before
+  // their side_result can arrive; live runs only enter the set below. A
+  // retired run's late result must not replace the current card, and its
+  // entry stays so the trailing terminal chat event is still swallowed.
+  if (state.chatSideResultTerminalRuns?.has(sideResult.runId)) {
     return true;
   }
   state.chatSideResult = sideResult;

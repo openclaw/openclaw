@@ -15,7 +15,10 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractSideQuestionDisplayText } from "../../lib/chat/side-question.ts";
-import type { ChatSideResultPending } from "../../lib/chat/side-result.ts";
+import {
+  retirePendingChatSideQuestion,
+  type ChatSideResultPending,
+} from "../../lib/chat/side-result.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentIdForSession,
@@ -129,6 +132,8 @@ export type ChatHost = ChatInputHistoryState &
     chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
     /** Placeholder for an in-flight /btw side question awaiting chat.side_result. */
     chatSideResultPending?: ChatSideResultPending | null;
+    /** Retired/handled BTW run ids whose late events must not reach the transcript. */
+    chatSideResultTerminalRuns?: Set<string>;
   };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -2197,13 +2202,10 @@ export async function handleSendChat(
             }
           : null;
         if (btwPending) {
-          // The superseded run loses its pending record; suppress its late
-          // side_result/terminal events so a failed old run cannot be adopted
-          // into the transcript.
-          const supersededRunId = host.chatSideResultPending?.runId;
-          if (supersededRunId) {
-            host.chatSideResultTerminalRuns?.add(supersededRunId);
-          }
+          // The superseded run loses its pending record; retire it so its
+          // late side_result/terminal events cannot reach the card or the
+          // transcript.
+          retirePendingChatSideQuestion(host);
           host.chatSideResult = null;
           host.chatSideResultPending = btwPending;
           host.requestUpdate?.();
