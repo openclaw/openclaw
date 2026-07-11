@@ -1008,6 +1008,26 @@ describe("WorkboardStore", () => {
     expect(released.metadata?.claim).toBeUndefined();
   });
 
+  it("reports already claimed instead of dependency error for a claimed dependency-backed card", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "done" });
+    const child = await store.create({
+      title: "Child",
+      status: "ready",
+      metadata: {
+        links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: Date.now() }],
+      },
+    });
+
+    // First claim succeeds.
+    const first = await store.claim(child.id, { ownerId: "main", ttlSeconds: 60 });
+    expect(first.card.status).toBe("running");
+    expect(first.card.metadata?.claim?.ownerId).toBe("main");
+
+    // Second claim must report "already claimed", not "dependencies not done".
+    await expect(store.claim(child.id, { ownerId: "other" })).rejects.toThrow(/already claimed/);
+  });
+
   it("caps oversized claim TTL seconds to a valid Date timestamp", async () => {
     vi.useFakeTimers();
     try {
