@@ -1075,6 +1075,21 @@ describe("config cli", () => {
 
       expect(mockLog).toHaveBeenCalledWith("60");
     });
+
+    it("outputs JSON error to stdout when path is not found and --json is set", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "get", "nonexistent.path", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockError).not.toHaveBeenCalled();
+      const payload = parseLastLogPayload() as { error: string };
+      expect(payload.error).toBe("Config path not found: nonexistent.path");
+    });
   });
 
   describe("config validate", () => {

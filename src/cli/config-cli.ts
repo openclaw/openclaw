@@ -2459,6 +2459,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const redacted = redactConfigObject(snapshot.config);
     const res = getAtPath(redacted, parsedPath);
     if (!res.found) {
+      if (opts.json) {
+        writeRuntimeJson(runtime, { error: `Config path not found: ${opts.path}` });
+        runtime.exit(1);
+        return;
+      }
       runtime.error(
         danger(
           `Config path not found: ${opts.path}. Run ${formatCliCommand("openclaw config validate")} to inspect config shape.`,
@@ -2481,6 +2486,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     }
     writeRuntimeJson(runtime, res.value ?? null);
   } catch (err) {
+    if (err instanceof Error && err.message.startsWith("__exit__:")) throw err;
     runtime.error(danger(String(err)));
     runtime.exit(1);
   }
