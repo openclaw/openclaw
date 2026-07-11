@@ -5602,6 +5602,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Configuration
   - H2: Native Runtime
+  - H2: Runtime diagnostics
   - H2: Troubleshooting
 
 ## plugins/logbook.md
