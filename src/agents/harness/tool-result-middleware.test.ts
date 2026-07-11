@@ -67,14 +67,14 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(result.details).toEqual({ status: "error", middlewareError: true });
   });
 
-  it("rejects oversized middleware details", async () => {
+  it("rejects oversized multibyte middleware details", async () => {
     // Details are serialized into harness/tool payloads; cap them before a
     // middleware result can create unbounded transcript growth.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
-          details: { payload: "x".repeat(100_001) },
+          details: { payload: "é".repeat(60_000) },
         },
       }),
     ]);

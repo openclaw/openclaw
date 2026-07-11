@@ -2,6 +2,7 @@
  * Runs native harness tool-result middleware around tool execution results.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   AgentToolResultMiddleware,
@@ -55,9 +56,8 @@ function isValidMiddlewareContentBlock(value: unknown): boolean {
 
 function hasValidMiddlewareDetailsShape(
   value: unknown,
-  state: { keys: number; bytes: number; seen: WeakSet<object> } = {
+  state: { keys: number; seen: WeakSet<object> } = {
     keys: 0,
-    bytes: 0,
     seen: new WeakSet<object>(),
   },
   depth = 0,
@@ -68,13 +68,8 @@ function hasValidMiddlewareDetailsShape(
   if (depth > MAX_MIDDLEWARE_DETAILS_DEPTH) {
     return false;
   }
-  if (typeof value === "string") {
-    state.bytes += Buffer.byteLength(value);
-    return state.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    state.bytes += Buffer.byteLength(String(value));
-    return state.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return true;
   }
   if (typeof value !== "object") {
     return false;
@@ -95,10 +90,9 @@ function hasValidMiddlewareDetailsShape(
     }
     return true;
   }
-  for (const [key, entry] of Object.entries(value)) {
+  for (const entry of Object.values(value)) {
     state.keys += 1;
-    state.bytes += Buffer.byteLength(key);
-    if (state.keys > MAX_MIDDLEWARE_DETAILS_KEYS || state.bytes > MAX_MIDDLEWARE_DETAILS_BYTES) {
+    if (state.keys > MAX_MIDDLEWARE_DETAILS_KEYS) {
       return false;
     }
     if (!hasValidMiddlewareDetailsShape(entry, state, depth + 1)) {
@@ -109,20 +103,14 @@ function hasValidMiddlewareDetailsShape(
 }
 
 function isValidMiddlewareDetails(value: unknown): boolean {
-  if (!hasValidMiddlewareDetailsShape(value)) {
-    return false;
-  }
   if (value === undefined) {
     return true;
   }
-  try {
-    const serialized = JSON.stringify(value);
-    return (
-      serialized !== undefined && Buffer.byteLength(serialized) <= MAX_MIDDLEWARE_DETAILS_BYTES
-    );
-  } catch {
+  if (!hasValidMiddlewareDetailsShape(value)) {
     return false;
   }
+  const size = boundedJsonUtf8Bytes(value, MAX_MIDDLEWARE_DETAILS_BYTES);
+  return size.complete && size.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
 }
 
 function isValidMiddlewareToolResult(value: unknown): value is OpenClawAgentToolResult {
@@ -403,7 +391,7 @@ function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
     if (serialized === undefined) {
       return null;
     }
-    const serializedBytes = Buffer.byteLength(serialized);
+    const serializedBytes = Buffer.byteLength(serialized, "utf8");
     if (serializedBytes > MAX_MIDDLEWARE_DETAILS_BYTES) {
       return { truncated: true, originalSizeBytes: serializedBytes };
     }
