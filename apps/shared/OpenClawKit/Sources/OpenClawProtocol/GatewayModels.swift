@@ -1580,6 +1580,68 @@ public struct WorktreesBranchesResult: Codable, Sendable {
     }
 }
 
+public struct FsDirEntry: Codable, Sendable {
+    public let name: String
+    public let path: String
+    public let hidden: Bool?
+
+    public init(
+        name: String,
+        path: String,
+        hidden: Bool? = nil)
+    {
+        self.name = name
+        self.path = path
+        self.hidden = hidden
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case path
+        case hidden
+    }
+}
+
+public struct FsListDirParams: Codable, Sendable {
+    public let path: String?
+
+    public init(
+        path: String? = nil)
+    {
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+    }
+}
+
+public struct FsListDirResult: Codable, Sendable {
+    public let path: String
+    public let parent: String?
+    public let home: String
+    public let entries: [FsDirEntry]
+
+    public init(
+        path: String,
+        parent: String? = nil,
+        home: String,
+        entries: [FsDirEntry])
+    {
+        self.path = path
+        self.parent = parent
+        self.home = home
+        self.entries = entries
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case parent
+        case home
+        case entries
+    }
+}
+
 public struct NodePairListParams: Codable, Sendable {}
 
 public struct NodePairApproveParams: Codable, Sendable {

@@ -1,24 +1,24 @@
-// Codex Supervisor tests cover lightweight CLI discovery and lazy registration.
+// Codex CLI metadata tests cover lightweight discovery and lazy registration.
 import { Command } from "commander";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  registerCodexSupervisorCli: vi.fn(),
+  registerCodexSessionCli: vi.fn(),
 }));
 
-vi.mock("./src/cli.js", () => ({
-  registerCodexSupervisorCli: mocks.registerCodexSupervisorCli,
+vi.mock("./src/session-cli.js", () => ({
+  registerCodexSessionCli: mocks.registerCodexSessionCli,
 }));
 
 import entry from "./cli-metadata.js";
 
-describe("codex-supervisor CLI metadata entry", () => {
-  it("advertises codex and loads its registrar only when invoked", async () => {
+describe("codex CLI metadata entry", () => {
+  it("advertises codex and loads its session registrar only when invoked", async () => {
     const registerCli = vi.fn();
     const api = createTestPluginApi({
-      id: "codex-supervisor",
-      name: "Codex Supervisor",
+      id: "codex",
+      name: "Codex",
       registerCli,
     });
 
@@ -28,16 +28,16 @@ describe("codex-supervisor CLI metadata entry", () => {
       descriptors: [
         {
           name: "codex",
-          description: "Inspect Codex sessions across the Gateway and paired nodes",
+          description: "Inspect and branch from Codex sessions through the Gateway",
           hasSubcommands: true,
         },
       ],
     });
-    expect(mocks.registerCodexSupervisorCli).not.toHaveBeenCalled();
+    expect(mocks.registerCodexSessionCli).not.toHaveBeenCalled();
 
     const registrar = registerCli.mock.calls[0]?.[0];
     if (typeof registrar !== "function") {
-      throw new Error("expected codex-supervisor CLI registrar");
+      throw new Error("expected Codex CLI registrar");
     }
     const program = new Command();
     await registrar({
@@ -48,6 +48,6 @@ describe("codex-supervisor CLI metadata entry", () => {
       logger: api.logger,
     });
 
-    expect(mocks.registerCodexSupervisorCli).toHaveBeenCalledWith(program);
+    expect(mocks.registerCodexSessionCli).toHaveBeenCalledWith(program);
   });
 });

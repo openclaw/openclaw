@@ -111,6 +111,9 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the
   // same bar as starting worktree sessions instead of plain read scope.
   { name: "worktrees.branches", scope: "operator.write" },
+  // Arbitrary host-path directory listing backs the new-session folder picker;
+  // same trust bar as sessions.create with an explicit cwd.
+  { name: "fs.listDir", scope: "operator.admin" },
   { name: "worktrees.create", scope: "operator.admin", controlPlaneWrite: true },
   { name: "worktrees.remove", scope: "operator.admin", controlPlaneWrite: true },
   { name: "worktrees.restore", scope: "operator.admin", controlPlaneWrite: true },

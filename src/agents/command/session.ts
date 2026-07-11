@@ -36,6 +36,7 @@ import {
   normalizeAgentId,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
@@ -382,21 +383,23 @@ export function resolveSession(opts: {
           storePath,
         })
       : false;
+  const lockedModelSelection = isModelSelectionLocked(sessionEntry);
   const skipImplicitExpiry =
     resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
   const fresh = sessionEntry
-    ? !terminalMainTranscriptNewerThanRegistry &&
-      (skipImplicitExpiry ||
-        evaluateSessionFreshness({
-          updatedAt: sessionEntry.updatedAt,
-          ...resolveSessionLifecycleTimestamps({
-            entry: sessionEntry,
-            agentId: sessionAgentId,
-            storePath,
-          }),
-          now,
-          policy: resetPolicy,
-        }).fresh)
+    ? lockedModelSelection ||
+      (!terminalMainTranscriptNewerThanRegistry &&
+        (skipImplicitExpiry ||
+          evaluateSessionFreshness({
+            updatedAt: sessionEntry.updatedAt,
+            ...resolveSessionLifecycleTimestamps({
+              entry: sessionEntry,
+              agentId: sessionAgentId,
+              storePath,
+            }),
+            now,
+            policy: resetPolicy,
+          }).fresh))
     : false;
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();

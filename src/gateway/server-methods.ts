@@ -147,6 +147,10 @@ const loadExecApprovalsHandlers = lazyHandlerModule(
   () => import("./server-methods/exec-approvals.js"),
   (module) => module.execApprovalsHandlers,
 );
+const loadFsHandlers = lazyHandlerModule(
+  () => import("./server-methods/fs.js"),
+  (module) => module.fsHandlers,
+);
 const loadHealthHandlers = lazyHandlerModule(
   () => import("./server-methods/health.js"),
   (module) => module.healthHandlers,
@@ -461,6 +465,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "exec.approvals.node.set",
     ],
     loadHandlers: loadExecApprovalsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["fs.listDir"],
+    loadHandlers: loadFsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["web.login.start", "web.login.wait"],

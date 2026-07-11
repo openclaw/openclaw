@@ -1518,7 +1518,9 @@ async function runAgentTurnWithFallbackInternal(
     }
     return effectiveRun;
   };
-  let liveModelSwitchRuntimeEntry: Pick<SessionEntry, "agentRuntimeOverride"> | undefined;
+  let liveModelSwitchRuntimeEntry:
+    | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
+    | undefined;
   const applyLiveModelSwitchToRun = (
     run: FollowupRun["run"],
     err: LiveSessionModelSwitchError,
@@ -1978,38 +1980,52 @@ async function runAgentTurnWithFallbackInternal(
               model,
               thinkLevel: candidateThinkLevel,
             });
-            const { sessionRuntimeOverride, cliExecutionProvider } = agentTurnTiming.measureSync(
-              "fallback_resolve_runtime",
-              () => {
+            const { sessionRuntimeOverride, cliExecutionProvider, useCliExecution } =
+              agentTurnTiming.measureSync("fallback_resolve_runtime", () => {
+                const activeSessionEntry =
+                  liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry();
                 const resolvedSessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                   provider,
-                  entry: liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry(),
+                  entry: activeSessionEntry,
                   cfg: runtimeConfig,
                 });
+                // A locked harness owns the transcript. A configured CLI backend with the
+                // same id must not steal dispatch from that persisted harness.
+                const locksPersistedHarness =
+                  activeSessionEntry?.modelSelectionLocked === true &&
+                  normalizeLowercaseStringOrEmpty(activeSessionEntry.agentHarnessId) ===
+                    resolvedSessionRuntimeOverride;
                 const resolvedSelectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
                   config: runtimeConfig,
                 });
-                const resolvedCliExecutionProvider =
-                  (resolvedSessionRuntimeOverride &&
+                const pinnedCliRuntime =
+                  !locksPersistedHarness &&
+                  resolvedSessionRuntimeOverride &&
                   isCliProvider(resolvedSessionRuntimeOverride, runtimeConfig)
                     ? resolvedSessionRuntimeOverride
-                    : undefined) ??
-                  resolveCliRuntimeExecutionProvider({
-                    provider,
-                    cfg: runtimeConfig,
-                    agentId: params.followupRun.run.agentId,
-                    modelId: model,
-                    authProfileId: resolvedSelectedAuthProfile.authProfileId,
-                  }) ??
-                  provider;
+                    : undefined;
+                const resolvedCliExecutionProvider =
+                  pinnedCliRuntime ??
+                  (resolvedSessionRuntimeOverride
+                    ? provider
+                    : (resolveCliRuntimeExecutionProvider({
+                        provider,
+                        cfg: runtimeConfig,
+                        agentId: params.followupRun.run.agentId,
+                        modelId: model,
+                        authProfileId: resolvedSelectedAuthProfile.authProfileId,
+                      }) ?? provider));
                 return {
                   sessionRuntimeOverride: resolvedSessionRuntimeOverride,
                   cliExecutionProvider: resolvedCliExecutionProvider,
+                  useCliExecution:
+                    pinnedCliRuntime !== undefined ||
+                    (!resolvedSessionRuntimeOverride &&
+                      isCliProvider(resolvedCliExecutionProvider, runtimeConfig)),
                 };
-              },
-            );
+              });
 
-            if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+            if (useCliExecution) {
               const cliSessionBinding = getCliSessionBinding(
                 params.getActiveSessionEntry(),
                 cliExecutionProvider,

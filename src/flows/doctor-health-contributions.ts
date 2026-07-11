@@ -1494,16 +1494,19 @@ async function runCoreHealthFindingNote(
   if (findings.length === 0) {
     return;
   }
-  ctx.healthOk = false;
-  note(formatHealthFindings(findings), "Doctor warnings");
+  const information = findings.filter((finding) => finding.severity === "info");
+  const warnings = findings.filter((finding) => finding.severity !== "info");
+  if (information.length > 0) {
+    note(formatHealthFindings(information), "Doctor information");
+  }
+  if (warnings.length > 0) {
+    ctx.healthOk = false;
+    note(formatHealthFindings(warnings), "Doctor warnings");
+  }
 }
 
 async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await runCoreHealthFindingNote(ctx, "core/doctor/provider-catalog-projection");
-}
-
-async function runLocalAudioAccelerationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  await runCoreHealthFindingNote(ctx, "core/doctor/local-audio-acceleration");
 }
 
 async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -2034,7 +2037,9 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:local-audio-acceleration",
       label: "Local audio acceleration",
       healthCheckIds: ["core/doctor/local-audio-acceleration"],
-      run: runLocalAudioAccelerationHealth,
+      // This informational inventory is rendered through `doctor --lint`.
+      // Keep the normal doctor flow quiet instead of presenting healthy local STT as a warning.
+      run: async () => {},
     }),
     createDoctorHealthContribution({
       id: "doctor:runtime-tool-schemas",

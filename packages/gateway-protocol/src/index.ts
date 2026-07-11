@@ -696,6 +696,12 @@ import {
   WorktreeBranchSchema,
   type WorktreesBranchesResult,
   WorktreesBranchesResultSchema,
+  type FsDirEntry,
+  FsDirEntrySchema,
+  type FsListDirParams,
+  FsListDirParamsSchema,
+  type FsListDirResult,
+  FsListDirResultSchema,
 } from "./schema.js";
 
 /** Runtime validator shape shared by gateway clients and server handlers. */
@@ -795,6 +801,7 @@ export const validateWorktreesGcParams = lazyCompile<WorktreesGcParams>(Worktree
 export const validateWorktreesBranchesParams = lazyCompile<WorktreesBranchesParams>(
   WorktreesBranchesParamsSchema,
 );
+export const validateFsListDirParams = lazyCompile<FsListDirParams>(FsListDirParamsSchema);
 export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
 export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
@@ -1557,6 +1564,9 @@ export {
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
   WorktreesBranchesResultSchema,
+  FsDirEntrySchema,
+  FsListDirParamsSchema,
+  FsListDirResultSchema,
   ProtocolSchemas,
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,
@@ -1868,6 +1878,9 @@ export type {
   WorktreesBranchesParams,
   WorktreeBranch,
   WorktreesBranchesResult,
+  FsDirEntry,
+  FsListDirParams,
+  FsListDirResult,
   SessionGroup,
   SessionsGroupsListParams,
   SessionsGroupsListResult,
@@ -1896,5 +1909,13 @@ type SessionsPatchResult = {
 type GatewayAgentRuntime = {
   id: string;
   fallback?: "openclaw" | "none";
-  source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
+  source:
+    | "env"
+    | "agent"
+    | "defaults"
+    | "model"
+    | "provider"
+    | "implicit"
+    | "session"
+    | "session-key";
 };

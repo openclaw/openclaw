@@ -209,6 +209,11 @@ export const ar: TranslationMap = {
     gateway: "Gateway · محلي",
     folder: "المجلد",
     folderPlaceholder: "مساحة عمل الوكيل",
+    browse: "تصفح المجلدات",
+    browserUp: "المجلد الأصلي",
+    browserUse: "استخدام هذا المجلد",
+    browserEmpty: "لا توجد مجلدات فرعية",
+    browserLoadFailed: "تعذر عرض ذلك المجلد.",
     worktree: "شجرة العمل",
     worktreeUnavailable: "مساحة عمل الوكيل ليست نسخة git checkout",
     baseBranch: "فرع الأساس",
@@ -929,7 +934,8 @@ export const ar: TranslationMap = {
   codexSessions: {
     eyebrow: "أسطول Codex",
     title: "الجلسات على جميع أجهزتك",
-    subtitle: "عرض للقراءة فقط لجلسات Codex على بوابة Gateway هذه وعلى كل كمبيوتر متصل يشاركها.",
+    interactiveSubtitle:
+      "ابدأ فرع Chat يبقى اختيار النموذج فيه تحت تحكم Codex App Server، وأرشف الجلسات المحلية المؤهلة بعد التأكيد، واعرض جلسات الكمبيوتر المقترنة.",
     summaryLabel: "ملخص جلسات Codex",
     summary: {
       sessions: "الجلسات",
@@ -938,11 +944,6 @@ export const ar: TranslationMap = {
     },
     searchLabel: "البحث في جلسات Codex",
     searchPlaceholder: "البحث في عناوين الجلسات",
-    scopeLabel: "عامل تصفية أرشيف الجلسات",
-    scope: {
-      active: "نشطة",
-      archived: "مؤرشفة",
-    },
     refresh: "تحديث",
     disconnected: "أعد الاتصال بـ Gateway لتحديث جلسات Codex.",
     partial: "عدد المضيفين غير المتاحين: {count}. لا يزال بقية المضيفين متاحين.",
@@ -951,11 +952,33 @@ export const ar: TranslationMap = {
     loadingMore: "جارٍ التحميل…",
     untitled: "جلسة Codex بلا عنوان",
     threadId: "السلسلة",
+    actions: {
+      continue: "متابعة",
+      continueAsBranch: "متابعة كفرع",
+      openChat: "فتح Chat",
+      continuing: "جارٍ المتابعة…",
+      archive: "أرشفة",
+      continueLabel: "متابعة {title}",
+      continueAsBranchLabel: "متابعة {title} كفرع",
+      openChatLabel: "فتح Chat لـ {title}",
+      continueAsBranchHint:
+        "أنشئ Chat من السجل المرئي المحفوظ. عند رسالتك الأولى، يختار Codex App Server النموذج والمزوّد لسلسلة harness الجديدة. يظل الاختيار لاحقًا تحت تحكم Codex؛ ولا يستبدل OpenClaw أبدًا ببيئة تشغيل أو نموذج أو خيار احتياطي آخر. يظل المصدر دون تغيير، وقد لا يكون العمل الجاري موجودًا.",
+      archiveLabel: "أرشفة {title}",
+      archiveConfirmation:
+        "هل تريد أرشفة {title} وأي عناصر فرعية منشأة منه؟ أكّد أنه لا يوجد أي عميل Codex آخر أو مشغّل OpenClaw يستخدمها. قد تؤدي الأرشفة أثناء نشاط مشغّل آخر إلى مقاطعة عمله.",
+      active: "لا يمكن للجلسات النشطة بدء فرع أو أرشفتها.",
+      archiveActivityUnknownHint:
+        "النشاط غير معروف لأن الحالة محلية للعملية. لا تقم بالأرشفة إلا بعد التأكد من عدم وجود أي عميل Codex آخر أو مشغّل يستخدم هذه الجلسة.",
+      statusUnavailable: "لا يمكن إدارة جلسة Codex هذه في حالتها الحالية.",
+      hostOffline: "أعِد توصيل هذا الكمبيوتر قبل إدارة جلسات Codex الخاصة به.",
+      gatewayOffline: "أعِد الاتصال بـ gateway قبل إدارة جلسات Codex.",
+      remoteReadOnly: "جلسات الكمبيوتر المقترن للعرض فقط في الوقت الحالي.",
+    },
     status: {
       active: "نشط",
       idle: "خامل",
       archived: "مؤرشف",
-      notLoaded: "مخزّن",
+      storedActivityUnknown: "محفوظ / النشاط غير معروف",
       systemError: "خطأ في النظام",
       unknown: "غير معروف",
     },
@@ -969,10 +992,9 @@ export const ar: TranslationMap = {
     },
     empty: {
       title: "لم يتم العثور على أي مضيف لـ Codex",
-      subtitle: "فعّل مشاركة جلسات Codex على Gateway أو كمبيوتر مقترن، ثم حدّث هذا العرض.",
+      supervisionSubtitle: "فعّل إشراف Codex على Gateway أو على كمبيوتر مقترن، ثم حدّث هذا العرض.",
       search: "لا توجد جلسات على هذا المضيف تطابق بحثك.",
-      active: "لا توجد جلسات نشطة على هذا المضيف.",
-      archived: "لا توجد جلسات مؤرشفة على هذا المضيف.",
+      nonArchived: "لا توجد جلسات غير مؤرشفة على هذا المضيف.",
     },
   },
   logbook: {
@@ -2068,6 +2090,11 @@ export const ar: TranslationMap = {
       clearSessionSearch: "مسح البحث في الجلسات",
       loadMoreSessions: "تحميل المزيد من الجلسات",
       model: "Chat model",
+      modelSection: "النموذج",
+      modelLocked: "مقفَل",
+      modelLockedLabel: "اختيار النموذج متحكَّم به لهذه الجلسة",
+      lockedSessionModel: "نموذج الجلسة",
+      nativeCodexModel: "النموذج المتحكَّم به من Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
