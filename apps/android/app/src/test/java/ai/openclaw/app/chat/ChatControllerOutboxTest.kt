@@ -20,6 +20,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.UUID
@@ -54,6 +55,7 @@ class ChatControllerOutboxTest {
     var acceptedStatusUpdateFailure: Throwable? = null
     var queuedStatusUpdateFailure: Throwable? = null
     var sendingStatusUpdateFailure: Throwable? = null
+    var pinSessionKeyFailure: Throwable? = null
     var claimGate: CompletableDeferred<Unit>? = null
     var deleteFailure: Throwable? = null
     var deleteOnFailedStatus = false
@@ -159,6 +161,7 @@ class ChatControllerOutboxTest {
       id: String,
       sessionKey: String,
     ) {
+      pinSessionKeyFailure?.let { throw it }
       val current = rows[id] ?: return
       rows[id] = current.copy(sessionKey = sessionKey)
     }
@@ -1920,6 +1923,122 @@ class ChatControllerOutboxTest {
       assertTrue(followUp)
       assertEquals(listOf("slow turn", "second"), gateway.sentMessages)
       assertTrue(outbox.rows.values.none { it.status == ChatOutboxStatus.Failed })
+    }
+
+  @Test
+  fun flushedSendAckedUnderDifferentRunIdResolvesWithTheLiveRun() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.sendResponse = { _ -> """{"runId":"gw-run-9","status":"started"}""" }
+      gateway.echoDeliveredSendsInHistory = false
+      chat.load("main")
+      advanceUntilIdle()
+
+      // Captured offline, delivered by the reconnect flush under a divergent acked run id.
+      chat.sendMessageAwaitAcceptance(message = "queued turn", thinkingLevel = "off", attachments = emptyList())
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceTimeBy(5_000)
+      assertEquals(listOf("queued turn"), gateway.sentMessages)
+      assertEquals(
+        ChatOutboxStatus.Accepted,
+        outbox.rows.values
+          .single()
+          .status,
+      )
+
+      // The run completes under the acknowledged id and its turn becomes visible in
+      // canonical history. The adopted send must resolve with the live run: without the
+      // ownership transfer the row-id pending run times out and surfaces a spurious error
+      // for a turn that was delivered.
+      gateway.echoDeliveredSendsInHistory = true
+      chat.handleGatewayEvent("chat", chatTerminalPayload("main", "gw-run-9", seq = 1, state = "final", assistantText = "done"))
+      advanceTimeBy(130_000)
+      assertEquals(0, chat.pendingRunCount.value)
+      assertTrue(outbox.rows.isEmpty())
+      assertNull(chat.errorText.value)
+    }
+
+  @Test
+  fun failedSessionPinKeepsTheRowQueuedInsteadOfDispatching() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      outbox.seed(
+        ChatOutboxItem(
+          id = "alias-row",
+          sessionKey = "main",
+          text = "captured pre-hello",
+          thinkingLevel = "off",
+          createdAtMs = System.currentTimeMillis(),
+          status = ChatOutboxStatus.Queued,
+          retryCount = 0,
+          lastError = null,
+        ),
+      )
+      chat.load("main")
+      chat.applyMainSessionKey("agent:work:main")
+      advanceUntilIdle()
+
+      // The durable pin is the only record of the alias resolution; if it cannot persist,
+      // dispatching anyway would let a retry after a default change target another session.
+      outbox.pinSessionKeyFailure = IllegalStateException("storage unavailable")
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertEquals(ChatOutboxStatus.Queued, outbox.rows.getValue("alias-row").status)
+      assertFalse(chat.healthOk.value)
+
+      // Storage recovers; the next health transition pins and delivers exactly once.
+      outbox.pinSessionKeyFailure = null
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertEquals(listOf("agent:work:main"), gateway.sentSessionKeys)
+      assertTrue(outbox.rows.values.none { it.sessionKey == "main" })
+    }
+
+  @Test
+  fun reconcileParkWriteFailureFailsClosedThenParksAfterRecovery() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.echoDeliveredSendsInHistory = false
+      outbox.seed(
+        ChatOutboxItem(
+          id = "orphan-row",
+          sessionKey = "main",
+          text = "ambiguous send",
+          thinkingLevel = "off",
+          createdAtMs = System.currentTimeMillis(),
+          status = ChatOutboxStatus.Accepted,
+          retryCount = 0,
+          lastError = null,
+        ),
+      )
+      chat.load("main")
+      advanceUntilIdle()
+
+      // Two sightings without proof want to park the row, but the write fails: health drops
+      // instead of the reconciler claiming a change it never persisted.
+      outbox.failedStatusUpdateFailure = IllegalStateException("storage unavailable")
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertEquals(ChatOutboxStatus.Accepted, outbox.rows.getValue("orphan-row").status)
+      assertFalse(chat.healthOk.value)
+
+      // Storage recovers; the next pass parks the orphan for manual review.
+      outbox.failedStatusUpdateFailure = null
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val parked = outbox.rows.getValue("orphan-row")
+      assertEquals(ChatOutboxStatus.Failed, parked.status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, parked.lastError)
     }
 
   @Test

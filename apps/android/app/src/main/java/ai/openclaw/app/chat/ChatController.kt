@@ -1977,10 +1977,17 @@ class ChatController internal constructor(
       }
       val sightings = (unconfirmedSightings[row.id] ?: 0) + 1
       if (sightings >= 2) {
-        runCatching { outbox.updateStatus(row.id, ChatOutboxStatus.Failed, row.retryCount, OUTBOX_DELIVERY_UNCONFIRMED_ERROR) }
-        unconfirmedSightings.remove(row.id)
-        acknowledgedRunIdByRowId.remove(row.id)
-        changed = true
+        val persisted = updateOutboxStatusOrNull(outbox, row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+        if (persisted == null) {
+          // The park write failed; reporting a change anyway would spin confirm/park passes
+          // against unavailable storage while the row's session stays blocked.
+          rearmOutboxRecovery()
+          _healthOk.value = false
+        } else {
+          unconfirmedSightings.remove(row.id)
+          acknowledgedRunIdByRowId.remove(row.id)
+          changed = true
+        }
       } else {
         unconfirmedSightings[row.id] = sightings
       }
@@ -2092,7 +2099,7 @@ class ChatController internal constructor(
           OutboxSendOutcome.Stop
         } else {
           // A zero update means a concurrent delete raced the ack; history still owns proof.
-          if (persisted > 0) adoptFlushedSend(item, attachments)
+          if (persisted > 0) adoptFlushedSend(item, attachments, result.runId)
           OutboxSendOutcome.Sent
         }
       }
@@ -2162,10 +2169,11 @@ class ChatController internal constructor(
   private fun adoptFlushedSend(
     item: ChatOutboxItem,
     attachments: List<OutgoingAttachment>,
+    ackRunId: String,
   ) {
     if (normalizeRequestedSessionKey(item.sessionKey) != _sessionKey.value) return
     val runId = item.id
-    if (locallyOwnedRun(runId)) return
+    if (locallyOwnedRun(runId) || locallyOwnedRun(ackRunId)) return
     val optimistic = optimisticUserMessage(runId = runId, text = item.text, attachments = attachments)
     optimisticMessagesByRunId[runId] = optimistic
     unresolvedRepliesByRunId[runId] = optimistic
@@ -2175,6 +2183,9 @@ class ChatController internal constructor(
       pendingRuns.add(runId)
       _pendingRunCount.value = pendingRuns.size
     }
+    // Chat events for this turn arrive under the acknowledged run id; mirroring the direct
+    // path's ownership transfer keeps the live run from looking foreign and timing out.
+    if (ackRunId != runId) transferRunOwnership(runId, ackRunId, optimistic)
   }
 
   private suspend fun attemptOutboxSend(
@@ -2188,8 +2199,18 @@ class ChatController internal constructor(
       if (queuedSessionKey != item.sessionKey) {
         // A row captured under the pre-hello "main" alias resolves exactly once, against the
         // canonical main session active at first dispatch. Pinning it before the request means
-        // a later default-agent change can never redirect this input on a retry.
-        runCatching { outbox.pinSessionKey(item.id, queuedSessionKey) }
+        // a later default-agent change can never redirect this input on a retry, so a pin
+        // that cannot be made durable must stop the dispatch while the row is still safe.
+        val pinned =
+          try {
+            outbox.pinSessionKey(item.id, queuedSessionKey)
+            true
+          } catch (err: CancellationException) {
+            throw err
+          } catch (_: Throwable) {
+            false
+          }
+        if (!pinned) return OutboxSendResult.NotDispatched("could not pin the delivery session")
       }
       // Android only knows the active session's selected model. Unknown queued sessions fail
       // open, preserving the thinking level captured when they were enqueued.
@@ -2512,8 +2533,13 @@ class ChatController internal constructor(
         it.status == ChatOutboxStatus.Accepted &&
           (it.id == runId || acknowledgedRunIdByRowId[it.id] == runId)
       } ?: return
-    runCatching { outbox.updateStatus(row.id, ChatOutboxStatus.Failed, row.retryCount, OUTBOX_DELIVERY_UNCONFIRMED_ERROR) }
-    acknowledgedRunIdByRowId.remove(row.id)
+    val persisted = updateOutboxStatusOrNull(outbox, row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+    if (persisted == null) {
+      rearmOutboxRecovery()
+      _healthOk.value = false
+    } else {
+      acknowledgedRunIdByRowId.remove(row.id)
+    }
     publishOutbox()
   }
 
