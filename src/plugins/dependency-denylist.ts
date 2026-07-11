@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Denylist checks for unsafe packages in plugin manifests and installed dependency trees. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
@@ -184,7 +185,12 @@ function collectBlockedOverrideFindings(
         field: "overrides",
       });
     }
-    findings.push(...collectBlockedOverrideFindings(value[overrideKey], [...path, overrideKey]));
+    findings.push(
+      ...collectBlockedOverrideFindings(
+        expectDefined(value[overrideKey], "value entry at override key"),
+        [...path, overrideKey],
+      ),
+    );
   }
   return findings;
 }
@@ -205,7 +211,7 @@ export function findBlockedManifestDependencies(
     findings.push(...collectBlockedOverrideFindings(manifest.overrides));
   }
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"] as const) {
-    const dependencyMap = manifest[field];
+    const dependencyMap = expectDefined(manifest[field], "manifest entry at field");
     if (!dependencyMap) {
       continue;
     }
@@ -215,7 +221,9 @@ export function findBlockedManifestDependencies(
         continue;
       }
 
-      const aliasTargetPackageName = parseNpmAliasTargetPackageName(dependencyMap[dependencyName]);
+      const aliasTargetPackageName = parseNpmAliasTargetPackageName(
+        expectDefined(dependencyMap[dependencyName], "dependency map entry at dependency name"),
+      );
       if (!aliasTargetPackageName) {
         continue;
       }

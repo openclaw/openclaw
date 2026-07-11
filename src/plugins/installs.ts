@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Normalizes installed plugin config and install records.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -64,10 +65,10 @@ export function recordPluginInstall(
   return {
     ...cfg,
     plugins: {
-      ...cfg.plugins,
+      ...expectDefined(cfg.plugins, "plugin configuration"),
       installs: {
         ...installs,
-        [pluginId]: installs[pluginId],
+        [pluginId]: expectDefined(installs[pluginId], "installs entry at plugin id"),
       },
     },
   };

@@ -1,4 +1,5 @@
 // Core SDK contracts expose stable identifiers, manifests, and shared plugin metadata types.
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
 import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
@@ -322,7 +323,7 @@ function resolveSdkChatChannelMeta(id: string) {
       metaById: buildChatChannelMetaById(),
     };
   }
-  return cachedSdkChatChannelMeta.metaById[id];
+  return expectDefined(cachedSdkChatChannelMeta.metaById[id], `chat channel metadata: ${id}`);
 }
 
 /** Resolve bundled chat channel metadata while respecting the active bundled-plugin directory. */
