@@ -53,6 +53,7 @@ let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
 let getReplyPayloadMetadataForTest: typeof import("../reply-payload.js").getReplyPayloadMetadata;
+let clearOperationalReplyPolicyStateForTest: typeof import("./operational-reply-policy.js").clearOperationalReplyPolicyStateForTest;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -529,6 +530,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
     getReplyPayloadMetadata: getReplyPayloadMetadataForTest,
     setReplyPayloadMetadata: setReplyPayloadMetadataForTest,
   } = await import("../reply-payload.js"));
+  ({ clearOperationalReplyPolicyStateForTest } = await import("./operational-reply-policy.js"));
 }
 
 function setFastFollowupCliBackendDeps(): void {
@@ -567,6 +569,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  clearOperationalReplyPolicyStateForTest?.();
   setFastFollowupCliBackendDeps();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
@@ -7014,6 +7017,51 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       text: "queued once usage limit",
       isError: true,
     });
+  });
+
+  it("does not consume queued once notices when origin routing suppresses delivery", async () => {
+    const buildNotice = () =>
+      setReplyPayloadMetadataForTest(
+        { text: "queued once suppressed route", isError: true },
+        { deliverDespiteSourceReplySuppression: true },
+      );
+    runEmbeddedAgentMock
+      .mockResolvedValueOnce({
+        payloads: [buildNotice()],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [buildNotice()],
+        meta: {},
+      });
+    routeReplyMock
+      .mockResolvedValueOnce({ ok: true, suppressed: true })
+      .mockResolvedValueOnce({ ok: true });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "work",
+      originatingThreadId: "1739142736.000100",
+      messageId: "current-msg-once-suppressed",
+      run: {
+        sessionKey: "followup-once-suppressed-session",
+        config: {
+          messages: { operationalReplies: { policy: "once" } },
+          channels: { discord: { replyToMode: "all" } },
+        },
+        messageProvider: "discord",
+      },
+    });
+
+    await runner(queued);
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not silence queued before-run block replies when operational replies are silent", async () => {

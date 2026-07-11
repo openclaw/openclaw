@@ -534,96 +534,121 @@ export function createFollowupRunner(params: {
       if (!policyResult.shouldDeliver) {
         continue;
       }
-      if (!shouldRouteToOriginating && !opts?.onBlockReply) {
-        defaultRuntime.error?.(
-          "followup queue: completed with payloads but no origin route or visible dispatcher is available",
-        );
-        return false;
-      }
-      const providerRoute = deliveryPlan.resolveFollowupRoute({
-        payload,
-        originatingChannel,
-        originatingTo,
-        originRoutable: Boolean(shouldRouteToOriginating),
-        dispatcherAvailable: Boolean(opts?.onBlockReply),
-      });
-      if (providerRoute?.route === "drop") {
-        logVerbose(
-          `followup queue: provider hook dropped payload route reason=${providerRoute.reason ?? "unspecified"}`,
-        );
-        continue;
-      }
-      const deliveryRoute =
-        providerRoute?.route === "origin" && shouldRouteToOriginating
-          ? "origin"
-          : providerRoute?.route === "dispatcher" && opts?.onBlockReply
-            ? "dispatcher"
-            : shouldRouteToOriginating
-              ? "origin"
-              : opts?.onBlockReply
-                ? "dispatcher"
-                : undefined;
-      await typingSignals.signalTextDelta(payload.text);
-
-      // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
-        const payloadMetadata = getReplyPayloadMetadata(payload);
-        const hasTranscriptOwner =
-          payloadMetadata?.assistantMessageIndex !== undefined ||
-          payloadMetadata?.assistantTranscriptOwned === true;
-        const result = await routeReply({
+      let policySettled = false;
+      const settleOperationalPolicy = (delivered: boolean): Promise<void> | undefined => {
+        policySettled = true;
+        return policyResult.markDelivered
+          ? markOperationalReplyPolicyDelivered(policyResult, delivered)
+          : undefined;
+      };
+      try {
+        if (!shouldRouteToOriginating && !opts?.onBlockReply) {
+          defaultRuntime.error?.(
+            "followup queue: completed with payloads but no origin route or visible dispatcher is available",
+          );
+          return false;
+        }
+        const providerRoute = deliveryPlan.resolveFollowupRoute({
           payload,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: queued.run.sessionKey,
-          accountId: queued.originatingAccountId,
-          requesterSenderId: queued.run.senderId,
-          requesterSenderName: queued.run.senderName,
-          requesterSenderUsername: queued.run.senderUsername,
-          requesterSenderE164: queued.run.senderE164,
-          threadId: queued.originatingThreadId,
-          cfg: runtimeConfig,
-          mirror: hasTranscriptOwner ? false : options.mirror,
-          replyKind,
-          runId: options.runId,
+          originatingChannel,
+          originatingTo,
+          originRoutable: Boolean(shouldRouteToOriginating),
+          dispatcherAvailable: Boolean(opts?.onBlockReply),
         });
-        if (!result.ok) {
-          const errorMsg = result.error ?? "unknown error";
-          logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
+        if (providerRoute?.route === "drop") {
+          logVerbose(
+            `followup queue: provider hook dropped payload route reason=${providerRoute.reason ?? "unspecified"}`,
+          );
+          continue;
+        }
+        const deliveryRoute =
+          providerRoute?.route === "origin" && shouldRouteToOriginating
+            ? "origin"
+            : providerRoute?.route === "dispatcher" && opts?.onBlockReply
+              ? "dispatcher"
+              : shouldRouteToOriginating
+                ? "origin"
+                : opts?.onBlockReply
+                  ? "dispatcher"
+                  : undefined;
+        await typingSignals.signalTextDelta(payload.text);
+
+        // Route to originating channel if set, otherwise fall back to dispatcher.
+        if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
+          const payloadMetadata = getReplyPayloadMetadata(payload);
+          const hasTranscriptOwner =
+            payloadMetadata?.assistantMessageIndex !== undefined ||
+            payloadMetadata?.assistantTranscriptOwned === true;
+          const result = await routeReply({
+            payload,
+            channel: originatingChannel,
+            to: originatingTo,
+            sessionKey: queued.run.sessionKey,
+            accountId: queued.originatingAccountId,
+            requesterSenderId: queued.run.senderId,
+            requesterSenderName: queued.run.senderName,
+            requesterSenderUsername: queued.run.senderUsername,
+            requesterSenderE164: queued.run.senderE164,
+            threadId: queued.originatingThreadId,
+            cfg: runtimeConfig,
+            mirror: hasTranscriptOwner ? false : options.mirror,
+            replyKind,
+            runId: options.runId,
           });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
-          if (opts?.onBlockReply) {
-            if (origin && origin === provider) {
-              const delivered = await sendDispatcherPayload(payload);
-              await markOperationalReplyPolicyDelivered(policyResult, delivered);
-              deliveredAnyPayload = delivered || deliveredAnyPayload;
+          if (!result.ok) {
+            const errorMsg = result.error ?? "unknown error";
+            logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
+            const provider = resolveOriginMessageProvider({
+              provider: queued.run.messageProvider,
+            });
+            const origin = resolveOriginMessageProvider({
+              originatingChannel,
+            });
+            if (opts?.onBlockReply) {
+              if (origin && origin === provider) {
+                const delivered = await sendDispatcherPayload(payload);
+                const policySettle = settleOperationalPolicy(delivered);
+                if (policySettle) {
+                  await policySettle;
+                }
+                deliveredAnyPayload = delivered || deliveredAnyPayload;
+              } else {
+                crossChannelRouteFailureNeedsNotice = true;
+              }
             } else {
-              crossChannelRouteFailureNeedsNotice = true;
+              defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
             }
-          } else {
-            defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
+          } else if (!result.suppressed) {
+            const policySettle = settleOperationalPolicy(true);
+            if (policySettle) {
+              await policySettle;
+            }
+            deliveredAnyPayload = true;
+            const provider = resolveOriginMessageProvider({
+              provider: queued.run.messageProvider,
+            });
+            const origin = resolveOriginMessageProvider({
+              originatingChannel,
+            });
+            if (origin && provider && origin !== provider) {
+              routedAnyCrossChannelPayloadToOrigin = true;
+            }
           }
-        } else if (!result.suppressed) {
-          await markOperationalReplyPolicyDelivered(policyResult, true);
-          deliveredAnyPayload = true;
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
-          });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
-          if (origin && provider && origin !== provider) {
-            routedAnyCrossChannelPayloadToOrigin = true;
+        } else if (deliveryRoute === "dispatcher") {
+          const delivered = await sendDispatcherPayload(payload);
+          const policySettle = settleOperationalPolicy(delivered);
+          if (policySettle) {
+            await policySettle;
+          }
+          deliveredAnyPayload = delivered || deliveredAnyPayload;
+        }
+      } finally {
+        if (!policySettled) {
+          const policySettle = settleOperationalPolicy(false);
+          if (policySettle) {
+            await policySettle;
           }
         }
-      } else if (deliveryRoute === "dispatcher") {
-        const delivered = await sendDispatcherPayload(payload);
-        await markOperationalReplyPolicyDelivered(policyResult, delivered);
-        deliveredAnyPayload = delivered || deliveredAnyPayload;
       }
     }
     if (
