@@ -1573,6 +1573,57 @@ describe("openclaw state database", () => {
     }
   }, 60_000);
 
+
+  it("backfills worktree readiness as ready for pre-column rows", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE worktrees DROP COLUMN readiness");
+    // Shipped releases inserted worktree rows only after provisioning finished, so a
+    // pre-column row is by construction a fully provisioned checkout.
+    legacyDb
+      .prepare(
+        `INSERT INTO worktrees (
+          id,
+          repo_fingerprint,
+          repo_root,
+          path,
+          branch,
+          base_ref,
+          owner_kind,
+          created_at,
+          last_active_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-worktree",
+        "0123456789abcdef",
+        "/repo",
+        "/state/worktrees/0123456789abcdef/task",
+        "openclaw/task",
+        "HEAD",
+        "manual",
+        1,
+        1,
+      );
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const row = reopened.db
+      .prepare("SELECT readiness FROM worktrees WHERE id = ?")
+      .get("legacy-worktree") as { readiness?: unknown };
+
+    expect(row.readiness).toBe("ready");
+  });
+
   it("migrates requester and executor attribution for existing cross-agent tasks", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({

@@ -1541,6 +1541,9 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed'))",
   );
   ensureOperatorApprovalResolutionRefs(db);
+  // Backfill-as-ready is provably correct: every shipped release inserted worktree rows only
+  // after provisioning completed (insert-last), so no pre-column row can be mid-provisioning.
+  ensureColumn(db, "worktrees", "readiness TEXT NOT NULL DEFAULT 'ready'");
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
