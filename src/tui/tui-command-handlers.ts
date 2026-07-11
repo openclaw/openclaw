@@ -532,7 +532,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             applySessionInfoFromPatch(result);
             await refreshSessionInfo();
           } catch (err) {
-chatLog.addSystem(`model set failed: ${formatErrorMessage(err)}`);
+            chatLog.addSystem(`model set failed: ${formatErrorMessage(err)}`);
           }
         }
         break;
