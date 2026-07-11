@@ -40,7 +40,6 @@ import { escapeSlackMrkdwn } from "../mrkdwn.js";
 type InteractionMessageBlock = {
   type?: string;
   block_id?: string;
-  elements?: Array<{ action_id?: string }>;
 };
 
 type SelectOption = {
@@ -819,7 +818,7 @@ function buildSlackConfirmationBlocks(params: {
     summary: params.parsed.actionSummary,
     buttonText: params.parsed.typedActionWithText.text?.text,
   });
-  const updatedBlocks = params.originalBlocks.map((block) => {
+  return params.originalBlocks.map((block) => {
     const typedBlock = block as InteractionMessageBlock;
     if (typedBlock.type === "actions" && typedBlock.block_id === params.parsed.blockId) {
       return {
@@ -836,8 +835,7 @@ function buildSlackConfirmationBlocks(params: {
       };
     }
     return block;
-  });
-  return updatedBlocks as (Block | KnownBlock)[];
+  }) as (Block | KnownBlock)[];
 }
 
 async function updateSlackLegacyBlockAction(params: {

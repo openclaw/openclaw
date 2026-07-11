@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Slack interaction confirmations:** preserve unrelated Block Kit action rows when another control is selected instead of deleting rows whose action IDs merely contain `_all_`. (#103445) Thanks @zw-xysk.
 - **OpenAI-compatible streamed tool calls:** execute complete native tool calls from streams that end with SSE `data: [DONE]` but omit `finish_reason`, while keeping transport EOF and visible-text cases fail-closed. (#98124, #97994) Thanks @SunnyShu0925.
 - **xAI provider aliases:** preserve Grok 4.3 and Grok 4.5 thinking profiles, fast-model routing, and encrypted reasoning replay when models use the shipped `x-ai` provider alias instead of clamping valid thinking requests to `minimal`. (#103315)
 - **Doctor state isolation:** prevent automated update and Gateway watch repair from importing and archiving default-home exec or plugin-binding approvals when `OPENCLAW_STATE_DIR` points elsewhere, keep implicit CLI preflight notice-only, and reserve cross-state imports for direct operator doctor runs. (#103247, #103317)
@@ -2727,7 +2728,7 @@ This audited record covers the complete v2026.5.31-beta.4..v2026.6.1 history: 11
 - **PR #88820** fix(diagnostics): clear embedded-run activity when recovery declares lane idle. Related #88660. Thanks @openperf and @Iman-Sharif.
 - **PR #88288** fix(config): skip state-dir dotenv values that are unresolved shell references. Related #88274. Thanks @Alix-007 and @mathias15010.
 - **PR #88305** fix(browser): isolate Chrome MCP pending attach aborts. Related #88304. Thanks @rohitjavvadi.
-- **PR #74089** fix(openai/tts): handle [[tts:speed]] directive in OpenAI speech provider (#12163). Thanks @stainlu and @useramuser.
+- **PR #74089** fix(openai/tts): handle [[tts]] directive in OpenAI speech provider (#12163). Thanks @stainlu and @useramuser.
 
 ## 2026.5.31
 
@@ -3059,7 +3060,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - **PR #79173** fix: skip disabled skill snapshot env overrides. Related #79072. Thanks @zeus1959 and @maverikva.
 - **PR #88752** refactor: split ACP manager session flows.
 - **PR #79149** fix(ci): guard workflow template injection. Related #68428. Thanks @WT-WSL and @visionik.
-- **PR #74089** fix(openai/tts): handle [[tts:speed]] directive in OpenAI speech provider (#12163). Thanks @stainlu and @useramuser.
+- **PR #74089** fix(openai/tts): handle [[tts]] directive in OpenAI speech provider (#12163). Thanks @stainlu and @useramuser.
 - **PR #88763** feat: add code-mode MCP API files.
 - **PR #87896** fix(feishu): fallback when accepted turns send no visible reply. Thanks @ArthurNie.
 - **PR #88761** [codex] Surface disabled Codex plugin routes in doctor lint. Related #88751. Thanks @brokemac79 and @jalehman.
