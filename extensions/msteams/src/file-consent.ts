@@ -9,9 +9,14 @@
  */
 
 import { lookup } from "node:dns/promises";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildUserAgent } from "./user-agent.js";
+
+// File consent PUTs carry large personal-chat uploads after the user accepts.
+// Keep a request deadline, but size it for transfer work rather than control-plane APIs.
+const MSTEAMS_FILE_CONSENT_UPLOAD_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * Allowlist of domains that are valid targets for file consent uploads.
@@ -38,6 +43,23 @@ export const CONSENT_UPLOAD_HOST_ALLOWLIST = [
  * special-use and must never be reached via consent uploads.
  */
 export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
+
+function createConsentUploadTimeoutSignal(timeoutMs: number | undefined): {
+  signal: AbortSignal;
+  release: () => void;
+} {
+  const controller = new AbortController();
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(
+    timeoutMs,
+    MSTEAMS_FILE_CONSENT_UPLOAD_TIMEOUT_MS,
+    1,
+  );
+  const timeoutId = setTimeout(() => controller.abort(), resolvedTimeoutMs);
+  return {
+    signal: controller.signal,
+    release: () => clearTimeout(timeoutId),
+  };
+}
 
 /**
  * Validate that a consent upload URL is safe to PUT to.
@@ -198,6 +220,7 @@ export async function uploadToConsentUrl(params: {
   buffer: Buffer;
   contentType?: string;
   fetchFn?: typeof fetch;
+  timeoutMs?: number;
   /** Override for testing — custom allowlist and DNS resolver */
   validationOpts?: {
     allowlist?: readonly string[];
@@ -207,17 +230,23 @@ export async function uploadToConsentUrl(params: {
   await validateConsentUploadUrl(params.url, params.validationOpts);
 
   const fetchFn = params.fetchFn ?? fetch;
-  const res = await fetchFn(params.url, {
-    method: "PUT",
-    headers: {
-      "User-Agent": buildUserAgent(),
-      "Content-Type": params.contentType ?? "application/octet-stream",
-      "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
-    },
-    body: new Uint8Array(params.buffer),
-  });
+  const timeout = createConsentUploadTimeoutSignal(params.timeoutMs);
+  try {
+    const res = await fetchFn(params.url, {
+      method: "PUT",
+      headers: {
+        "User-Agent": buildUserAgent(),
+        "Content-Type": params.contentType ?? "application/octet-stream",
+        "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
+      },
+      body: new Uint8Array(params.buffer),
+      signal: timeout.signal,
+    });
 
-  if (!res.ok) {
-    throw new Error(`File upload to consent URL failed: ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      throw new Error(`File upload to consent URL failed: ${res.status} ${res.statusText}`);
+    }
+  } finally {
+    timeout.release();
   }
 }
