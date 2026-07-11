@@ -1,14 +1,17 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 
-// jsdom Ranges have no layout; stub the rect the popup positions against.
-const originalGetBoundingClientRect = Range.prototype.getBoundingClientRect;
+// jsdom Ranges have no layout (and no getBoundingClientRect at all); stub the
+// rect the popup positions against and remove the stub afterwards.
 beforeAll(() => {
-  Range.prototype.getBoundingClientRect = () =>
-    ({ top: 100, left: 100, bottom: 120, right: 200, width: 100, height: 20 }) as DOMRect;
+  Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value: () =>
+      ({ top: 100, left: 100, bottom: 120, right: 200, width: 100, height: 20 }) as DOMRect,
+  });
 });
 afterAll(() => {
-  Range.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+  delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
 });
 
 function buildThreadWithBubble(text: string) {

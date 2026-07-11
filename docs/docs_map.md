@@ -9144,6 +9144,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does not do
   - H2: Delivery model
   - H2: Surface behavior
+  - H2: Selection popup (Control UI)
   - H2: When to use it
   - H2: Related
 
