@@ -527,6 +527,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "crestodian.setup.detect",
       "crestodian.setup.verify",
       "crestodian.setup.activate",
+      "crestodian.setup.auth.start",
     ],
     loadHandlers: loadCrestodianHandlers,
   }),

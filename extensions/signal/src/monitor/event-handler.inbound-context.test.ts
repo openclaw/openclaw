@@ -1534,6 +1534,42 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.ReplyToIsQuote).toBe(true);
   });
 
+  it("preserves blank quoted lines in multi-paragraph Signal replies", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        dataMessage: {
+          message: "What about the second part?",
+          quote: {
+            text: "First paragraph\n\nSecond paragraph",
+            author: "+15550001111",
+          },
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.BodyForAgent).toBe(
+      [
+        "Quoted Signal reply context from +15550001111:",
+        "> First paragraph",
+        ">",
+        "> Second paragraph",
+        "",
+        "What about the second part?",
+      ].join("\n"),
+    );
+  });
+
   it("does not duplicate Signal quote context when BodyForAgent is already decorated", async () => {
     const decoratedBody = [
       "Quoted Signal reply context from +15550001111:",

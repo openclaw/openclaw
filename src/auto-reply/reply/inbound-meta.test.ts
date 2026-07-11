@@ -721,6 +721,28 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain('"body": "quoted body"');
   });
 
+  it("recognizes generated multi-paragraph Signal reply context with blank quoted lines", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      OriginatingChannel: "signal",
+      OriginatingTo: "signal:group:g1",
+      BodyForAgent: [
+        "Quoted Signal reply context from sender:",
+        "> First paragraph",
+        ">",
+        "> Second paragraph",
+        "",
+        "What about the second part?",
+      ].join("\n"),
+      ReplyToSender: "sender",
+      ReplyToBody: "First paragraph\n\nSecond paragraph",
+    } as TemplateContext);
+
+    expect(parseConversationInfoPayload(text)["has_reply_context"]).toBe(true);
+    expect(text).not.toContain("Reply target of current user message");
+    expect(text).not.toContain('"body": "First paragraph');
+  });
+
   it("keeps reply target blocks for ordinary user-authored blockquotes", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

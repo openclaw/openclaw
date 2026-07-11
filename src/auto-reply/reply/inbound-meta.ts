@@ -536,7 +536,7 @@ function bodyForAgentContainsReplyQuote(ctx: TemplateContext, replyToBody: strin
   }
   const quotedBlock = quote
     .split("\n")
-    .map((line) => `> ${line}`)
+    .map((line) => (line ? `> ${line}` : ">"))
     .join("\n");
   const quoteSender = normalizeQuotedPromptBody(sanitizePromptBody(ctx.ReplyToSender));
   const header = `Quoted Signal reply context${quoteSender ? ` from ${quoteSender}` : ""}:`;

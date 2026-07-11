@@ -145,7 +145,7 @@ function formatSignalBodyForAgentWithReplyContext(entry: {
   const body = normalizeSignalAgentBodyPart(entry.bodyText);
   const quotedBlock = quote
     .split("\n")
-    .map((line) => `> ${line}`)
+    .map((line) => (line ? `> ${line}` : ">"))
     .join("\n");
   const quoteSender = normalizeSignalAgentBodyPart(entry.replyToSender);
   const header = `Quoted Signal reply context${quoteSender ? ` from ${quoteSender}` : ""}:`;
