@@ -94,6 +94,16 @@ function getMissingPluginRouteRuntimeContext(
   return context.gatewayRequestOperatorScopes === undefined ? "caller scope context" : undefined;
 }
 
+function canRunPluginHttpRouteWithoutAdmission(route: PluginHttpRouteRegistration): boolean {
+  // The manifest entitlement is plugin-wide; require the route-specific trusted operator
+  // surface so an ordinary sibling cannot start work after suspension reports ready.
+  return (
+    route.auth === "gateway" &&
+    route.gatewayRuntimeScopeSurface === "trusted-operator" &&
+    route.gatewayMethodDispatchAllowed === true
+  );
+}
+
 function createPluginRouteRuntimeScope(params: {
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
@@ -207,12 +217,11 @@ export function createGatewayPluginRequestHandler(params: {
             }),
             async () => route.handler(req, res),
           )) !== false;
-        // Entitled control-plane routes delegate substantive work back through Gateway dispatch.
+        // Entitled trusted-operator routes delegate substantive work through Gateway dispatch.
         // An outer root would make gateway.suspend.prepare nested and permanently unreachable.
-        const handled =
-          route.gatewayMethodDispatchAllowed === true
-            ? await runRoute()
-            : await runWithGatewayHttpWorkAdmission(res, runRoute);
+        const handled = canRunPluginHttpRouteWithoutAdmission(route)
+          ? await runRoute()
+          : await runWithGatewayHttpWorkAdmission(res, runRoute);
         if (handled) {
           return true;
         }

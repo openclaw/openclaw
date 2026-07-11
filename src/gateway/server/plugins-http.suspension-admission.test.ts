@@ -203,6 +203,40 @@ describe("plugin HTTP suspension admission", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
+  it("keeps an ordinary sibling from an entitled plugin behind admission", async () => {
+    const ordinaryHandler = vi.fn(() => true);
+    const handler = createRequestHandler([
+      createRoute({
+        auth: "gateway",
+        gatewayMethodDispatchAllowed: true,
+        handler: ordinaryHandler,
+      }),
+      createRoute({
+        path: `${ROUTE_PATH}/control`,
+        auth: "gateway",
+        gatewayRuntimeScopeSurface: "trusted-operator",
+        gatewayMethodDispatchAllowed: true,
+        handler: () => true,
+      }),
+    ]);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const response = makeMockHttpResponse();
+
+    await expect(
+      handler({ url: ROUTE_PATH, headers: {} } as IncomingMessage, response.res, undefined, {
+        gatewayAuthSatisfied: true,
+        gatewayRequestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
+        gatewayRequestOperatorScopes: ["operator.write"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(ordinaryHandler).not.toHaveBeenCalled();
+    expect(response.res.statusCode).toBe(503);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(suspension?.release()).toBe(true);
+  });
+
   it("keeps entitled Gateway suspension dispatch outside the plugin route root", async () => {
     const cron = {
       pauseScheduling: vi.fn(),
