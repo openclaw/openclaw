@@ -3,12 +3,21 @@ import { WizardSession } from "../wizard/session.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 
 describe("createWizardSessionTracker", () => {
-  it("reaps abandoned terminal sessions while checking for a running wizard", async () => {
-    const tracker = createWizardSessionTracker();
+  it("retains an uncollected terminal result before reaping it", async () => {
+    let now = 1_000;
+    const tracker = createWizardSessionTracker({ now: () => now });
     const terminal = new WizardSession(async () => {});
     tracker.wizardSessions.set("finished", terminal);
     await terminal.next();
 
+    expect(tracker.findRunningWizard()).toBeNull();
+    expect(tracker.wizardSessions.has("finished")).toBe(true);
+
+    now += 5 * 60 * 1000 - 1;
+    expect(tracker.findRunningWizard()).toBeNull();
+    expect(tracker.wizardSessions.has("finished")).toBe(true);
+
+    now += 1;
     expect(tracker.findRunningWizard()).toBeNull();
     expect(tracker.wizardSessions.has("finished")).toBe(false);
   });
