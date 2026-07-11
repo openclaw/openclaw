@@ -58,12 +58,17 @@
   right: 0;
   z-index: 1; /* revealed overlay paints above the next group's leading edge */
   display: flex;
-  flex-wrap: nowrap;
+  /* Wrap instead of clipping in narrow lanes (extreme chatMessageMaxWidth,
+     slim split panes): a wrapped revealed footer may transiently overlap the
+     next group, but every control stays reachable. Hidden overlays must not
+     intercept pointer input, so hit-testing is gated on the reveal. */
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   min-width: 0;
   margin-top: 1px;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 120ms ease-out;
 }
 
@@ -71,6 +76,7 @@
 .chat-group:focus-within .chat-group-footer,
 .chat-group-footer:has(details.msg-meta[open]) {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .chat-group-footer__meta {
@@ -368,6 +374,7 @@ img.chat-avatar {
     width: 100%;
     margin-top: 4px;
     opacity: 1;
+    pointer-events: auto;
   }
 
   .chat-group-footer-actions button,
