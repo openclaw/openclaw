@@ -4192,7 +4192,7 @@ describe("subagent registry seam flow", () => {
       "updated child session store entry",
     );
 
-    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledTimes(4);
+    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledTimes(5);
     expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(2);
   });
 
