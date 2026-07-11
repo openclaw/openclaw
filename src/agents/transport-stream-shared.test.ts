@@ -6,7 +6,6 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
-  parseTransportRetryAfterSeconds,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
@@ -40,17 +39,6 @@ describe("transport stream shared helpers", () => {
 
     expect(output.httpStatus).toBeUndefined();
     expect(output.retryAfterSeconds).toBeUndefined();
-  });
-
-  it("parses Retry-After from delta-seconds, retry-after-ms, and HTTP-date forms", () => {
-    expect(parseTransportRetryAfterSeconds(new Headers({ "retry-after": "30" }))).toBe(30);
-    expect(parseTransportRetryAfterSeconds(new Headers({ "retry-after-ms": "1500" }))).toBe(1.5);
-    expect(parseTransportRetryAfterSeconds(new Headers())).toBeUndefined();
-
-    const future = new Date(Date.now() + 45_000).toUTCString();
-    const seconds = parseTransportRetryAfterSeconds(new Headers({ "retry-after": future }));
-    expect(seconds).toBeGreaterThan(40);
-    expect(seconds).toBeLessThanOrEqual(45);
   });
 
   it("sanitizes unpaired surrogate code units", () => {

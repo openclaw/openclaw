@@ -33,7 +33,7 @@ import type {
   Model,
   TextContent,
 } from "../../llm/types.js";
-import { isRetryableAssistantError } from "../../llm/utils/retry.js";
+import { isRetryableAssistantError, resolveAutoRetryDelayMs } from "../../llm/utils/retry.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import type {
   PersistedUserTurnMessage,
@@ -337,38 +337,6 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 
 function estimateMessagesFromContent(messages: AgentMessage[]): number {
   return messages.reduce((total, message) => total + estimateTokens(message), 0);
-}
-
-// Upper bound for a single auto-retry wait. A server-supplied Retry-After is
-// honored in full below this (realistic provider cooldowns are seconds to at
-// most an hour), so we never shorten a valid cooldown into the active
-// rate-limit window. The ceiling only guards against pathological or malformed
-// hints (e.g. Retry-After far in the future, or an overflowed retry-after-ms):
-// it keeps the wait well under the setTimeout 32-bit millisecond limit, past
-// which a delay would silently fire immediately — the opposite of the intent.
-const MAX_AUTO_RETRY_DELAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Resolve the wait before an automatic in-turn retry.
- *
- * The base schedule is exponential backoff (`baseDelayMs * 2 ** (attempt - 1)`).
- * A server-supplied `retryAfterSeconds` (e.g. from a 429 `Retry-After` header)
- * is treated as a lower bound: we take whichever is larger so genuinely
- * rate-limited turns wait out the server's cooldown instead of resending inside
- * it. The result is clamped to {@link MAX_AUTO_RETRY_DELAY_MS}; invalid hints
- * (non-finite, zero, or negative) are ignored and the exponential delay is used.
- */
-export function resolveAutoRetryDelayMs(params: {
-  attempt: number;
-  baseDelayMs: number;
-  retryAfterSeconds?: number;
-}): number {
-  const exponentialMs = params.baseDelayMs * 2 ** (params.attempt - 1);
-  const retryAfterMs =
-    typeof params.retryAfterSeconds === "number" && params.retryAfterSeconds > 0
-      ? params.retryAfterSeconds * 1000
-      : 0;
-  return Math.min(Math.max(exponentialMs, retryAfterMs), MAX_AUTO_RETRY_DELAY_MS);
 }
 
 // ============================================================================
@@ -2707,8 +2675,18 @@ export class AgentSession {
     const delayMs = resolveAutoRetryDelayMs({
       attempt: this.retryCount,
       baseDelayMs: settings.baseDelayMs,
+      maxRetryDelayMs: this.settingsManager.getProviderRetrySettings().maxRetryDelayMs,
       retryAfterSeconds: message.retryAfterSeconds,
     });
+
+    if (delayMs === null) {
+      // The server asked to wait longer than retry.provider.maxRetryDelayMs.
+      // Do not hold the turn asleep for that long; stop retrying in-turn so
+      // provider fallback / operator recovery can proceed. Preserve the attempt
+      // count so post-run handling can emit the final failure.
+      this.retryCount--;
+      return false;
+    }
 
     this.emit({
       type: "auto_retry_start",

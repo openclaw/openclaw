@@ -1,4 +1,3 @@
-import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
 /**
  * Shared transport-stream normalization helpers.
  *
@@ -91,40 +90,6 @@ export function mergeTransportHeaders(
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
-/**
- * Parse an HTTP `Retry-After` cooldown (in seconds) from a response's headers.
- * Supports the non-standard `retry-after-ms`, delta-seconds, and HTTP-date
- * forms. Returns undefined when no usable value is present.
- */
-export function parseTransportRetryAfterSeconds(headers: Headers): number | undefined {
-  const retryAfterMs = headers.get("retry-after-ms");
-  if (retryAfterMs) {
-    const trimmed = retryAfterMs.trim();
-    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
-      const ms = Number(trimmed);
-      if (Number.isFinite(ms) && ms >= 0) {
-        return ms / 1000;
-      }
-    }
-  }
-
-  const retryAfter = headers.get("retry-after");
-  if (!retryAfter) {
-    return undefined;
-  }
-  const trimmed = retryAfter.trim();
-  if (/^\d+$/.test(trimmed)) {
-    const seconds = Number(trimmed);
-    return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
-  }
-
-  const retryAtMs = parseRetryAfterHttpDateMs(trimmed);
-  if (retryAtMs === undefined) {
-    return undefined;
-  }
-  return Math.max(0, (retryAtMs - Date.now()) / 1000);
 }
 
 export function mergeTransportMetadata<T extends Record<string, unknown>>(

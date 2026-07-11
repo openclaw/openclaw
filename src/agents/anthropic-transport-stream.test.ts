@@ -12,7 +12,8 @@ const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   guardedFetchMock: vi.fn(),
 }));
 
-vi.mock("./provider-transport-fetch.js", () => ({
+vi.mock("./provider-transport-fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./provider-transport-fetch.js")>()),
   buildGuardedModelFetch: buildGuardedModelFetchMock,
 }));
 

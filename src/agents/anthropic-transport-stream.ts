@@ -72,7 +72,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { buildGuardedModelFetch, parseRetryAfterSeconds } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
@@ -83,7 +83,6 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
-  parseTransportRetryAfterSeconds,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
@@ -829,7 +828,7 @@ function createAnthropicMessagesHttpError(
   };
   error.status = response.status;
   error.httpStatus = response.status;
-  const retryAfterSeconds = parseTransportRetryAfterSeconds(response.headers);
+  const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
   if (retryAfterSeconds !== undefined) {
     error.retryAfterSeconds = retryAfterSeconds;
   }
