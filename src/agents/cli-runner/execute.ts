@@ -77,6 +77,7 @@ import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import {
+  closeClaudeLiveSessionForContext,
   rotateClaudeLiveMcpCaptureKeyForContext,
   runClaudeLiveSessionTurn,
   shouldUseClaudeLiveSession,
@@ -637,6 +638,9 @@ export async function executePreparedCliRun(
         if (!forkResumeClaimed) {
           throw new Error("CLI session fork marker is no longer available");
         }
+        // The fork argument only applies at process startup; a cached warm child
+        // would run this turn inside the source session. Force a fresh spawn.
+        await closeClaudeLiveSessionForContext(context);
       }
       await context.preparedBackend.beforeExecution?.();
       const cliTurnStartedAt = Date.now();

@@ -187,6 +187,7 @@ describe("buildCliArgs — issue #80374", () => {
     const resumed = buildCliArgs({
       backend,
       baseArgs: ["--resume", "source-session"],
+      modelId: "claude-haiku-4-5",
       sessionId: "source-session",
       useResume: true,
       forkResume: true,
@@ -194,6 +195,7 @@ describe("buildCliArgs — issue #80374", () => {
     const subsequent = buildCliArgs({
       backend,
       baseArgs: ["--resume", "forked-session"],
+      modelId: "claude-haiku-4-5",
       sessionId: "forked-session",
       useResume: true,
       forkResume: false,
@@ -207,6 +209,7 @@ describe("buildCliArgs — issue #80374", () => {
       buildCliArgs({
         backend: BACKEND_ALWAYS as CliBackendConfig,
         baseArgs: ["--resume", "source-session"],
+        modelId: "claude-haiku-4-5",
         sessionId: "source-session",
         useResume: true,
         forkResume: true,

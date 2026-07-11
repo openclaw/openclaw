@@ -362,7 +362,7 @@ function boundedCatalogString(
 type CodexInteractiveThreadSourceKind = (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number];
 
 function isInteractiveThreadSource(
-  source: CodexThread["source"],
+  source: string | null | undefined,
 ): source is CodexInteractiveThreadSourceKind {
   return CODEX_INTERACTIVE_THREAD_SOURCE_KINDS.some((kind) => kind === source);
 }
@@ -1811,10 +1811,17 @@ function toGenericTranscriptItem(item: import("./app-server/protocol.js").CodexT
   const resultText =
     item.aggregatedOutput ||
     (item.result === undefined ? undefined : JSON.stringify(item.result, null, 2));
+  // fileChange items carry only a changes array; render it so edits are not
+  // reduced to an unsupported-item placeholder. The protocol type declares
+  // changes as always present, but raw projections can omit it.
+  const changesText = Array.isArray(item.changes)
+    ? item.changes.map((change) => `${change.kind}: ${change.path}`).join("\n") || undefined
+    : undefined;
+  const text = item.text || resultText || changesText || fallback;
   return {
     id: item.id,
     type,
-    ...(item.text || resultText || fallback ? { text: item.text || resultText || fallback } : {}),
+    ...(text ? { text } : {}),
     raw: item as SessionCatalogTranscriptItem["raw"],
   } satisfies SessionCatalogTranscriptItem;
 }

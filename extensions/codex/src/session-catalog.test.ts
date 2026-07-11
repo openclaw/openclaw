@@ -208,10 +208,14 @@ function createRuntime(
     let summary: SessionEntrySummary;
     if (existing) {
       const entry = existing.entry;
+      const initialHarnessId =
+        "agentHarnessId" in createParams.initialEntry
+          ? createParams.initialEntry.agentHarnessId
+          : undefined;
       const initialMatches =
         createParams.recoverMatchingInitialEntry === true &&
         entry.initializationPending === true &&
-        entry.agentHarnessId === createParams.initialEntry.agentHarnessId &&
+        entry.agentHarnessId === initialHarnessId &&
         entry.modelSelectionLocked === createParams.initialEntry.modelSelectionLocked &&
         JSON.stringify(entry.pluginExtensions) ===
           JSON.stringify(createParams.initialEntry.pluginExtensions);

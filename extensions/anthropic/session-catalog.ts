@@ -1305,9 +1305,15 @@ async function importClaudeHistory(params: {
   const items = (await readBoundedClaudeHistory(params.threadId)).toReversed();
   await withSessionTranscriptWriteLock(params, async (transcript) => {
     for (const [index, item] of items.entries()) {
-      await transcript.appendMessage({
-        message: importedClaudeMessage(item, Date.now() + index),
+      // The idempotency key rides on the message so recovery re-imports dedupe
+      // against the transcript instead of appending duplicate history.
+      const message = {
+        ...(importedClaudeMessage(item, Date.now() + index) as unknown as Record<string, unknown>),
         idempotencyKey: `claude-catalog:${params.threadId}:${item.uuid ?? index}`,
+      } as AgentMessage;
+      await transcript.appendMessage({
+        message,
+        idempotencyLookup: "scan",
         cwd: params.cwd,
       });
     }
