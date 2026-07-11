@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
+import { clearOperationalReplyPolicyStateForTest } from "./operational-reply-policy.js";
 import { createReplyDispatcher, type ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -192,6 +193,7 @@ async function expectVisibleChatBlockRoutesToAccount(
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
   beforeEach(() => {
+    clearOperationalReplyPolicyStateForTest();
     deliveryMocks.routeReply.mockClear();
     deliveryMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock-message" });
     deliveryMocks.runMessageAction.mockClear();
@@ -492,6 +494,25 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(failedDispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
     expect(delivered).toBe(true);
     expect(visibleDispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
+  });
+
+  it("does not consume ACP once notices after routed delivery fails", async () => {
+    const cfg = createAcpTestConfig({
+      messages: {
+        operationalReplies: { policy: "once" },
+      },
+    });
+    const notice = createAcpErrorNotice("ACP once route failure retry proof");
+    deliveryMocks.routeReply
+      .mockResolvedValueOnce({ ok: false, reason: "temporary route failure" })
+      .mockResolvedValueOnce({ ok: true, messageId: "notice-2" });
+
+    const failed = await createVisibleChatAcpCoordinator(cfg).deliver("final", notice);
+    const delivered = await createVisibleChatAcpCoordinator(cfg).deliver("final", notice);
+
+    expect(failed).toBe(false);
+    expect(delivered).toBe(true);
+    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(2);
   });
 
   it("tracks successful final delivery separately from routed counters", async () => {

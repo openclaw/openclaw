@@ -399,182 +399,207 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
 
     const policyResult = await applyAcpOperationalReplyPolicy(visiblePayload);
-    if (!policyResult.shouldDeliver) {
-      return false;
-    }
-    const isOperationalReply = isOperationalReplyPayload({
-      payload: visiblePayload,
-      explicitCommandTurn: false,
-    });
-
-    if (rawBlockText) {
-      if (!isStatusNotice) {
-        if (state.accumulatedBlockText.length > 0) {
-          state.accumulatedBlockText += "\n";
-        }
-        state.accumulatedBlockText += rawBlockText;
-        if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
-          state.accumulatedBlockTtsText += "\n";
-        }
-        state.accumulatedBlockTtsText += rawBlockText;
-        state.blockCount += 1;
-      }
-      if (visiblePayload.text) {
-        if (state.accumulatedVisibleBlockText.length > 0) {
-          state.accumulatedVisibleBlockText += "\n";
-        }
-        state.accumulatedVisibleBlockText += visiblePayload.text;
-      }
-    }
-    const rawFinalText =
-      kind === "final" && !isStatusNotice ? normalizeOptionalString(payload.text) : undefined;
-    if (rawFinalText) {
-      if (state.accumulatedFinalText.length > 0) {
-        state.accumulatedFinalText += "\n";
-      }
-      state.accumulatedFinalText += rawFinalText;
-    }
-
-    if (hasOutboundReplyContent(visiblePayload, { trimText: true })) {
-      await startReplyLifecycleOnce();
-    } else {
-      return false;
-    }
-
-    const allowOperationalSuppressionBypass =
-      isOperationalReply &&
-      !params.sendPolicyDenied &&
-      params.sourceReplyDeliveryMode === "message_tool_only" &&
-      params.suppressUserDeliveryBySourceReplyPolicy === true &&
-      (params.ctx.InboundEventKind !== "room_event" ||
-        resolveOperationalReplyPolicy(params.cfg).policy !== "always");
-    if (params.suppressUserDelivery && !allowOperationalSuppressionBypass) {
-      return false;
-    }
-
-    const ttsPayload = await maybeApplyAcpTts({
-      payload: visiblePayload,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      channel: params.ttsChannel,
-      accountId: resolvedAccountId,
-      kind,
-      inboundAudio: params.inboundAudio,
-      ttsAuto: params.sessionTtsAuto,
-      skipTts: meta?.skipTts,
-    });
-
-    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
-      const toolCallId = normalizeOptionalString(meta?.toolCallId);
-      if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
-        const edited = await tryEditToolMessage(ttsPayload, toolCallId);
-        if (edited) {
-          void markOperationalReplyPolicyDelivered(policyResult, true);
-          return true;
-        }
-      }
-
-      const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
-        channel: routedChannel,
-        kind,
-        text: ttsPayload.text,
-        routed: true,
-      });
-      const { routeReply } = await loadRouteReplyRuntime();
-      const threadId =
-        params.originatingThreadId ??
-        resolveRoutedDeliveryThreadId({
-          ctx: params.ctx,
-          sessionKey: deliverySessionKey,
-        });
-      const result = await routeReply({
-        payload: ttsPayload,
-        channel: params.originatingChannel,
-        to: params.originatingTo,
-        sessionKey: deliverySessionKey,
-        ...(deliverySessionKey !== params.ctx.SessionKey
-          ? { policySessionKey: params.ctx.SessionKey }
-          : {}),
-        accountId: resolvedAccountId,
-        requesterSenderId: params.ctx.SenderId,
-        requesterSenderName: params.ctx.SenderName,
-        requesterSenderUsername: params.ctx.SenderUsername,
-        requesterSenderE164: params.ctx.SenderE164,
-        threadId,
-        replyDelivery: routedReplyDelivery,
-        cfg: params.cfg,
-        mirror: false,
-        replyKind: kind,
-        runId: params.runId,
-      });
-      if (!result.ok) {
-        if (tracksVisibleText) {
-          state.failedVisibleTextDelivery = true;
-        }
-        logVerbose(
-          `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
-        );
+    let policySettled = false;
+    const settleOperationalPolicy = (delivered: boolean): Promise<void> | undefined => {
+      policySettled = true;
+      return policyResult.shouldDeliver && policyResult.markDelivered
+        ? markOperationalReplyPolicyDelivered(policyResult, delivered)
+        : undefined;
+    };
+    try {
+      if (!policyResult.shouldDeliver) {
         return false;
       }
-      if (result.suppressed) {
+      const isOperationalReply = isOperationalReplyPayload({
+        payload: visiblePayload,
+        explicitCommandTurn: false,
+      });
+
+      if (rawBlockText) {
+        if (!isStatusNotice) {
+          if (state.accumulatedBlockText.length > 0) {
+            state.accumulatedBlockText += "\n";
+          }
+          state.accumulatedBlockText += rawBlockText;
+          if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
+            state.accumulatedBlockTtsText += "\n";
+          }
+          state.accumulatedBlockTtsText += rawBlockText;
+          state.blockCount += 1;
+        }
+        if (visiblePayload.text) {
+          if (state.accumulatedVisibleBlockText.length > 0) {
+            state.accumulatedVisibleBlockText += "\n";
+          }
+          state.accumulatedVisibleBlockText += visiblePayload.text;
+        }
+      }
+      const rawFinalText =
+        kind === "final" && !isStatusNotice ? normalizeOptionalString(payload.text) : undefined;
+      if (rawFinalText) {
+        if (state.accumulatedFinalText.length > 0) {
+          state.accumulatedFinalText += "\n";
+        }
+        state.accumulatedFinalText += rawFinalText;
+      }
+
+      if (hasOutboundReplyContent(visiblePayload, { trimText: true })) {
+        await startReplyLifecycleOnce();
+      } else {
+        return false;
+      }
+
+      const allowOperationalSuppressionBypass =
+        isOperationalReply &&
+        !params.sendPolicyDenied &&
+        params.sourceReplyDeliveryMode === "message_tool_only" &&
+        params.suppressUserDeliveryBySourceReplyPolicy === true &&
+        (params.ctx.InboundEventKind !== "room_event" ||
+          resolveOperationalReplyPolicy(params.cfg).policy !== "always");
+      if (params.suppressUserDelivery && !allowOperationalSuppressionBypass) {
+        return false;
+      }
+
+      const ttsPayload = await maybeApplyAcpTts({
+        payload: visiblePayload,
+        cfg: params.cfg,
+        agentId: params.agentId,
+        channel: params.ttsChannel,
+        accountId: resolvedAccountId,
+        kind,
+        inboundAudio: params.inboundAudio,
+        ttsAuto: params.sessionTtsAuto,
+        skipTts: meta?.skipTts,
+      });
+
+      if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
+        const toolCallId = normalizeOptionalString(meta?.toolCallId);
+        if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
+          const edited = await tryEditToolMessage(ttsPayload, toolCallId);
+          if (edited) {
+            const policySettle = settleOperationalPolicy(true);
+            if (policySettle) {
+              await policySettle;
+            }
+            return true;
+          }
+        }
+
+        const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
+          channel: routedChannel,
+          kind,
+          text: ttsPayload.text,
+          routed: true,
+        });
+        const { routeReply } = await loadRouteReplyRuntime();
+        const threadId =
+          params.originatingThreadId ??
+          resolveRoutedDeliveryThreadId({
+            ctx: params.ctx,
+            sessionKey: deliverySessionKey,
+          });
+        const result = await routeReply({
+          payload: ttsPayload,
+          channel: params.originatingChannel,
+          to: params.originatingTo,
+          sessionKey: deliverySessionKey,
+          ...(deliverySessionKey !== params.ctx.SessionKey
+            ? { policySessionKey: params.ctx.SessionKey }
+            : {}),
+          accountId: resolvedAccountId,
+          requesterSenderId: params.ctx.SenderId,
+          requesterSenderName: params.ctx.SenderName,
+          requesterSenderUsername: params.ctx.SenderUsername,
+          requesterSenderE164: params.ctx.SenderE164,
+          threadId,
+          replyDelivery: routedReplyDelivery,
+          cfg: params.cfg,
+          mirror: false,
+          replyKind: kind,
+          runId: params.runId,
+        });
+        if (!result.ok) {
+          if (tracksVisibleText) {
+            state.failedVisibleTextDelivery = true;
+          }
+          logVerbose(
+            `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
+          );
+          return false;
+        }
+        if (result.suppressed) {
+          if (kind === "final") {
+            state.deliveredFinalReply = true;
+          }
+          if (tracksVisibleText) {
+            state.deliveredVisibleText = true;
+          }
+          return true;
+        }
+        const policySettle = settleOperationalPolicy(true);
+        if (policySettle) {
+          await policySettle;
+        }
+        if (kind === "tool" && meta?.toolCallId && result.messageId) {
+          state.toolMessageByCallId.set(meta.toolCallId, {
+            channel: params.originatingChannel,
+            accountId: resolvedAccountId,
+            to: params.originatingTo,
+            ...(threadId != null ? { threadId } : {}),
+            messageId: result.messageId,
+          });
+        }
         if (kind === "final") {
           state.deliveredFinalReply = true;
         }
         if (tracksVisibleText) {
           state.deliveredVisibleText = true;
         }
+        state.routedCounts[kind] += 1;
         return true;
       }
-      void markOperationalReplyPolicyDelivered(policyResult, true);
-      if (kind === "tool" && meta?.toolCallId && result.messageId) {
-        state.toolMessageByCallId.set(meta.toolCallId, {
-          channel: params.originatingChannel,
-          accountId: resolvedAccountId,
-          to: params.originatingTo,
-          ...(threadId != null ? { threadId } : {}),
-          messageId: result.messageId,
-        });
+
+      if (kind === "tool") {
+        await waitForPendingDirectBlockReplyDelivery();
       }
-      if (kind === "final") {
+
+      const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
+        channel: directChannel,
+        kind,
+        text: ttsPayload.text,
+        routed: false,
+      });
+      const delivered =
+        kind === "tool"
+          ? params.dispatcher.sendToolResult(ttsPayload)
+          : kind === "block"
+            ? params.dispatcher.sendBlockReply(ttsPayload)
+            : params.dispatcher.sendFinalReply(ttsPayload);
+      if (kind === "final" && delivered) {
         state.deliveredFinalReply = true;
       }
-      if (tracksVisibleText) {
-        state.deliveredVisibleText = true;
+      const policySettle = settleOperationalPolicy(delivered);
+      if (policySettle) {
+        await policySettle;
       }
-      state.routedCounts[kind] += 1;
-      return true;
+      if (delivered && tracksVisibleText) {
+        state.queuedDirectVisibleTextDeliveries += 1;
+        state.settledDirectVisibleText = false;
+      } else if (!delivered && tracksVisibleText) {
+        state.failedVisibleTextDelivery = true;
+      }
+      if (kind === "block" && delivered) {
+        hasPendingDirectBlockReplyDelivery = true;
+      }
+      return delivered;
+    } finally {
+      if (!policySettled) {
+        const policySettle = settleOperationalPolicy(false);
+        if (policySettle) {
+          await policySettle;
+        }
+      }
     }
-
-    if (kind === "tool") {
-      await waitForPendingDirectBlockReplyDelivery();
-    }
-
-    const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
-      channel: directChannel,
-      kind,
-      text: ttsPayload.text,
-      routed: false,
-    });
-    const delivered =
-      kind === "tool"
-        ? params.dispatcher.sendToolResult(ttsPayload)
-        : kind === "block"
-          ? params.dispatcher.sendBlockReply(ttsPayload)
-          : params.dispatcher.sendFinalReply(ttsPayload);
-    if (kind === "final" && delivered) {
-      state.deliveredFinalReply = true;
-    }
-    void markOperationalReplyPolicyDelivered(policyResult, delivered);
-    if (delivered && tracksVisibleText) {
-      state.queuedDirectVisibleTextDeliveries += 1;
-      state.settledDirectVisibleText = false;
-    } else if (!delivered && tracksVisibleText) {
-      state.failedVisibleTextDelivery = true;
-    }
-    if (kind === "block" && delivered) {
-      hasPendingDirectBlockReplyDelivery = true;
-    }
-    return delivered;
   };
 
   return {
