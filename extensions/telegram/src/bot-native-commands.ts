@@ -43,9 +43,9 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   formatSqliteSessionFileMarker,
   getSessionEntry,
-  patchSessionEntry,
   resolveStorePath,
   type SessionEntry,
+  updateSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1339,10 +1339,6 @@ export const registerTelegramNativeCommands = ({
               agentId: route.agentId,
               sessionKey: targetSessionKey,
             });
-            const previousProfileId = codexChannelLoginRuntime.resolveProviderScopedProfileId(
-              targetSessionEntry?.authProfileOverride,
-              loginProvider,
-            );
             const loginResult = await codexChannelLoginRuntime.runDeviceLoginFlow({
               runLoginFlow: loginFlow,
               provider: loginProvider,
@@ -1356,23 +1352,61 @@ export const registerTelegramNativeCommands = ({
             const nextProfileId = loginResult.profiles.find(
               (profile) => profile.provider === loginProvider,
             )?.profileId;
-            if (targetSessionEntry && nextProfileId && nextProfileId !== previousProfileId) {
+            if (!nextProfileId) {
+              await sendLoginMessage(
+                "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+              );
+              return;
+            }
+            const needsSessionUpdate =
+              targetSessionEntry &&
+              (targetSessionEntry.authProfileOverride !== nextProfileId ||
+                targetSessionEntry.authProfileOverrideSource !== "user" ||
+                targetSessionEntry.authProfileOverrideCompactionCount !== undefined);
+            if (targetSessionEntry) {
               try {
                 const storePath = resolveStorePath(runtimeCfg.session?.store, {
                   agentId: route.agentId,
                 });
-                await patchSessionEntry({
-                  agentId: route.agentId,
+                let snapshotMatched = false;
+                const persisted = await updateSessionStoreEntry({
                   sessionKey: targetSessionKey,
                   storePath,
-                  fallbackEntry: targetSessionEntry,
-                  preserveActivity: true,
-                  update: () => ({
-                    authProfileOverride: nextProfileId,
-                    authProfileOverrideSource: "user",
-                    authProfileOverrideCompactionCount: undefined,
-                  }),
+                  requireWriteSuccess: true,
+                  skipMaintenance: true,
+                  update: (entry) => {
+                    if (
+                      entry.sessionId !== targetSessionEntry.sessionId ||
+                      entry.authProfileOverride !== targetSessionEntry.authProfileOverride ||
+                      entry.authProfileOverrideSource !==
+                        targetSessionEntry.authProfileOverrideSource ||
+                      entry.authProfileOverrideCompactionCount !==
+                        targetSessionEntry.authProfileOverrideCompactionCount
+                    ) {
+                      return null;
+                    }
+                    snapshotMatched = true;
+                    return needsSessionUpdate
+                      ? {
+                          authProfileOverride: nextProfileId,
+                          authProfileOverrideSource: "user",
+                          authProfileOverrideCompactionCount: undefined,
+                        }
+                      : null;
+                  },
                 });
+                if (
+                  !snapshotMatched ||
+                  !persisted ||
+                  persisted.authProfileOverride !== nextProfileId ||
+                  persisted.authProfileOverrideSource !== "user" ||
+                  persisted.authProfileOverrideCompactionCount !== undefined
+                ) {
+                  await sendLoginMessage(
+                    "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+                  );
+                  return;
+                }
               } catch (error) {
                 runtime.error?.(
                   danger(
@@ -1381,6 +1415,10 @@ export const registerTelegramNativeCommands = ({
                     )}`,
                   ),
                 );
+                await sendLoginMessage(
+                  "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+                );
+                return;
               }
             }
             await sendLoginMessage("Codex login complete. Try your request again now.");
