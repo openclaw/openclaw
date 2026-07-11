@@ -16,10 +16,6 @@ import {
 export async function executeStatusScanFromOverview(params: {
   overview: StatusScanOverviewResult;
   runtime?: RuntimeEnv;
-  summary?: {
-    includeChannelSummary?: boolean;
-    credentialResolutionSkipped?: boolean;
-  };
   resolveMemory: (args: {
     cfg: StatusScanOverviewResult["cfg"];
     agentStatus: StatusScanOverviewResult["agentStatus"];
@@ -39,15 +35,7 @@ export async function executeStatusScanFromOverview(params: {
       memoryPlugin,
       ...(params.runtime ? { runtime: params.runtime } : {}),
     }),
-    resolveStatusSummaryFromOverview({
-      overview: params.overview,
-      ...(params.summary?.includeChannelSummary !== undefined
-        ? { includeChannelSummary: params.summary.includeChannelSummary }
-        : {}),
-      ...(params.summary?.credentialResolutionSkipped !== undefined
-        ? { credentialResolutionSkipped: params.summary.credentialResolutionSkipped }
-        : {}),
-    }),
+    resolveStatusSummaryFromOverview({ overview: params.overview }),
   ]);
 
   return buildStatusScanResult({

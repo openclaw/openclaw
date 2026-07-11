@@ -108,6 +108,11 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: false }, {} as never);
 
+    expect(mocks.getStatusSummary).toHaveBeenCalledWith({
+      config: resolvedConfig,
+      sourceConfig,
+      includeChannelSummary: false,
+    });
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
     expect(firstBuildChannelsTableCall()).toStrictEqual([
       resolvedConfig,
