@@ -178,6 +178,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) activePluginTabId = "";
+  @property({ attribute: false }) activePluginHostId = "";
+  @property({ attribute: false }) activePluginThreadId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) canPairDevice = false;
@@ -226,6 +228,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
+  @state() private codexSidebarReady = false;
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
@@ -241,6 +244,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private reconnectListRevision: number | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
+  private codexSidebarLoadStarted = false;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -282,6 +286,19 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     this.routePreloadTimers.clear();
     super.disconnectedCallback();
+  }
+
+  override updated() {
+    const advertised = this.pluginTabs().some(
+      (tab) => tab.pluginId === "codex" && tab.id === "sessions",
+    );
+    if (!advertised || this.codexSidebarReady || this.codexSidebarLoadStarted) {
+      return;
+    }
+    this.codexSidebarLoadStarted = true;
+    void import("../pages/plugin/codex-sidebar.ts").then(() => {
+      this.codexSidebarReady = true;
+    });
   }
 
   // The shell calls this before CSS hides the panel or drawer. Mounted menus
@@ -2028,7 +2045,38 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               })}
         </div>
       </section>
+      ${this.renderCodexSidebar()}
     `;
+  }
+
+  private renderCodexSidebar() {
+    if (!this.codexSidebarReady) {
+      return nothing;
+    }
+    const tab = this.pluginTabs().find(
+      (candidate) => candidate.pluginId === "codex" && candidate.id === "sessions",
+    );
+    if (!tab) {
+      return nothing;
+    }
+    const open = (hostId?: string, threadId?: string) => {
+      this.onNavigate?.("plugin", {
+        search: pluginTabSearch({
+          pluginId: "codex",
+          id: "sessions",
+          ...(hostId && threadId ? { hostId, threadId } : {}),
+        }),
+      });
+    };
+    return html`<openclaw-codex-sidebar
+      .client=${this.context?.gateway.snapshot.client ?? null}
+      .connected=${this.connected}
+      .basePath=${this.basePath}
+      .selectedHostId=${this.activePluginHostId}
+      .selectedThreadId=${this.activePluginThreadId}
+      .onOpenSession=${(hostId: string, threadId: string) => open(hostId, threadId)}
+      .onViewAll=${() => open()}
+    ></openclaw-codex-sidebar>`;
   }
 
   private renderMoreSection() {

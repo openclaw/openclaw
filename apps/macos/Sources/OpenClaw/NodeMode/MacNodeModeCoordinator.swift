@@ -340,7 +340,7 @@ final class MacNodeModeCoordinator: NSObject {
         command: String,
         catalogAdvertised: Bool) -> Bool
     {
-        command != MacNodeCodexThreadCatalogContract.listCommand || catalogAdvertised
+        !MacNodeCodexThreadCatalogContract.commands.contains(command) || catalogAdvertised
     }
 
     nonisolated static func stalePostConnectRequiresDisconnect(
@@ -763,7 +763,7 @@ final class MacNodeModeCoordinator: NSObject {
             commands.append(OpenClawLocationCommand.get.rawValue)
         }
         if capsSet.contains(MacNodeCodexThreadCatalogContract.capability) {
-            commands.append(MacNodeCodexThreadCatalogContract.listCommand)
+            commands.append(contentsOf: MacNodeCodexThreadCatalogContract.commands)
         }
         if capsSet.contains(OpenClawCapability.computer.rawValue) {
             commands.append(OpenClawComputerCommand.act.rawValue)

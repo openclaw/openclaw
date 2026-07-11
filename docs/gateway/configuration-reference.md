@@ -736,6 +736,47 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 
 Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, OpenClaw accepts no new worker creation. Durable records created earlier still reconcile and remain visible; the existing gateway/node projection is unchanged.
 
+### Crabbox profile
+
+The bundled `crabbox` provider provisions an SSH-capable lease through the local Crabbox CLI. The inner `settings.provider` selects the Crabbox backend; it is separate from the outer OpenClaw provider id.
+
+```json5
+{
+  cloudWorkers: {
+    profiles: {
+      production: {
+        provider: "crabbox",
+        settings: {
+          provider: "aws",
+          class: "standard",
+          ttl: "24h",
+          idleTimeout: "60m",
+          // Optional absolute path. Default: sibling ../crabbox/bin/crabbox, then PATH.
+          binary: "/usr/local/bin/crabbox",
+        },
+        lifetime: {
+          idleTimeoutMinutes: 60,
+          maxLifetimeMinutes: 1440,
+        },
+      },
+    },
+  },
+}
+```
+
+- `settings.provider` (required): Crabbox backend passed through `--provider`. Use a backend whose inspect output includes an SSH endpoint; `aws` selects the direct AWS backend.
+- `settings.class` (required): Crabbox machine class passed to `--class`.
+- `settings.ttl` and `settings.idleTimeout` (required): positive Go duration strings passed to `--ttl` and `--idle-timeout`. These provider-side failsafes are distinct from OpenClaw's stored `lifetime` policy below.
+- `settings.binary`: optional absolute Crabbox executable path. Without it, OpenClaw checks the sibling Crabbox checkout, then executable entries on `PATH`, and finally invokes `crabbox` so a missing CLI remains a visible provider error.
+
+Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
+
+<Warning>
+  This milestone surfaces the SSH endpoint and a file `SecretRef`, but the current generic file-secret contract does not resolve Crabbox's dynamic key path, and Crabbox `inspect` does not expose host-key material. The later tunnel milestone must define direct-file key resolution and host-key pinning before connecting; this profile alone is not yet a complete SSH trust boundary.
+</Warning>
+
+### Static SSH development profile
+
 ```json5
 {
   cloudWorkers: {
@@ -763,11 +804,13 @@ Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, O
 ```
 
 - `profiles`: named worker profiles with non-empty, whitespace-trimmed ids. Each profile selects a provider registered by a plugin.
-- `provider`: non-empty worker provider id. The example uses the `static-ssh` provider from the QA Lab plugin.
-- Bundled provider plugins are enabled automatically when selected. External provider plugins must be installed and explicitly enabled (and included in `plugins.allow` when that allowlist is set).
+- `provider`: non-empty worker provider id. The examples use the bundled `crabbox` provider and the QA Lab `static-ssh` provider.
+- Bundled provider plugins are selected automatically when configured, but explicit disables and `plugins.allow` still apply. Include the provider id (for example, `crabbox`) when an allowlist is configured. External provider plugins must also be installed and explicitly enabled.
 - `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, and `keyRef`; `port` defaults to `22`.
 - `lifetime.idleTimeoutMinutes`: positive integer minutes stored for later idle-reclamation policy.
 - `lifetime.maxLifetimeMinutes`: positive integer minutes stored for later lifecycle policy.
+
+Each durable environment record retains its validated provider settings snapshot for later inspection and destruction. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with their creation-time settings, provided the owning plugin remains available.
 
 Lifetime values are data only in the first cloud-worker release; automatic enforcement lands with later lifecycle work. Profile changes require a gateway restart.
 

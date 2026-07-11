@@ -50,7 +50,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: 790f0b28229cb60a60c289ef8c250d76c639f48f
+        default: 5425ee9e6c59cc18c1fd52a65df09fbc758381a7
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -153,7 +153,7 @@ jobs:
             include_filters: "scenario:agent-cold-warm-message"
             expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || '790f0b28229cb60a60c289ef8c250d76c639f48f' }}
+      KOVA_REF: ${{ inputs.kova_ref || '5425ee9e6c59cc18c1fd52a65df09fbc758381a7' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -171,7 +171,6 @@ jobs:
       MATRIX_REPEAT: ${{ matrix.repeat }}
       MATRIX_DEEP_PROFILE: ${{ matrix.deep_profile }}
       MATRIX_LIVE: ${{ matrix.live }}
-      OPENCLAW_OCM_RUNTIME_BUILD_PROFILE: ${{ (inputs.profile || 'diagnostic') == 'diagnostic' && 'sourcePerformance' || '' }}
     steps:
       - name: Decide lane
         id: lane
