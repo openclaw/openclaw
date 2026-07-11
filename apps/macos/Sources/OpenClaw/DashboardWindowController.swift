@@ -28,8 +28,18 @@ private final class DashboardLinkMessageHandler: NSObject, WKScriptMessageHandle
 }
 
 @MainActor
+private final class DashboardWindowDragMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var owner: DashboardWindowController?
+
+    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        self.owner?.receiveWindowDragMessage(message)
+    }
+}
+
+@MainActor
 final class DashboardWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     private static let linkMessageHandlerName = "openclawLink"
+    private static let windowDragMessageHandlerName = "openclawWindowDrag"
 
     private let webView: WKWebView
     private let linkBrowser: DashboardLinkBrowserView
@@ -55,6 +65,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.userContentController = WKUserContentController()
         let linkMessageHandler = DashboardLinkMessageHandler()
         config.userContentController.add(linkMessageHandler, name: Self.linkMessageHandlerName)
+        let windowDragMessageHandler = DashboardWindowDragMessageHandler()
+        config.userContentController.add(windowDragMessageHandler, name: Self.windowDragMessageHandlerName)
         Self.installNativeChromeScript(into: config.userContentController)
         Self.installNativeAuthScript(into: config.userContentController, url: url, auth: auth)
 
@@ -104,6 +116,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // optional browser collapsed until a link explicitly opens it.
         self.linkBrowserItem.isCollapsed = true
         linkMessageHandler.owner = self
+        windowDragMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
         self.linkBrowser.webViewNavigationDelegate = self
@@ -229,7 +242,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.refreshNativeAuthScript(url: self.currentURL, auth: self.auth)
         self.webView.stopLoading()
         self.webView.loadHTMLString(
-            Self.failureHTML(title: title, message: message, detail: detail, url: nil),
+            DashboardFailurePage.html(title: title, message: message, detail: detail, url: nil),
             baseURL: nil)
         self.show()
     }
@@ -276,6 +289,36 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         case .external:
             self.openExternal(request.url)
         }
+    }
+
+    /// The Control UI posts this from mousedown on passive pane-header chrome
+    /// (split-view session titles). WKWebView swallows titlebar-style drags, so
+    /// the web side asks the window to take over the in-flight mouse gesture.
+    fileprivate func receiveWindowDragMessage(_ message: WKScriptMessage) {
+        guard message.name == Self.windowDragMessageHandlerName,
+              message.webView === self.webView,
+              message.frameInfo.isMainFrame,
+              Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
+              Self.isWindowDragRequest(message.body),
+              let window
+        else {
+            return
+        }
+        // The script message arrives async; during a press the app's current
+        // event is still the initiating left-mouse-down (or a later drag). A
+        // finished click leaves left-mouse-up here and starts no drag.
+        guard let event = NSApp.currentEvent,
+              event.type == .leftMouseDown || event.type == .leftMouseDragged,
+              event.window === window
+        else {
+            return
+        }
+        window.performDrag(with: event)
+    }
+
+    static func isWindowDragRequest(_ body: Any) -> Bool {
+        guard let payload = body as? [String: Any] else { return false }
+        return payload["type"] as? String == "window-drag"
     }
 
     static func linkRequest(from body: Any) -> DashboardLinkRequest? {
@@ -384,8 +427,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.canGoBackObservation = self.webView.observe(\.canGoBack, options: [
             .initial,
             .new,
-        ]) { [weak self] webView, _ in
-            let canGoBack = webView.canGoBack
+        ]) { [weak self] _, change in
+            guard let canGoBack = change.newValue else { return }
             Task { @MainActor in
                 self?.backButton?.isEnabled = canGoBack
             }
@@ -393,8 +436,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.canGoForwardObservation = self.webView.observe(\.canGoForward, options: [
             .initial,
             .new,
-        ]) { [weak self] webView, _ in
-            let canGoForward = webView.canGoForward
+        ]) { [weak self] _, change in
+            guard let canGoForward = change.newValue else { return }
             Task { @MainActor in
                 self?.forwardButton?.isEnabled = canGoForward
             }
@@ -456,17 +499,18 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             topDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 78),
             topDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -380),
             topDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
-            // Thin edge strip only: the web topbar's controls sit vertically
-            // centered in its 48px row, so an 8px strip stays clear of them
-            // while still offering a grab edge across the window.
-            topDragRegion.heightAnchor.constraint(equalToConstant: 8),
+            // Thin edge strip only: the web UI has no desktop topbar row, so a
+            // taller region would swallow clicks meant for the top of the
+            // content column (chat thread, page headers). The sidebar region
+            // below stays the primary drag surface — it floats over the 50px
+            // strip the native chrome CSS reserves in the web sidebar. At
+            // narrow widths the compact drawer topbar keeps x 78-254 passive
+            // (its brand strip), so the region stays click-safe there too.
+            topDragRegion.heightAnchor.constraint(equalToConstant: 12),
             topRightDragRegion.leadingAnchor.constraint(equalTo: topDragRegion.trailingAnchor),
             topRightDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
             topRightDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
             topRightDragRegion.heightAnchor.constraint(equalToConstant: 6),
-            // Primary drag surface: floats over the web topbar's brand strip,
-            // which the Control UI keeps non-interactive and >=176px wide on
-            // native macOS (layout.css html.openclaw-native-macos rules).
             sidebarDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 78),
             sidebarDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
             sidebarDragRegion.widthAnchor.constraint(equalToConstant: 176),
@@ -490,25 +534,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private static func installNativeChromeScript(into userContentController: WKUserContentController) {
-        // Desktop widths need no rules here: the Control UI's own
-        // `html.openclaw-native-macos` styles inset the topbar past the
-        // traffic lights and keep the brand strip passive under the drag
-        // regions installed in makeWindow (layout.css).
+        // Narrow widths need no rules here: the Control UI's own
+        // `html.openclaw-native-macos` styles fold the titlebar clearance into
+        // the drawer topbar row (layout.mobile.css); their body-qualified
+        // !important selectors also outrank the rules older app builds inject.
         let css = """
         html.openclaw-native-macos {
           --openclaw-native-titlebar-height: 50px;
         }
-        @media (max-width: 1100px) {
-          /* The drawer topbar replaces the desktop bar below this breakpoint.
-             Move its controls below AppKit's traffic lights and drag overlay. */
-          html.openclaw-native-macos .shell {
-            --shell-topbar-height: calc(58px + var(--openclaw-native-titlebar-height));
-          }
-          html.openclaw-native-macos .topbar {
-            padding: var(--openclaw-native-titlebar-height) 12px 0 !important;
-          }
-          html.openclaw-native-macos .topnav-shell {
-            min-height: 58px;
+        @media (min-width: 700px) {
+          /* Both desktop navigation surfaces must clear AppKit's window controls
+             and drag regions or their first interactive row becomes unreachable. */
+          html.openclaw-native-macos .sidebar-shell,
+          html.openclaw-native-macos .settings-sidebar__header {
+            padding-top: max(14px, var(--openclaw-native-titlebar-height)) !important;
           }
         }
         """
@@ -676,21 +715,22 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         decisionHandler(.cancel)
     }
 
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation _: WKNavigation!) {
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if self.linkBrowser.owns(webView) {
+            self.linkBrowser.navigationDidStart(navigation, in: webView)
             self.linkBrowser.updateChrome()
         }
     }
 
-    func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if self.linkBrowser.owns(webView) {
-            self.linkBrowser.navigationDidFinish(for: webView)
+            self.linkBrowser.navigationDidFinish(navigation, for: webView)
         }
     }
 
     func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         if self.linkBrowser.owns(webView) {
-            self.linkBrowser.updateChrome()
+            self.linkBrowser.navigationDidFail(for: webView)
             return
         }
         guard webView === self.webView else { return }
@@ -703,7 +743,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         withError error: Error)
     {
         if self.linkBrowser.owns(webView) {
-            self.linkBrowser.updateChrome()
+            self.linkBrowser.navigationDidFail(for: webView)
             return
         }
         guard webView === self.webView else { return }
@@ -802,121 +842,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return
         }
         dashboardWindowLogger.error(
-            "dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
-        let html = Self.failureHTML(
+            """
+            dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
+            error=\(error.localizedDescription, privacy: .public)
+            """)
+        let html = DashboardFailurePage.html(
             title: "Dashboard unavailable",
             message: error.localizedDescription,
             detail: "The dashboard window is open, but the web UI could not load from this endpoint.",
             url: self.currentURL)
         self.webView.loadHTMLString(html, baseURL: nil)
-    }
-
-    private static func failureHTML(title: String, message: String, detail: String?, url: URL?) -> String {
-        let detailHTML = detail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
-        let urlHTML = url.map { "<code>\(self.htmlEscape($0.absoluteString))</code>" } ?? ""
-        return """
-        <!doctype html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <style>
-            :root { color-scheme: light dark; }
-            * { box-sizing: border-box; }
-            body {
-              margin: 0;
-              min-height: 100vh;
-              display: grid;
-              place-items: center;
-              background: #101114;
-              color: rgba(255,255,255,.92);
-              font: 15px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-            }
-            main {
-              width: min(540px, calc(100vw - 72px));
-              padding: 34px;
-              border: 1px solid rgba(255,255,255,.12);
-              border-radius: 22px;
-              background: rgba(255,255,255,.035);
-              box-shadow: 0 28px 90px rgba(0,0,0,.36);
-              line-height: 1.45;
-            }
-            .badge {
-              width: 44px;
-              height: 44px;
-              display: grid;
-              place-items: center;
-              margin-bottom: 20px;
-              border-radius: 14px;
-              background: rgba(255,255,255,.07);
-              color: #ff746b;
-              font-size: 24px;
-            }
-            h1 {
-              margin: 0 0 12px;
-              font-size: 24px;
-              line-height: 1.16;
-              font-weight: 700;
-              letter-spacing: 0;
-            }
-            p {
-              margin: 0;
-              color: rgba(255,255,255,.76);
-              font-size: 16px;
-            }
-            .detail {
-              margin-top: 14px;
-              color: rgba(255,255,255,.56);
-              font-size: 13px;
-            }
-            code {
-              display: block;
-              margin-top: 18px;
-              padding: 12px;
-              border: 1px solid rgba(255,255,255,.08);
-              border-radius: 10px;
-              background: rgba(0,0,0,.26);
-              color: rgba(255,255,255,.76);
-              overflow-wrap: anywhere;
-              font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
-            }
-            @media (prefers-color-scheme: light) {
-              body { background: #f5f6f8; color: rgba(0,0,0,.86); }
-              main {
-                background: rgba(255,255,255,.84);
-                border-color: rgba(0,0,0,.1);
-                box-shadow: 0 28px 90px rgba(0,0,0,.12);
-              }
-              .badge { background: rgba(0,0,0,.06); }
-              p { color: rgba(0,0,0,.68); }
-              .detail { color: rgba(0,0,0,.54); }
-              code {
-                background: rgba(0,0,0,.05);
-                border-color: rgba(0,0,0,.08);
-                color: rgba(0,0,0,.68);
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <main>
-            <div class="badge">!</div>
-            <h1>\(self.htmlEscape(title))</h1>
-            <p>\(self.htmlEscape(message))</p>
-            \(detailHTML)
-            \(urlHTML)
-          </main>
-        </body>
-        </html>
-        """
-    }
-
-    private static func htmlEscape(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&#39;")
     }
 }
 

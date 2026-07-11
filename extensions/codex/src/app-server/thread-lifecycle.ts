@@ -1,4 +1,5 @@
 // Codex plugin module implements thread lifecycle behavior.
+import crypto from "node:crypto";
 import {
   buildSkillWorkshopPromptSection,
   embeddedAgentLog,
@@ -7,7 +8,7 @@ import {
   SKILL_WORKSHOP_TOOL_NAME,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import {
@@ -373,8 +374,15 @@ export async function startOrResumeThread(params: {
     const userMcpServersConfigPatch =
       params.userMcpServersEnabled === false
         ? undefined
-        : buildCodexUserMcpServersThreadConfigPatch(params.params.config, {
+        : await buildCodexUserMcpServersThreadConfigPatchForRuntime(params.params.config, {
             agentId: params.agentId ?? params.params.agentId,
+            agentDir: params.params.agentDir,
+            allowLiteralOAuthProjection: params.appServer.connectionClass !== "remote",
+            onServerUnavailable: (serverName, error) =>
+              embeddedAgentLog.warn("skipping unavailable MCP OAuth server", {
+                serverName,
+                error: formatErrorMessage(error),
+              }),
           });
     const userMcpServersFingerprint =
       fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
@@ -438,6 +446,26 @@ export async function startOrResumeThread(params: {
         connectionClass: params.appServer.connectionClass,
       });
       await clearCurrentBinding("rotating a stale thread binding");
+      binding = undefined;
+    }
+    if (
+      binding?.threadId &&
+      shouldRotateCodexGpt56MultiAgentBinding({
+        bindingModel: binding.model,
+        requestedModel: params.params.modelId,
+      })
+    ) {
+      // Codex locks the model-selected multi-agent version on the first turn.
+      // Sol/Terra (V2) and Luna (V1) therefore cannot share one resumed thread.
+      embeddedAgentLog.debug(
+        "codex app-server GPT-5.6 multi-agent version changed; starting a new thread",
+        {
+          threadId: binding.threadId,
+          bindingModel: binding.model,
+          requestedModel: params.params.modelId,
+        },
+      );
+      await clearCurrentBinding("rotating a GPT-5.6 multi-agent thread binding");
       binding = undefined;
     }
     const startModelSelection = resolveCodexAppServerThreadModelSelection({
@@ -1020,6 +1048,38 @@ export function shouldRotateCodexAppServerBindingForRuntime(params: {
     return false;
   }
   return params.connectionClass === "remote" || Boolean(params.binding);
+}
+
+type CodexGpt56MultiAgentVersion = "v1" | "v2";
+
+function resolveCodexGpt56MultiAgentVersion(
+  modelRef: string | undefined,
+): CodexGpt56MultiAgentVersion | undefined {
+  let modelId = modelRef?.trim().toLowerCase();
+  if (!modelId) {
+    return undefined;
+  }
+  const slashIndex = modelId.indexOf("/");
+  if (slashIndex > 0) {
+    const provider = modelId.slice(0, slashIndex);
+    if (provider !== "openai" && provider !== "codex") {
+      return undefined;
+    }
+    modelId = modelId.slice(slashIndex + 1);
+  }
+  if (modelId === "gpt-5.6-sol" || modelId === "gpt-5.6-terra") {
+    return "v2";
+  }
+  return modelId === "gpt-5.6-luna" ? "v1" : undefined;
+}
+
+function shouldRotateCodexGpt56MultiAgentBinding(params: {
+  bindingModel?: string;
+  requestedModel: string;
+}): boolean {
+  const bindingVersion = resolveCodexGpt56MultiAgentVersion(params.bindingModel);
+  const requestedVersion = resolveCodexGpt56MultiAgentVersion(params.requestedModel);
+  return Boolean(bindingVersion && requestedVersion && bindingVersion !== requestedVersion);
 }
 
 function isTransientWebSearchRestriction(
@@ -1713,7 +1773,40 @@ function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
 function fingerprintUserMcpServersConfigPatch(
   configPatch: JsonObject | undefined,
 ): string | undefined {
-  return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
+  return configPatch
+    ? JSON.stringify(stabilizeJsonValue(redactUserMcpServersFingerprintSecrets(configPatch)))
+    : undefined;
+}
+
+function redactUserMcpServersFingerprintSecrets(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) {
+    return value.map(redactUserMcpServersFingerprintSecrets);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const next: JsonObject = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "http_headers" && entry && typeof entry === "object" && !Array.isArray(entry)) {
+      next[key] = Object.fromEntries(
+        Object.entries(entry).map(([header, headerValue]) => [
+          header,
+          header.toLowerCase() === "authorization"
+            ? fingerprintUserMcpServersAuthorizationHeader(headerValue)
+            : headerValue,
+        ]),
+      ) as JsonObject;
+      continue;
+    }
+    next[key] = redactUserMcpServersFingerprintSecrets(entry);
+  }
+  return next;
+}
+
+function fingerprintUserMcpServersAuthorizationHeader(value: unknown): string {
+  return typeof value === "string" && value.length > 0
+    ? `<redacted:sha256:${crypto.createHash("sha256").update(value).digest("hex")}>`
+    : "<redacted>";
 }
 
 function fingerprintJsonObject(value: JsonObject): string {
@@ -1909,7 +2002,7 @@ export function resolveCodexAppServerModelProvider(params: {
 // Other modern models translate `minimal` to `low`. (#71946)
 // Exported for unit-test coverage of the model-aware translation path.
 export function resolveReasoningEffort(
-  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
+  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"] | "ultra",
   modelId: string,
   supportedReasoningEfforts?: readonly string[],
 ): CodexReasoningEffort | null {

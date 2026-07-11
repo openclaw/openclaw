@@ -9,10 +9,10 @@
   overflow: hidden;
 }
 
+/* A collapsed rail renders nothing at all — the whole width goes back to the
+   thread. Reopen via the pane header / floating toggle or ⇧⌘B. */
 .chat-workbench--workspace-collapsed {
-  /* Collapsed rail is a slim always-visible icon strip (Cursor-style); it
-     stays in layout so it never overlays or floats over chat content. */
-  grid-template-columns: minmax(0, 1fr) 44px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* Bottom dock mirrors the terminal panel: the rail becomes a strip under the
@@ -23,20 +23,93 @@
 }
 
 .chat-workbench--dock-bottom.chat-workbench--workspace-collapsed {
-  grid-template-rows: minmax(0, 1fr) 44px;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .chat-workbench--dock-bottom .chat-workspace-rail {
-  grid-column: 1;
+  grid-column: 1 / -1;
   grid-row: 2;
   border-left: none;
   border-top: 1px solid var(--border);
 }
 
-.chat-workbench--dock-bottom .chat-workspace-rail--collapsed {
-  flex-direction: row;
-  justify-content: flex-start;
-  padding: 0 12px;
+/* Background-tasks rail: always right-docked, taking the last grid track. It
+   composes with the workspace rail (three columns when both are open) and
+   with a bottom-docked workspace strip (the strip spans under it). These
+   rules sit after the collapse/dock modifiers so the extra column wins at
+   equal specificity. */
+.chat-workbench--tasks-open {
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+}
+
+.chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
+  .chat-workbench--dock-bottom
+) {
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(230px, 280px);
+}
+
+/* Floating opener shown in single-pane mode while the rail is collapsed
+   (split panes host the same toggle in their header row instead). */
+.chat-workspace-open {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 12;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Floating background-tasks opener stacks under the workspace one so both
+   stay reachable regardless of which rail is open. */
+.chat-tasks-open {
+  position: absolute;
+  top: 48px;
+  right: 10px;
+  z-index: 12;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* The workspace rail adapts to the pane width (side column on wide panes,
+   bottom strip on narrow ones — chat-pane measures and flips the dock), so
+   its toggles stay available at every width. The background-tasks rail is
+   side-dock only, so its toggles still hide on narrow viewports until it
+   grows a narrow presentation. */
+@media (max-width: 1120px) {
+  .chat-tasks-open,
+  .chat-pane__actions .chat-tasks-toggle {
+    display: none;
+  }
+}
+
+/* Positioning context for the badge; the floating variant already gets one
+   from its own position: absolute, so scope this to the pane-header variant. */
+.chat-pane__actions .chat-workspace-toggle,
+.chat-pane__actions .chat-tasks-toggle {
+  position: relative;
+}
+
+.chat-workspace-toggle__badge,
+.chat-tasks-toggle__badge {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--primary-foreground, #fff);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 14px;
+  text-align: center;
 }
 
 /* Drop zones shown while dragging the rail's grip; the hovered edge wins. */
@@ -91,8 +164,8 @@
 
 /* The workspace rail docks flush to the window edge like the terminal panel:
    drop the chat content's right gutter and square the card's right corners in
-   both rail states. Guarded to viewports where the rail actually renders
-   (it is display:none <=1120px, where the gutter should stay). */
+   both rail states. Guarded to wide viewports; narrow ones keep the gutter
+   because the rail presents as a bottom strip there. */
 @media (min-width: 1121px) {
   .content--chat:has(.chat-workbench) {
     padding-left: 0;
@@ -123,10 +196,11 @@
   transition: flex 250ms ease-out;
 }
 
+/* No border-left: the resizable divider rendered next to this panel draws
+   the separator line; a border here doubles it. */
 .chat-sidebar {
   flex: 1;
   min-width: 300px;
-  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -142,12 +216,6 @@
   min-height: 0;
   border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 84%, transparent);
-}
-
-.chat-workspace-rail--collapsed {
-  align-items: center;
-  gap: 10px;
-  padding: 12px 6px;
 }
 
 .chat-workspace-rail__header {
@@ -212,9 +280,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  /* Match the sibling refresh/collapse buttons (.btn radius) so the rail
-     header buttons share one corner treatment. */
+  /* Chromeless at rest like the sibling ghost buttons; chrome on hover only. */
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
@@ -227,20 +294,20 @@
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.chat-workspace-rail--collapsed .chat-workspace-rail__terminal {
-  border-color: transparent;
-  background: transparent;
-}
-
-.chat-workspace-rail--collapsed .chat-workspace-rail__terminal:hover,
-.chat-workspace-rail--collapsed .chat-workspace-rail__terminal:focus-visible {
-  border-color: transparent;
-  background: transparent;
-}
-
+/* Overrides the shared .nav-collapse-toggle chrome (border, elevated
+   background, inset highlight): rail header buttons only show chrome on
+   hover. */
 .chat-workspace-rail__collapse-toggle {
   flex: 0 0 auto;
+  border-color: transparent;
+  background: transparent;
   box-shadow: none;
+}
+
+.chat-workspace-rail__collapse-toggle:hover {
+  border-color: transparent;
+  background: var(--bg-hover);
+  transform: none;
 }
 
 .chat-workspace-rail__terminal svg,
@@ -257,63 +324,9 @@
   stroke-linejoin: round;
 }
 
-/* Collapsed-strip files button: expands the rail; the badge carries the
-   session's changed-file count when known. */
-.chat-workspace-rail__files {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.chat-workspace-rail__files:hover,
-.chat-workspace-rail__files:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.chat-workspace-rail__files:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.chat-workspace-rail__files svg {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-workspace-rail__files-badge {
-  position: absolute;
-  top: 1px;
-  right: 0;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--primary-foreground, #fff);
-  font-size: 9px;
-  font-weight: 650;
-  line-height: 14px;
-  text-align: center;
-}
-
 .chat-workspace-rail__path {
+  /* Fixed rows: only the scroll area gives way when the bottom dock is short. */
+  flex-shrink: 0;
   padding: 9px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
   color: var(--muted);
@@ -364,6 +377,32 @@
   padding-top: 8px;
 }
 
+/* Bottom dock is short and wide: sections sit side by side as their own
+   scroll columns instead of compressing into clipped slivers. */
+.chat-workbench--dock-bottom .chat-workspace-rail__scroll {
+  flex-direction: row;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chat-workbench--dock-bottom .chat-workspace-rail__scroll > .chat-workspace-rail__section {
+  flex: 1 0 260px;
+  min-width: 0;
+}
+
+.chat-workbench--dock-bottom
+  .chat-workspace-rail__scroll
+  > .chat-workspace-rail__section
+  + .chat-workspace-rail__section {
+  border-left: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+}
+
+/* The empty-state notice can sit in the row too; keep it readable. */
+.chat-workbench--dock-bottom .chat-workspace-rail__scroll > .chat-workspace-rail__state {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
 .chat-workspace-rail__section-title {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
@@ -374,6 +413,7 @@
 
 .chat-workspace-rail__summary {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   gap: 4px;
   padding: 0 12px 8px;
@@ -571,6 +611,230 @@
   padding: 0 12px 6px;
   font-size: var(--control-ui-text-xs);
   line-height: 1.2;
+}
+
+/* Background-tasks rail: independent element classes on purpose — the
+   workspace rail's dock-bottom modifiers re-lay-out its descendants, and the
+   tasks rail must not inherit that when the workspace strip moves. */
+.chat-tasks-rail {
+  grid-column: -2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+}
+
+.chat-tasks-rail__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.chat-tasks-rail__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chat-tasks-rail__eyebrow {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chat-tasks-rail__title strong {
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.2;
+}
+
+.chat-tasks-rail__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-tasks-rail__refresh svg,
+.chat-tasks-rail__collapse-toggle svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+}
+
+.chat-tasks-rail__state {
+  padding: 14px 12px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.35;
+}
+
+.chat-tasks-rail__state--error {
+  color: var(--danger, #ef4444);
+}
+
+.chat-tasks-rail__scroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chat-tasks-rail__section {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 8px;
+}
+
+.chat-tasks-rail__section-title {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.1;
+  padding: 0 12px 6px;
+  text-transform: uppercase;
+}
+
+.chat-tasks-rail__section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 0 12px 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.chat-tasks-rail__section-toggle .chat-tasks-rail__section-title {
+  padding: 0;
+}
+
+.chat-tasks-rail__section-chevron svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+}
+
+.chat-tasks-rail__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  padding: 4px 8px 8px;
+}
+
+.chat-tasks-rail__task {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-elevated) 46%, transparent);
+}
+
+.chat-tasks-rail__task-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-tasks-rail__task-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.25;
+}
+
+.chat-tasks-rail__task-stop {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.chat-tasks-rail__task-stop:hover,
+.chat-tasks-rail__task-stop:focus-visible {
+  border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  color: var(--danger, #ef4444);
+}
+
+.chat-tasks-rail__task-stop svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+}
+
+.chat-tasks-rail__task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-tasks-rail__task-time {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.2;
+}
+
+.chat-tasks-rail__task-detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.chat-tasks-rail__task-transcript {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.chat-tasks-rail__task-transcript:hover,
+.chat-tasks-rail__task-transcript:focus-visible {
+  text-decoration: underline;
 }
 
 @keyframes chat-sidebar-fade-in {
@@ -1341,13 +1605,43 @@
   }
 }
 
+/* Narrow pane: the detail panel stacks under the thread instead of fighting
+   it for horizontal space (chat-pane measures the pane and sets the class;
+   the divider flips to a horizontal handle so the split stays resizable). */
+.chat-split-container--stacked {
+  flex-direction: column;
+}
+
+.chat-split-container--stacked .chat-main {
+  min-width: 0;
+  min-height: 200px;
+}
+
+.chat-split-container--stacked .chat-sidebar {
+  min-width: 0;
+  min-height: 160px;
+}
+
+/* The background-tasks rail has no narrow presentation yet; hide it with its
+   toggles on narrow viewports (the workspace rail adapts instead). The hidden
+   rail must also release its reserved grid track, so the tasks-open templates
+   collapse back to the workspace-only shapes here. */
 @media (max-width: 1120px) {
-  .chat-workbench {
-    display: flex;
+  .chat-tasks-rail {
+    display: none;
   }
 
-  .chat-workspace-rail {
-    display: none;
+  .chat-workbench--tasks-open.chat-workbench--workspace-collapsed,
+  .chat-workbench--tasks-open.chat-workbench--dock-bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Mirrors the three-column selector's specificity so the two-column shape
+     wins while the tasks rail is hidden. */
+  .chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
+    .chat-workbench--dock-bottom
+  ) {
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
   }
 }
 
@@ -1366,9 +1660,13 @@
     display: none; /* Hide chat on mobile when sidebar open */
   }
 
+  /* No split to resize while the chat column is hidden. */
+  .chat-split-container--open resizable-divider {
+    display: none;
+  }
+
   .chat-split-container--open .chat-sidebar {
     width: 100%;
     min-width: 0;
-    border-left: none;
   }
 }

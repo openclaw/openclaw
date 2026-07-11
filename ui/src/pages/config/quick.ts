@@ -98,6 +98,8 @@ export type QuickSettingsProps = {
   setTextScale: (value: number) => void;
   lobsterPetVisits: boolean;
   setLobsterPetVisits: (enabled: boolean) => void;
+  lobsterPetSounds: boolean;
+  setLobsterPetSounds: (enabled: boolean) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
@@ -798,6 +800,23 @@ function renderAppearanceCard(props: QuickSettingsProps) {
             </span>
           </label>
         </div>
+        <div class="qs-row">
+          <span class="qs-row__label">${t("quickSettings.appearance.lobsterSounds")}</span>
+          <label class="qs-toggle">
+            <input
+              type="checkbox"
+              .checked=${props.lobsterPetSounds}
+              @change=${(event: Event) =>
+                props.setLobsterPetSounds((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="qs-toggle__track"></span>
+            <span class="qs-toggle__hint muted">
+              ${props.lobsterPetSounds
+                ? t("quickSettings.appearance.lobsterSoundsOn")
+                : t("quickSettings.appearance.lobsterSoundsOff")}
+            </span>
+          </label>
+        </div>
         <div class="qs-row qs-row--stacked">
           <span class="qs-row__label">
             ${t("quickSettings.appearance.lobsterdex")}
@@ -861,14 +880,14 @@ function renderPersonalCard(props: QuickSettingsProps) {
     assistantAvatarRendered,
     Boolean(assistantAvatarOverride),
   );
-  const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "IDENTITY.md";
+  const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "Configured avatar";
   const canOverrideAssistantAvatar = Boolean(props.onAssistantAvatarOverrideChange);
   const assistantAvatarSubtitle = assistantAvatarOverride
     ? "Override from settings"
     : assistantAvatarIssue
       ? "Fallback avatar"
       : assistantAvatarRendered
-        ? "From IDENTITY.md"
+        ? "Configured avatar"
         : "Fallback logo";
   return html`
     <div class="qs-card qs-card--personal">
@@ -977,7 +996,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
                           : nothing}
                       </div>
                       <div class="muted">
-                        Stores a Control UI override. Clear it to return to IDENTITY.md.
+                        Stores a Control UI override. Clear it to return to the configured avatar.
                       </div>
                     </div>
                   `

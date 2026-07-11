@@ -30,6 +30,28 @@ const ExecApprovalsPolicyFields = {
   autoAllowSkills: Type.Optional(Type.Boolean()),
 };
 
+const ExecSecuritySchema = Type.Union([
+  Type.Literal("deny"),
+  Type.Literal("allowlist"),
+  Type.Literal("full"),
+]);
+const ExecAskSchema = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("on-miss"),
+  Type.Literal("always"),
+]);
+
+/** Host-resolved default policy after applying persisted defaults and runtime fallbacks. */
+const ExecApprovalsResolvedDefaultsSchema = Type.Object(
+  {
+    security: ExecSecuritySchema,
+    ask: ExecAskSchema,
+    askFallback: ExecSecuritySchema,
+    autoAllowSkills: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+
 /** Default exec approval policy shared by all agents unless overridden. */
 export const ExecApprovalsDefaultsSchema = Type.Object(ExecApprovalsPolicyFields, {
   additionalProperties: false,
@@ -109,6 +131,7 @@ export const ExecApprovalsNodeSnapshotSchema = Type.Object(
     exists: Type.Optional(Type.Boolean()),
     hash: Type.Optional(Type.String()),
     file: Type.Optional(ExecApprovalsFileSchema),
+    resolvedDefaults: Type.Optional(ExecApprovalsResolvedDefaultsSchema),
     enabled: Type.Optional(Type.Boolean()),
     baseHash: Type.Optional(NonEmptyString),
     defaultAction: Type.Optional(NativeExecApprovalActionSchema),
@@ -140,6 +163,7 @@ export const ExecApprovalsNodeSnapshotSchema = Type.Object(
             { required: ["path"] },
             { required: ["exists"] },
             { required: ["file"] },
+            { required: ["resolvedDefaults"] },
             { required: ["message"] },
           ],
         },
@@ -153,6 +177,7 @@ export const ExecApprovalsNodeSnapshotSchema = Type.Object(
             { required: ["exists"] },
             { required: ["hash"] },
             { required: ["file"] },
+            { required: ["resolvedDefaults"] },
             { required: ["baseHash"] },
             { required: ["defaultAction"] },
             { required: ["rules"] },
@@ -222,6 +247,32 @@ export const ExecApprovalGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ExecApprovalPolicySecuritySchema = Type.Union([
+  Type.Literal("deny"),
+  Type.Literal("allowlist"),
+  Type.Literal("full"),
+]);
+
+const ExecApprovalPolicySnapshotSchema = Type.Object(
+  {
+    security: ExecApprovalPolicySecuritySchema,
+    ask: Type.Union([Type.Literal("off"), Type.Literal("on-miss"), Type.Literal("always")]),
+    askFallback: ExecApprovalPolicySecuritySchema,
+    autoAllowSkills: Type.Boolean(),
+    allowlistRules: Type.Array(
+      Type.Object(
+        {
+          pattern: Type.String(),
+          argPattern: Type.Optional(Type.String()),
+          source: Type.Optional(Type.Literal("allow-always")),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 /** Pending command execution approval request shown to reviewers. */
 export const ExecApprovalRequestParamsSchema = Type.Object(
   {
@@ -237,6 +288,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
           commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
           agentId: Type.Union([Type.String(), Type.Null()]),
           sessionKey: Type.Union([Type.String(), Type.Null()]),
+          policySnapshot: Type.Optional(ExecApprovalPolicySnapshotSchema),
           mutableFileOperand: Type.Optional(
             Type.Union([
               Type.Object(

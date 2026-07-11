@@ -405,7 +405,7 @@ enum ChatMarkdownBlockSegmenter {
             guard start >= 0, start <= end, end <= bytes.count else { return nil }
             let lower = bytes.index(bytes.startIndex, offsetBy: start)
             let upper = bytes.index(bytes.startIndex, offsetBy: end)
-            return String(decoding: bytes[lower..<upper], as: UTF8.self)
+            return String(bytes: bytes[lower..<upper], encoding: .utf8)
         }
 
         func tableCells(at lineIndex: Int) -> [String] {

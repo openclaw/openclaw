@@ -29,6 +29,7 @@ import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
+import { getToolTitlesVersion } from "../tool-titles.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
@@ -65,6 +66,9 @@ type ChatThreadState = {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
+  relativeTimeTimer: ReturnType<typeof setInterval> | null;
+  relativeTimeRequestUpdate: (() => void) | null;
+  relativeTimeVersion: number;
 };
 
 type ChatThreadProps = {
@@ -79,6 +83,8 @@ type ChatThreadProps = {
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
+  /** True while the session has an abortable live run (marks running tool rows). */
+  runActive?: boolean;
   sessions: SessionsListResult | null;
   assistantName: string;
   assistantAvatar: string | null;
@@ -125,7 +131,24 @@ function createChatThreadState(): ChatThreadState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
+    relativeTimeTimer: null,
+    relativeTimeRequestUpdate: null,
+    relativeTimeVersion: 0,
   };
+}
+
+const RELATIVE_TIME_REFRESH_MS = 60_000;
+
+// Footer timestamps render relative labels ("5m ago") that go stale on idle
+// panes; one per-pane minute tick keeps them fresh without per-message timers.
+// The version bump must accompany requestUpdate: the message subtree is
+// memoized by guard(), so a tick only re-renders it via this dependency.
+function ensureRelativeTimeRefresh(state: ChatThreadState, requestUpdate: () => void) {
+  state.relativeTimeRequestUpdate = requestUpdate;
+  state.relativeTimeTimer ??= setInterval(() => {
+    state.relativeTimeVersion = (state.relativeTimeVersion + 1) % Number.MAX_SAFE_INTEGER;
+    state.relativeTimeRequestUpdate?.();
+  }, RELATIVE_TIME_REFRESH_MS);
 }
 
 const threadStates = new Map<string, ChatThreadState>();
@@ -171,6 +194,11 @@ export function resetChatThreadPresentationState(paneId?: string) {
     }
     if (state.historyRenderAnchorFrame != null) {
       cancelAnimationFrame(state.historyRenderAnchorFrame);
+    }
+    if (state.relativeTimeTimer != null) {
+      clearInterval(state.relativeTimeTimer);
+      state.relativeTimeTimer = null;
+      state.relativeTimeRequestUpdate = null;
     }
   }
   if (paneId) {
@@ -647,6 +675,7 @@ function renderLoadingSkeleton() {
 export function renderChatThread(props: ChatThreadProps) {
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  ensureRelativeTimeRefresh(state, requestUpdate);
   const displayStream = props.stream ?? null;
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
@@ -722,10 +751,13 @@ export function renderChatThread(props: ChatThreadProps) {
             deletedChatItemsSignature(deleted, chatItems),
             stableBooleanMapSignature(expandedToolCards),
             getAssistantAttachmentAvailabilityRenderVersion(),
+            state.relativeTimeVersion,
+            getToolTitlesVersion(),
             props.sessionKey,
             props.fullMessageAgentId,
             showReasoning,
             props.showToolCalls,
+            Boolean(props.runActive),
             Boolean(props.autoExpandToolCalls),
             props.assistantName,
             assistantIdentity.avatar,
@@ -796,6 +828,7 @@ export function renderChatThread(props: ChatThreadProps) {
                     agentId: props.fullMessageAgentId,
                     showReasoning,
                     showToolCalls: props.showToolCalls,
+                    runActive: props.runActive,
                     autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
                     isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
                     onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
