@@ -14,6 +14,33 @@ describes the intended architecture and review boundary only. It does not claim
 that runtime behavior, external delivery, replay, worker recovery, or CLI/Gateway
 control behavior has landed in this PR.
 
+## General Durable Runtime RFC
+
+Durable core is the shared, opt-in runtime substrate beneath OpenClaw agent,
+session, subagent, task, channel, and operator surfaces. Its job is to record
+runtime facts that must survive process restarts: accepted work identity,
+ordered steps and events, parent/child links, bounded refs, leases, recovery
+states, wake/attention obligations, delivery evidence, and read-only inspection
+state.
+
+The durable runtime layer exists because no single product surface can safely
+own those facts. Task Flow, Workboard, channel UI, plugins, and session UX may
+project from durable facts, but they must not define the persistence boundary.
+The core must remain useful when those products are disabled, absent, or
+changing independently.
+
+The RFC boundary is intentionally conservative:
+
+- record accepted runtime work with stable identities and append-only or
+  otherwise auditable lifecycle events;
+- keep recovery explicit by separating complete, failed, cancelled, stale,
+  interrupted, and owner-decision-needed states;
+- expose operator and Gateway read paths that explain state without mutating
+  work;
+- require opt-in durable runtime and worker behavior until storage, recovery,
+  controls, and live delivery claims have direct proof;
+- preserve current synchronous behavior when durable runtime is disabled.
+
 ## What Problem This Solves
 
 OpenClaw is no longer only a synchronous chat loop. It now spans long-running
@@ -27,6 +54,41 @@ Durable core gives OpenClaw a local-first operational record for those runtime
 facts. The record is meant to answer what OpenClaw accepted, what ran, what is
 waiting, what failed, what became stale after restart, and which bounded recovery
 action is safe to present to an owner or operator.
+
+## Why Beta 3 Needs This Foundation
+
+Beta 3 needs the durable core foundation before broader runtime and product
+work because the current failure modes are cross-cutting rather than isolated to
+one channel, one prompt, or one UI. The repeated pattern is not merely "a
+message did not arrive"; it is that OpenClaw can accept work, delegate it, defer
+it, or route it through a channel without a durable obligation that later code
+can inspect, recover, acknowledge, or fail closed.
+
+The root causes PR2 through PR5 must address are:
+
+- **Coordinator silence:** a coordinator can promise later progress or
+  completion, then depend on transcript intent and voluntary follow-up instead
+  of a durable wake/report-route obligation.
+- **Restart and interruption loss:** process exit, gateway restart, tool
+  interruption, or provider return can erase process-local knowledge of accepted
+  work and leave no safe recovery classification.
+- **Stale running work:** rows, sessions, or in-memory markers can appear
+  running after the owner is gone unless durable leases, expiry, and stale-state
+  diagnostics exist.
+- **Parent/child handoff gaps:** subagent completion, fan-in, and result
+  delivery can be visible to a child but not durably addressed to the parent or
+  human who needs the result.
+- **Delivery and attention uncertainty:** a channel send, internal handoff, or
+  operator notification may be accepted, attempted, failed, or unknown without
+  durable attempt evidence and acknowledgement state.
+- **Side-effect uncertainty:** crashes before or after tool dispatch, provider
+  return, child spawn, local commit, or channel send can make automatic replay
+  unsafe unless idempotency and authority gates prove it.
+
+This foundation lets beta 3 treat those cases as inspectable runtime states
+instead of as unrelated prompt, channel, or UI bugs. PR1 only documents that
+boundary and proof model; implementation and runtime claims remain deferred to
+the later PRs that add and validate code.
 
 ## Stack Position
 
