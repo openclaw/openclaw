@@ -11,6 +11,7 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { createMSTeamsHttpError } from "./http-error.js";
+import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
@@ -37,6 +38,44 @@ interface SharingLinkResult {
   webUrl: string;
 }
 
+function createSharePointRequestTimeoutError(): Error {
+  const error = new Error(
+    `MS Teams SharePoint request timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
+  );
+  error.name = "TimeoutError";
+  return error;
+}
+
+async function withSharePointRequestTimeout<T>(
+  work: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timeoutError: Error | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timeoutError = createSharePointRequestTimeoutError();
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, MSTEAMS_REQUEST_TIMEOUT_MS);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  const workPromise = work(controller.signal);
+
+  try {
+    return await Promise.race([workPromise, timeoutPromise]);
+  } catch (error) {
+    if (controller.signal.aborted && timeoutError) {
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 // ============================================================================
 // SharePoint upload functions for group chats and channels
 // ============================================================================
@@ -61,28 +100,31 @@ export async function uploadToSharePoint(params: {
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
 
-  const res = await fetchFn(
-    `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
-    {
-      method: "PUT",
-      headers: {
-        "User-Agent": buildUserAgent(),
-        Authorization: `Bearer ${token}`,
-        "Content-Type": params.contentType ?? "application/octet-stream",
+  const data = await withSharePointRequestTimeout(async (signal) => {
+    const res = await fetchFn(
+      `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
+      {
+        method: "PUT",
+        headers: {
+          "User-Agent": buildUserAgent(),
+          Authorization: `Bearer ${token}`,
+          "Content-Type": params.contentType ?? "application/octet-stream",
+        },
+        body: new Uint8Array(params.buffer),
+        signal,
       },
-      body: new Uint8Array(params.buffer),
-    },
-  );
+    );
 
-  if (!res.ok) {
-    throw await createMSTeamsHttpError(res, "SharePoint upload failed");
-  }
+    if (!res.ok) {
+      throw await createMSTeamsHttpError(res, "SharePoint upload failed");
+    }
 
-  const data = await readProviderJsonResponse<{
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  }>(res, "msteams.graph-upload.uploadSharePointFile");
+    return await readProviderJsonResponse<{
+      id?: string;
+      webUrl?: string;
+      name?: string;
+    }>(res, "msteams.graph-upload.uploadSharePointFile");
+  });
 
   if (!data.id || !data.webUrl || !data.name) {
     throw new Error("SharePoint upload response missing required fields");
@@ -128,20 +170,25 @@ export async function getDriveItemProperties(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
-  const res = await fetchFn(
-    `${GRAPH_ROOT}/sites/${params.siteId}/drive/items/${params.itemId}?$select=eTag,webDavUrl,name`,
-    { headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` } },
-  );
+  const data = await withSharePointRequestTimeout(async (signal) => {
+    const res = await fetchFn(
+      `${GRAPH_ROOT}/sites/${params.siteId}/drive/items/${params.itemId}?$select=eTag,webDavUrl,name`,
+      {
+        headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
+        signal,
+      },
+    );
 
-  if (!res.ok) {
-    throw await createMSTeamsHttpError(res, "Get driveItem properties failed");
-  }
+    if (!res.ok) {
+      throw await createMSTeamsHttpError(res, "Get driveItem properties failed");
+    }
 
-  const data = await readProviderJsonResponse<{
-    eTag?: string;
-    webDavUrl?: string;
-    name?: string;
-  }>(res, "msteams.graph-upload.getDriveItemProperties");
+    return await readProviderJsonResponse<{
+      eTag?: string;
+      webDavUrl?: string;
+      name?: string;
+    }>(res, "msteams.graph-upload.getDriveItemProperties");
+  });
 
   if (!data.eTag || !data.webDavUrl || !data.name) {
     throw new Error("DriveItem response missing required properties (eTag, webDavUrl, or name)");
@@ -166,17 +213,20 @@ async function getChatMembers(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
-  const res = await fetchFn(`${GRAPH_ROOT}/chats/${params.chatId}/members`, {
-    headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
+  const data = await withSharePointRequestTimeout(async (signal) => {
+    const res = await fetchFn(`${GRAPH_ROOT}/chats/${params.chatId}/members`, {
+      headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
+      signal,
+    });
+
+    if (!res.ok) {
+      throw await createMSTeamsHttpError(res, "Get chat members failed");
+    }
+
+    return await readProviderJsonResponse<{
+      value?: Array<{ userId?: string }>;
+    }>(res, "msteams.graph-upload.getChatMembers");
   });
-
-  if (!res.ok) {
-    throw await createMSTeamsHttpError(res, "Get chat members failed");
-  }
-
-  const data = await readProviderJsonResponse<{
-    value?: Array<{ userId?: string }>;
-  }>(res, "msteams.graph-upload.getChatMembers");
 
   return (data.value ?? [])
     .map((m) => ({ aadObjectId: m.userId ?? "" }))
@@ -215,26 +265,29 @@ async function createSharePointSharingLink(params: {
     body.recipients = params.recipientObjectIds.map((id) => ({ objectId: id }));
   }
 
-  const res = await fetchFn(
-    `${apiRoot}/sites/${params.siteId}/drive/items/${params.itemId}/createLink`,
-    {
-      method: "POST",
-      headers: {
-        "User-Agent": buildUserAgent(),
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
+  const data = await withSharePointRequestTimeout(async (signal) => {
+    const res = await fetchFn(
+      `${apiRoot}/sites/${params.siteId}/drive/items/${params.itemId}/createLink`,
+      {
+        method: "POST",
+        headers: {
+          "User-Agent": buildUserAgent(),
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal,
       },
-      body: JSON.stringify(body),
-    },
-  );
+    );
 
-  if (!res.ok) {
-    throw await createMSTeamsHttpError(res, "Create SharePoint sharing link failed");
-  }
+    if (!res.ok) {
+      throw await createMSTeamsHttpError(res, "Create SharePoint sharing link failed");
+    }
 
-  const data = await readProviderJsonResponse<{
-    link?: { webUrl?: string };
-  }>(res, "msteams.graph-upload.createSharePointSharingLink");
+    return await readProviderJsonResponse<{
+      link?: { webUrl?: string };
+    }>(res, "msteams.graph-upload.createSharePointSharingLink");
+  });
 
   if (!data.link?.webUrl) {
     throw new Error("Create SharePoint sharing link response missing webUrl");
