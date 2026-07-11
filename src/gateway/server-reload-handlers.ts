@@ -1314,6 +1314,8 @@ export function startManagedGatewayConfigReloader(
     stop: async () => {
       stopped = true;
       stopRestartRetries();
+      // Release managed waiters before the base reloader joins every active transaction.
+      abortPendingChannelReloads();
       abortActiveGmailRestart();
       await configReloader.stop();
     },

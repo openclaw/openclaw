@@ -858,6 +858,54 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("waits for an active reload transaction before stop resolves", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true, token: "test-token", path: "/old" },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true, token: "test-token", path: "/next" },
+    };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({ config: nextConfig, hash: "active-reload" }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    let markReloadStarted: (() => void) | undefined;
+    const reloadStarted = new Promise<void>((resolve) => {
+      markReloadStarted = resolve;
+    });
+    let finishReload: (() => void) | undefined;
+    const reloadBlocked = new Promise<void>((resolve) => {
+      finishReload = resolve;
+    });
+    harness.onHotReload.mockImplementationOnce(async () => {
+      markReloadStarted?.();
+      await reloadBlocked;
+    });
+
+    harness.watcher.emit("change");
+    await vi.advanceTimersByTimeAsync(0);
+    await reloadStarted;
+
+    // A second callback exits quickly through `running` and must not replace
+    // the transaction that still owns the reload.
+    harness.watcher.emit("change");
+    await vi.advanceTimersByTimeAsync(0);
+
+    let stopResolved = false;
+    const stopPromise = harness.reloader.stop().then(() => {
+      stopResolved = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stopResolved).toBe(false);
+
+    finishReload?.();
+    await stopPromise;
+    expect(stopResolved).toBe(true);
+  });
+
   it("notifies lifecycle owners for no-op sandbox policy changes", async () => {
     const initialConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },

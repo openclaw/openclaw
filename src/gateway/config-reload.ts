@@ -139,6 +139,7 @@ export function startGatewayConfigReloader(opts: {
   let pending = false;
   let running = false;
   let stopped = false;
+  const activeReloads = new Set<Promise<void>>();
   let restartQueued = false;
   let missingConfigRetries = 0;
   let pendingInProcessConfig: {
@@ -163,7 +164,7 @@ export function startGatewayConfigReloader(opts: {
       clearTimeout(debounceTimer);
     }
     debounceTimer = setTimeout(() => {
-      void runReload();
+      startTrackedReload();
     }, wait);
   };
   const schedule = () => {
@@ -441,6 +442,17 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
+  function startTrackedReload(): void {
+    const reload = runReload();
+    activeReloads.add(reload);
+    // A quick invocation can only set `pending` and finish while the owner run
+    // remains active. Track every promise so it cannot replace that owner.
+    void reload.then(
+      () => activeReloads.delete(reload),
+      () => activeReloads.delete(reload),
+    );
+  }
+
   const scheduleFromWatcher = () => {
     schedule();
   };
@@ -551,6 +563,8 @@ export function startGatewayConfigReloader(opts: {
       const active = watcher;
       watcher = null;
       await active?.close().catch(() => {});
+      // Timer callbacks detach runReload; shutdown owns their full transaction unwind.
+      await Promise.all(activeReloads);
     },
     hotReloadStatus: () => hotReloadStatus,
   };
