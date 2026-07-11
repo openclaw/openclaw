@@ -2500,6 +2500,51 @@ export const tr: TranslationMap = {
       howHeading: "Nasıl çalışmalı?",
       howHint: "Sonuçların nasıl iletileceğini seçin.",
       title: "Yeni Otomasyon",
+      createAndRun: "Oluştur ve şimdi çalıştır",
+    },
+    suggestions: {
+      title: "Otomasyon fikirleri",
+      hint: "Başlangıç otomasyonları — birini seçin ve oluşturmadan önce düzenleyin.",
+      use: "Fikri kullan →",
+      ideas: {
+        repoPulse: {
+          name: "Repo nabzı",
+          tagline: "Gece açılan sorunlar, PR'lar ve CI hataları, aciliyete göre sıralanmış.",
+          prompt:
+            "Depolarımdaki gece aktivitesini incele: yeni sorunlar, pull request'ler ve CI hataları. Bugün en çok dikkat etmem gereken üç şeyi özetle; her biri için bir bağlantı ve tek satırlık bir neden ekle.",
+        },
+        standupGhostwriter: {
+          name: "Standup yazarı",
+          tagline: "Dünkü çalışmalarınızdan hazırlanmış standup güncellemesi.",
+          prompt:
+            "Dünkü commit'lerimden, birleştirilen pull request'lerden ve açık inceleme başlıklarından standup güncellememi taslak olarak hazırla. En fazla üç madde: yapıldı, yapılıyor, engellendi.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News kaşifi",
+          tagline: "Kahvenize değer üç bağlantı, sıcak yorumlarıyla.",
+          prompt:
+            "Bugünkü Hacker News ana sayfasını AI ajanları, geliştirici araçları ve TypeScript hakkındaki gönderiler için tara. En ilginç üç bağlantıyı, her biri için tek satırlık sıcak bir yorumla bana gönder.",
+        },
+        dependencyRadar: {
+          name: "Bağımlılık radarı",
+          tagline: "Güncel olmayan veya güvenlik açığı olan bağımlılıklar, güncelleme notlarıyla.",
+          prompt:
+            "Ana projemi güncel olmayan veya güvenlik açığı bulunan bağımlılıklar açısından kontrol et. Önemli güncellemeleri tek satırlık risk notu ile listele ve güncelleme komutunu taslak olarak hazırla.",
+        },
+        nightWatch: {
+          name: "Gece nöbeti",
+          tagline:
+            "Sakin saatlik sağlık kontrolü — yalnızca bir şeyler bozulduğunda sesini yükseltir.",
+          prompt:
+            "Servislerimin ve Gateway'imin sağlıklı olduğunu kontrol et: son günlüklerde yeni hatalar, yeniden başlatmalar veya olağandışı yük ara. Her şey yolundaysa sessiz kal; bir şey bozuk görünüyorsa ne başarısız olduğunu ve nereden bakmaya başlayacağımı mesaj olarak ilet.",
+        },
+        polyglotMinute: {
+          name: "Poliglot dakikası",
+          tagline: "Sabah kahvenizle birlikte işe yarar bir yabancı dil ifadesi.",
+          prompt:
+            "Bana Japonca'da işe yarar bir ifade öğret: ifadeyi, nasıl telaffuz edileceğini, gerçek anlamını ve ne zaman kullanılacağını. Beş satırı geçmesin.",
+        },
+      },
     },
     summary: {
       enabled: "Etkin",
