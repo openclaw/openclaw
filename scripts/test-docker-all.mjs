@@ -276,8 +276,7 @@ function maybeGhcrImage(value) {
 export function githubWorkflowRerunCommand(laneNames, ref, env = process.env) {
   const workflowRef = githubWorkflowRef(env);
   const releasePath = env.OPENCLAW_DOCKER_ALL_PROFILE === RELEASE_PATH_PROFILE;
-  const allowUnreleasedChangelog =
-    env.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG === "true";
+  const allowUnreleasedChangelog = env.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG === "true";
   const bareImage = maybeGhcrImage(env.OPENCLAW_DOCKER_E2E_BARE_IMAGE);
   const functionalImage = maybeGhcrImage(env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE);
   const fields = [
