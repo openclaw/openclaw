@@ -153,8 +153,15 @@ function isBinaryChunk(chunk: string): boolean {
 
 function countPatchAdditions(chunk: string): number {
   let additions = 0;
+  let inHunk = false;
   for (const line of chunk.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) {
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    // Count only hunk-body additions so a `+++foo` content line is not mistaken
+    // for the `+++ b/path` header (which always precedes the first hunk).
+    if (inHunk && line.startsWith("+")) {
       additions += 1;
     }
   }
@@ -234,6 +241,24 @@ async function resolveDiffBase(
     }
   }
   return { base: "HEAD", baseRef: "HEAD" };
+}
+
+/**
+ * Diff base for a repo before its first commit: the empty-tree object id, so
+ * `git diff <empty>` reports staged/index files as additions. `hash-object`
+ * derives the id for the repo's object format (SHA-1 vs SHA-256) and does not
+ * write to the object DB. baseRef stays undefined — there is no named base.
+ */
+async function resolveUnbornDiffBase(
+  root: string,
+): Promise<{ base: string; baseRef?: string } | null> {
+  try {
+    const result = await runGit(root, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
+    const emptyTree = result.code === 0 ? result.stdout.trim() : "";
+    return emptyTree ? { base: emptyTree } : null;
+  } catch {
+    return null;
+  }
 }
 
 async function collectUntrackedFiles(
@@ -429,10 +454,14 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
   const branchOut = (await gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"]))?.trim();
   const branch = branchOut && branchOut !== "HEAD" ? branchOut : undefined;
   const budget: PatchBudget = { remaining: MAX_TOTAL_PATCH_BYTES };
-  // Repos without any commit (fresh init) have no HEAD to diff against; the
-  // untracked scan below still reports the working tree.
+  // Repos before their first commit have no HEAD, so diff the index/worktree
+  // against the empty tree to surface staged files (the untracked scan below
+  // only covers files git does not track yet). hash-object derives the empty
+  // tree id for the repo's object format without writing to the object DB.
   const hasHead = (await gitOut(root, ["rev-parse", "--verify", "--quiet", "HEAD"])) !== null;
-  const baseInfo = hasHead ? await resolveDiffBase(root, branch) : null;
+  const baseInfo = hasHead
+    ? await resolveDiffBase(root, branch)
+    : await resolveUnbornDiffBase(root);
   const tracked = baseInfo
     ? await collectTrackedFiles(root, realRoot, baseInfo.base, budget)
     : { files: [], truncated: false };
@@ -448,7 +477,7 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
     sessionKey: params.sessionKey,
     root,
     ...(branch ? { branch } : {}),
-    ...(baseInfo ? { baseRef: baseInfo.baseRef } : {}),
+    ...(baseInfo?.baseRef ? { baseRef: baseInfo.baseRef } : {}),
     files,
     additions,
     deletions,

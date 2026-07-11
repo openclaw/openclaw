@@ -249,6 +249,39 @@ describe("loadSessionDiff", () => {
     }
   });
 
+  it("reports staged files in a repo before its first commit", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "staged.txt"), "line one\nline two\n");
+    git(repoRoot, "add", "staged.txt");
+    fs.writeFileSync(path.join(repoRoot, "loose.txt"), "loose\n");
+    mockSession(repoRoot);
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.unavailableReason).toBeUndefined();
+    const staged = result.files.find((file) => file.path === "staged.txt");
+    expect(staged?.status).toBe("added");
+    expect(staged?.additions).toBe(2);
+    expect(staged?.patch).toContain("+line one");
+    // The untracked scan still covers files git does not track yet.
+    expect(result.files.find((file) => file.path === "loose.txt")?.untracked).toBe(true);
+  });
+
+  it("counts untracked additions whose content begins with plus signs", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "seed.txt"), "seed\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "init");
+    // Content lines rendered as `+++more`/`++i` must not be read as the header.
+    fs.writeFileSync(path.join(repoRoot, "diffish.txt"), "++i\n+++more\nplain\n");
+    mockSession(repoRoot);
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    const file = result.files.find((entry) => entry.path === "diffish.txt");
+    expect(file?.additions).toBe(3);
+  });
+
   it("rejects invalid params through the handler", async () => {
     const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
     await sessionsDiffHandlers["sessions.diff"]?.({
