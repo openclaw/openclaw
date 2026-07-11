@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state as litState } from "lit/decorators.js";
 import type {
   TaskSuggestion,
   TaskSuggestionEvent,
@@ -133,6 +133,18 @@ const CHAT_SPACE_ACTIVATION_SELECTOR =
   "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
 const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
 
+/* Pane-width thresholds (CSS px). Split panes and compact windows can be far
+ * narrower than the viewport, so side-by-side layouts key off the pane's own
+ * measured width, never viewport media queries. */
+// Side rail (230-280px) plus a readable thread; below this the rail docks bottom.
+const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
+// Widest the rail's grid column gets; a side-docked rail takes this from the
+// width available to the chat + detail-panel split.
+const WORKSPACE_RAIL_MAX_WIDTH = 280;
+// .chat-main min-width (312) + divider + .chat-sidebar min-width (300) + slack;
+// below this the detail panel stacks under the thread.
+const DETAIL_SIDEBAR_SIDE_MIN_WIDTH = 680;
+
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 const NEW_SESSION_LIST_LOADING_MESSAGE =
@@ -174,6 +186,10 @@ class ChatPane extends OpenClawLightDomElement {
 
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private state: ChatPageHost | undefined;
+  /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
+   * the wide side-by-side layout instead of flashing the stacked one. */
+  @litState() private paneWidth = Number.POSITIVE_INFINITY;
+  private paneResizeObserver: ResizeObserver | null = null;
   private connectedClient: GatewayBrowserClient | null = null;
   private connectionGeneration = 0;
   private nativeDraftCleanup: (() => void) | null = null;
@@ -809,6 +825,16 @@ class ChatPane extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    if (typeof ResizeObserver === "function") {
+      this.paneResizeObserver = new ResizeObserver((entries) => {
+        const width = entries.at(-1)?.contentRect.width;
+        // Hidden panes (narrow split view) report 0; keep the last real width.
+        if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
+          this.paneWidth = width;
+        }
+      });
+      this.paneResizeObserver.observe(this);
+    }
     this.addEventListener("pointerdown", this.handlePaneFocus);
     this.addEventListener("focusin", this.handlePaneFocus);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
@@ -915,6 +941,8 @@ class ChatPane extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.paneResizeObserver?.disconnect();
+    this.paneResizeObserver = null;
     this.connectionGeneration += 1;
     this.taskSuggestionsRequestVersion += 1;
     this.taskSuggestions = [];
@@ -1189,12 +1217,22 @@ class ChatPane extends OpenClawLightDomElement {
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
-    const sessionWorkspace = createSessionWorkspaceProps(state);
+    const sessionWorkspace = createSessionWorkspaceProps(state, {
+      narrowLayout: this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
+    });
     const backgroundTasks = createBackgroundTasksProps(state, {
       onOpenSession: (sessionKey) => {
         this.onPaneSessionChange?.(this.paneId, sessionKey);
       },
     });
+    const railSideDocked =
+      !sessionWorkspace.collapsed &&
+      !sessionWorkspace.narrowLayout &&
+      sessionWorkspace.dock !== "bottom";
+    // Every open side rail (workspace and/or background tasks) narrows the
+    // room left for the chat + detail split.
+    const sideRailCount = (railSideDocked ? 1 : 0) + (backgroundTasks.collapsed ? 0 : 1);
+    const detailSplitWidth = this.paneWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const props: ChatProps = {
       paneId: this.paneId,
       sessionKey: state.sessionKey,
@@ -1405,6 +1443,7 @@ class ChatPane extends OpenClawLightDomElement {
       },
       sidebarOpen: state.sidebarOpen,
       sidebarContent: state.sidebarContent,
+      sidebarStacked: detailSplitWidth < DETAIL_SIDEBAR_SIDE_MIN_WIDTH,
       splitRatio: state.splitRatio,
       canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
       onOpenSidebar: state.handleOpenSidebar,
