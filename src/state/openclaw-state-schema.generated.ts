@@ -1333,4 +1333,18 @@ CREATE TABLE IF NOT EXISTS session_groups (
   name TEXT NOT NULL PRIMARY KEY,
   position INTEGER NOT NULL,
   created_at INTEGER NOT NULL
+);
+
+-- Singleton row gating whether new agent runs (interactive and cron) are
+-- accepted gateway-wide. Enforcement reads this table directly rather than
+-- an in-memory flag so a paused state survives a gateway crash/restart and
+-- cannot be silently cleared by process recycling.
+CREATE TABLE IF NOT EXISTS runtime_killswitch (
+  killswitch_key TEXT NOT NULL PRIMARY KEY,
+  engaged INTEGER NOT NULL,
+  reason TEXT,
+  source TEXT,
+  engaged_at_ms INTEGER,
+  released_at_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL
 );\n`;

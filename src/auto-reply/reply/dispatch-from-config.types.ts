@@ -5,6 +5,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { FormatAbortReplyText, TryFastAbortFromMessage } from "./abort.runtime-types.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { InternalGetReplyFromConfig, InternalGetReplyOptions } from "./get-reply.types.js";
+import type { TryFastKillswitchFromMessage } from "./killswitch-command.runtime-types.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 export type DispatchFromConfigResult = {
@@ -28,6 +29,7 @@ export type DispatchFromConfigParams = {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   fastAbortResolver?: TryFastAbortFromMessage;
   formatAbortReplyTextResolver?: FormatAbortReplyText;
+  fastKillswitchResolver?: TryFastKillswitchFromMessage;
   /** Optional patch applied to the already loaded config before reply resolution. */
   configOverride?: OpenClawConfig;
 };

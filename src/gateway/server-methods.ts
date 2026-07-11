@@ -155,6 +155,10 @@ const loadHealthHandlers = lazyHandlerModule(
   () => import("./server-methods/health.js"),
   (module) => module.healthHandlers,
 );
+const loadKillswitchHandlers = lazyHandlerModule(
+  () => import("./server-methods/killswitch.js"),
+  (module) => module.killswitchHandlers,
+);
 const loadLogsHandlers = lazyHandlerModule(
   () => import("./server-methods/logs.js"),
   (module) => module.logsHandlers,
@@ -369,6 +373,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["health", "status"],
     loadHandlers: loadHealthHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["killswitch.status", "killswitch.enable", "killswitch.disable"],
+    loadHandlers: loadKillswitchHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["channels.status", "channels.start", "channels.stop", "channels.logout"],

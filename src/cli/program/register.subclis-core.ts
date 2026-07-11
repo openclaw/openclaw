@@ -158,6 +158,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerDevicesCli",
     },
     {
+      commandNames: ["killswitch"],
+      loadModule: () => import("../killswitch-cli.js"),
+      exportName: "registerKillswitchCli",
+    },
+    {
       commandNames: ["node"],
       loadModule: () => import("../node-cli.js"),
       exportName: "registerNodeCli",

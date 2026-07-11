@@ -103,6 +103,7 @@ import {
 } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
+import { getKillswitchStatusSync } from "../../infra/killswitch.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentExplicitRecipientSession,
@@ -1330,6 +1331,23 @@ export const agentHandlers: GatewayRequestHandlers = {
       workspaceDir?: string;
       voiceWakeTrigger?: string;
     };
+    // Structural gate, not a prompt-level instruction: this must reject before any
+    // agent/LLM involvement so a misbehaving agent cannot reason its way around it.
+    const killswitchStatus = getKillswitchStatusSync();
+    if (killswitchStatus.engaged) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `agent runs are paused by the operator killswitch${
+            killswitchStatus.reason ? `: ${killswitchStatus.reason}` : ""
+          }`,
+          { retryable: false },
+        ),
+      );
+      return;
+    }
     if (request.cwd && !path.isAbsolute(request.cwd)) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "cwd must be absolute"));
       return;

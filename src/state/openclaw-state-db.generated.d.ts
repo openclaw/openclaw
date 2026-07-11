@@ -758,6 +758,16 @@ export interface PluginStateEntries {
   value_json: string;
 }
 
+export interface RuntimeKillswitch {
+  engaged: number;
+  engaged_at_ms: number | null;
+  killswitch_key: string;
+  reason: string | null;
+  released_at_ms: number | null;
+  source: string | null;
+  updated_at_ms: number;
+}
+
 export interface SandboxRegistryEntries {
   backend_id: string | null;
   cdp_port: number | null;
@@ -1078,6 +1088,7 @@ export interface DB {
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  runtime_killswitch: RuntimeKillswitch;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   session_groups: SessionGroups;
