@@ -595,8 +595,11 @@ export async function runSetupMigrationImport(params: {
   };
   assertApplySucceeded(withReport);
   // Commit the config to disk only after apply succeeds, so a failed apply
-  // does not leave wizard metadata on disk that blocks retry.
-  await params.commitConfigFile(targetConfig);
+  // does not leave wizard metadata on disk that blocks retry. Preserve the
+  // returned config so any patches written by the provider during apply
+  // (e.g. auth profile selections) are carried forward rather than silently
+  // replaced by the pre-apply snapshot.
+  targetConfig = await params.commitConfigFile(targetConfig);
   await params.prompter.note(
     formatMigrationResult(withReport).join("\n"),
     t("wizard.migration.appliedTitle"),
