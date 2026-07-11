@@ -23,7 +23,7 @@ describe("resolveAutoRetryDelayMs", () => {
         attempt: 1,
         baseDelayMs: 2000,
         maxRetryDelayMs: MAX,
-        retryAfterSeconds: 30,
+        retryAfter: { kind: "seconds", seconds: 30 },
       }),
     ).toBe(30_000);
   });
@@ -35,7 +35,7 @@ describe("resolveAutoRetryDelayMs", () => {
         attempt: 3,
         baseDelayMs: 2000,
         maxRetryDelayMs: MAX,
-        retryAfterSeconds: 1,
+        retryAfter: { kind: "seconds", seconds: 1 },
       }),
     ).toBe(8000);
   });
@@ -46,7 +46,7 @@ describe("resolveAutoRetryDelayMs", () => {
         attempt: 1,
         baseDelayMs: 2000,
         maxRetryDelayMs: MAX,
-        retryAfterSeconds: 60,
+        retryAfter: { kind: "seconds", seconds: 60 },
       }),
     ).toBe(60_000);
   });
@@ -58,7 +58,7 @@ describe("resolveAutoRetryDelayMs", () => {
         attempt: 1,
         baseDelayMs: 2000,
         maxRetryDelayMs: MAX,
-        retryAfterSeconds: 120,
+        retryAfter: { kind: "seconds", seconds: 120 },
       }),
     ).toBeNull();
     // An overflowed/never-ending header (canonical parser yields Infinity) is also rejected.
@@ -67,7 +67,7 @@ describe("resolveAutoRetryDelayMs", () => {
         attempt: 1,
         baseDelayMs: 2000,
         maxRetryDelayMs: MAX,
-        retryAfterSeconds: Number.POSITIVE_INFINITY,
+        retryAfter: { kind: "unbounded" },
       }),
     ).toBeNull();
   });
@@ -79,7 +79,7 @@ describe("resolveAutoRetryDelayMs", () => {
         attempt: 1,
         baseDelayMs: 2000,
         maxRetryDelayMs: 600_000,
-        retryAfterSeconds: 120,
+        retryAfter: { kind: "seconds", seconds: 120 },
       }),
     ).toBe(120_000);
   });
@@ -90,7 +90,6 @@ describe("resolveAutoRetryDelayMs", () => {
         attempt: 2,
         baseDelayMs: 2000,
         maxRetryDelayMs: MAX,
-        retryAfterSeconds: Number.NaN,
       }),
     ).toBe(4000);
     expect(
@@ -98,15 +97,7 @@ describe("resolveAutoRetryDelayMs", () => {
         attempt: 2,
         baseDelayMs: 2000,
         maxRetryDelayMs: MAX,
-        retryAfterSeconds: -5,
-      }),
-    ).toBe(4000);
-    expect(
-      resolveAutoRetryDelayMs({
-        attempt: 2,
-        baseDelayMs: 2000,
-        maxRetryDelayMs: MAX,
-        retryAfterSeconds: 0,
+        retryAfter: { kind: "seconds", seconds: 0 },
       }),
     ).toBe(4000);
   });

@@ -1,6 +1,7 @@
 // Transport stream shared tests cover payload sanitization, header merging, and
 // final/error stream termination helpers used by provider transports.
 import { describe, expect, it, vi } from "vitest";
+import type { ServerRetryAfter } from "../llm/types.js";
 import { resolveAutoRetryDelayMs } from "../llm/utils/retry.js";
 import {
   assignTransportErrorDetails,
@@ -12,56 +13,56 @@ import {
 } from "./transport-stream-shared.js";
 
 describe("transport stream shared helpers", () => {
-  it("propagates httpStatus and retryAfterSeconds from an augmented transport error", () => {
+  it("propagates httpStatus and retryAfter from an augmented transport error", () => {
     const output: {
       stopReason: string;
       errorMessage?: string;
       httpStatus?: number;
-      retryAfterSeconds?: number;
+      retryAfter?: ServerRetryAfter;
     } = { stopReason: "stop" };
     const error = Object.assign(new Error("rate limited"), {
       status: 429,
-      retryAfterSeconds: 30,
+      retryAfter: { kind: "seconds", seconds: 30 },
     });
 
     assignTransportErrorDetails(output as never, error);
 
     expect(output.stopReason).toBe("error");
     expect(output.httpStatus).toBe(429);
-    expect(output.retryAfterSeconds).toBe(30);
+    expect(output.retryAfter).toEqual({ kind: "seconds", seconds: 30 });
   });
 
   it("omits status/retry-after fields when the error carries none", () => {
-    const output: { stopReason: string; httpStatus?: number; retryAfterSeconds?: number } = {
+    const output: { stopReason: string; httpStatus?: number; retryAfter?: ServerRetryAfter } = {
       stopReason: "stop",
     };
 
     assignTransportErrorDetails(output as never, new Error("boom"));
 
     expect(output.httpStatus).toBeUndefined();
-    expect(output.retryAfterSeconds).toBeUndefined();
+    expect(output.retryAfter).toBeUndefined();
   });
 
-  it("preserves an over-limit (Infinity) retryAfterSeconds through extraction so it can be rejected", () => {
+  it("preserves an over-limit (unbounded) retryAfter through extraction so it can be rejected", () => {
     // parseRetryAfterSeconds yields Infinity for an overflowed numeric header;
-    // that over-limit signal must survive so the resolver rejects it instead of
-    // falling back to the short exponential delay.
-    const output: { stopReason: string; retryAfterSeconds?: number } = { stopReason: "stop" };
+    // that over-limit signal becomes { kind: "unbounded" } so it must survive so
+    // the resolver rejects it instead of falling back to the short exponential delay.
+    const output: { stopReason: string; retryAfter?: ServerRetryAfter } = { stopReason: "stop" };
     const error = Object.assign(new Error("rate limited"), {
       status: 429,
-      retryAfterSeconds: Number.POSITIVE_INFINITY,
+      retryAfter: { kind: "unbounded" },
     });
 
     assignTransportErrorDetails(output as never, error);
 
-    expect(output.retryAfterSeconds).toBe(Number.POSITIVE_INFINITY);
+    expect(output.retryAfter).toEqual({ kind: "unbounded" });
     // End of chain: the resolver rejects an over-limit cooldown (stop retrying).
     expect(
       resolveAutoRetryDelayMs({
         attempt: 1,
         baseDelayMs: 2000,
         maxRetryDelayMs: 60_000,
-        retryAfterSeconds: output.retryAfterSeconds,
+        retryAfter: output.retryAfter,
       }),
     ).toBeNull();
   });

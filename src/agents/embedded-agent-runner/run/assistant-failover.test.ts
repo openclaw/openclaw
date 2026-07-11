@@ -404,7 +404,7 @@ describe("handleAssistantFailover", () => {
           rateLimitFailure: true,
           lastAssistant: {
             errorMessage: "Anthropic Messages request failed with HTTP 429",
-            retryAfterSeconds: 30,
+            retryAfter: { kind: "seconds", seconds: 30 },
           } as Params["lastAssistant"],
           maybeRetrySameModelRateLimit,
           maybeEscalateRateLimitProfileFallback,
@@ -436,7 +436,7 @@ describe("handleAssistantFailover", () => {
           rateLimitFailure: true,
           lastAssistant: {
             errorMessage: "Anthropic Messages request failed with HTTP 429",
-            retryAfterSeconds: 120,
+            retryAfter: { kind: "seconds", seconds: 120 },
           } as Params["lastAssistant"],
           maybeRetrySameModelRateLimit,
           maybeEscalateRateLimitProfileFallback,
@@ -470,7 +470,7 @@ describe("handleAssistantFailover", () => {
           lastProfileId: "anthropic:default",
           lastAssistant: {
             errorMessage: "Anthropic Messages request failed with HTTP 429",
-            retryAfterSeconds: 120,
+            retryAfter: { kind: "seconds", seconds: 120 },
           } as Params["lastAssistant"],
           maybeMarkAuthProfileFailure,
           maybeRetrySameModelRateLimit,
@@ -486,7 +486,7 @@ describe("handleAssistantFailover", () => {
         profileId: "anthropic:default",
         reason: "rate_limit",
         modelId: "claude-haiku-4-5-20251001",
-        retryAfterSeconds: 120,
+        retryAfter: { kind: "seconds", seconds: 120 },
       });
     });
 

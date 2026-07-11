@@ -932,7 +932,7 @@ describe("anthropic transport stream", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.httpStatus).toBe(429);
-    expect(result.retryAfterSeconds).toBe(30);
+    expect(result.retryAfter).toEqual({ kind: "seconds", seconds: 30 });
   });
 
   it("surfaces an over-limit Retry-After as Infinity from an overflowed retry-after-ms header", async () => {
@@ -952,7 +952,7 @@ describe("anthropic transport stream", () => {
     // The over-limit signal must survive to the AssistantMessage so the retry
     // resolver rejects it instead of falling back to the short exponential delay.
     expect(result.stopReason).toBe("error");
-    expect(result.retryAfterSeconds).toBe(Number.POSITIVE_INFINITY);
+    expect(result.retryAfter).toEqual({ kind: "unbounded" });
   });
 
   it("aborts stalled streamed Anthropic error responses", async () => {

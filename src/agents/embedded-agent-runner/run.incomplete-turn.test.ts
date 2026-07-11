@@ -709,7 +709,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       model: "claude-haiku-4-5-20251001",
       errorMessage: "Anthropic Messages request failed",
       httpStatus: 429,
-      retryAfterSeconds: 30,
+      retryAfter: { kind: "seconds", seconds: 30 },
       content: [],
     } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     mockedClassifyAssistantFailoverReason.mockImplementation((assistant) =>
@@ -774,7 +774,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       model: "claude-haiku-4-5-20251001",
       errorMessage: "Anthropic Messages request failed",
       httpStatus: 429,
-      retryAfterSeconds: 120,
+      retryAfter: { kind: "seconds", seconds: 120 },
       content: [],
     } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     mockedClassifyAssistantFailoverReason.mockImplementation((assistant) =>
@@ -816,7 +816,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         profileId: "test-profile",
         reason: "rate_limit",
         modelId: "claude-haiku-4-5-20251001",
-        retryAfterSeconds: 120,
+        retryAfter: { kind: "seconds", seconds: 120 },
       }),
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
