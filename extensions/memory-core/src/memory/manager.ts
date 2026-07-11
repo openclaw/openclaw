@@ -58,7 +58,13 @@ import {
 } from "./manager-provider-state.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
-import { searchKeyword, searchPathKeyword, searchVector } from "./manager-search.js";
+import {
+  resolveExactPathSpecificity,
+  searchKeyword,
+  searchPathKeyword,
+  searchVector,
+  type ExactPathSpecificity,
+} from "./manager-search.js";
 import {
   collectMemoryStatusAggregate,
   resolveInitialMemoryDirty,
@@ -105,8 +111,6 @@ type EmbeddingProbeCacheEntry = {
   checkedAtMs: number;
   expireAtMs: number;
 };
-
-type ExactPathSpecificity = 0 | 1 | 2 | 3;
 
 type KeywordSearchHit = MemorySearchResult & {
   id: string;
@@ -817,6 +821,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
 
     const merged = await this.mergeHybridResults({
+      query: cleaned,
       vector: vectorResults,
       keyword: keywordResults,
       vectorWeight: hybrid.vectorWeight,
@@ -965,7 +970,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
     const [bodyResults, pathResults] = await Promise.all([bodySearch, pathSearch]);
     return this.mergeKeywordSearchHits([
-      bodyResults.map((entry) => Object.assign(entry, { exactPathSpecificity: 0 })),
+      bodyResults.map((entry) =>
+        Object.assign(entry, {
+          exactPathSpecificity: resolveExactPathSpecificity(query, entry.path),
+        }),
+      ),
       pathResults,
     ]).slice(0, limit);
   }
@@ -1047,6 +1056,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private mergeHybridResults(params: {
+    query: string;
     vector: Array<MemorySearchResult & { id: string }>;
     keyword: Array<
       MemorySearchResult & {
@@ -1069,6 +1079,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         source: r.source,
         snippet: r.snippet,
         vectorScore: r.score,
+        exactPathSpecificity: resolveExactPathSpecificity(params.query, r.path),
       })),
       keyword: params.keyword.map((r) => ({
         id: r.id,

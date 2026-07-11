@@ -106,6 +106,42 @@ describe("memory hybrid helpers", () => {
     expect(merged[1]?.score).toBeCloseTo(0.7 * 0.99);
   });
 
+  it("keeps vector-only exact path candidates ahead of stronger semantic matches", async () => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 1,
+      vector: [
+        {
+          id: "semantic",
+          path: "memory/semantic.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "semantic",
+          vectorScore: 0.99,
+        },
+        {
+          id: "exact-vector",
+          path: "memory/deep/README.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "exact vector",
+          vectorScore: 0.2,
+          exactPathSpecificity: 2,
+        },
+      ],
+      keyword: [],
+    });
+
+    expect(merged.map((entry) => entry.path)).toEqual([
+      "memory/deep/README.md",
+      "memory/semantic.md",
+    ]);
+    expect(merged[0]?.score).toBe(1);
+    expect(merged[0]?.vectorScore).toBe(0.2);
+  });
+
   it("uses specificity across exact tiers and combined relevance within one tier", async () => {
     const merged = await mergeHybridResults({
       vectorWeight: 0.5,

@@ -50,7 +50,7 @@ type PathKeywordSearchResult = SearchRowResult & {
   exactPathSpecificity: ExactPathSpecificity;
 };
 
-type ExactPathSpecificity = 0 | 1 | 2 | 3;
+export type ExactPathSpecificity = 0 | 1 | 2 | 3;
 
 function normalizeSearchTokens(raw: string): string[] {
   return normalizeStringEntriesLower(raw.match(FTS_QUERY_TOKEN_RE) ?? []);
@@ -107,7 +107,10 @@ function normalizePathIdentifier(value: string): string {
   return value.trim().replaceAll("\\", "/").replace(/^\.\//, "").normalize("NFC").toLowerCase();
 }
 
-function resolveExactPathSpecificity(query: string, candidatePath: string): ExactPathSpecificity {
+export function resolveExactPathSpecificity(
+  query: string,
+  candidatePath: string,
+): ExactPathSpecificity {
   const normalizedQuery = normalizePathIdentifier(query);
   const normalizedPath = normalizePathIdentifier(candidatePath);
   if (!normalizedQuery || normalizedQuery === ".") {

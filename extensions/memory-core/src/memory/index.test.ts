@@ -2337,6 +2337,40 @@ describe("memory index", () => {
     expect(results[0]?.score).toBe(1);
   });
 
+  it("keeps body relevance for an exact basename beyond the exact candidate cap", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    const duplicatesDir = path.join(memoryDir, "readme-dupes");
+    for (let index = 0; index < 205; index += 1) {
+      const duplicateDir = path.join(duplicatesDir, `a-${index.toString().padStart(3, "0")}`);
+      await fs.mkdir(duplicateDir, { recursive: true });
+      await fs.writeFile(path.join(duplicateDir, "README.md"), "Unrelated weak body.");
+    }
+    const strongDir = path.join(duplicatesDir, "z-strong");
+    await fs.mkdir(strongDir, { recursive: true });
+    await fs.writeFile(
+      path.join(strongDir, "README.md"),
+      "README md README md README md strongest body match.",
+    );
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("README.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/readme-dupes/z-strong/README.md");
+    expect(results[0]?.score).toBe(1);
+  });
+
   it("keeps boosted score ordering for non-exact FTS-only body matches", async () => {
     forceNoProvider = true;
     const cfg = createCfg({

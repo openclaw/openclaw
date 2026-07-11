@@ -18,6 +18,7 @@ type HybridVectorResult = {
   source: HybridSource;
   snippet: string;
   vectorScore: number;
+  exactPathSpecificity?: ExactPathSpecificity;
 };
 
 type HybridKeywordResult = {
@@ -100,7 +101,7 @@ export async function mergeHybridResults(params: {
       snippet: r.snippet,
       vectorScore: r.vectorScore,
       textScore: 0,
-      exactPathSpecificity: 0,
+      exactPathSpecificity: r.exactPathSpecificity ?? 0,
     });
   }
 
