@@ -14,10 +14,7 @@ function requireFirstNoteText(noteFn: ReturnType<typeof vi.fn>): string {
   return String(message);
 }
 
-function requireNoteTextContaining(
-  noteFn: ReturnType<typeof vi.fn>,
-  expected: string,
-): string {
+function requireNoteTextContaining(noteFn: ReturnType<typeof vi.fn>, expected: string): string {
   const call = noteFn.mock.calls.find(([message]) => String(message).includes(expected));
   if (!call) {
     throw new Error(`expected browser doctor note containing ${expected}`);
