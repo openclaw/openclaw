@@ -802,6 +802,10 @@ export async function buildSessionEntry(
       false;
     const allowArchiveRecordCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
+    // When a heartbeat user prompt is filtered by sanitizeSessionText (below),
+    // this flag tracks that the next assistant response is a synthetic ack
+    // that must also be excluded from the dream corpus.
+    let pendingHeartbeatUserDrop = false;
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
       const newlineIndex = raw.indexOf("\n", lineStart);
@@ -853,18 +857,34 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
+      // Check before sanitization: if this user message is a runtime-injected
+      // heartbeat poll, the following assistant response is a synthetic ack
+      // that must also be excluded (see pendingHeartbeatUserDrop below).
+      const isHeartbeatUser =
+        message.role === "user" && isGeneratedHeartbeatPromptMessage(rawText, "user");
+
       // User text is not trusted archive-wide provenance. Per-message sanitization
       // drops cron prompts without clearing unrelated content from the archive.
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
-        // Assistant-side machinery (silent replies, system wrappers) is already
-        // dropped by sanitizeSessionText. We deliberately do NOT use the prior
-        // user message's pattern-match to drop the next assistant message:
-        // user-typed text can match those same patterns (`[cron:...]`,
-        // `System (untrusted): ...`) and a cross-message drop would let users
-        // exfiltrate real assistant replies from the dreaming corpus by
-        // prefixing their own prompt. See PR #70737 review (aisle-research-bot).
+        if (isHeartbeatUser) {
+          pendingHeartbeatUserDrop = true;
+        }
+        // SAFE cross-message coupling for heartbeat only: the prompt pattern
+        // ([OpenClaw heartbeat poll]) is injected by the runtime and cannot be
+        // spoofed by user input, unlike [cron:...] or System (untrusted): ...
+        // patterns. See PR #70737 review for why those are unsafe to couple.
         continue;
+      }
+
+      // When a heartbeat user message was filtered above, the assistant
+      // response that immediately follows is a synthetic heartbeat ack and
+      // must not enter the dream corpus.
+      if (pendingHeartbeatUserDrop) {
+        pendingHeartbeatUserDrop = false;
+        if (message.role === "assistant") {
+          continue;
+        }
       }
       if (generatedByDreamingNarrative || generatedByCronRun) {
         continue;
