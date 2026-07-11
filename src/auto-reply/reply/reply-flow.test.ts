@@ -316,13 +316,17 @@ describe("createReplyDispatcher", () => {
       const beforeDeliver = composeReplyDispatchBeforeDeliver(
         {
           hook: async (payload) => {
-            await new Promise((resolve) => setTimeout(resolve, 16_000));
+            await new Promise((resolve) => {
+              setTimeout(resolve, 16_000);
+            });
             return { ...payload, text: `${payload.text}:owner` };
           },
           options: { timeoutMs: 20_000 },
         },
         async (payload) => {
-          await new Promise((resolve) => setTimeout(resolve, 10_000));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10_000);
+          });
           return { ...payload, text: `${payload.text}:plugin` };
         },
       );
