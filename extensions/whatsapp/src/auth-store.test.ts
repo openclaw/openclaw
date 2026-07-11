@@ -20,7 +20,11 @@ import {
   webAuthExists,
   WhatsAppAuthUnstableError,
 } from "./auth-store.js";
-import type { CredsQueueWaitResult } from "./creds-persistence.js";
+import {
+  enqueueCredsSave,
+  waitForCredsSaveQueue,
+  type CredsQueueWaitResult,
+} from "./creds-persistence.js";
 
 const hoisted = vi.hoisted(() => ({
   waitForCredsSaveQueueWithTimeout: vi.fn<() => Promise<CredsQueueWaitResult>>(),
@@ -211,6 +215,59 @@ describe("auth-store", () => {
     await expect(clearStalePhoneCodePairingAuthIfNeeded({ authDir, isLegacyAuthDir: false })).resolves.toBe("not-needed");
     expect(fsSync.existsSync(credsPath)).toBe(true);
     await expect(webAuthExists(authDir)).resolves.toBe(true);
+  });
+
+  it("preserves completed phone-code creds queued while stale cleanup deletes", async () => {
+    await withOwnedOAuthAuthDir("openclaw-wa-auth-phone-code-delete-race", async (authDir) => {
+      const credsPath = path.join(authDir, "creds.json");
+      fsSync.writeFileSync(
+        credsPath,
+        JSON.stringify({
+          registered: false,
+          pairingCode: "12345678",
+          me: { id: "15551234567@s.whatsapp.net" },
+        }),
+        "utf-8",
+      );
+      const completedCreds = JSON.stringify({
+        registered: false,
+        pairingCode: "12345678",
+        me: { id: "15551234567@s.whatsapp.net" },
+        account: {},
+        signalIdentities: [{ identifier: { name: "15551234567", deviceId: 0 } }],
+      });
+      const { rm: originalRm } =
+        await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        if (path.resolve(String(target)) === path.resolve(authDir)) {
+          enqueueCredsSave(
+            authDir,
+            () => {
+              fsSync.mkdirSync(authDir, { recursive: true });
+              fsSync.writeFileSync(credsPath, completedCreds, "utf-8");
+            },
+            () => undefined,
+          );
+          await Promise.resolve();
+        }
+        return await originalRm(target, options);
+      });
+
+      try {
+        await expect(
+          clearStalePhoneCodePairingAuthIfNeeded({
+            authDir,
+            isLegacyAuthDir: false,
+          }),
+        ).resolves.toBe("cleared");
+        await waitForCredsSaveQueue(authDir);
+
+        await expect(webAuthExists(authDir)).resolves.toBe(true);
+        expect(fsSync.readFileSync(credsPath, "utf-8")).toBe(completedCreds);
+      } finally {
+        rmSpy.mockRestore();
+      }
+    });
   });
 
   it("reports unstable cleanup when the credential save queue does not settle", async () => {
