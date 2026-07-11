@@ -85,6 +85,20 @@ export const CLAUDE_BRIDGE_BIN_ENV = "OPENCLAW_CLAUDE_APP_SERVER_BIN";
  */
 export type ClaudeBridgeCommandSource = "managed" | "resolved-managed" | "config" | "env";
 
+// SERVER-enforced (not the consumer watchdog): how long the bridge server
+// keeps a thread's persistent Query/subprocess alive with no turn feeding it
+// before discarding it (openclaw-claude-bridge >= 0.3.1's AttemptRegistry idle
+// sweep). Distinct from turnIdleTimeoutMs (a per-turn CONSUMER watchdog that
+// tears down a stalled in-flight turn): this one governs a subprocess sitting
+// idle BETWEEN turns, waiting on the chance a same-thread follow-up arrives
+// with matching settings and can reuse it. 30 min shipped default; operators
+// running many one-shot sessions (heartbeats, cron, subagents — none of which
+// ever return to reuse their thread) may want it lower to bound the number of
+// idle subprocesses. Threaded to the server as
+// OPENCLAW_CLAUDE_BRIDGE_QUERY_THREAD_TIMEOUT_MS (resolveClaudeBridgeStartEnv);
+// operators can also raise or lower it via appServer.queryThreadTimeoutMs.
+export const DEFAULT_CLAUDE_APP_SERVER_QUERY_THREAD_TIMEOUT_MS = 30 * 60_000;
+
 export const CLAUDE_APP_SERVER_CONFIG_KEYS = [
   "command",
   "args",
@@ -95,6 +109,7 @@ export const CLAUDE_APP_SERVER_CONFIG_KEYS = [
   "turnIdleTimeoutMs",
   "progressIdleTimeoutMs",
   "subagentProgressIdleTimeoutMs",
+  "queryThreadTimeoutMs",
 ] as const;
 
 export const CLAUDE_DYNAMIC_TOOLS_CONFIG_KEYS = ["exclude"] as const;
@@ -127,6 +142,7 @@ const appServerConfigSchema = z
     turnIdleTimeoutMs: positiveIntegerSchema.optional(),
     progressIdleTimeoutMs: positiveIntegerSchema.optional(),
     subagentProgressIdleTimeoutMs: positiveIntegerSchema.optional(),
+    queryThreadTimeoutMs: positiveIntegerSchema.optional(),
   })
   .strict();
 
@@ -155,6 +171,7 @@ export type ClaudeAppServerRuntimeConfig = {
   turnIdleTimeoutMs: number;
   progressIdleTimeoutMs: number;
   subagentProgressIdleTimeoutMs: number;
+  queryThreadTimeoutMs: number;
 };
 
 export type ClaudeDynamicToolsRuntimeConfig = {
@@ -251,6 +268,7 @@ export function resolveClaudeAppServerConfig(
     turnIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS,
     progressIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_PROGRESS_IDLE_TIMEOUT_MS,
     subagentProgressIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_SUBAGENT_PROGRESS_IDLE_TIMEOUT_MS,
+    queryThreadTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_QUERY_THREAD_TIMEOUT_MS,
   };
   if (parsed) {
     if (parsed.args !== undefined) {
@@ -270,6 +288,9 @@ export function resolveClaudeAppServerConfig(
     }
     if (parsed.subagentProgressIdleTimeoutMs !== undefined) {
       appServer.subagentProgressIdleTimeoutMs = parsed.subagentProgressIdleTimeoutMs;
+    }
+    if (parsed.queryThreadTimeoutMs !== undefined) {
+      appServer.queryThreadTimeoutMs = parsed.queryThreadTimeoutMs;
     }
   }
 

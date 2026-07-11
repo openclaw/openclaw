@@ -144,6 +144,7 @@ export async function runClaudeAppServerAttempt(
       env: resolveClaudeBridgeStartEnv({
         configuredEnv: cfg.appServer.env,
         resolvedApiKey: params.resolvedApiKey,
+        queryThreadTimeoutMs: cfg.appServer.queryThreadTimeoutMs,
       }),
     });
     client = getSharedClaudeAppServerClient(startOptions);
@@ -593,11 +594,20 @@ export async function runClaudeAppServerAttempt(
 export function resolveClaudeBridgeStartEnv(params: {
   configuredEnv?: Record<string, string>;
   resolvedApiKey?: string;
+  queryThreadTimeoutMs?: number;
 }): Record<string, string> | undefined {
   const env = { ...params.configuredEnv };
   const resolvedApiKey = params.resolvedApiKey?.trim();
   if (resolvedApiKey && !env.ANTHROPIC_API_KEY?.trim()) {
     env.ANTHROPIC_API_KEY = resolvedApiKey;
+  }
+  // A raw appServer.env override (set directly by the operator) wins over the
+  // derived value from the first-class appServer.queryThreadTimeoutMs option.
+  if (
+    params.queryThreadTimeoutMs !== undefined &&
+    !env.OPENCLAW_CLAUDE_BRIDGE_QUERY_THREAD_TIMEOUT_MS?.trim()
+  ) {
+    env.OPENCLAW_CLAUDE_BRIDGE_QUERY_THREAD_TIMEOUT_MS = String(params.queryThreadTimeoutMs);
   }
   return Object.keys(env).length > 0 ? env : undefined;
 }
@@ -994,6 +1004,15 @@ async function runTurn(
       { modelId: params.modelId },
     );
   }
+  // One-shot: heartbeat/cron runs and subagent dispatches never send a
+  // follow-up turn on this thread, so there's nothing to reuse the attempt
+  // for — tell the bridge to close its subprocess right after this turn
+  // instead of holding it idle until the query-thread-timeout sweep.
+  // Everything else (a real user-triggered chat exchange, or a
+  // compaction/memory continuation of one) may get a follow-up turn, so it
+  // defaults to retained.
+  const oneShot =
+    params.trigger === "heartbeat" || params.trigger === "cron" || Boolean(params.spawnedBy);
   const turnParamsCandidate: TurnStartParams = {
     threadId,
     input: buildInput(params, promptPrefix),
@@ -1004,6 +1023,7 @@ async function runTurn(
     model: params.modelId,
     ...(effort ? { effort } : {}),
     ...(fastMode ? { fastMode: true } : {}),
+    ...(oneShot ? { oneShot: true } : {}),
   };
   // Outbound validation: catch a malformed turn/start params object
   // (empty threadId, unknown effort enum, etc.) before paying the round

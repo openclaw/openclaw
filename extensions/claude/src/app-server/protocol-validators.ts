@@ -109,6 +109,7 @@ const turnStartParamsSchema = z
     model: z.string().optional(),
     effort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]).optional(),
     fastMode: z.boolean().optional(),
+    oneShot: z.boolean().optional(),
   })
   .passthrough();
 

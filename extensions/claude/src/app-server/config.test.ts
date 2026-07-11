@@ -7,6 +7,7 @@ import {
   CLAUDE_DYNAMIC_TOOLS_CONFIG_KEYS,
   DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY,
   DEFAULT_CLAUDE_APP_SERVER_PROGRESS_IDLE_TIMEOUT_MS,
+  DEFAULT_CLAUDE_APP_SERVER_QUERY_THREAD_TIMEOUT_MS,
   DEFAULT_CLAUDE_APP_SERVER_SUBAGENT_PROGRESS_IDLE_TIMEOUT_MS,
   DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS,
   DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,
@@ -33,6 +34,7 @@ describe("resolveClaudeAppServerConfig", () => {
         turnIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS,
         progressIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_PROGRESS_IDLE_TIMEOUT_MS,
         subagentProgressIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_SUBAGENT_PROGRESS_IDLE_TIMEOUT_MS,
+        queryThreadTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_QUERY_THREAD_TIMEOUT_MS,
       },
       dynamicTools: {
         excludeNames: [],
@@ -70,6 +72,7 @@ describe("resolveClaudeAppServerConfig", () => {
         turnIdleTimeoutMs: 567,
         progressIdleTimeoutMs: 890,
         subagentProgressIdleTimeoutMs: 4321,
+        queryThreadTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_QUERY_THREAD_TIMEOUT_MS,
       },
       dynamicTools: {
         excludeNames: ["image", "read"],
@@ -102,6 +105,7 @@ describe("resolveClaudeAppServerConfig", () => {
         turnIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS,
         progressIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_PROGRESS_IDLE_TIMEOUT_MS,
         subagentProgressIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_SUBAGENT_PROGRESS_IDLE_TIMEOUT_MS,
+        queryThreadTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_QUERY_THREAD_TIMEOUT_MS,
       },
       dynamicTools: {
         excludeNames: [],
