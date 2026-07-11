@@ -400,6 +400,7 @@ export function createSessionMcpRuntime(params: {
   const runGuardedServerRequest = async <T>(
     serverName: string,
     request: () => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> => {
     const nowMs = Date.now();
     const backoff = serverBackoff.get(serverName);
@@ -413,7 +414,10 @@ export function createSessionMcpRuntime(params: {
       serverBackoff.delete(serverName);
       return result;
     } catch (error) {
-      recordServerToolFailure(serverName, nowMs);
+      // Caller cancellations are health-neutral: do not count them as server failures.
+      if (!signal?.aborted) {
+        recordServerToolFailure(serverName, nowMs);
+      }
       throw error;
     }
   };
@@ -819,14 +823,17 @@ export function createSessionMcpRuntime(params: {
             undefined,
             { timeout: session.requestTimeoutMs, signal },
           )) as CallToolResult,
+        signal,
       );
     },
     async listResources(serverName, signal?) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(serverName, async () =>
-        listAllResources(session.client, session.requestTimeoutMs, signal),
+      return await runGuardedServerRequest(
+        serverName,
+        async () => listAllResources(session.client, session.requestTimeoutMs, signal),
+        signal,
       );
     },
     async readResource(serverName, uri, signal?) {
@@ -837,14 +844,17 @@ export function createSessionMcpRuntime(params: {
         serverName,
         async () =>
           await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs, signal }),
+        signal,
       );
     },
     async listPrompts(serverName, signal?) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(serverName, async () =>
-        listAllPrompts(session.client, session.requestTimeoutMs, signal),
+      return await runGuardedServerRequest(
+        serverName,
+        async () => listAllPrompts(session.client, session.requestTimeoutMs, signal),
+        signal,
       );
     },
     async getPrompt(serverName, name, args, signal?) {
@@ -858,6 +868,7 @@ export function createSessionMcpRuntime(params: {
             { name, ...(args ? { arguments: args } : {}) },
             { timeout: session.requestTimeoutMs, signal },
           ),
+        signal,
       );
     },
     async dispose() {

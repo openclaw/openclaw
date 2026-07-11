@@ -2149,6 +2149,53 @@ process.on("SIGINT", shutdown);`,
       }
     },
   );
+  it("does not count caller aborts as server failures", { timeout: 15_000 }, async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-abort-backoff-"));
+    const serverPath = path.join(tempDir, "abort-backoff-server.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      callToolDelayMs: 5_000,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-abort-backoff",
+      sessionKey: "agent:test:session-abort-backoff",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            cancelable: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        const controller = new AbortController();
+        const callPromise = runtime.callTool("cancelable", "slow_tool", {}, controller.signal);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 200);
+        });
+        controller.abort("user cancelled");
+        await expect(callPromise).rejects.toThrow();
+      }
+
+      // A fourth, non-aborted call must still succeed; aborts did not pause the server.
+      await expect(runtime.callTool("cancelable", "slow_tool", {})).resolves.toMatchObject({
+        content: [{ type: "text", text: "tool ok" }],
+        isError: false,
+      });
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("disposeSession timeout", () => {
