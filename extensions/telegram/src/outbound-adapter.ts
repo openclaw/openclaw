@@ -10,7 +10,6 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
   sendPayloadMediaSequenceOrFallback,
@@ -20,7 +19,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
-import { splitTelegramHtmlChunks } from "./format.js";
+import { markdownToTelegramChunks, splitTelegramHtmlChunks } from "./format.js";
 import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
@@ -55,9 +54,14 @@ function chunkTelegramOutboundText(
   limit: number,
   ctx?: { formatting?: OutboundDeliveryFormattingOptions },
 ): string[] {
-  return ctx?.formatting?.parseMode === "HTML"
-    ? splitTelegramHtmlChunks(text, limit)
-    : chunkMarkdownTextWithMode(text, limit, ctx?.formatting?.chunkMode ?? "length");
+  if (ctx?.formatting?.parseMode === "HTML") {
+    return splitTelegramHtmlChunks(text, limit);
+  }
+  // Use the IR chunker so split points account for HTML rendering length.
+  // Return markdown text (not HTML) so downstream renderers stay consistent.
+  return markdownToTelegramChunks(text, limit, {
+    tableMode: ctx?.formatting?.tableMode,
+  }).map((chunk) => chunk.text);
 }
 
 async function resolveTelegramSendContext(params: {
