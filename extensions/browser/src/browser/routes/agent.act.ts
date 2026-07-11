@@ -78,14 +78,16 @@ async function readExistingSessionLocationHref(params: ExistingSessionOperation)
 }
 
 async function assertExistingSessionPostInteractionNavigationAllowed(
-  params: ExistingSessionOperation & {
-    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
-    listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
-    initialTabTargetIds: ReadonlySet<string>;
-  },
+  params: ExistingSessionOperation &
+    BrowserNavigationPolicyOptions & {
+      listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
+      initialTabTargetIds: ReadonlySet<string>;
+    },
 ): Promise<void> {
-  const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
-  if (!ssrfPolicyOpts.ssrfPolicy) {
+  const navigationPolicy = withBrowserNavigationPolicy(params.ssrfPolicy, {
+    browserProxyMode: params.browserProxyMode,
+  });
+  if (!navigationPolicy.ssrfPolicy && !navigationPolicy.browserProxyMode) {
     return;
   }
   const listTabs = params.listTabs;
@@ -99,7 +101,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
       }
       await assertBrowserNavigationResultAllowed({
         url: tab.url,
-        ...ssrfPolicyOpts,
+        ...navigationPolicy,
       });
     }
   };
@@ -120,7 +122,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
     }
     await assertBrowserNavigationResultAllowed({
       url: currentUrl,
-      ...ssrfPolicyOpts,
+      ...navigationPolicy,
     });
     if (currentUrl === lastObservedUrl) {
       sawStableAllowedUrl = true;
@@ -148,7 +150,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
       const followUpUrl = await readExistingSessionLocationHref(params);
       await assertBrowserNavigationResultAllowed({
         url: followUpUrl,
-        ...ssrfPolicyOpts,
+        ...navigationPolicy,
       });
       if (followUpUrl === lastObservedUrl) {
         await assertNewTabsAllowed();
@@ -394,7 +396,6 @@ export function registerBrowserAgentActRoutes(
         run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
           const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
-          const { ssrfPolicy } = navigationPolicy;
           const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
           const requestedTimeoutMs =
             "timeoutMs" in action && typeof action.timeoutMs === "number"
@@ -465,7 +466,7 @@ export function registerBrowserAgentActRoutes(
               : new Set<string>();
             const existingSessionNavigationGuard = {
               ...existingSessionTarget,
-              ssrfPolicy,
+              ...navigationPolicy,
               listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
               initialTabTargetIds,
             };
