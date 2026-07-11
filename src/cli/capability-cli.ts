@@ -2550,19 +2550,23 @@ export function registerCapabilityCli(program: Command) {
         const localSelection = await inspectLocalAudioSelection();
         const localProviders = localSelection.candidates
           .filter((candidate) => candidate.available)
-          .map((candidate) => ({
-            available: candidate.available,
-            configured: candidate.ready,
-            selected: candidate.selected,
-            id: `local/${candidate.id}`,
-            transport: "local-cli",
-            command: candidate.command,
-            ...(candidate.capableBackend ? { capableBackend: candidate.capableBackend } : {}),
-            ...(candidate.requestedBackend ? { requestedBackend: candidate.requestedBackend } : {}),
-            observedBackend: candidate.observedBackend ?? "unknown",
-            evidence: candidate.evidence,
-            ...(candidate.reason ? { reason: candidate.reason } : {}),
-          }));
+          .map((candidate) =>
+            Object.assign(
+              {
+                available: candidate.available,
+                configured: candidate.ready,
+                selected: candidate.selected,
+                id: `local/${candidate.id}`,
+                transport: "local-cli",
+                command: candidate.command,
+                observedBackend: candidate.observedBackend ?? "unknown",
+                evidence: candidate.evidence,
+              },
+              candidate.capableBackend ? { capableBackend: candidate.capableBackend } : {},
+              candidate.requestedBackend ? { requestedBackend: candidate.requestedBackend } : {},
+              candidate.reason ? { reason: candidate.reason } : {},
+            ),
+          );
         const providers = [...remoteProviders, ...localProviders];
         emitJsonOrText(defaultRuntime, Boolean(opts.json), providers, providerSummaryText);
       });
