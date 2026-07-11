@@ -25,6 +25,10 @@ const member = {
   id: "principal-member",
   principal: { issuer: "tailscale", subject: "member@example.com", kind: "human" },
 } as const;
+const recipient = {
+  id: "principal-recipient",
+  principal: { issuer: "trusted-proxy", subject: "recipient@example.com", kind: "human" },
+} as const;
 const workspace: GatewayResourceRef = {
   namespace: "workspaces",
   type: "workspace",
@@ -241,6 +245,111 @@ describe("state-backed gateway authorization", () => {
     });
   });
 
+  it("allows a human resource owner without granting workspace-admin authority", async () => {
+    const database = createDatabase();
+    const domainId = seedDomain({ database, resource: workspace });
+    putAuthorizationPrincipal({ ...member, database });
+    addIsolationDomainMember({
+      domainId,
+      principalId: member.id,
+      addedByPrincipalId: owner.id,
+      database,
+    });
+    bindAuthorizationResource({
+      domainId,
+      resource: tab,
+      ownerPrincipalId: member.id,
+      database,
+    });
+
+    await expect(
+      isolatedAuthorize(database)({
+        principal: member.principal,
+        method: "workspaces.share",
+        permission: "workspaces.tab.share",
+        resources: [tab],
+      }),
+    ).resolves.toEqual({
+      allowed: true,
+      principalId: member.id,
+      domain: { id: domainId },
+    });
+    await expect(
+      isolatedAuthorize(database)({
+        principal: member.principal,
+        method: "workspaces.replace",
+        permission: "workspaces.workspace.replace",
+        resources: [workspace],
+      }),
+    ).resolves.toEqual({ allowed: false, reason: "forbidden" });
+  });
+
+  it("lets a human resource owner grant exact access only on that resource", async () => {
+    const database = createDatabase();
+    const domainId = seedDomain({ database, resource: workspace });
+    for (const entry of [member, recipient]) {
+      putAuthorizationPrincipal({ ...entry, database });
+      addIsolationDomainMember({
+        domainId,
+        principalId: entry.id,
+        addedByPrincipalId: owner.id,
+        database,
+      });
+    }
+    bindAuthorizationResource({
+      domainId,
+      resource: tab,
+      ownerPrincipalId: member.id,
+      database,
+    });
+
+    expect(() =>
+      grantAuthorizationPermission({
+        domainId,
+        principalId: recipient.id,
+        resource: tab,
+        permission: "workspaces.tab.read",
+        grantedByPrincipalId: member.id,
+        database,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      grantAuthorizationPermission({
+        domainId,
+        principalId: recipient.id,
+        resource: workspace,
+        permission: "workspaces.workspace.read",
+        grantedByPrincipalId: member.id,
+        database,
+      }),
+    ).toThrow(/owner/i);
+  });
+
+  it("does not allow a service principal to own a resource", () => {
+    const database = createDatabase();
+    const domainId = seedDomain({ database });
+    const service = {
+      id: "principal-service",
+      principal: { issuer: "core", subject: "agent:main", kind: "service" },
+    } as const;
+    putAuthorizationPrincipal({ ...service, database });
+    addIsolationDomainMember({
+      domainId,
+      principalId: service.id,
+      addedByPrincipalId: owner.id,
+      database,
+    });
+
+    expect(() =>
+      bindAuthorizationResource({
+        domainId,
+        resource: tab,
+        ownerPrincipalId: service.id,
+        database,
+      }),
+    ).toThrow(/human principal/i);
+  });
+
   it("supports one principal holding non-owner membership in multiple domains", async () => {
     const database = createDatabase();
     const firstDomainId = seedDomain({ database, domainId: "domain-1", resource: workspace });
@@ -398,8 +507,8 @@ describe("state-backed gateway authorization", () => {
         .prepare(
           `INSERT INTO authorization_grants (
              domain_id, principal_id, namespace, resource_type, resource_id,
-             permission, granted_by_principal_id, granted_by_role, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             permission, granted_by_principal_id, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           "domain-1",
@@ -409,7 +518,6 @@ describe("state-backed gateway authorization", () => {
           workspace.id,
           "workspaces.workspace.read",
           owner.id,
-          "owner",
           Date.now(),
         ),
     ).toThrow(/foreign key/i);
@@ -432,8 +540,8 @@ describe("state-backed gateway authorization", () => {
         .prepare(
           `INSERT INTO authorization_grants (
              domain_id, principal_id, namespace, resource_type, resource_id,
-             permission, granted_by_principal_id, granted_by_role, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             permission, granted_by_principal_id, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           domainId,
@@ -443,9 +551,59 @@ describe("state-backed gateway authorization", () => {
           workspace.id,
           "workspaces.workspace.read",
           member.id,
-          "owner",
           Date.now(),
         ),
-    ).toThrow(/constraint|foreign key/i);
+    ).toThrow(/constraint|foreign key|must own/i);
+  });
+
+  it("rejects moving an existing resource-owner grant to a resource they do not own", () => {
+    const database = createDatabase();
+    const domainId = seedDomain({ database, resource: workspace });
+    for (const entry of [member, recipient]) {
+      putAuthorizationPrincipal({ ...entry, database });
+      addIsolationDomainMember({
+        domainId,
+        principalId: entry.id,
+        addedByPrincipalId: owner.id,
+        database,
+      });
+    }
+    bindAuthorizationResource({
+      domainId,
+      resource: tab,
+      ownerPrincipalId: member.id,
+      database,
+    });
+    grantAuthorizationPermission({
+      domainId,
+      principalId: recipient.id,
+      resource: tab,
+      permission: "workspaces.tab.read",
+      grantedByPrincipalId: member.id,
+      database,
+    });
+    const { db } = openOpenClawStateDatabase(database);
+
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE authorization_grants
+           SET namespace = ?, resource_type = ?, resource_id = ?, permission = ?
+           WHERE domain_id = ? AND principal_id = ?
+             AND namespace = ? AND resource_type = ? AND resource_id = ? AND permission = ?`,
+        )
+        .run(
+          workspace.namespace,
+          workspace.type,
+          workspace.id,
+          "workspaces.workspace.read",
+          domainId,
+          recipient.id,
+          tab.namespace,
+          tab.type,
+          tab.id,
+          "workspaces.tab.read",
+        ),
+    ).toThrow(/immutable|must own/i);
   });
 });
