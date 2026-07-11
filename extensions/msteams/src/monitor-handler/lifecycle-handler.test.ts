@@ -111,6 +111,11 @@ describe("handleMSTeamsLifecycleRemove", () => {
         origin: { provider: "msteams" },
         sessionFile: "/tmp/openclaw/agents/dale/sessions/old-session.jsonl",
         sessionStartedAt: 1_000,
+        status: "running",
+        startedAt: 1_100,
+        endedAt: 1_900,
+        runtimeMs: 800,
+        lastInteractionAt: 1_250,
         inputTokens: 10,
         outputTokens: 5,
         totalTokens: 15,
@@ -168,6 +173,11 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:user-aad"].origin).toBeUndefined();
     expect(store["msteams:direct:user-aad"].sessionFile).toBeUndefined();
     expect(store["msteams:direct:user-aad"].sessionStartedAt).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].status).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].startedAt).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].endedAt).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].runtimeMs).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].lastInteractionAt).toBeUndefined();
     expect(store["msteams:direct:user-aad"].inputTokens).toBeUndefined();
     expect(store["msteams:direct:user-aad"].outputTokens).toBeUndefined();
     expect(store["msteams:direct:user-aad"].totalTokens).toBeUndefined();

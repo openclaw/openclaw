@@ -107,6 +107,11 @@ type MSTeamsResetCandidateEntry = {
   sessionId?: string;
   sessionFile?: unknown;
   sessionStartedAt?: unknown;
+  status?: unknown;
+  startedAt?: unknown;
+  endedAt?: unknown;
+  runtimeMs?: unknown;
+  lastInteractionAt?: unknown;
   systemSent?: unknown;
   abortedLastRun?: unknown;
   restartRecoveryRuns?: unknown;
@@ -178,6 +183,11 @@ function createMSTeamsLifecycleResetEntry<T extends MSTeamsResetCandidateEntry>(
 
   delete next.sessionFile;
   delete next.sessionStartedAt;
+  delete next.status;
+  delete next.startedAt;
+  delete next.endedAt;
+  delete next.runtimeMs;
+  delete next.lastInteractionAt;
   delete next.systemSent;
   delete next.abortedLastRun;
   delete next.restartRecoveryRuns;
