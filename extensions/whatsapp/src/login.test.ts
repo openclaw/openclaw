@@ -336,6 +336,33 @@ describe("web login", () => {
     expect(runtime.log).toHaveBeenCalledWith(success("WhatsApp pairing code: 3333 4444"));
     expect(waiter).toHaveBeenCalledTimes(2);
   });
+
+  it("preserves phone-code credentials across the post-pairing restart", async () => {
+    const firstSock = createPhoneCodeSocket("11112222");
+    const secondSock = createPhoneCodeSocket("33334444");
+    vi.mocked(createWaSocket)
+      .mockImplementationOnce(resolveSocketAfterImmediateQr(firstSock))
+      .mockResolvedValueOnce(secondSock as never);
+    const restartError = Object.assign(new Error("restart required"), {
+      output: { statusCode: 515 },
+    });
+    const waiter: typeof waitForWaConnection = vi
+      .fn()
+      .mockRejectedValueOnce(restartError)
+      .mockResolvedValueOnce(undefined);
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await loginWebWithPhoneCode(false, "+15551234567", waiter, runtime as never);
+
+    expect(firstSock.requestPairingCode).toHaveBeenCalledWith("15551234567");
+    expect(secondSock.requestPairingCode).not.toHaveBeenCalled();
+    expect(clearStalePhoneCodePairingAuthIfNeeded).toHaveBeenCalledOnce();
+    expect(waiter).toHaveBeenNthCalledWith(2, secondSock, { timeout: "none" });
+  });
 });
 
 describe("renderQrPngBase64", () => {

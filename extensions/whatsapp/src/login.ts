@@ -345,13 +345,19 @@ export async function loginWebWithPhoneCode(
       waitForConnection,
       socketTiming,
       onQr: readySignal.onQr,
-      beforeCreateLoginSocket: async () => {
+      beforeCreateLoginSocket: async (context) => {
+        // The 515 restart completes the same pairing attempt and must reuse its saved creds.
+        if (context.reason === "post-pairing") {
+          return;
+        }
         readySignal.reset();
-        await clearStalePhoneCodePairingAuthForLogin({
-          authDir: account.authDir,
-          isLegacyAuthDir: account.isLegacyAuthDir,
-          runtime,
-        });
+        if (context.reason === "timeout") {
+          await clearStalePhoneCodePairingAuthForLogin({
+            authDir: account.authDir,
+            isLegacyAuthDir: account.isLegacyAuthDir,
+            runtime,
+          });
+        }
       },
       prepareLoginSocket: async (loginSock, context) => {
         if (context.reason === "post-pairing") {
