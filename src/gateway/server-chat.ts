@@ -1,15 +1,17 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
+import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/types.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
-import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { logError } from "../logger.js";
 import {
@@ -197,7 +199,10 @@ export type ChatEventBroadcast = (
 
 export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
 
-const CHAT_ERROR_KINDS = new Set<ErrorKind>([
+// Derived from ChatErrorEventSchema.errorKind (gateway-protocol); keep set in sync.
+type ChatErrorKind = NonNullable<Extract<ChatEvent, { state: "error" }>["errorKind"]>;
+
+const CHAT_ERROR_KINDS = new Set<ChatErrorKind>([
   "refusal",
   "timeout",
   "rate_limit",
@@ -218,10 +223,38 @@ function buildChatErrorMessage(error: unknown): Record<string, unknown> | undefi
   };
 }
 
-function readChatErrorKind(value: unknown): ErrorKind | undefined {
-  return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ErrorKind)
-    ? (value as ErrorKind)
+function readChatErrorKind(value: unknown): ChatErrorKind | undefined {
+  return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ChatErrorKind)
+    ? (value as ChatErrorKind)
     : undefined;
+}
+
+// Refusal first (stop-reason fact, not FailoverReason); then canonical failover map.
+export function resolveChatErrorKindFromError(error: unknown): ChatErrorKind | undefined {
+  if (error === undefined) {
+    return undefined;
+  }
+  const message = formatErrorMessage(error).toLowerCase();
+  if (
+    message.includes("refusal") ||
+    message.includes("content_filter") ||
+    message.includes("sensitive") ||
+    message.includes("unhandled stop reason: refusal_policy")
+  ) {
+    return "refusal";
+  }
+  switch (resolveFailoverReasonFromError(error)) {
+    case "rate_limit":
+    case "overloaded":
+      return "rate_limit";
+    case "timeout":
+    case "server_error":
+      return "timeout";
+    case "context_overflow":
+      return "context_length";
+    default:
+      return undefined;
+  }
 }
 
 function excludeConnIds(
@@ -685,7 +718,8 @@ export function createAgentEventHandler({
             terminalState,
             terminalOutcome.error ?? evt.data?.error,
             terminalOutcome.stopReason,
-            readChatErrorKind(evt.data?.errorKind) ?? detectErrorKind(evt.data?.error),
+            readChatErrorKind(evt.data?.errorKind) ??
+              resolveChatErrorKindFromError(evt.data?.error),
             {
               agentId: terminalAgentId,
               controlUiVisible: isControlUiVisible,
@@ -966,7 +1000,7 @@ export function createAgentEventHandler({
     jobState: "done" | "error" | "aborted",
     error?: unknown,
     stopReason?: string,
-    errorKind?: ErrorKind,
+    errorKind?: ChatErrorKind,
     opts?: {
       agentId?: string;
       controlUiVisible?: boolean;
