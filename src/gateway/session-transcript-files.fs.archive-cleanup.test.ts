@@ -86,6 +86,40 @@ describe("cleanupArchivedSessionTranscripts", () => {
     expect(await remaining()).toEqual([`a.jsonl.reset.${OLD_STAMP}`]);
   });
 
+  it("ages out trajectory tombstones under the same rules and directory listing as transcript tombstones", async () => {
+    // The trajectory pair is renamed beside its transcript on reset/delete
+    // (trajectory/cleanup.ts), so its tombstones share this exact suffix
+    // contract and reuse this same sweep with no trajectory-specific code.
+    await seed([
+      `session-a.jsonl.deleted.${OLD_STAMP}`,
+      `session-a.trajectory.jsonl.deleted.${OLD_STAMP}`,
+      `session-a.trajectory-path.json.deleted.${OLD_STAMP}`,
+      `session-b.jsonl.reset.${FRESH_STAMP}`,
+      `session-b.trajectory.jsonl.reset.${FRESH_STAMP}`,
+      `session-b.trajectory-path.json.reset.${FRESH_STAMP}`,
+    ]);
+    const readdirSpy = vi.spyOn(fsPromises, "readdir");
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [
+        { reason: "deleted", olderThanMs: 30 * DAY_MS },
+        { reason: "reset", olderThanMs: 30 * DAY_MS },
+      ],
+      nowMs: NOW_MS,
+    });
+
+    expect(readdirSpy).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ removed: 3, scanned: 6 });
+    expect(await remaining()).toEqual(
+      [
+        `session-b.jsonl.reset.${FRESH_STAMP}`,
+        `session-b.trajectory.jsonl.reset.${FRESH_STAMP}`,
+        `session-b.trajectory-path.json.reset.${FRESH_STAMP}`,
+      ].toSorted(),
+    );
+  });
+
   it("drops invalid rules and never lists when none remain", async () => {
     const readdirSpy = vi.spyOn(fsPromises, "readdir");
 
