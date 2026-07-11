@@ -1,6 +1,7 @@
 // Gateway hot-reload handlers.
 // Applies config reload plans to hooks, cron, heartbeat, plugins, channels, and restarts.
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
   getActiveEmbeddedRunCount,
@@ -28,7 +29,10 @@ import {
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
@@ -234,13 +238,23 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const queueSize = getTotalQueueSize();
     const pendingReplies = getTotalPendingReplies();
     const embeddedRuns = getActiveEmbeddedRunCount();
+    const backgroundExecSessions = getActiveBackgroundExecSessionCount();
+    const rootRequests = getActiveGatewayRootWorkCount({ excludeCurrent: true });
     const activeTasks = getInspectableActiveTaskRestartBlockers().length;
     return {
       queueSize,
       pendingReplies,
       embeddedRuns,
+      backgroundExecSessions,
+      rootRequests,
       activeTasks,
-      totalActive: queueSize + pendingReplies + embeddedRuns + activeTasks,
+      totalActive:
+        queueSize +
+        pendingReplies +
+        embeddedRuns +
+        backgroundExecSessions +
+        rootRequests +
+        activeTasks,
     };
   };
   const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
@@ -253,6 +267,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     if (counts.embeddedRuns > 0) {
       details.push(`${counts.embeddedRuns} embedded run(s)`);
+    }
+    if (counts.backgroundExecSessions > 0) {
+      details.push(`${counts.backgroundExecSessions} background exec session(s)`);
+    }
+    if (counts.rootRequests > 0) {
+      details.push(`${counts.rootRequests} gateway request(s)`);
     }
     if (counts.activeTasks > 0) {
       details.push(`${counts.activeTasks} background task run(s)`);

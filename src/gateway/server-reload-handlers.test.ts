@@ -2,6 +2,13 @@
  * Gateway config reload handler tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  addSession,
+  markBackgrounded,
+  markExited,
+  resetProcessRegistryForTests,
+} from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -16,6 +23,7 @@ import {
 import {
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
@@ -234,12 +242,14 @@ function createReloadHandlersForTest(
 // shared vitest worker imports those helpers before this file runs, the leaked
 // env routes reloads into the skip branch and channel restarts never fire.
 beforeEach(() => {
+  resetProcessRegistryForTests();
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  resetProcessRegistryForTests();
   hoisted.startGmailWatcherWithLogs.mockClear();
   hoisted.stopGmailWatcher.mockClear();
   hoisted.activeTaskCount.value = 0;
@@ -494,6 +504,111 @@ describe("gateway restart deferral preflight", () => {
       markGatewaySigusr1RestartHandled();
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
     } finally {
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("defers config restart until a background exec actually exits", async () => {
+    restartTesting.resetSigusr1State();
+    resetGatewayWorkAdmission();
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
+    const session = createProcessSessionFixture({
+      id: "background-restart-blocker",
+      command: "private command",
+      pid: 12345,
+    });
+    addSession(session);
+    markBackgrounded(session);
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+    vi.useFakeTimers();
+
+    try {
+      expect(
+        requestGatewayRestart(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          {},
+        ),
+      ).toBe(true);
+
+      expect(signalSpy).not.toHaveBeenCalled();
+      expect(logReload.warn).toHaveBeenCalledWith(
+        "config change requires gateway restart (gateway.port) — deferring until 1 background exec session(s) complete",
+      );
+
+      markExited(session, 0, null, "completed");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(signalSpy).toHaveBeenCalledOnce();
+      expect(logReload.info).toHaveBeenCalledWith(
+        "all operations and replies completed; restarting gateway now",
+      );
+    } finally {
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("defers config restart across an admitted process handoff", async () => {
+    restartTesting.resetSigusr1State();
+    resetGatewayWorkAdmission();
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
+    const handoff = tryBeginGatewayIndependentRootWorkAdmission();
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+    vi.useFakeTimers();
+
+    try {
+      expect(
+        requestGatewayRestart(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          {},
+        ),
+      ).toBe(true);
+      expect(signalSpy).not.toHaveBeenCalled();
+      expect(logReload.warn).toHaveBeenCalledWith(
+        "config change requires gateway restart (gateway.port) — deferring until 1 gateway request(s) complete",
+      );
+
+      handoff?.release();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(signalSpy).toHaveBeenCalledOnce();
+    } finally {
+      handoff?.release();
       process.removeListener("SIGUSR1", signalSpy);
       restartTesting.resetSigusr1State();
       resetGatewayWorkAdmission();

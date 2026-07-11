@@ -134,8 +134,10 @@ transports, or control the hosting platform. The host must fence its ingress
 before preparation and remains responsible for wake, snapshot/freeze, and
 stop. `activeCount` is the aggregate tracked-work count, while `blockers`
 contains the non-zero category counts and bounded task details. This is not a
-general process-quiescence barrier. Channel health, maintenance, cache refresh,
-established plugin WebSocket sessions, and plugin-owned background work can
+general process-quiescence barrier. A `background-exec` blocker is aggregate
+only: command text, process IDs, output, and session or scope identifiers never
+cross the protocol. Channel health, maintenance, cache refresh, established
+plugin WebSocket sessions, and unregistered plugin-owned background work can
 remain active.
 The hosting platform must freeze or snapshot the full process tree and its
 filesystem consistently; unregistered work cannot be proven idle by this first
