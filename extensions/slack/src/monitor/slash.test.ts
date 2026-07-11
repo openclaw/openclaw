@@ -1558,6 +1558,64 @@ describe("slack slash command session metadata", () => {
     );
   });
 
+  it("keeps the monitor's resolved secrets when the runtime snapshot is unrelated", async () => {
+    const harness = createPolicyHarness({
+      channelId: "D123",
+      channelName: "directmessage",
+      resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
+    });
+    const resolvedCfg = {
+      ...(harness.ctx as { cfg: OpenClawConfig }).cfg,
+      channels: {
+        slack: {
+          accounts: {
+            default: {
+              botToken: "xoxb-resolved",
+              appToken: "xapp-resolved",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    (harness.ctx as { cfg: OpenClawConfig }).cfg = resolvedCfg;
+    const unresolvedSnapshot = {
+      channels: {
+        slack: {
+          accounts: {
+            default: {
+              botToken: {
+                source: "env",
+                provider: "default",
+                id: "SLACK_BOT_TOKEN",
+              },
+              appToken: {
+                source: "env",
+                provider: "default",
+                id: "SLACK_APP_TOKEN",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(unresolvedSnapshot, unresolvedSnapshot);
+    await registerCommands(harness.ctx, harness.account);
+
+    await runSlashHandler({
+      commands: harness.commands,
+      command: {
+        channel_id: harness.channelId,
+        channel_name: harness.channelName,
+      },
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: resolvedCfg,
+      }),
+    );
+  });
+
   it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {
     const harness = createPolicyHarness({ groupPolicy: "open" });
     await registerAndRunPolicySlash({ harness });
