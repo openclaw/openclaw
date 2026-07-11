@@ -22,6 +22,7 @@ const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
+const uploadImageMediaFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -49,6 +50,7 @@ vi.mock("./channel.runtime.js", () => ({
     removeReactionFeishu: removeReactionFeishuMock,
     sendCardFeishu: sendCardFeishuMock,
     sendMessageFeishu: sendMessageFeishuMock,
+    uploadImageMediaFeishu: uploadImageMediaFeishuMock,
     feishuOutbound: {
       sendText: vi.fn(),
       sendMedia: feishuOutboundSendMediaMock,
@@ -544,25 +546,47 @@ describe("feishuPlugin actions", () => {
     });
   });
 
-  it("rejects card JSON sent with media", async () => {
-    await expect(
-      feishuPlugin.actions?.handleAction?.({
-        action: "send",
-        params: {
-          to: "chat:oc_group_1",
-          message: JSON.stringify({
-            elements: [{ tag: "markdown", content: "Card body" }],
-          }),
-          media: "/tmp/image.png",
-        },
-        cfg,
-        accountId: undefined,
-        toolContext: {},
-        mediaLocalRoots: ["/tmp"],
-      } as never),
-    ).rejects.toThrow("Feishu send does not support card with media.");
+  it("embeds image media in card JSON messages", async () => {
+    uploadImageMediaFeishuMock.mockResolvedValueOnce({ imageKey: "img_key_1" });
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
 
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: JSON.stringify({
+          elements: [{ tag: "markdown", content: "Card body" }],
+        }),
+        media: "/tmp/image.png",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(uploadImageMediaFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      mediaUrl: "/tmp/image.png",
+      accountId: undefined,
+      mediaLocalRoots: ["/tmp"],
+    });
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    expect(card.body).toEqual({
+      elements: [
+        { tag: "markdown", content: "Card body" },
+        {
+          tag: "img",
+          img_key: "img_key_1",
+          alt: { tag: "plain_text", content: "image" },
+          mode: "fit_horizontal",
+        },
+      ],
+    });
     expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });

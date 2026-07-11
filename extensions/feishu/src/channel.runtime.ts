@@ -8,6 +8,7 @@ import {
   listFeishuDirectoryGroupsLive as listFeishuDirectoryGroupsLiveImpl,
   listFeishuDirectoryPeersLive as listFeishuDirectoryPeersLiveImpl,
 } from "./directory.js";
+import { uploadImageMediaFeishu as uploadImageMediaFeishuImpl } from "./media.js";
 import { feishuOutbound as feishuOutboundImpl } from "./outbound.js";
 import {
   createPinFeishu as createPinFeishuImpl,
@@ -43,6 +44,7 @@ export const feishuChannelRuntime = {
   getFeishuMemberInfo: getFeishuMemberInfoImpl,
   editMessageFeishu: editMessageFeishuImpl,
   getMessageFeishu: getMessageFeishuImpl,
+  uploadImageMediaFeishu: uploadImageMediaFeishuImpl,
   sendCardFeishu: sendCardFeishuImpl,
   sendMessageFeishu: sendMessageFeishuImpl,
 };
