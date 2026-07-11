@@ -36,6 +36,11 @@ export const INTERRUPTED_SETTINGS_WAIT_ERROR =
 export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
   "Could not store the previous draft in browser storage. It remains available in this tab.";
 const STALE_STACK_OVERFLOW_SEND_ERROR_PATTERN = /Maximum call stack size exceeded/i;
+const STORED_QUEUE_ITEM_FORMAT_VERSION = 1;
+
+type StoredChatQueueItem = ChatQueueItem & {
+  composerPersistenceVersion: typeof STORED_QUEUE_ITEM_FORMAT_VERSION;
+};
 
 type ChatComposerPersistenceState = {
   settings?: { gatewayUrl?: string | null };
@@ -747,7 +752,7 @@ function isStaleStackOverflowSendError(value: unknown): boolean {
   return STALE_STACK_OVERFLOW_SEND_ERROR_PATTERN.test(normalizeOptionalString(value) ?? "");
 }
 
-function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
+function serializeQueueItem(item: ChatQueueItem): StoredChatQueueItem | null {
   const id = normalizeOptionalString(item.id);
   const text = typeof item.text === "string" ? item.text : "";
   if (!id || (!text.trim() && !item.attachments?.length)) {
@@ -757,9 +762,6 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
     return null;
   }
   if (item.sendState === "sending" && !item.sendRunId) {
-    return null;
-  }
-  if (item.sendState === "failed" && isStaleStackOverflowSendError(item.sendError)) {
     return null;
   }
   const attachments = item.attachments?.map(serializeChatAttachment) ?? [];
@@ -785,6 +787,7 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   return {
     id,
     text,
+    composerPersistenceVersion: STORED_QUEUE_ITEM_FORMAT_VERSION,
     createdAt:
       typeof item.createdAt === "number" && Number.isFinite(item.createdAt)
         ? item.createdAt
@@ -848,7 +851,12 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
     item.sendError = INTERRUPTED_SETTINGS_WAIT_ERROR;
   }
   const sendError = normalizeOptionalString(entry.sendError);
-  if (item.sendState === "failed" && isStaleStackOverflowSendError(sendError)) {
+  const isLegacyAttachmentStackOverflowFailure =
+    item.sendState === "failed" &&
+    attachments.length > 0 &&
+    entry.composerPersistenceVersion !== STORED_QUEUE_ITEM_FORMAT_VERSION &&
+    isStaleStackOverflowSendError(sendError);
+  if (isLegacyAttachmentStackOverflowFailure) {
     return null;
   }
   if (sendError) {
