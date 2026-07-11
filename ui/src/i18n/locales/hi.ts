@@ -4251,6 +4251,8 @@ export const hi: TranslationMap = {
       modelLockedLabel: "इस सत्र के लिए मॉडल चयन नियंत्रित है",
       lockedSessionModel: "सत्र मॉडल",
       nativeCodexModel: "Codex-नियंत्रित मॉडल",
+      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
+      manageModels: "Manage models",
       thinkingLevel: "चैट सोच स्तर",
     },
     toolCards: {

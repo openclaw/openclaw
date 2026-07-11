@@ -34,6 +34,7 @@ import type {
   SessionVisibility,
 } from "../../api/types.ts";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,

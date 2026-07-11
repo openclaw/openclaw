@@ -4295,6 +4295,8 @@ export const fa: TranslationMap = {
       modelLockedLabel: "انتخاب مدل برای این نشست کنترل‌شده است",
       lockedSessionModel: "مدل جلسه",
       nativeCodexModel: "مدل کنترل‌شده توسط Codex",
+      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
+      manageModels: "Manage models",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

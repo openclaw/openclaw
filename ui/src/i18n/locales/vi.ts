@@ -4303,6 +4303,8 @@ export const vi: TranslationMap = {
       modelLockedLabel: "Lựa chọn mô hình được kiểm soát cho phiên này",
       lockedSessionModel: "Mô hình phiên",
       nativeCodexModel: "Mô hình do Codex kiểm soát",
+      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
+      manageModels: "Manage models",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

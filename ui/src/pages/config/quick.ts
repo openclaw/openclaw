@@ -118,6 +118,16 @@ function renderModelSection(props: QuickSettingsProps) {
         control: renderSettingsValue(props.currentModel || "default", { mono: true }),
         onClick: () => props.onModelChange?.(),
       }),
+      props.modelCatalogMode === "replace"
+        ? renderSettingsRow({
+            title: t("chat.selectors.replaceModeHint"),
+            control: html`
+              <button type="button" class="btn" @click=${() => props.onModelChange?.()}>
+                ${t("chat.selectors.manageModels")}
+              </button>
+            `,
+          })
+        : nothing,
       renderSettingsRow({
         title: t("quickSettings.model.thinking"),
         control: renderSettingsSegmented({

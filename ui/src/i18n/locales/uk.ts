@@ -4318,6 +4318,8 @@ export const uk: TranslationMap = {
       modelLockedLabel: "Вибір моделі керується для цієї сесії",
       lockedSessionModel: "Модель сеансу",
       nativeCodexModel: "Модель, керована Codex",
+      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
+      manageModels: "Manage models",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

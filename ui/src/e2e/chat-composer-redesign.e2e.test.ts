@@ -541,6 +541,41 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     }
   });
 
+  it("explains configured-only model results in replace mode", async () => {
+    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const models = [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }];
+    const gateway = await installMockGateway(page, {
+      models,
+      methodResponses: {
+        "chat.metadata": {
+          catalogMode: "replace",
+          commands: [],
+          models,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.metadata");
+
+      const composer = page.locator(".agent-chat__input");
+      await composer.locator('[data-chat-model-select="true"]').click();
+      const hint = composer.locator(".chat-controls__catalog-hint");
+      await expect
+        .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
+        .toBe("Replace mode shows only models explicitly listed in Settings. Manage models");
+      await expect
+        .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
+        .toBe("/settings/ai-agents");
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();

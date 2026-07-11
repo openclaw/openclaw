@@ -4186,6 +4186,8 @@ export const zh_CN: TranslationMap = {
       modelLockedLabel: "此会话的模型选择已受控",
       lockedSessionModel: "会话模型",
       nativeCodexModel: "Codex 控制的模型",
+      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
+      manageModels: "Manage models",
       thinkingLevel: "聊天思考级别",
     },
     toolCards: {

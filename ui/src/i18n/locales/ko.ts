@@ -4279,6 +4279,8 @@ export const ko: TranslationMap = {
       modelLockedLabel: "이 세션의 모델 선택이 제어됨",
       lockedSessionModel: "세션 모델",
       nativeCodexModel: "Codex 제어 모델",
+      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
+      manageModels: "Manage models",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
