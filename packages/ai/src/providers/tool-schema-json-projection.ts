@@ -46,14 +46,15 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
   try {
     text = JSON.stringify(value, function (this: object, key, entry) {
       const holderPath = paths.get(this);
+      const keyPath = String(key);
       const entryPath =
         key === ""
           ? path
           : holderPath === undefined
-            ? `${path}.${key}`
+            ? `${path}.${keyPath}`
             : Array.isArray(this)
-              ? `${holderPath}[${key}]`
-              : `${holderPath}.${key}`;
+              ? `${holderPath}[${keyPath}]`
+              : `${holderPath}.${keyPath}`;
       if (nonFiniteNumberPath === null && typeof entry === "number" && !Number.isFinite(entry)) {
         nonFiniteNumberPath = entryPath;
       } else if (entry && typeof entry === "object") {
