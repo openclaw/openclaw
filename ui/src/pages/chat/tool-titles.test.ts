@@ -14,6 +14,21 @@ const LONG_GENERIC_ARGS = {
   description: "The websocket reconnect loop spins when the auth token expires mid-session.",
 };
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    const previous = value.charCodeAt(index - 1);
+    const next = value.charCodeAt(index + 1);
+    if (unit >= 0xd800 && unit <= 0xdbff && !(next >= 0xdc00 && next <= 0xdfff)) {
+      return true;
+    }
+    if (unit >= 0xdc00 && unit <= 0xdfff && !(previous >= 0xd800 && previous <= 0xdbff)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("resolveToolTitleRequest", () => {
   afterEach(() => {
     resetToolTitlesForTest();
@@ -51,6 +66,27 @@ describe("resolveToolTitleRequest", () => {
     const second = resolveToolTitleRequest("bash", { command: "pnpm install --frozen" });
 
     expect(first?.key).toBe(second?.key);
+  });
+
+  it("keeps every bounded tool-title input on a valid UTF-16 boundary", () => {
+    const command = resolveToolTitleRequest("bash", {
+      command: `${"a".repeat(1_999)}😀tail`,
+    });
+    const stringArgs = resolveToolTitleRequest(
+      "mcp__linear__create_issue",
+      `${"a".repeat(1_999)}😀tail`,
+    );
+    const jsonPrefix = '{"value":"';
+    const objectArgs = resolveToolTitleRequest("mcp__linear__create_issue", {
+      value: `${"a".repeat(1_999 - jsonPrefix.length)}😀tail`,
+    });
+
+    expect(command?.input).toBe("a".repeat(1_999));
+    expect(stringArgs?.input).toBe("a".repeat(1_999));
+    expect(objectArgs?.input).toBe(`${jsonPrefix}${"a".repeat(1_999 - jsonPrefix.length)}`);
+    expect(
+      [command, stringArgs, objectArgs].some((request) => hasLoneSurrogate(request?.input ?? "")),
+    ).toBe(false);
   });
 });
 
