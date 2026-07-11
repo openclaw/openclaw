@@ -640,17 +640,32 @@ describe("resolveGatewayReloadSettings", () => {
 });
 
 type WatcherHandler = () => void;
-type WatcherEvent = "add" | "change" | "unlink" | "error";
+type WatcherEvent = "add" | "change" | "unlink" | "error" | "ready";
 
 function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
+  const register = (event: WatcherEvent, handler: WatcherHandler) => {
+    const existing = handlers.get(event) ?? [];
+    existing.push(handler);
+    handlers.set(event, existing);
+  };
   return {
     effectiveUsePolling,
     options: { usePolling: false },
     on(event: WatcherEvent, handler: WatcherHandler) {
-      const existing = handlers.get(event) ?? [];
-      existing.push(handler);
-      handlers.set(event, existing);
+      register(event, handler);
+      return this;
+    },
+    once(event: WatcherEvent, handler: WatcherHandler) {
+      const wrapped: WatcherHandler = () => {
+        const list = handlers.get(event) ?? [];
+        const idx = list.indexOf(wrapped);
+        if (idx >= 0) {
+          list.splice(idx, 1);
+        }
+        handler();
+      };
+      register(event, wrapped);
       return this;
     },
     emit(event: WatcherEvent) {
