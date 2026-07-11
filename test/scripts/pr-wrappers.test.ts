@@ -35,13 +35,13 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain('exec "$base" merge-run "$pr"');
   });
 
-  it("defaults to squash and allows an explicit merge commit", () => {
+  it("defaults to squash and allows commit-preserving merge methods", () => {
     const script = readScript("scripts/pr-lib/merge.sh");
 
     expect(script).toContain("OPENCLAW_PR_MERGE_METHOD:-squash");
     expect(script).toContain("--squash");
     expect(script).toContain("--merge");
-    expect(script).not.toContain("--rebase");
+    expect(script).toContain("--rebase");
     expect(script).toContain('echo "Merged via $merge_label."');
   });
 

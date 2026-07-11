@@ -245,8 +245,12 @@ merge_run() {
       merge_flag="--merge"
       merge_label="merge commit"
       ;;
+    rebase)
+      merge_flag="--rebase"
+      merge_label="rebase"
+      ;;
     *)
-      echo "Invalid OPENCLAW_PR_MERGE_METHOD: $merge_method (expected squash or merge)."
+      echo "Invalid OPENCLAW_PR_MERGE_METHOD: $merge_method (expected squash, merge, or rebase)."
       exit 2
       ;;
   esac
