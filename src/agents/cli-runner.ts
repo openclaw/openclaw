@@ -1154,6 +1154,7 @@ export async function runPreparedCliAgent(
       }),
       providerId: params.provider,
       modelId: context.modelId,
+      abortSignal: params.abortSignal,
       warn: (message) => log.warn(message),
     });
     const contextEngineHistoryMessages = context.contextEngine

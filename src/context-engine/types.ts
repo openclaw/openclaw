@@ -358,6 +358,8 @@ export interface ContextEngine {
     sessionKey?: string;
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
+    /** Run-level cancellation; engines should stop session work before rejecting. */
+    abortSignal?: AbortSignal;
   }): Promise<BootstrapResult>;
 
   /**
@@ -372,6 +374,8 @@ export interface ContextEngine {
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
+    /** Run-level cancellation for foreground maintenance. */
+    abortSignal?: AbortSignal;
   }): Promise<ContextEngineMaintenanceResult>;
 
   /**
@@ -438,6 +442,8 @@ export interface ContextEngine {
     /** The incoming user prompt for this turn (useful for retrieval-oriented engines). */
     prompt?: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
+    /** Run-level cancellation; engines should stop assembly work before rejecting. */
+    abortSignal?: AbortSignal;
   }): Promise<AssembleResult>;
 
   /**

@@ -1208,6 +1208,7 @@ export async function createContextEngineAttemptRunner(params: {
       sessionId: string;
       sessionKey?: string;
       sessionFile: string;
+      abortSignal?: AbortSignal;
     }) => Promise<BootstrapResult>;
     maintain?:
       | boolean
@@ -1228,6 +1229,7 @@ export async function createContextEngineAttemptRunner(params: {
       messages: AgentMessage[];
       tokenBudget?: number;
       model?: string;
+      abortSignal?: AbortSignal;
     }) => Promise<AssembleResult>;
     afterTurn?: (params: {
       sessionId: string;

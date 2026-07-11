@@ -414,6 +414,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(bootstrapParams.sessionId).toBe("session-1");
     expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
     expect(bootstrapParams.sessionFile).toBe(sessionFile);
+    expect(bootstrapParams.abortSignal).toBeInstanceOf(AbortSignal);
     expect(bootstrapParams.runtimeSettings).toMatchObject({
       runtime: { mode: "degraded" },
       model: {
@@ -447,6 +448,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       },
     });
     expect(assembleParams.prompt).toBe("hello");
+    expect(assembleParams.abortSignal).toBe(bootstrapParams.abortSignal);
     expect(assembleParams.messages.map((message) => message.role)).toEqual(["assistant"]);
     expect(assembleParams.availableTools).toEqual(new Set());
 
@@ -459,6 +461,47 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("aborts pending context bootstrap before starting Codex", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("existing context", Date.now()) as never,
+    );
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async ({ abortSignal }) => {
+      if (!abortSignal) {
+        throw new Error("missing context bootstrap abort signal");
+      }
+      await new Promise<never>((_resolve, reject) => {
+        const rejectForAbort = () =>
+          reject(
+            abortSignal.reason instanceof Error
+              ? abortSignal.reason
+              : new Error("context bootstrap aborted"),
+          );
+        if (abortSignal.aborted) {
+          rejectForAbort();
+          return;
+        }
+        abortSignal.addEventListener("abort", rejectForAbort, { once: true });
+      });
+      throw new Error("unreachable");
+    });
+    const contextEngine = createContextEngine({ bootstrap });
+    const harness = createStartedThreadHarness();
+    const abortController = new AbortController();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.abortSignal = abortController.signal;
+
+    const run = runCodexAppServerAttempt(params);
+    const rejection = expect(run).rejects.toThrow("context bootstrap cancelled");
+    await vi.waitFor(() => expect(bootstrap).toHaveBeenCalledTimes(1));
+    abortController.abort(new Error("context bootstrap cancelled"));
+
+    await rejection;
+    expect(harness.requests).toEqual([]);
   });
 
   it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
