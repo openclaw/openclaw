@@ -3238,13 +3238,62 @@ describe("runCli exit behavior", () => {
     );
   });
 
-  it("starts the local TUI for bare root invocations when the gateway is unavailable", async () => {
+  it("keeps a configured remote Gateway authoritative across a transient cold-restart probe", async () => {
+    const url = "wss://gateway.example/ws";
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: { mode: "remote", remote: { url, token: "remote-token" } },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "unreachable",
+      detail: "gateway restarting",
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(runRemoteGatewayInferenceOnboardingMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: url, authSource: "config" },
+    );
+  });
+
+  it("keeps a configured local Gateway authoritative across a transient cold-restart probe", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: { mode: "local", auth: { mode: "token", token: "local-token" } },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "unreachable",
+      detail: "offline",
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: "ws://127.0.0.1:18789", authSource: "config" },
+    );
+  });
+
+  it("starts the local TUI when no Gateway is configured and the default probe is unavailable", async () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,
       valid: true,
       sourceConfig: {
         agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-        gateway: { mode: "local" },
       },
     });
     probeGatewayConfiguredModelMock.mockResolvedValueOnce({

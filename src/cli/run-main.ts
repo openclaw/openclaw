@@ -323,16 +323,20 @@ async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaun
   if (!snapshot.valid) {
     return { kind: "onboarding", classic: true };
   }
-  return resolveConfiguredTuiLaunchTarget(snapshot.config ?? snapshot.sourceConfig);
+  return resolveConfiguredTuiLaunchTarget(snapshot.config ?? snapshot.sourceConfig, {
+    hasConfiguredGateway: snapshot.sourceConfig.gateway !== undefined,
+  });
 }
 
 async function resolveConfiguredTuiLaunchTarget(
   config: OpenClawConfig,
+  options: { hasConfiguredGateway: boolean },
 ): Promise<BareRootLaunchTarget> {
-  const gatewayResolution = await resolveReachableGateway(config);
+  const gatewayResolution = await resolveReachableGateway(config, options);
   if (
     gatewayResolution.kind === "configured" ||
-    gatewayResolution.kind === "reachable-unverified"
+    gatewayResolution.kind === "reachable-unverified" ||
+    gatewayResolution.kind === "configured-unreachable"
   ) {
     const gateway = gatewayResolution.gateway;
     const target: BareRootLaunchTarget = { kind: "tui", local: false, gatewayUrl: gateway.url };
@@ -395,6 +399,7 @@ type GatewayResolution =
   | { kind: "configured"; gateway: ReachableGateway }
   | { kind: "missing-configured-model"; gateway: ReachableGateway }
   | { kind: "reachable-unverified"; gateway: ReachableGateway }
+  | { kind: "configured-unreachable"; gateway: ReachableGateway }
   | { kind: "unreachable" };
 
 type GatewayProbeAuth = {
@@ -414,7 +419,10 @@ function toReachableGateway(target: GatewayProbeTarget, auth: GatewayProbeAuth):
   };
 }
 
-async function resolveReachableGateway(config: OpenClawConfig): Promise<GatewayResolution> {
+async function resolveReachableGateway(
+  config: OpenClawConfig,
+  options: { hasConfiguredGateway: boolean },
+): Promise<GatewayResolution> {
   const targets = await resolveGatewayProbeTargets(config);
   if (targets.length === 0) {
     return { kind: "unreachable" };
@@ -424,9 +432,15 @@ async function resolveReachableGateway(config: OpenClawConfig): Promise<GatewayR
   const { probeGatewayConfiguredModel } = await import("../commands/onboard-helpers.js");
   let missingModelGateway: ReachableGateway | undefined;
   let reachableUnverifiedGateway: ReachableGateway | undefined;
+  let configuredGateway: ReachableGateway | undefined;
   for (const target of targets) {
     if (!isSafeGatewayProbeTarget(target)) {
       continue;
+    }
+    // A cold-restarting configured Gateway remains the authoritative route.
+    // Keep its safe endpoint so one failed probe cannot reopen local onboarding.
+    if (options.hasConfiguredGateway && !configuredGateway) {
+      configuredGateway = toReachableGateway(target, auth);
     }
     const probeOptions: {
       url: string;
@@ -464,6 +478,9 @@ async function resolveReachableGateway(config: OpenClawConfig): Promise<GatewayR
   }
   if (reachableUnverifiedGateway) {
     return { kind: "reachable-unverified", gateway: reachableUnverifiedGateway };
+  }
+  if (configuredGateway) {
+    return { kind: "configured-unreachable", gateway: configuredGateway };
   }
   return { kind: "unreachable" };
 }
