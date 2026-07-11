@@ -10053,6 +10053,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /web/workspaces
 - Headings:
+  - H2: Enable Workspaces
   - H2: The default workspace
   - H2: Built-in widgets
   - H2: Provenance
