@@ -94,7 +94,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     });
 
     try {
-      const response = await page.goto(server.baseUrl);
+      const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
 
       await page.locator(".sidebar-session-new").click();

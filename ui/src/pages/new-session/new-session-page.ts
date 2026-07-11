@@ -59,17 +59,21 @@ class NewSessionPage extends OpenClawLightDomElement {
   private browserRequestToken = 0;
 
   override updated() {
-    const agents = this.agents();
+    const agentsReady = this.agents().length > 0;
     const openKey = this.data?.agentId ?? "";
-    // A hard reload can land here before agents.list resolves; re-adopt the
-    // workspace defaults once the list arrives instead of keeping blanks.
-    const hydrating = !this.agentsHydrated && agents.length > 0;
-    if (this.openedFor === openKey && !hydrating) {
+    if (this.openedFor !== openKey) {
+      this.openedFor = openKey;
+      this.agentsHydrated = agentsReady;
+      this.resetDraft();
       return;
     }
-    this.openedFor = openKey;
-    this.agentsHydrated = agents.length > 0;
-    this.resetDraft();
+    // A hard reload can land here before agents.list resolves. Once the list
+    // arrives, adopt only agent-derived defaults; a full reset would discard
+    // anything the user already typed while the list was loading.
+    if (!this.agentsHydrated && agentsReady) {
+      this.agentsHydrated = true;
+      this.adoptAgentDefaults();
+    }
   }
 
   private agents() {
@@ -94,14 +98,23 @@ class NewSessionPage extends OpenClawLightDomElement {
     return Boolean(folder) && folder !== this.workspacePath();
   }
 
-  private resetDraft() {
+  /** Resolves the agent selection and workspace-derived fields; keeps user input. */
+  private adoptAgentDefaults() {
     const agents = this.agents();
     const requested = normalizeAgentId(this.data?.agentId || "");
     const fallback = this.context?.agents.state.agentsList?.defaultId ?? agents[0]?.id ?? "main";
     this.agentId = agents.some((agent) => normalizeAgentId(agent.id) === requested)
       ? requested
       : normalizeAgentId(fallback);
-    this.folder = this.workspacePath();
+    if (!this.folder.trim()) {
+      this.folder = this.workspacePath();
+    }
+    void this.loadNodes();
+    this.maybeLoadBranches();
+  }
+
+  private resetDraft() {
+    this.folder = "";
     this.worktree = false;
     this.worktreeName = "";
     this.baseRef = "";
@@ -112,8 +125,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.submitting = false;
     this.error = null;
     this.closeBrowser();
-    void this.loadNodes();
-    this.maybeLoadBranches();
+    this.adoptAgentDefaults();
     void this.updateComplete.then(() => {
       this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
     });
@@ -286,6 +298,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     const requestId = ++this.browserRequestToken;
     this.browserLoading = true;
     this.browserError = null;
+    // Clear the previous directory immediately: keeping it clickable while the
+    // request is in flight would let "Use this folder" apply the stale path.
+    this.browserListing = null;
     void client
       .request<FsListDirResult>("fs.listDir", path ? { path } : {})
       .then((result) => {
