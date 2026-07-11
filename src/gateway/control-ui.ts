@@ -47,6 +47,8 @@ import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js
 import {
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_MCP_APP_SANDBOX_PATH,
+  CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
@@ -56,6 +58,10 @@ import {
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
+import {
+  createControlUiMcpAppSandboxTicket,
+  serveControlUiMcpAppSandboxProxy,
+} from "./control-ui-mcp-app-sandbox.js";
 import { classifyControlUiRequest } from "./control-ui-routing.js";
 import {
   buildControlUiAvatarUrl,
@@ -816,11 +822,12 @@ function serveResolvedIndexHtml(
   const basePathAttribute = normalizedBasePath
     ? ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`
     : "";
+  const mcpAppSandboxTicket = escapeHtmlAttribute(createControlUiMcpAppSandboxTicket());
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
   const prepared = withBasePath.replace(
     /<html\b/i,
-    `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
+    `<html${basePathAttribute} ${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="${mcpAppSandboxTicket}" ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
   );
   const hashes = computeInlineScriptHashes(prepared);
   // Always set the document CSP here (the index carries inline scripts) so the
@@ -990,6 +997,11 @@ export async function handleControlUiHttpRequest(
     res.statusCode = 302;
     res.setHeader("Location", route.location);
     res.end();
+    return true;
+  }
+
+  if (pathname === `${basePath}${CONTROL_UI_MCP_APP_SANDBOX_PATH}`) {
+    serveControlUiMcpAppSandboxProxy(req, res, url);
     return true;
   }
 

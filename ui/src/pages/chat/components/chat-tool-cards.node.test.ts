@@ -408,14 +408,18 @@ with Example Deck
       "msg:view:1",
     );
 
-    expect(card?.preview?.kind).toBe("canvas");
-    expect(card?.preview?.surface).toBe("assistant_message");
-    expect(card?.preview?.render).toBe("url");
-    expect(card?.preview?.viewId).toBe("cv_inline");
-    expect(card?.preview?.url).toBe("/__openclaw__/canvas/documents/cv_inline/index.html");
-    expect(card?.preview?.title).toBe("Inline demo");
-    expect(card?.preview?.preferredHeight).toBe(420);
-    expect(card?.preview?.sandbox).toBe("scripts");
+    const preview = card?.preview;
+    expect(preview?.kind).toBe("canvas");
+    if (preview?.kind !== "canvas") {
+      throw new Error("Expected canvas preview");
+    }
+    expect(preview.surface).toBe("assistant_message");
+    expect(preview.render).toBe("url");
+    expect(preview.viewId).toBe("cv_inline");
+    expect(preview.url).toBe("/__openclaw__/canvas/documents/cv_inline/index.html");
+    expect(preview.title).toBe("Inline demo");
+    expect(preview.preferredHeight).toBe(420);
+    expect(preview.sandbox).toBe("scripts");
   });
 
   it("carries the preview sandbox ceiling into sidebar canvas content", () => {

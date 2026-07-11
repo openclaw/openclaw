@@ -68,7 +68,7 @@ function normalizeStringList(raw: unknown): string[] | undefined {
     return undefined;
   }
   const values = raw.filter(
-    (entry): entry is string => typeof entry === "string" && !!entry.trim(),
+    (entry): entry is string => typeof entry === "string" && Boolean(entry.trim()),
   );
   return values.length > 0 ? values : undefined;
 }
@@ -178,7 +178,7 @@ export function parseMcpAppResource(readResult: unknown): McpAppResource | undef
     if (!html || Buffer.byteLength(html, "utf8") > MCP_APP_MAX_HTML_BYTES) {
       continue;
     }
-    const entryMeta = isRecord(rawEntry._meta) ? rawEntry._meta : undefined;
+    const entryMeta = isRecord(rawEntry["_meta"]) ? rawEntry["_meta"] : undefined;
     const uiMeta = isRecord(entryMeta?.ui) ? entryMeta.ui : undefined;
     const permissions = isRecord(uiMeta?.permissions) ? Object.keys(uiMeta.permissions) : undefined;
     return {

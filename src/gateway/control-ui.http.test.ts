@@ -20,7 +20,12 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_MCP_APP_SANDBOX_PATH,
+  CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
+} from "./control-ui-contract.js";
+import { CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML } from "./control-ui-mcp-app-sandbox.js";
 import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
@@ -940,9 +945,81 @@ describe("handleControlUiHttpRequest", () => {
           },
         );
         expect(handled).toBe(true);
-        expect(end).toHaveBeenCalledWith(
-          html.replace("<html", '<html data-openclaw-terminal-enabled="false"'),
+        const body = responseBody(end);
+        expect(body).toMatch(
+          new RegExp(
+            `^<html ${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="[^"]+" data-openclaw-terminal-enabled="false"`,
+          ),
         );
+        expect(body).not.toContain("<script");
+      },
+    });
+  });
+
+  it("serves the ticketed MCP App sandbox proxy with its own CSP", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const indexResponse = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET" } as IncomingMessage,
+          indexResponse.res,
+          { root: { kind: "resolved", path: tmp } },
+        );
+        const ticket = responseBody(indexResponse.end).match(
+          new RegExp(`${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="([^"]+)"`),
+        )?.[1];
+        expect(ticket).toBeTruthy();
+
+        const csp = encodeURIComponent(
+          JSON.stringify({
+            connectDomains: ["https://api.example.com", "https://safe.example; script-src *"],
+            resourceDomains: ["https://cdn.example.com"],
+          }),
+        );
+        const { res, end, setHeader } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          {
+            url: `${CONTROL_UI_MCP_APP_SANDBOX_PATH}?ticket=${encodeURIComponent(ticket ?? "")}&csp=${csp}`,
+            method: "GET",
+          } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(end).toHaveBeenCalledWith(CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML);
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+        expect(setHeader).toHaveBeenCalledWith("X-Frame-Options", "SAMEORIGIN");
+        const policy = String(
+          setHeader.mock.calls.find((call) => call[0] === "Content-Security-Policy")?.[1] ?? "",
+        );
+        expect(policy).toContain("sandbox allow-scripts");
+        expect(policy).toContain("frame-ancestors 'self'");
+        expect(policy).toContain("https://api.example.com");
+        expect(policy).toContain("https://cdn.example.com");
+        expect(policy).not.toContain("safe.example");
+        expect(CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML).toContain(
+          'view.setAttribute("sandbox", "allow-scripts allow-same-origin")',
+        );
+        expect(CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML).not.toContain('view.setAttribute("allow"');
+      },
+    });
+  });
+
+  it("rejects invalid MCP App sandbox tickets", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          {
+            url: `${CONTROL_UI_MCP_APP_SANDBOX_PATH}?ticket=invalid`,
+            method: "GET",
+          } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
+        expectNotFoundResponse({ handled, res, end });
       },
     });
   });

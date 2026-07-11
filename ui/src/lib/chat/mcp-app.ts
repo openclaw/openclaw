@@ -14,7 +14,9 @@ function normalizeStringList(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
   }
-  const values = raw.filter((entry): entry is string => typeof entry === "string" && !!entry);
+  const values = raw.filter(
+    (entry): entry is string => typeof entry === "string" && Boolean(entry),
+  );
   return values.length > 0 ? values : undefined;
 }
 
@@ -52,6 +54,7 @@ export function extractMcpAppPreview(
       }
     : undefined;
   const result = isRecord(mcpApp.result) ? mcpApp.result : undefined;
+  const resultMeta = result?.["_meta"];
   const toolName = typeof mcpApp.toolName === "string" ? mcpApp.toolName : undefined;
   // Details carry the authoritative input: transcripts split tool calls and
   // results into separate messages, so call-site args may be unavailable.
@@ -74,7 +77,7 @@ export function extractMcpAppPreview(
             ...(result.structuredContent !== undefined
               ? { structuredContent: result.structuredContent }
               : {}),
-            ...(isRecord(result._meta) ? { _meta: result._meta } : {}),
+            ...(isRecord(resultMeta) ? { _meta: resultMeta } : {}),
           },
         }
       : {}),

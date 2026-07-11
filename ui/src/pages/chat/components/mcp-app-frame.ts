@@ -1,40 +1,27 @@
 /**
- * Minimal MCP Apps host frame (Phase 0): renders a ui:// app document in a
- * sandboxed srcdoc iframe and answers the app's JSON-RPC-over-postMessage
- * handshake (`ui/initialize` → `ui/notifications/initialized` → tool-input +
- * tool-result). App-initiated requests such as tools/call are answered with a
- * JSON-RPC method-not-found error until the full host bridge lands.
- *
- * Security: the iframe runs with `sandbox="allow-scripts"` only — never
- * `allow-same-origin` — so the untrusted document cannot reach the Control UI
- * origin. The app-declared CSP (`_meta.ui.csp`) is injected as a meta tag.
- *
- * KNOWN LIMITATION: `about:srcdoc` documents inherit the embedding page's
- * CSP. The gateway serves the Control UI with `script-src 'self'`
- * (src/gateway/control-ui-csp.ts), which blocks app scripts before they can
- * initialize, so this inline preview only functions on deployments without
- * that header (e.g. dev servers). The follow-up host serves app documents
- * from a dedicated ticketed route with their own CSP headers — the
- * spec-required sandbox-proxy pattern — and this module's bridge, sizing,
- * and registry carry over unchanged.
+ * Minimal MCP Apps host frame (Phase 0): renders a ui:// app through the
+ * gateway's sandbox proxy and answers the JSON-RPC-over-postMessage handshake.
+ * App-initiated requests such as tools/call are rejected until the full host
+ * bridge lands.
  */
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+import {
+  CONTROL_UI_BASE_PATH_ATTRIBUTE,
+  CONTROL_UI_MCP_APP_SANDBOX_PATH,
+  CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
+} from "../../../../../src/gateway/control-ui-contract.js";
 import type { McpAppToolPreview } from "../../../lib/chat/chat-types.ts";
 
 const MCP_APPS_PROTOCOL_VERSION = "2026-01-26";
 const APP_FRAME_MIN_HEIGHT = 240;
 const APP_FRAME_MAX_HEIGHT = 1200;
 const APP_FRAME_DEFAULT_HEIGHT = 480;
-
-// Permission names from `_meta.ui.permissions` mapped to iframe allow features.
-const PERMISSION_TO_ALLOW_FEATURE: Record<string, string> = {
-  camera: "camera",
-  microphone: "microphone",
-  geolocation: "geolocation",
-  clipboardWrite: "clipboard-write",
-};
+const APP_CSP_MAX_TOTAL_DOMAINS = 32;
+const APP_CSP_MAX_ORIGIN_CHARS = 256;
+const APP_CSP_ORIGIN_PATTERN =
+  /^(https?|wss?):\/\/(\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$/i;
 
 type JsonRpcMessage = {
   jsonrpc?: string;
@@ -46,6 +33,7 @@ type JsonRpcMessage = {
 type McpAppHostState = {
   preview: McpAppToolPreview;
   initialized: boolean;
+  resourceSent: boolean;
 };
 
 // Frames register on load; state is keyed by the iframe element so multiple
@@ -59,13 +47,14 @@ function resolveHostTheme(): "light" | "dark" {
 }
 
 function postToApp(frame: HTMLIFrameElement, message: Record<string, unknown>) {
-  // srcdoc sandboxed frames have an opaque origin, so "*" is the only valid
-  // target; the payload never contains host secrets.
+  // The outer sandbox proxy has an opaque origin, so "*" is the only valid
+  // target. Source-window checks on both sides prevent cross-frame delivery.
   frame.contentWindow?.postMessage({ jsonrpc: "2.0", ...message }, "*");
 }
 
 function sendToolLifecycle(frame: HTMLIFrameElement, state: McpAppHostState) {
   const { toolInput, toolResult } = state.preview;
+  const toolResultMeta = toolResult?.["_meta"];
   postToApp(frame, {
     method: "ui/notifications/tool-input",
     params: {
@@ -80,7 +69,7 @@ function sendToolLifecycle(frame: HTMLIFrameElement, state: McpAppHostState) {
       ...(toolResult?.structuredContent !== undefined
         ? { structuredContent: toolResult.structuredContent }
         : {}),
-      ...(toolResult?._meta !== undefined ? { _meta: toolResult._meta } : {}),
+      ...(toolResultMeta !== undefined ? { _meta: toolResultMeta } : {}),
     },
   });
 }
@@ -90,6 +79,16 @@ function clampAppFrameHeight(raw: number): number {
 }
 
 function handleAppMessage(frame: HTMLIFrameElement, state: McpAppHostState, data: JsonRpcMessage) {
+  if (data.method === "ui/notifications/sandbox-proxy-ready") {
+    if (!state.resourceSent) {
+      state.resourceSent = true;
+      postToApp(frame, {
+        method: "ui/notifications/sandbox-resource-ready",
+        params: { html: state.preview.html },
+      });
+    }
+    return;
+  }
   if (data.method === "ui/initialize" && data.id !== undefined) {
     postToApp(frame, {
       id: data.id,
@@ -166,62 +165,63 @@ function installAppHostListener() {
   });
 }
 
-// CSP source expressions accepted from app metadata: scheme://host[:port]
-// with an optional single leading wildcard label. Anything else (spaces,
-// semicolons, quotes) could smuggle extra directives into the policy string.
-const CSP_ORIGIN_PATTERN =
-  /^(https?|wss?):\/\/(\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$/i;
-
-function sanitizeCspOrigins(origins: string[] | undefined): string {
-  return (origins ?? []).filter((origin) => CSP_ORIGIN_PATTERN.test(origin)).join(" ");
+export function buildMcpAppSandboxUrl(params: {
+  basePath: string;
+  ticket: string;
+  csp?: McpAppToolPreview["csp"];
+}): string {
+  const search = new URLSearchParams({ ticket: params.ticket });
+  if (params.csp) {
+    let remainingDomains = APP_CSP_MAX_TOTAL_DOMAINS;
+    const sanitize = (origins: string[] | undefined): string[] | undefined => {
+      if (!origins || remainingDomains <= 0) {
+        return undefined;
+      }
+      const values = origins
+        .filter(
+          (origin) =>
+            origin.length <= APP_CSP_MAX_ORIGIN_CHARS && APP_CSP_ORIGIN_PATTERN.test(origin),
+        )
+        .slice(0, remainingDomains);
+      remainingDomains -= values.length;
+      return values.length > 0 ? values : undefined;
+    };
+    const connectDomains = sanitize(params.csp.connectDomains);
+    const resourceDomains = sanitize(params.csp.resourceDomains);
+    const frameDomains = sanitize(params.csp.frameDomains);
+    const baseUriDomains = sanitize(params.csp.baseUriDomains);
+    const csp = {
+      ...(connectDomains ? { connectDomains } : {}),
+      ...(resourceDomains ? { resourceDomains } : {}),
+      ...(frameDomains ? { frameDomains } : {}),
+      ...(baseUriDomains ? { baseUriDomains } : {}),
+    };
+    if (Object.keys(csp).length > 0) {
+      search.set("csp", JSON.stringify(csp));
+    }
+  }
+  return `${params.basePath}${CONTROL_UI_MCP_APP_SANDBOX_PATH}?${search.toString()}`;
 }
 
-function buildCspContent(preview: McpAppToolPreview): string {
-  const resourceOrigins = sanitizeCspOrigins(preview.csp?.resourceDomains);
-  const connectOrigins = sanitizeCspOrigins(preview.csp?.connectDomains);
-  const frameOrigins = sanitizeCspOrigins(preview.csp?.frameDomains);
-  const baseUriOrigins = sanitizeCspOrigins(preview.csp?.baseUriDomains);
-  // Spec mapping (deny-by-default): resourceDomains feed static asset
-  // directives, connectDomains feed connect-src. Inline scripts/styles and
-  // data/blob URLs stay allowed — the document itself is already the trust
-  // boundary and self-contained bundles rely on them.
-  return [
-    `default-src 'none'`,
-    `script-src 'unsafe-inline' 'unsafe-eval' blob: ${resourceOrigins}`.trim(),
-    `style-src 'unsafe-inline' ${resourceOrigins}`.trim(),
-    `img-src data: blob: ${resourceOrigins}`.trim(),
-    `font-src data: ${resourceOrigins}`.trim(),
-    `media-src data: blob: ${resourceOrigins}`.trim(),
-    `connect-src data: blob: ${connectOrigins}`.trim(),
-    `worker-src blob:`,
-    frameOrigins ? `frame-src ${frameOrigins}` : `frame-src 'none'`,
-    baseUriOrigins ? `base-uri ${baseUriOrigins}` : `base-uri 'none'`,
-  ].join("; ");
-}
-
-function buildAppSrcdoc(preview: McpAppToolPreview): string {
-  // Structural insertion via DOMParser: regexes over attacker-controlled
-  // markup can be steered (e.g. `<head data-x=">">`) to land the CSP meta
-  // inside an attribute where the browser never enforces it.
-  const doc = new DOMParser().parseFromString(preview.html, "text/html");
-  const meta = doc.createElement("meta");
-  meta.setAttribute("http-equiv", "Content-Security-Policy");
-  meta.setAttribute("content", buildCspContent(preview));
-  doc.head.insertBefore(meta, doc.head.firstChild);
-  return `<!doctype html>${doc.documentElement.outerHTML}`;
-}
-
-function buildAllowAttribute(preview: McpAppToolPreview): string {
-  const features = (preview.permissions ?? [])
-    .map((permission) => PERMISSION_TO_ALLOW_FEATURE[permission])
-    .filter((feature): feature is string => Boolean(feature));
-  return features.join("; ");
+function resolveMcpAppSandboxUrl(preview: McpAppToolPreview): string | undefined {
+  if (typeof document === "undefined") {
+    return undefined;
+  }
+  const root = document.documentElement;
+  const ticket = root.getAttribute(CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE)?.trim();
+  if (!ticket) {
+    return undefined;
+  }
+  return buildMcpAppSandboxUrl({
+    basePath: root.getAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE)?.trim() ?? "",
+    ticket,
+    csp: preview.csp,
+  });
 }
 
 function registerAppFrame(preview: McpAppToolPreview) {
-  // Registration must happen synchronously when the element attaches — before
-  // the srcdoc document executes — or an app that connects immediately posts
-  // ui/initialize into the void and hangs waiting for the response.
+  // Registration must happen synchronously when the proxy element attaches so
+  // its ready notification cannot race the host listener.
   let registered: HTMLIFrameElement | undefined;
   return (element: Element | undefined) => {
     if (!(element instanceof HTMLIFrameElement)) {
@@ -237,7 +237,7 @@ function registerAppFrame(preview: McpAppToolPreview) {
     registered = element;
     appFrameRegistry.add(element);
     if (!appFrameHosts.has(element)) {
-      appFrameHosts.set(element, { preview, initialized: false });
+      appFrameHosts.set(element, { preview, initialized: false, resourceSent: false });
     }
   };
 }
@@ -247,7 +247,10 @@ export function renderMcpAppPreview(preview: McpAppToolPreview) {
   if (!preview.html) {
     return nothing;
   }
-  const allow = buildAllowAttribute(preview);
+  const sandboxUrl = resolveMcpAppSandboxUrl(preview);
+  if (!sandboxUrl) {
+    return nothing;
+  }
   return html`
     <div
       class="chat-tool-card__preview"
@@ -259,14 +262,14 @@ export function renderMcpAppPreview(preview: McpAppToolPreview) {
       </div>
       <div class="chat-tool-card__preview-panel" data-side="mcp-app">
         ${keyed(
-          preview.resourceUri ?? preview.html.length,
+          `${preview.resourceUri ?? preview.html.length}:${sandboxUrl}`,
           html`
             <iframe
               class="chat-tool-card__preview-frame chat-tool-card__preview-frame--mcp-app"
               title=${preview.title?.trim() || "MCP app"}
               sandbox="allow-scripts"
-              allow=${allow || nothing}
-              srcdoc=${buildAppSrcdoc(preview)}
+              referrerpolicy="no-referrer"
+              src=${sandboxUrl}
               style="height:${APP_FRAME_DEFAULT_HEIGHT}px;min-height:${APP_FRAME_DEFAULT_HEIGHT}px"
               ${ref(registerAppFrame(preview))}
             ></iframe>

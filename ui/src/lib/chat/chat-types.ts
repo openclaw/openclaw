@@ -170,8 +170,8 @@ export type ToolCard = {
 
 /**
  * MCP App (ui://) preview extracted from a tool result's `details.mcpApp`.
- * The html document is untrusted MCP server output and must only render in a
- * sandboxed iframe without `allow-same-origin`.
+ * The html document is untrusted MCP server output and must render through the
+ * gateway's opaque-origin sandbox proxy.
  */
 export type McpAppToolPreview = {
   kind: "mcp-app";
@@ -184,7 +184,7 @@ export type McpAppToolPreview = {
     frameDomains?: string[];
     baseUriDomains?: string[];
   };
-  /** Permission names requested by the app (e.g. clipboardWrite). */
+  /** Permission names requested by the app. Phase 0 records but does not grant them. */
   permissions?: string[];
   prefersBorder?: boolean;
   /** Original tool-call arguments for ui/notifications/tool-input. */

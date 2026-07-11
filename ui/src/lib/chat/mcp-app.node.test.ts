@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildMcpAppSandboxUrl } from "../../pages/chat/components/mcp-app-frame.ts";
 import { extractMcpAppPreview } from "./mcp-app.ts";
 import { extractToolCards } from "./tool-cards.ts";
 
@@ -57,6 +58,51 @@ describe("extractMcpAppPreview", () => {
     expect(extractMcpAppPreview(undefined)).toBe(undefined);
     expect(extractMcpAppPreview({})).toBe(undefined);
     expect(extractMcpAppPreview({ mcpApp: { resource: { html: "" } } })).toBe(undefined);
+  });
+});
+
+describe("buildMcpAppSandboxUrl", () => {
+  it("preserves the Control UI base path and encodes app CSP metadata", () => {
+    const url = new URL(
+      buildMcpAppSandboxUrl({
+        basePath: "/openclaw",
+        ticket: "signed.ticket",
+        csp: {
+          connectDomains: ["https://api.example.com"],
+          resourceDomains: ["https://cdn.example.com"],
+        },
+      }),
+      "https://gateway.example",
+    );
+    expect(url.pathname).toBe("/openclaw/__openclaw__/mcp-app-sandbox");
+    expect(url.searchParams.get("ticket")).toBe("signed.ticket");
+    expect(JSON.parse(url.searchParams.get("csp") ?? "{}")).toEqual({
+      connectDomains: ["https://api.example.com"],
+      resourceDomains: ["https://cdn.example.com"],
+    });
+  });
+
+  it("drops unsafe and excessive CSP origins before building the iframe URL", () => {
+    const url = new URL(
+      buildMcpAppSandboxUrl({
+        basePath: "",
+        ticket: "signed.ticket",
+        csp: {
+          connectDomains: [
+            "https://api.example.com",
+            "https://bad.example; script-src *",
+            ...Array.from({ length: 40 }, (_, index) => `https://api-${index}.example.com`),
+          ],
+        },
+      }),
+      "https://gateway.example",
+    );
+    const csp = JSON.parse(url.searchParams.get("csp") ?? "{}") as {
+      connectDomains?: string[];
+    };
+    expect(csp.connectDomains).toHaveLength(32);
+    expect(csp.connectDomains).toContain("https://api.example.com");
+    expect(csp.connectDomains?.some((origin) => origin.includes(";"))).toBe(false);
   });
 });
 

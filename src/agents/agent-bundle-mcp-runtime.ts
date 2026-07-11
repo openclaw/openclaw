@@ -642,7 +642,7 @@ export function createSessionMcpRuntime(params: {
                     shouldExposeMcpTool(selection, tool.name.trim()) &&
                     // App-only tools (`_meta.ui.visibility` without "model")
                     // exist for the app iframe, never for the agent.
-                    !isAppOnlyMcpTool(tool._meta),
+                    !isAppOnlyMcpTool(tool["_meta"]),
                 );
                 const serverEntry: McpServerCatalog = {
                   serverName,
@@ -678,7 +678,7 @@ export function createSessionMcpRuntime(params: {
                   if (!toolName) {
                     continue;
                   }
-                  const uiMeta = parseMcpToolUiMeta(tool._meta);
+                  const uiMeta = parseMcpToolUiMeta(tool["_meta"]);
                   toolEntries.push({
                     serverName,
                     safeServerName,

@@ -831,14 +831,14 @@ Behavior:
 
 - After a ui-bearing tool call succeeds, OpenClaw reads the app document (up to 5MB) and attaches it to the tool result for UI-capable surfaces. Every other surface receives the tool's normal text/structured result, so apps degrade gracefully everywhere.
 - Tools a server marks app-only (`_meta.ui.visibility` without `"model"`, including an explicitly empty list) are never exposed to the agent.
-- The Control UI renders the document inside the tool card in a sandboxed iframe (`allow-scripts`, never `allow-same-origin`) with the app-declared CSP (`_meta.ui.csp`) enforced, and answers the app's `ui/initialize` handshake, tool-input/tool-result notifications, and sizing.
+- The Control UI renders the document inside the tool card through a gateway-served sandbox proxy. The outer frame has an opaque origin, the nested app frame receives the extension-required `allow-scripts allow-same-origin` sandbox, and the app-declared CSP (`_meta.ui.csp`) is enforced by the proxy response header.
+- Phase 0 does not delegate requested camera, microphone, geolocation, or clipboard permissions to app frames.
 
 Plugins can attach MCP App servers declaratively with the `mcpServers` manifest field — see the [plugin manifest reference](/plugins/manifest).
 
 Current MCP Apps limits:
 
 - the host is view-only for app→host calls: app-initiated `tools/call`, `ui/open-link`, and similar requests receive a JSON-RPC method-not-found error until the full host bridge lands
-- gateway-served Control UI deployments enforce a strict page CSP that srcdoc iframes inherit, which currently blocks inline app scripts; the dedicated app-document route with per-app CSP headers is the tracked follow-up (text results are unaffected)
 
 ## Current limits
 

@@ -97,6 +97,7 @@ async function resolveMcpAppDetails(params: {
     if (!resource) {
       return undefined;
     }
+    const resultMeta = params.result["_meta"];
     return {
       serverName: params.tool.serverName,
       toolName: params.tool.toolName,
@@ -107,7 +108,7 @@ async function resolveMcpAppDetails(params: {
         ...(params.result.structuredContent !== undefined
           ? { structuredContent: params.result.structuredContent }
           : {}),
-        ...(isRecord(params.result._meta) ? { _meta: params.result._meta } : {}),
+        ...(isRecord(resultMeta) ? { _meta: resultMeta } : {}),
       },
     };
   } catch (error) {
