@@ -1,7 +1,5 @@
-/**
- * Scans remote provider model catalogs for configured providers.
- */
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import type { OpenAICompletionsOptions } from "@openclaw/ai/internal/openai";
+import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
@@ -17,8 +15,10 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import type { OpenAICompletionsOptions } from "../llm/providers/openai-completions.js";
+/**
+ * Scans remote provider model catalogs for configured providers.
+ */
+import { readResponseWithLimit } from "../infra/http-body.js";
 import { complete } from "../llm/stream.js";
 import type { Context, Model, Tool } from "../llm/types.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
@@ -429,7 +429,11 @@ async function mapWithConcurrency<T, R>(
       if (current >= items.length) {
         return;
       }
-      results[current] = await fn(items[current], current);
+      const item = items.at(current);
+      if (item === undefined) {
+        return;
+      }
+      results[current] = await fn(item, current);
       completed += 1;
       opts?.onProgress?.(completed, items.length);
     }

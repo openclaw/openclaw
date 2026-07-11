@@ -62,8 +62,22 @@ describe("noteBootstrapFileSize", () => {
         "Total bootstrap injected chars: 20,000 (13% of max/total 150,000).",
         "Total bootstrap raw chars (before truncation): 25,000.",
         "",
-        "- Tip: tune `agents.defaults.bootstrapMaxChars` for per-file limits.",
+        "- Tip: tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       ].join("\n"),
+    );
+  });
+
+  it("threads the default agent id through bootstrap size resolution", async () => {
+    resolveDefaultAgentId.mockReturnValueOnce("custom-agent");
+    resolveBootstrapContextForRun.mockResolvedValue({
+      bootstrapFiles: [],
+      contextFiles: [],
+    });
+    await noteBootstrapFileSize({} as OpenClawConfig);
+    expect(resolveBootstrapMaxChars).toHaveBeenCalledWith(expect.anything(), "custom-agent");
+    expect(resolveBootstrapTotalMaxChars).toHaveBeenCalledWith(expect.anything(), "custom-agent");
+    expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "custom-agent" }),
     );
   });
 

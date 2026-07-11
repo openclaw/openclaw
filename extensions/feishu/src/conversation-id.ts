@@ -7,6 +7,25 @@ export type FeishuGroupSessionScope =
   | "group_topic"
   | "group_topic_sender";
 
+export function resolveConfiguredFeishuGroupSessionScope(params: {
+  groupConfig?: {
+    groupSessionScope?: FeishuGroupSessionScope;
+    topicSessionMode?: "enabled" | "disabled";
+  };
+  feishuCfg?: {
+    groupSessionScope?: FeishuGroupSessionScope;
+    topicSessionMode?: "enabled" | "disabled";
+  };
+}): FeishuGroupSessionScope {
+  const legacyTopicSessionMode =
+    params.groupConfig?.topicSessionMode ?? params.feishuCfg?.topicSessionMode ?? "disabled";
+  return (
+    params.groupConfig?.groupSessionScope ??
+    params.feishuCfg?.groupSessionScope ??
+    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group")
+  );
+}
+
 function normalizeText(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;

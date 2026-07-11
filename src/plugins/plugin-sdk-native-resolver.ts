@@ -53,14 +53,52 @@ const nodeResolveFilenameProperty = "_resolveFilename" as const;
 const PLUGIN_SDK_PACKAGE_PREFIXES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const INTERNAL_CORE_PACKAGE_ALIASES = [
   {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpaths: [
+      ["", "index.ts"],
+      ["code-spans", "code-spans.ts"],
+      ["fences", "fences.ts"],
+      ["frontmatter", "frontmatter.ts"],
+      ["ir", "ir.ts"],
+      ["render", "render.ts"],
+      ["render-aware-chunking", "render-aware-chunking.ts"],
+      ["tables", "tables.ts"],
+      ["types", "types.ts"],
+    ],
+  },
+  {
     packageName: "@openclaw/normalization-core",
     packageDir: "normalization-core",
     subpaths: [
       ["", "index.ts"],
+      ["boolean-coercion", "boolean-coercion.ts"],
+      ["error-coercion", "error-coercion.ts"],
       ["number-coercion", "number-coercion.ts"],
       ["record-coerce", "record-coerce.ts"],
       ["string-coerce", "string-coerce.ts"],
       ["string-normalization", "string-normalization.ts"],
+      ["utf16-slice", "utf16-slice.ts"],
+    ],
+  },
+  {
+    // Mirrors packages/ai/package.json exports; dist file names do not follow
+    // the src layout (dist/diagnostics.mjs <- src/utils/diagnostics.ts), so the
+    // generic export-map derivation cannot be used here.
+    packageName: "@openclaw/ai",
+    packageDir: "ai",
+    subpaths: [
+      ["", "index.ts"],
+      ["providers", "providers.ts"],
+      ["diagnostics", path.join("utils", "diagnostics.ts")],
+      ["event-stream", path.join("utils", "event-stream.ts")],
+      ["types", "types.ts"],
+      ["validation", "validation.ts"],
+      ["internal/anthropic", path.join("internal", "anthropic.ts")],
+      ["internal/openai", path.join("internal", "openai.ts")],
+      ["internal/retry-after", path.join("internal", "retry-after.ts")],
+      ["internal/runtime", path.join("internal", "runtime.ts")],
+      ["internal/shared", path.join("internal", "shared.ts")],
     ],
   },
   {
@@ -77,7 +115,6 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["media-source-url", "media-source-url.ts"],
       ["mime", "mime.ts"],
       ["read-byte-stream-with-limit", "read-byte-stream-with-limit.ts"],
-      ["read-response-with-limit", "read-response-with-limit.ts"],
     ],
   },
   {

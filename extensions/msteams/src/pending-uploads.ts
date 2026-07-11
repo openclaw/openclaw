@@ -8,7 +8,7 @@
 
 import crypto from "node:crypto";
 
-export interface PendingUpload {
+interface PendingUpload {
   id: string;
   buffer: Buffer;
   filename: string;

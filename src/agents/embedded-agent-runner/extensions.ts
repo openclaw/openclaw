@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
@@ -92,7 +93,14 @@ function buildAgentToolResultMiddlewareFactory(
         isError: event.isError,
         result: current,
       });
-      const isError = event.isError === true || inputHadErrorStatus || isToolResultError(result);
+      const isAcceptedSessionSpawn =
+        event.toolName === "sessions_spawn" && normalizeAcceptedSessionSpawnResult(result) !== null;
+      const isError =
+        !isAcceptedSessionSpawn &&
+        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
+      const clearsAcceptedSessionSpawnError =
+        isAcceptedSessionSpawn &&
+        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
       if (eventToolCallId) {
         finalizeToolTerminalPresentation({
           toolCallId: eventToolCallId,
@@ -105,6 +113,7 @@ function buildAgentToolResultMiddlewareFactory(
         content: result.content,
         details: result.details,
         ...(isError ? { isError: true } : {}),
+        ...(clearsAcceptedSessionSpawnError ? { isError: false } : {}),
       };
     });
   };
@@ -169,7 +178,7 @@ function hasCompactionModelOverride(cfg?: OpenClawConfig): boolean {
   return Boolean(cfg?.agents?.defaults?.compaction?.model?.trim());
 }
 
-export function resolveSafeguardRuntimeTarget(params: {
+function resolveSafeguardRuntimeTarget(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
@@ -177,11 +186,17 @@ export function resolveSafeguardRuntimeTarget(params: {
   modelRegistry?: ModelRegistry;
   agentDir?: string;
   workspaceDir?: string;
+  authProfileId?: string;
+  harnessRuntime?: string;
+  modelSelectionLocked?: boolean;
 }): { provider: string; modelId: string; model: ProviderRuntimeModel | undefined } {
   const resolved = resolveEmbeddedCompactionTarget({
     config: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
+    authProfileId: params.authProfileId,
+    harnessRuntime: params.harnessRuntime,
+    modelSelectionLocked: params.modelSelectionLocked,
   });
   const provider = resolved.provider ?? params.provider;
   const modelId = resolved.model ?? params.modelId;
@@ -194,21 +209,30 @@ export function resolveSafeguardRuntimeTarget(params: {
 
   const model = params.modelRegistry
     ? resolveModelWithRegistry({
-        provider,
+        provider: resolved.runtimeProvider ?? provider,
         modelId,
         modelRegistry: params.modelRegistry,
         cfg: params.cfg,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
+        authProfileId: resolved.authProfileId,
       })
     : undefined;
-  if (!model) {
-    log.warn(
-      `Configured safeguard compaction model "${provider}/${modelId}" could not be resolved against the model registry; using the session model when available, otherwise compaction will be skipped.`,
-    );
+  if (model) {
+    return { provider, modelId, model };
   }
-  return { provider, modelId, model };
+
+  log.warn(
+    `Configured safeguard compaction model "${provider}/${modelId}" could not be resolved; ` +
+      "using the active session model when available, otherwise safeguard compaction will be skipped.",
+  );
+  return {
+    provider: params.provider,
+    modelId: params.modelId,
+    model: params.model,
+  };
 }
+
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
@@ -218,6 +242,9 @@ export function buildEmbeddedExtensionFactories(params: {
   model: ProviderRuntimeModel | undefined;
   modelRegistry?: ModelRegistry;
   agentDir?: string;
+  authProfileId?: string;
+  harnessRuntime?: string;
+  modelSelectionLocked?: boolean;
   runId?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];

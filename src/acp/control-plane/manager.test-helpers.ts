@@ -112,10 +112,7 @@ function mockCallArgs(mock: ReturnType<typeof vi.fn>): Array<Record<string, unkn
   return mock.mock.calls.map((call) => call[0] as Record<string, unknown>);
 }
 
-function findMockCallFields(
-  mock: ReturnType<typeof vi.fn>,
-  expected: Record<string, unknown>,
-) {
+function findMockCallFields(mock: ReturnType<typeof vi.fn>, expected: Record<string, unknown>) {
   return mockCallArgs(mock).find((actual) =>
     Object.entries(expected).every(([key, value]) => Object.is(actual[key], value)),
   );
@@ -215,6 +212,38 @@ export function readySessionMeta(overrides: Partial<SessionAcpMeta> = {}): Sessi
     lastActivityAt: Date.now(),
     ...overrides,
   };
+}
+
+export function mockParentedAcpSessionEntries(params: {
+  childSessionKey: string;
+  parentSessionKey: string;
+}): void {
+  hoisted.readAcpSessionEntryMock.mockImplementation((input: unknown) => {
+    const sessionKey = (input as { sessionKey?: string }).sessionKey;
+    if (sessionKey === params.childSessionKey) {
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "child-1",
+          updatedAt: Date.now(),
+          spawnedBy: params.parentSessionKey,
+        },
+        acp: readySessionMeta(),
+      };
+    }
+    if (sessionKey === params.parentSessionKey) {
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "parent-1",
+          updatedAt: Date.now(),
+        },
+      };
+    }
+    return null;
+  });
 }
 
 export function extractStatesFromUpserts(): SessionAcpMeta["state"][] {

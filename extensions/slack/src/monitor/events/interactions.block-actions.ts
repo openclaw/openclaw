@@ -19,8 +19,10 @@ import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import {
   SLACK_REPLY_BUTTON_ACTION_ID,
+  SLACK_REPLY_LINK_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
 } from "../../reply-action-ids.js";
+import { truncateSlackText } from "../../truncate.js";
 import {
   authorizeSlackSystemEventSender,
   resolveSlackCommandIngress,
@@ -38,7 +40,6 @@ import { escapeSlackMrkdwn } from "../mrkdwn.js";
 type InteractionMessageBlock = {
   type?: string;
   block_id?: string;
-  elements?: Array<{ action_id?: string }>;
 };
 
 type SelectOption = {
@@ -98,7 +99,7 @@ type SlackBlockActionBody = {
   response_url?: string;
   channel?: { id?: string };
   container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
-  message?: { ts?: string; text?: string; blocks?: unknown[] };
+  message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
 };
 
 type SlackBlockActionRespond = NonNullable<SlackActionMiddlewareArgs["respond"]>;
@@ -173,7 +174,7 @@ function summarizeRichTextPreview(value: unknown): string | undefined {
     return undefined;
   }
   const max = 120;
-  return joined.length <= max ? joined : `${joined.slice(0, max - 1)}…`;
+  return joined.length <= max ? joined : truncateSlackText(joined, max);
 }
 
 function readInteractionAction(raw: unknown) {
@@ -283,15 +284,6 @@ export function summarizeAction(action: Record<string, unknown>): SlackActionSum
   };
 }
 
-function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
-  return (
-    block.type === "actions" &&
-    Array.isArray(block.elements) &&
-    block.elements.length > 0 &&
-    block.elements.every((el) => typeof el.action_id === "string" && el.action_id.includes("_all_"))
-  );
-}
-
 function formatInteractionSelectionLabel(params: {
   actionId: string;
   summary: SlackActionSummary;
@@ -378,6 +370,17 @@ function isSlackReplyActionId(actionId: string): boolean {
   );
 }
 
+function isSlackReplyLinkAction(parsed: ParsedSlackBlockAction): boolean {
+  if (
+    parsed.actionId === SLACK_REPLY_LINK_ACTION_ID ||
+    parsed.actionId.startsWith(`${SLACK_REPLY_LINK_ACTION_ID}:`)
+  ) {
+    return true;
+  }
+  const legacyUrl = normalizeOptionalString((parsed.typedAction as { url?: unknown }).url);
+  return Boolean(legacyUrl && isSlackReplyActionId(parsed.actionId));
+}
+
 function buildSlackPluginInteractionId(params: {
   userId?: string;
   channelId?: string;
@@ -431,7 +434,7 @@ function parseSlackBlockAction(params: {
     userId: typedBody.user?.id ?? "unknown",
     channelId: typedBody.channel?.id ?? typedBody.container?.channel_id,
     messageTs: typedBody.message?.ts ?? typedBody.container?.message_ts,
-    threadTs: typedBody.container?.thread_ts,
+    threadTs: typedBody.container?.thread_ts ?? typedBody.message?.thread_ts,
     actionSummary: summarizeAction(typedAction),
   };
 }
@@ -815,7 +818,7 @@ function buildSlackConfirmationBlocks(params: {
     summary: params.parsed.actionSummary,
     buttonText: params.parsed.typedActionWithText.text?.text,
   });
-  let updatedBlocks = params.originalBlocks.map((block) => {
+  return params.originalBlocks.map((block) => {
     const typedBlock = block as InteractionMessageBlock;
     if (typedBlock.type === "actions" && typedBlock.block_id === params.parsed.blockId) {
       return {
@@ -832,25 +835,7 @@ function buildSlackConfirmationBlocks(params: {
       };
     }
     return block;
-  });
-  const hasRemainingIndividualActionRows = updatedBlocks.some((block) => {
-    const typedBlock = block as InteractionMessageBlock;
-    return typedBlock.type === "actions" && !isBulkActionsBlock(typedBlock);
-  });
-  if (!hasRemainingIndividualActionRows) {
-    updatedBlocks = updatedBlocks.filter((block, index) => {
-      const typedBlock = block as InteractionMessageBlock;
-      if (isBulkActionsBlock(typedBlock)) {
-        return false;
-      }
-      if (typedBlock.type !== "divider") {
-        return true;
-      }
-      const next = updatedBlocks[index + 1] as InteractionMessageBlock | undefined;
-      return !next || !isBulkActionsBlock(next);
-    });
-  }
-  return updatedBlocks as (Block | KnownBlock)[];
+  }) as (Block | KnownBlock)[];
 }
 
 async function updateSlackLegacyBlockAction(params: {
@@ -901,6 +886,10 @@ async function handleSlackBlockAction(params: {
     log: params.ctx.runtime.log,
   });
   if (!parsed) {
+    return;
+  }
+  // Slack reports URL-button clicks too; navigation must not enqueue an agent interaction.
+  if (isSlackReplyLinkAction(parsed)) {
     return;
   }
   params.trackEvent?.();

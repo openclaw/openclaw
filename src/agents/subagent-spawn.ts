@@ -5,7 +5,6 @@
  */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -35,6 +34,7 @@ import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { recordSubagentSpawned } from "../sessions/session-state-events.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
@@ -106,7 +106,7 @@ import {
   resolveMainSessionAlias,
   resolveSandboxRuntimeStatus,
   updateSessionStore,
-  isAdminOnlyMethod,
+  resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
 import type {
   SpawnSubagentContextMode,
@@ -158,7 +158,7 @@ const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 
-export type SpawnSubagentParams = {
+type SpawnSubagentParams = {
   task: string;
   label?: string;
   agentId?: string;
@@ -183,7 +183,7 @@ export type SpawnSubagentParams = {
   attachMountPath?: string;
 };
 
-export type SpawnSubagentContext = {
+type SpawnSubagentContext = {
   agentSessionKey?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
@@ -242,9 +242,15 @@ async function callSubagentGateway(
   // scope-upgrade handshake that headless gateway-client connections cannot
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
-  // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" -> write) keep their least-privilege scope.
-  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
+  // "agent" -> write) keep their least-privilege scope. The params-aware
+  // resolver keeps spawn-metadata sessions.patch calls on the admin tier.
+  const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
+    params.method,
+    params.params,
+  );
+  const scopes =
+    params.scopes ?? (leastPrivilegeScopes.includes(ADMIN_SCOPE) ? [ADMIN_SCOPE] : undefined);
   const request = {
     ...params,
     ...(scopes != null ? { scopes } : {}),
@@ -263,7 +269,7 @@ async function callSubagentGateway(
       {
         expectFinal: request.expectFinal,
         ...(scopes != null ? { forceSyntheticClient: true } : {}),
-        timeoutMs: request.timeoutMs,
+        ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },
     );
@@ -504,7 +510,6 @@ async function prepareSubagentSessionContext(params: {
   let parentEntry: SessionEntry | undefined;
   let childEntry: SessionEntry | undefined;
   let forkFallbackNote: string | undefined;
-  const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
     if (params.targetAgentId !== params.requesterAgentId) {
@@ -521,7 +526,6 @@ async function prepareSubagentSessionContext(params: {
       sessionStoreKeys: childTarget.storeKeys,
       fallbackEntry: { sessionId: "", updatedAt: Date.now() },
       agentId: params.requesterAgentId,
-      sessionsDir,
     });
     if (forkedResult.status === "missing-parent") {
       throw new Error(
@@ -827,7 +831,10 @@ function resolveRequesterBoundConversationRef(params: {
     return undefined;
   }
   if (activeBindings.length === 1) {
-    const conversation = activeBindings[0].conversation;
+    const conversation = activeBindings.at(0)?.conversation;
+    if (!conversation) {
+      return undefined;
+    }
     return {
       conversationId: conversation.conversationId,
       ...(conversation.parentConversationId
@@ -843,7 +850,10 @@ function resolveRequesterBoundConversationRef(params: {
           normalizeOptionalString(params.fallback?.parentConversationId),
     );
     if (matched.length === 1) {
-      const conversation = matched[0].conversation;
+      const conversation = matched.at(0)?.conversation;
+      if (!conversation) {
+        return undefined;
+      }
       return {
         conversationId: conversation.conversationId,
         ...(conversation.parentConversationId
@@ -1488,6 +1498,8 @@ export async function spawnSubagentDirect(
     task,
   });
 
+  const childIdem = crypto.randomUUID();
+  let childRunId: string = childIdem;
   const spawnedMetadata = normalizeSpawnedRunMetadata({
     spawnedBy: spawnedByKey,
     ...toolSpawnMetadata,
@@ -1511,6 +1523,12 @@ export async function spawnSubagentDirect(
       childSessionKey,
     };
   }
+  recordSubagentSpawned({
+    childSessionKey,
+    childRunId,
+    requesterSessionKey: requesterInternalKey,
+    agentId: targetAgentId,
+  });
   const contextEnginePrepareResult =
     params.lightContext && preparedSpawnContext.mode === "isolated"
       ? ({ status: "ok", preparation: undefined } as const)
@@ -1536,8 +1554,6 @@ export async function spawnSubagentDirect(
   }
   const contextEnginePreparation = contextEnginePrepareResult.preparation;
 
-  const childIdem = crypto.randomUUID();
-  let childRunId: string = childIdem;
   const deliverInitialChildRunDirectly =
     requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
   const shouldAnnounceCompletion = deliverInitialChildRunDirectly

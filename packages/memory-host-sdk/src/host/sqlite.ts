@@ -2,6 +2,7 @@
 import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
+import { installProcessWarningFilter } from "./openclaw-runtime-io.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
@@ -9,7 +10,6 @@ import {
   type SqliteWalMaintenance,
   type SqliteWalMaintenanceOptions,
 } from "./sqlite-wal.js";
-import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
 const sqliteWalMaintenanceByDb = new WeakMap<DatabaseSync, SqliteWalMaintenance>();

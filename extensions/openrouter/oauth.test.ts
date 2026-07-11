@@ -24,7 +24,10 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
   });
 }
 
-function boundedTextErrorResponse(body: string, status = 502): {
+function boundedTextErrorResponse(
+  body: string,
+  status = 502,
+): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
   releaseLock: ReturnType<typeof vi.fn>;
@@ -58,6 +61,25 @@ function boundedTextErrorResponse(body: string, status = 502): {
   } as unknown as Response;
 
   return { response, cancel, releaseLock, text };
+}
+
+function oversizedJsonResponse(): { response: Response; wasCanceled: () => boolean } {
+  let canceled = false;
+  const body = new TextEncoder().encode(`{"key":"${"x".repeat(16 * 1024 * 1024)}"}`);
+  return {
+    response: new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(body);
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
+    wasCanceled: () => canceled,
+  };
 }
 
 function requestUrl(input: RequestInfo | URL): string {
@@ -190,6 +212,19 @@ describe("OpenRouter OAuth", () => {
     });
   });
 
+  it("bounds successful OpenRouter OAuth responses", async () => {
+    const oversized = oversizedJsonResponse();
+
+    await expect(
+      exchangeOpenRouterOAuthCode({
+        code: "AUTHCODE",
+        codeVerifier: "verifier-1",
+        fetchImpl: vi.fn(async () => oversized.response),
+      }),
+    ).rejects.toThrow("OpenRouter OAuth key exchange: JSON response exceeds 16777216 bytes");
+    expect(oversized.wasCanceled()).toBe(true);
+  });
+
   it("surfaces OpenRouter OAuth exchange errors without credential material", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
@@ -247,7 +282,7 @@ describe("OpenRouter OAuth", () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({ key: "sk-or-v1-test", user_id: "user-1" }),
     );
-    const { ctx, progress, text, log, openUrl } = createOpenRouterOAuthContext({
+    const { ctx, progress, note, text, log, openUrl } = createOpenRouterOAuthContext({
       isRemote: true,
     });
 
@@ -257,8 +292,12 @@ describe("OpenRouter OAuth", () => {
       fetchImpl,
     });
 
-    expect(openUrl).not.toHaveBeenCalled();
+    expect(openUrl).toHaveBeenCalledWith(expect.stringContaining("https://openrouter.ai/auth?"));
     expect(log.mock.calls[0]?.[0]).toContain("https://openrouter.ai/auth?");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("https://openrouter.ai/auth?"),
+      "OpenRouter OAuth",
+    );
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "Paste the OpenRouter redirect URL",

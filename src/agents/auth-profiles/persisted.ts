@@ -212,7 +212,7 @@ function parseCredentialEntry(
   if (!AUTH_PROFILE_TYPES.has(typed.type as AuthProfileCredential["type"])) {
     return { ok: false, reason: "invalid_type" };
   }
-  const provider = typed.provider ?? fallbackProvider;
+  const provider = typed.provider || fallbackProvider;
   const normalizedProvider = typeof provider === "string" ? normalizeProviderId(provider) : "";
   if (!normalizedProvider) {
     return { ok: false, reason: "missing_provider" };
@@ -246,7 +246,7 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
   });
 }
 
-function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
+export function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
   if (!isRecord(raw)) {
     return null;
   }
@@ -630,7 +630,7 @@ export function mergeAuthProfileStores(
                 profiles[profileId] || !removedRuntimeExternalProfileIds.has(profileId),
             ),
           ])
-          .filter(([, profileIds]) => profileIds.length > 0),
+          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
       )
     : undefined;
   const mergedLastGood = mergeRecord(base.lastGood, override.lastGood);

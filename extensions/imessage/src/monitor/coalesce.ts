@@ -1,4 +1,5 @@
 // Imessage plugin module implements the same-sender inbound debounce merge.
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { IMessagePayload } from "./types.js";
 
 // Keep the merge contract narrow (caps, ID tracking, reply-context preference)
@@ -76,7 +77,7 @@ export function shouldCombineIMessagePayloadBucket(
   return true;
 }
 
-export type CoalescedIMessagePayload = IMessagePayload & {
+type CoalescedIMessagePayload = IMessagePayload & {
   /**
    * Source GUIDs folded into this merged payload, in arrival order. Includes
    * GUIDs from entries that were dropped by the entry cap so downstream
@@ -136,7 +137,7 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   }
   let combinedText = textParts.join(" ");
   if (combinedText.length > MAX_COALESCED_TEXT_CHARS) {
-    combinedText = `${combinedText.slice(0, MAX_COALESCED_TEXT_CHARS)}…[truncated]`;
+    combinedText = `${sliceUtf16Safe(combinedText, 0, MAX_COALESCED_TEXT_CHARS)}…[truncated]`;
   }
 
   // Merge attachments across bounded entries, capped to keep downstream media

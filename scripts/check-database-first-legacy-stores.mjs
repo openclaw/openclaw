@@ -6,7 +6,7 @@ import path from "node:path";
 import ts from "typescript";
 import { resolveRepoRoot, runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
-export const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
+const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
 
 const legacyWriteCallees = new Set([
   "appendFile",

@@ -136,6 +136,14 @@ describe("error helpers", () => {
       expected: "rate_limit",
     },
     {
+      value: new Error("Rate limit exceeded, timeout: 30s"),
+      expected: "rate_limit",
+    },
+    {
+      value: Object.assign(new Error("HTTP 429 Too Many Requests"), { code: "ETIMEDOUT" }),
+      expected: "rate_limit",
+    },
+    {
       value: new Error("context_window exceeded with too many tokens"),
       expected: "context_length",
     },

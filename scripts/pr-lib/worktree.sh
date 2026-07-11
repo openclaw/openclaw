@@ -15,9 +15,10 @@ repo_root() {
 }
 
 ensure_gh_api_auth() {
-  # Use a non-interactive API probe so wrapper auth behaves the same in
-  # terminal sessions and redirected/scripted runs.
-  if gh api user >/dev/null 2>&1; then
+  # gh auth status fetches token scopes through REST and misreports quota
+  # failures as invalid credentials. GraphQL verifies the active local token
+  # without sending maintainers through a login that cannot restore quota.
+  if gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login >/dev/null 2>&1; then
     return 0
   fi
 
@@ -138,22 +139,45 @@ gc_pr_worktrees() {
       echo "skipping $dir (could not parse PR number)"
       continue
     fi
+    local lock_status=0
+    try_acquire_pr_operation_lock "$pr" || lock_status=$?
+    if [ "$lock_status" -ne 0 ]; then
+      if [ "$lock_status" -eq 1 ]; then
+        echo "skipping $dir (PR #$pr has an active scripts/pr operation)"
+      elif [ -n "$PR_OPERATION_LOCK_BLOCKED_OID" ]; then
+        echo "skipping $dir (PR #$pr operation lock is $PR_OPERATION_LOCK_BLOCKED_REASON)"
+        print_pr_operation_lock_recovery_guidance "$pr"
+      else
+        echo "skipping $dir (PR #$pr operation lock state is indeterminate)"
+      fi
+      continue
+    fi
     local state
     state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || printf 'UNKNOWN')
     case "$state" in
       MERGED|CLOSED)
         if [ "$dry_run" = "true" ]; then
           echo "would remove $dir (PR #$pr state=$state)"
+          removed=$((removed + 1))
         else
           remove_worktree_if_present "$dir"
           delete_local_branch_if_safe "temp/pr-$pr"
           delete_local_branch_if_safe "pr-$pr"
           delete_local_branch_if_safe "pr-$pr-prep"
-          echo "removed $dir (PR #$pr state=$state)"
+          if [ ! -e "$dir" ] &&
+            ! git show-ref --verify --quiet "refs/heads/temp/pr-$pr" &&
+            ! git show-ref --verify --quiet "refs/heads/pr-$pr" &&
+            ! git show-ref --verify --quiet "refs/heads/pr-$pr-prep"
+          then
+            echo "removed $dir (PR #$pr state=$state)"
+            removed=$((removed + 1))
+          else
+            echo "skipping $dir (cleanup incomplete)"
+          fi
         fi
-        removed=$((removed + 1))
         ;;
     esac
+    release_pr_operation_lock
   done
 
   if [ "$removed" -eq 0 ]; then
@@ -167,12 +191,9 @@ gc_pr_worktrees() {
 
 pr_number_from_worktree_dir() {
   local dir="$1"
-  local token
-  token="${dir##*/pr-}"
-  token="${token%%[^0-9]*}"
-  if [ -n "$token" ]; then
-    printf '%s\n' "$token"
-    return 0
-  fi
-  return 1
+  local basename=${dir##*/}
+  local token=${basename#pr-}
+  [ "$basename" != "$token" ] || return 1
+  is_canonical_pr_number "$token" || return 1
+  printf '%s\n' "$token"
 }

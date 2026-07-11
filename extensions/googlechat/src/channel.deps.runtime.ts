@@ -3,14 +3,10 @@ export {
   buildChannelConfigSchema,
   chunkTextForOutbound,
   DEFAULT_ACCOUNT_ID,
-  readRemoteMediaBuffer,
   GoogleChatConfigSchema,
-  loadOutboundMediaFromUrl,
   missingTargetError,
   PAIRING_APPROVED_MESSAGE,
-  resolveChannelMediaMaxBytes,
   type ChannelMessageActionAdapter,
-  type ChannelMessageActionName,
   type ChannelStatusIssue,
   type OpenClawConfig,
 } from "../runtime-api.js";
@@ -26,5 +22,6 @@ export {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
   normalizeGoogleChatTarget,
+  resolveGoogleChatOutboundSessionRoute,
   resolveGoogleChatOutboundSpace,
 } from "./targets.js";

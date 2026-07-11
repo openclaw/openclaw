@@ -19,6 +19,7 @@ import type {
 import { resetCommandQueueStateForTest } from "../../process/command-queue.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -276,9 +277,12 @@ export const mockedGetApiKeyForModel = vi.fn(
   }),
 );
 export const mockedMarkAuthProfileFailure = vi.fn(async () => {});
-export const mockedEnsureAuthProfileStore = vi.fn(() => ({}));
+export const mockedEnsureAuthProfileStore = vi.fn(() => ({ version: 1 as const, profiles: {} }));
 export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(
-  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({}),
+  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({
+    version: 1 as const,
+    profiles: {},
+  }),
 );
 export const mockedResolveAuthProfileOrder = vi.fn<(_params?: unknown) => string[]>(
   (_params?: unknown) => [],
@@ -481,9 +485,12 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedMarkAuthProfileFailure.mockReset();
   mockedMarkAuthProfileFailure.mockResolvedValue(undefined);
   mockedEnsureAuthProfileStore.mockReset();
-  mockedEnsureAuthProfileStore.mockReturnValue({});
+  mockedEnsureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
   mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReset();
-  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({});
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+    version: 1,
+    profiles: {},
+  });
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
   mockedMarkAuthProfileSuccess.mockReset();
@@ -585,6 +592,24 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     normalizeUsage: vi.fn((usage?: unknown) =>
       usage && typeof usage === "object" ? usage : undefined,
     ),
+    hasNonzeroUsage: vi.fn(
+      (usage?: {
+        total?: number;
+        input?: number;
+        output?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+        reasoningTokens?: number;
+      }) =>
+        [
+          usage?.total,
+          usage?.input,
+          usage?.output,
+          usage?.cacheRead,
+          usage?.cacheWrite,
+          usage?.reasoningTokens,
+        ].some((value) => (value ?? 0) > 0),
+    ),
     derivePromptTokens: vi.fn(
       (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) =>
         usage
@@ -593,6 +618,45 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
               return sum > 0 ? sum : undefined;
             })()
           : undefined,
+    ),
+    deriveContextPromptTokens: vi.fn(
+      (params: {
+        lastCallUsage?: {
+          input?: number;
+          output?: number;
+          cacheRead?: number;
+          cacheWrite?: number;
+          contextUsage?:
+            | { state: "available"; promptTokens: number; totalTokens: number }
+            | { state: "unavailable" };
+          total?: number;
+        };
+        promptTokens?: number;
+        usage?: { input?: number; cacheRead?: number; cacheWrite?: number };
+      }) => {
+        if (
+          typeof params.promptTokens === "number" &&
+          Number.isFinite(params.promptTokens) &&
+          params.promptTokens > 0
+        ) {
+          return params.promptTokens;
+        }
+        const lastCall = params.lastCallUsage;
+        if (lastCall?.contextUsage?.state === "available") {
+          return lastCall.contextUsage.promptTokens;
+        }
+        if (lastCall?.contextUsage?.state === "unavailable") {
+          return undefined;
+        }
+        for (const usage of [lastCall, params.usage]) {
+          const promptTokens =
+            (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
+          if (promptTokens > 0) {
+            return promptTokens;
+          }
+        }
+        return undefined;
+      },
     ),
   }));
 
@@ -741,15 +805,35 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 
-  vi.doMock("./utils.js", () => ({
-    describeUnknownError: vi.fn((err: unknown) => {
-      if (err instanceof Error) {
-        return err.message;
-      }
-      return String(err);
-    }),
-  }));
+  vi.doMock("./utils.js", async () => {
+    const actual = await vi.importActual<typeof import("./utils.js")>("./utils.js");
+    return {
+      ...actual,
+      describeUnknownError: vi.fn((err: unknown) => {
+        if (err instanceof Error) {
+          return err.message;
+        }
+        return String(err);
+      }),
+    };
+  });
 
   const { runEmbeddedAgent } = await import("./run.js");
   return { runEmbeddedAgent };
+}
+
+/** Move one-time runner compilation out of individual behavior timings. */
+export async function warmRunOverflowCompactionHarness(
+  runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent,
+  params?: Partial<Parameters<typeof runEmbeddedAgent>[0]>,
+): Promise<void> {
+  resetRunOverflowCompactionHarnessMocks();
+  mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+  mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "warmup" }]);
+  mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["warmup"] }));
+  await runEmbeddedAgent({
+    ...overflowBaseRunParams,
+    ...params,
+    runId: params?.runId ?? "run-overflow-compaction-harness-warmup",
+  });
 }

@@ -9,6 +9,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
@@ -35,6 +36,7 @@ import {
   normalizeAgentId,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
@@ -58,12 +60,7 @@ type SessionKeyResolution = {
   storePath: string;
 };
 
-function clearRotatedTerminalMainSessionMetadata(
-  entry: SessionEntry | undefined,
-): SessionEntry | undefined {
-  if (!entry) {
-    return undefined;
-  }
+export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
   const next = {
     ...entry,
     sessionFile: undefined,
@@ -386,25 +383,29 @@ export function resolveSession(opts: {
           storePath,
         })
       : false;
+  const lockedModelSelection = isModelSelectionLocked(sessionEntry);
+  const skipImplicitExpiry =
+    resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
   const fresh = sessionEntry
-    ? !terminalMainTranscriptNewerThanRegistry &&
-      evaluateSessionFreshness({
-        updatedAt: sessionEntry.updatedAt,
-        ...resolveSessionLifecycleTimestamps({
-          entry: sessionEntry,
-          agentId: sessionAgentId,
-          storePath,
-        }),
-        now,
-        policy: resetPolicy,
-      }).fresh
+    ? lockedModelSelection ||
+      (!terminalMainTranscriptNewerThanRegistry &&
+        (skipImplicitExpiry ||
+          evaluateSessionFreshness({
+            updatedAt: sessionEntry.updatedAt,
+            ...resolveSessionLifecycleTimestamps({
+              entry: sessionEntry,
+              agentId: sessionAgentId,
+              storePath,
+            }),
+            now,
+            policy: resetPolicy,
+          }).fresh))
     : false;
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
-  const resolvedSessionEntry = terminalMainTranscriptNewerThanRegistry
-    ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
-    : sessionEntry;
+  const resolvedSessionEntry =
+    isNewSession && sessionEntry ? clearRotatedSessionMetadata(sessionEntry) : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,

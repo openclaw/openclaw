@@ -1,4 +1,5 @@
 // Together provider module implements model/runtime integration.
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -9,6 +10,7 @@ import {
   fetchProviderDownloadResponse,
   pollProviderOperationJson,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   type ProviderOperationTimeoutMs,
@@ -54,6 +56,18 @@ type TogetherVideoResponse = {
       }>;
 };
 
+// Reads the Together create-video response through the shared provider JSON
+// reader so a provider that streams an unbounded JSON body cannot force the
+// runtime to buffer the whole payload before parsing it on the success path.
+// The shared helper applies the established 16 MiB provider JSON cap and the
+// standard malformed-JSON wrapping instead of a provider-local reimplementation.
+async function readTogetherVideoJson(response: Response): Promise<TogetherVideoResponse> {
+  return (await readProviderJsonResponse(
+    response,
+    "Together video generation failed",
+  )) as TogetherVideoResponse;
+}
+
 function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
   const configuredBaseUrl = normalizeOptionalString(req.cfg?.models?.providers?.together?.baseUrl);
   if (
@@ -67,10 +81,6 @@ function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
 
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
-}
-
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
 function extractTogetherVideoUrl(payload: TogetherVideoResponse): string | undefined {
@@ -256,7 +266,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         const value = normalizeOptionalString(input.url)
           ? normalizeOptionalString(input.url)
           : input.buffer
-            ? toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png")
+            ? toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" })
             : undefined;
         if (!value) {
           throw new Error("Together reference image is missing image data.");
@@ -277,7 +287,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       });
       try {
         await assertOkOrThrowHttpError(response, "Together video generation failed");
-        const submitted = (await response.json()) as TogetherVideoResponse;
+        const submitted = await readTogetherVideoJson(response);
         const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("Together video generation response missing id");

@@ -384,7 +384,7 @@ describe("applyGroupGating", () => {
     });
 
     expect(result.shouldProcess).toBe(true);
-    expect(msg.wasMentioned).toBe(true);
+    expect(msg.groupMention).toEqual({ wasMentioned: true, requireMention: true });
     expect(groupHistories.get("whatsapp:default:group:123@g.us")).toBeUndefined();
   });
 

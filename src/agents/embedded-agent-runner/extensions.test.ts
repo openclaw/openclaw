@@ -6,29 +6,18 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
-import { buildEmbeddedExtensionFactories, resolveSafeguardRuntimeTarget } from "./extensions.js";
+import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
 const mocks = vi.hoisted(() => ({
-  log: {
-    warn: vi.fn(),
-  },
+  resolveModelWithRegistry: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   // Plugin-owned cache-TTL decisions are mocked out here; extension selection
-  // tests assert the core default wiring only. The model module builds its
-  // provider runtime hook sets at import time, so every referenced hook must
-  // exist in this factory even when a test never exercises it.
-  applyProviderResolvedTransportWithPlugin: () => undefined,
-  buildProviderUnknownModelHintWithPlugin: () => undefined,
-  normalizeProviderResolvedModelWithPlugin: () => undefined,
-  normalizeProviderTransportWithPlugin: () => undefined,
-  prepareProviderDynamicModel: () => undefined,
-  resolveExternalAuthProfilesWithPlugins: () => [],
+  // tests assert the core default wiring only.
   resolveProviderCacheTtlEligibility: () => undefined,
   resolveProviderRuntimePlugin: () => undefined,
-  runProviderDynamicModel: () => undefined,
-  shouldPreferProviderRuntimeResolvedModel: () => false,
 }));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
@@ -36,17 +25,32 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
 }));
 
 vi.mock("./logger.js", () => ({
-  log: mocks.log,
+  log: { warn: mocks.warn },
 }));
+
+vi.mock("./model.js", () => ({
+  resolveModelWithRegistry: mocks.resolveModelWithRegistry,
+}));
+
+function createModel(provider: string, id: string, contextWindow = 200_000): Model {
+  return {
+    id,
+    name: id,
+    provider,
+    api: provider === "anthropic" ? "anthropic-messages" : "openai-responses",
+    baseUrl: `https://${provider}.example.test`,
+    contextWindow,
+    maxTokens: 4096,
+    reasoning: false,
+    input: ["text"],
+  } as Model;
+}
 
 function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
   // The safeguard runtime attaches to the session manager, so tests keep the
   // same manager instance around for both factory construction and inspection.
   const sessionManager = {} as SessionManager;
-  const model = {
-    id: "claude-sonnet-4-20250514",
-    contextWindow: 200_000,
-  } as Model;
+  const model = createModel("anthropic", "claude-sonnet-4-20250514");
 
   const factories = buildEmbeddedExtensionFactories({
     cfg,
@@ -58,20 +62,6 @@ function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
   });
 
   return { factories, sessionManager };
-}
-
-function createAnthropicModel(id: string): Model {
-  return {
-    id,
-    name: id,
-    provider: "anthropic",
-    api: "anthropic",
-    baseUrl: "https://api.anthropic.com",
-    contextWindow: 200_000,
-    maxTokens: 4096,
-    reasoning: false,
-    input: ["text"],
-  } as Model;
 }
 
 function expectSafeguardRuntime(
@@ -89,7 +79,8 @@ function expectSafeguardRuntime(
 
 describe("buildEmbeddedExtensionFactories", () => {
   beforeEach(() => {
-    mocks.log.warn.mockReset();
+    mocks.resolveModelWithRegistry.mockReset();
+    mocks.warn.mockReset();
   });
 
   it("enables quality-guard retries by default in safeguard mode", () => {
@@ -145,15 +136,54 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
   });
 
-  it("resolves configured safeguard compaction model before registering runtime", () => {
+  it("registers the configured safeguard compaction model", () => {
     const sessionManager = {} as SessionManager;
-    const sessionModel = createAnthropicModel("claude-opus-4-7");
-    const compactionModel = createAnthropicModel("claude-sonnet-4-6");
-    const modelRegistry = {
-      find: vi.fn((provider: string, modelId: string) =>
-        provider === "anthropic" && modelId === "claude-sonnet-4-6" ? compactionModel : null,
-      ),
-    };
+    const sessionModel = createModel("anthropic", "claude-opus-4-6");
+    const compactionModel = createModel("openai", "gpt-5.6-luna", 128_000);
+    const modelRegistry = {} as ModelRegistry;
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            model: "openai/gpt-5.6-luna",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.resolveModelWithRegistry.mockReturnValueOnce(compactionModel);
+
+    buildEmbeddedExtensionFactories({
+      cfg,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      model: sessionModel,
+      modelRegistry,
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      authProfileId: "anthropic:default",
+      harnessRuntime: "openclaw",
+    });
+
+    expect(mocks.resolveModelWithRegistry).toHaveBeenCalledWith({
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      modelRegistry,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      authProfileId: undefined,
+    });
+    expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
+      model: compactionModel,
+      contextWindowTokens: 128_000,
+    });
+  });
+
+  it("keeps the pinned session model when model selection is locked to a native harness", () => {
+    const sessionManager = {} as SessionManager;
+    const sessionModel = createModel("openai", "gpt-5.5");
 
     buildEmbeddedExtensionFactories({
       cfg: {
@@ -167,104 +197,24 @@ describe("buildEmbeddedExtensionFactories", () => {
         },
       } as OpenClawConfig,
       sessionManager,
-      provider: "anthropic",
-      modelId: "claude-opus-4-7",
+      provider: "openai",
+      modelId: "gpt-5.5",
       model: sessionModel,
-      modelRegistry: modelRegistry as unknown as ModelRegistry,
+      modelRegistry: {} as ModelRegistry,
+      harnessRuntime: "codex",
+      modelSelectionLocked: true,
     });
 
-    expect(modelRegistry.find).toHaveBeenCalledWith("anthropic", "claude-sonnet-4-6");
-    expect(getCompactionSafeguardRuntime(sessionManager)?.model).toMatchObject({
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
-    });
-  });
-
-  it("resolves configured safeguard compaction model from inline provider config", () => {
-    const sessionManager = {} as SessionManager;
-    const sessionModel = createAnthropicModel("claude-opus-4-7");
-    const modelRegistry = {
-      find: vi.fn(() => null),
-    };
-
-    buildEmbeddedExtensionFactories({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-              model: "foo/custom-summary",
-            },
-          },
-        },
-        models: {
-          providers: {
-            foo: {
-              baseUrl: "https://foo.example/v1",
-              api: "openai-responses",
-              models: [
-                {
-                  id: "custom-summary",
-                  name: "Custom Summary",
-                  contextWindow: 123_456,
-                  maxTokens: 4096,
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      sessionManager,
-      provider: "anthropic",
-      modelId: "claude-opus-4-7",
-      model: sessionModel,
-      modelRegistry: modelRegistry as unknown as ModelRegistry,
-    });
-
-    const runtime = getCompactionSafeguardRuntime(sessionManager);
-    expect(modelRegistry.find).not.toHaveBeenCalled();
-    expect(runtime?.model).not.toBe(sessionModel);
-    expect(runtime?.model).toMatchObject({
-      provider: "foo",
-      id: "custom-summary",
-      api: "openai-responses",
-      contextWindow: 123_456,
-    });
-    expect(runtime?.contextWindowTokens).toBe(123_456);
-  });
-
-  it("keeps the session model in safeguard runtime when no compaction model is configured", () => {
-    const sessionManager = {} as SessionManager;
-    const sessionModel = createAnthropicModel("claude-opus-4-7");
-
-    buildEmbeddedExtensionFactories({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-            },
-          },
-        },
-      } as OpenClawConfig,
-      sessionManager,
-      provider: "anthropic",
-      modelId: "claude-opus-4-7",
-      model: sessionModel,
-    });
-
+    expect(mocks.resolveModelWithRegistry).not.toHaveBeenCalled();
     expect(getCompactionSafeguardRuntime(sessionManager)?.model).toBe(sessionModel);
   });
 
-  it("warns when configured safeguard compaction model is absent from registry", () => {
-    const modelRegistry = {
-      find: vi.fn(() => null),
-    };
+  it("warns and keeps the session model when the configured model cannot be resolved", () => {
+    const sessionManager = {} as SessionManager;
+    const sessionModel = createModel("anthropic", "claude-opus-4-6");
+    mocks.resolveModelWithRegistry.mockReturnValueOnce(undefined);
 
-    const target = resolveSafeguardRuntimeTarget({
+    buildEmbeddedExtensionFactories({
       cfg: {
         agents: {
           defaults: {
@@ -275,20 +225,16 @@ describe("buildEmbeddedExtensionFactories", () => {
           },
         },
       } as OpenClawConfig,
+      sessionManager,
       provider: "anthropic",
-      modelId: "claude-opus-4-7",
-      model: createAnthropicModel("claude-opus-4-7"),
-      modelRegistry: modelRegistry as unknown as ModelRegistry,
+      modelId: "claude-opus-4-6",
+      model: sessionModel,
+      modelRegistry: {} as ModelRegistry,
     });
 
-    expect(modelRegistry.find).toHaveBeenCalledWith("anthropic", "claude-typo-4-6");
-    expect(target).toEqual({
-      provider: "anthropic",
-      modelId: "claude-typo-4-6",
-      model: undefined,
-    });
-    expect(mocks.log.warn).toHaveBeenCalledWith(
-      'Configured safeguard compaction model "anthropic/claude-typo-4-6" could not be resolved against the model registry; using the session model when available, otherwise compaction will be skipped.',
+    expect(getCompactionSafeguardRuntime(sessionManager)?.model).toBe(sessionModel);
+    expect(mocks.warn).toHaveBeenCalledWith(
+      'Configured safeguard compaction model "anthropic/claude-typo-4-6" could not be resolved; using the active session model when available, otherwise safeguard compaction will be skipped.',
     );
   });
 

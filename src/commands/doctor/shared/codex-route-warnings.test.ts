@@ -75,6 +75,65 @@ describe("collectCodexRouteWarnings", () => {
     ]);
   });
 
+  it("surfaces enabled Codex Computer Use in doctor warnings", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                computerUse: {
+                  enabled: true,
+                  healthCheckEnabled: true,
+                  healthCheckIntervalMinutes: 120,
+                  autoRepair: true,
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex Computer Use is enabled.",
+        "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
+        "- Periodic Computer Use health checks are enabled with a 120-minute cadence.",
+        "- Stale Computer Use MCP child repair is enabled and limited to SkyComputerUseClient children.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("surfaces opt-in defaults for Codex Computer Use health and repair", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                computerUse: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex Computer Use is enabled.",
+        "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
+        "- Periodic Computer Use health checks are disabled by default; set `computerUse.healthCheckEnabled` to true to enable them.",
+        "- Stale Computer Use MCP child repair is disabled by default; set `computerUse.autoRepair` to true to repair before retrying a failed probe.",
+      ].join("\n"),
+    ]);
+  });
+
   it("still warns when the native Codex runtime is selected with a legacy model ref", () => {
     const warnings = collectCodexRouteWarnings({
       cfg: {
@@ -3796,6 +3855,48 @@ describe("collectCodexRouteWarnings", () => {
     expect(store.main.fallbackNoticeReason).toBeUndefined();
     expect(store.other.updatedAt).toBe(2);
     expect(store.other.agentHarnessId).toBe("codex");
+  });
+
+  it("skips valid locked agent-harness rows while repairing ordinary legacy routes", () => {
+    const supervisedKey = "agent:main:harness:codex:supervision:abc123";
+    const ordinaryLockedKey = "agent:main:ordinary-locked";
+    const lockedEntry: SessionEntry = {
+      sessionId: "s-supervised",
+      updatedAt: 1,
+      modelSelectionLocked: true,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      providerOverride: "openai-codex",
+      modelOverride: "openai-codex/gpt-5.4",
+      fallbackNoticeSelectedModel: "openai-codex/gpt-5.5",
+    };
+    const store: Record<string, SessionEntry> = {
+      [supervisedKey]: lockedEntry,
+      [ordinaryLockedKey]: { ...lockedEntry, sessionId: "s-ordinary-locked" },
+      ordinary: {
+        sessionId: "s-ordinary",
+        updatedAt: 2,
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+      },
+    };
+    const supervised = structuredClone(store[supervisedKey]);
+    const ordinaryLocked = structuredClone(store[ordinaryLockedKey]);
+
+    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
+
+    expect(result).toEqual({ changed: true, sessionKeys: ["ordinary"] });
+    expect(store[supervisedKey]).toEqual(supervised);
+    expect(store[ordinaryLockedKey]).toEqual(ordinaryLocked);
+    expect(store.ordinary).toMatchObject({
+      updatedAt: 123,
+      modelProvider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(store.ordinary.agentHarnessId).toBeUndefined();
   });
 
   it("preserves explicit OpenClaw runtime pins while repairing legacy session routes", () => {

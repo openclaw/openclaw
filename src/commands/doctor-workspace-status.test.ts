@@ -8,7 +8,10 @@ import {
   createPluginRecord,
   createTypedHook,
 } from "../plugins/status.test-helpers.js";
-import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
+import {
+  collectWorkspaceStatusHealthFindings,
+  noteWorkspaceStatus,
+} from "./doctor-workspace-status.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
@@ -156,6 +159,110 @@ describe("noteWorkspaceStatus", () => {
     } finally {
       noteSpy.mockRestore();
     }
+  });
+
+  it("collects plugin version drift as structured findings", async () => {
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
+    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      ...createPluginLoadResult({ plugins: [] }),
+    });
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
+    mocks.listTaskFlowRecords.mockReturnValue([]);
+
+    const findings = collectWorkspaceStatusHealthFindings(
+      {
+        plugins: { entries: { codex: { enabled: true } } },
+      },
+      {
+        pluginVersionDrift: {
+          gatewayVersion: "2026.6.1",
+          drifts: [
+            {
+              pluginId: "codex",
+              installedVersion: "2026.5.30-beta.1",
+              gatewayVersion: "2026.6.1",
+              source: "npm",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-status",
+        severity: "warning",
+        path: "plugins.entries.codex",
+        target: "codex",
+        requirement: "plugin-version-drift",
+        message: expect.stringContaining("2026.5.30-beta.1"),
+        fixHint: expect.stringContaining("openclaw plugins update codex"),
+      }),
+    ]);
+  });
+
+  it("collects compatibility warnings, plugin diagnostics, and TaskFlow recovery findings", async () => {
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
+    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      ...createPluginLoadResult({
+        plugins: [],
+        diagnostics: [
+          {
+            level: "error",
+            pluginId: "broken-plugin",
+            message: "channel setup failed",
+            source: "/tmp/plugin.json",
+            code: "channel-setup-failure",
+          },
+        ],
+      }),
+    });
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([
+      "legacy-plugin still uses legacy before_agent_start",
+    ]);
+    mocks.listTaskFlowRecords.mockReturnValue([
+      {
+        flowId: "flow-123",
+        syncMode: "managed",
+        status: "blocked",
+        blockedTaskId: "task-missing",
+      },
+    ]);
+    mocks.listTasksForFlowId.mockReturnValue([]);
+
+    const findings = collectWorkspaceStatusHealthFindings({});
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-status",
+        severity: "warning",
+        path: "plugins",
+        requirement: "plugin-compatibility",
+        message: "legacy-plugin still uses legacy before_agent_start",
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-status",
+        severity: "error",
+        path: "plugins.entries.broken-plugin",
+        target: "broken-plugin",
+        requirement: "channel-setup-failure",
+        source: "/tmp/plugin.json",
+        message: "channel setup failed",
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-status",
+        severity: "warning",
+        path: "tasks.flows",
+        target: "flow-123",
+        requirement: "taskflow-recovery",
+        message: expect.stringContaining("task-missing"),
+        fixHint: expect.stringContaining("openclaw tasks flow show flow-123"),
+      }),
+    ]);
   });
 
   it("surfaces active official managed plugin version drift", async () => {
@@ -372,7 +479,10 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
-  const makeSkill = (skillKey: string, fields: { eligible: boolean; platformIncompatible: boolean }) =>
+  const makeSkill = (
+    skillKey: string,
+    fields: { eligible: boolean; platformIncompatible: boolean },
+  ) =>
     ({
       skillKey,
       disabled: false,

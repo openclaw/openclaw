@@ -4,10 +4,12 @@ import { resolve } from "node:path";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { readBoundedResponseText } from "./bounded-response.ts";
 import {
+  assertPluginReleaseDependencyFreshness,
   collectExtensionPackageJsonCandidates,
   collectChangedPathsFromGitRange,
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
+  collectRequiredLatestDependencies,
   assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
   resolvePublishablePluginVersion,
@@ -15,10 +17,16 @@ import {
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
   type GitRangeSelection,
+  type NpmLatestVersionResolver,
   type PluginReleaseSelectionMode,
+  type RequiredLatestDependency,
 } from "./plugin-npm-release.ts";
 
-export { assertPluginReleaseVersionFloors, parsePluginReleaseArgs };
+export {
+  assertPluginReleaseDependencyFreshness,
+  assertPluginReleaseVersionFloors,
+  parsePluginReleaseArgs,
+};
 
 type PluginPackageJson = {
   name?: string;
@@ -50,7 +58,8 @@ export type PublishablePluginPackage = {
   packageName: string;
   version: string;
   channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta" | "extended-stable";
+  requiredLatestDependencies?: RequiredLatestDependency[];
 };
 
 type PluginReleasePlanItem = PublishablePluginPackage & {
@@ -122,6 +131,10 @@ function getRegistryBaseUrl(explicit?: string) {
 type ClawHubRequestOptions = {
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
+};
+
+type ClawHubRetryOptions = ClawHubRequestOptions & {
+  sleep?: (ms: number) => Promise<void>;
 };
 
 async function fetchClawHubRequest(
@@ -237,6 +250,7 @@ export function collectClawHubPublishablePluginPackages(
       continue;
     }
     const { version, parsedVersion } = resolvedVersion;
+    const requiredLatestDependencies = collectRequiredLatestDependencies(packageJson).dependencies;
 
     publishable.push({
       extensionId,
@@ -250,6 +264,7 @@ export function collectClawHubPublishablePluginPackages(
           : parsedVersion.channel === "beta"
             ? "beta"
             : "latest",
+      ...(requiredLatestDependencies.length > 0 ? { requiredLatestDependencies } : {}),
     });
   }
 
@@ -474,10 +489,8 @@ async function doesClawHubPackageExist(
 
 async function hasClawHubTrustedPublisher(
   packageName: string,
-  options: {
-    fetchImpl?: typeof fetch;
+  options: ClawHubRetryOptions & {
     registryBaseUrl?: string;
-    requestTimeoutMs?: number;
   } = {},
 ): Promise<boolean> {
   const url = new URL(
@@ -526,7 +539,7 @@ async function hasClawHubTrustedPublisher(
     }
 
     await response.body?.cancel().catch(() => undefined);
-    await delay(clawHubRetryDelayMs(response, attempt));
+    await (options.sleep ?? delay)(clawHubRetryDelayMs(response, attempt));
   }
 }
 
@@ -588,6 +601,8 @@ export async function collectPluginClawHubReleasePlan(params?: {
   registryBaseUrl?: string;
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
+  resolveLatestVersion?: NpmLatestVersionResolver;
+  sleep?: (ms: number) => Promise<void>;
 }): Promise<PluginReleasePlan> {
   const rootDir = params?.rootDir;
   const selection = params?.selection ?? [];
@@ -618,6 +633,11 @@ export async function collectPluginClawHubReleasePlan(params?: {
   if (explicitPublishSelection) {
     assertPluginReleaseVersionFloors(selectedPublishable, "Plugin ClawHub release plan");
   }
+  assertPluginReleaseDependencyFreshness(
+    selectedPublishable,
+    "Plugin ClawHub release plan",
+    params?.resolveLatestVersion,
+  );
 
   const planned: PluginReleasePlanItemWithPackageState[] = [];
   for (const plugin of selectedPublishable) {
@@ -631,6 +651,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
           registryBaseUrl: params?.registryBaseUrl,
           fetchImpl: params?.fetchImpl,
           requestTimeoutMs: params?.requestTimeoutMs,
+          sleep: params?.sleep,
         })
       : false;
     const alreadyPublished = packageExists

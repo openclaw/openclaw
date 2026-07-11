@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
@@ -68,7 +69,7 @@ const CONFIG_MUTATION_LOCK_OPTIONS = {
 
 const DEFAULT_CONFIG_MUTATION_RETRY_ATTEMPTS = 5;
 const activeConfigMutationLocks = new AsyncLocalStorage<Set<string>>();
-const configMutationQueueTails = new Map<string, Promise<void>>();
+const configMutationQueue = new KeyedAsyncQueue();
 
 export { ConfigMutationConflictError } from "./mutation-conflict.js";
 
@@ -187,28 +188,14 @@ async function withConfigMutationLock<T>(
   assertConfigWriteAllowedInCurrentMode({ configPath });
   await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
 
-  const previousTail = configMutationQueueTails.get(configPath) ?? Promise.resolve();
-  let releaseQueueSlot!: () => void;
-  const currentRun = new Promise<void>((resolve) => {
-    releaseQueueSlot = resolve;
-  });
-  const currentTail = previousTail.catch(() => undefined).then(() => currentRun);
-  configMutationQueueTails.set(configPath, currentTail);
-
-  await previousTail.catch(() => undefined);
-  try {
-    const nextActiveLocks = new Set(activeLocks ?? []);
-    nextActiveLocks.add(configPath);
-    return await activeConfigMutationLocks.run(
+  const nextActiveLocks = new Set(activeLocks ?? []);
+  nextActiveLocks.add(configPath);
+  return await configMutationQueue.enqueue(configPath, () =>
+    activeConfigMutationLocks.run(
       nextActiveLocks,
       async () => await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, fn),
-    );
-  } finally {
-    releaseQueueSlot();
-    if (configMutationQueueTails.get(configPath) === currentTail) {
-      configMutationQueueTails.delete(configPath);
-    }
-  }
+    ),
+  );
 }
 
 function markActiveConfigMutationPath(configPath: string): void {
@@ -522,6 +509,7 @@ async function writeRootBoundJsonFile(params: {
   expectedRaw: string | null;
   rootSnapshot: ConfigFileSnapshot;
   assertConfigPathForWrite: () => void;
+  preCommitRuntimePreflight?: () => Promise<unknown>;
 }): Promise<void> {
   params.assertConfigPathForWrite();
   const targetBeforeBackup = await resolveExpectedRootBoundIncludeFile({
@@ -551,8 +539,11 @@ async function writeRootBoundJsonFile(params: {
       currentHash,
     });
   }
-  params.assertConfigPathForWrite();
   const content = formatJsonFileValue(params.value);
+  // The include fast path bypasses writeConfigFile(); keep its authority guard
+  // on the final conflict-checked target with no later await before the write.
+  await params.preCommitRuntimePreflight?.();
+  params.assertConfigPathForWrite();
   await targetAtCommit.root.write(targetAtCommit.relativePath, content, {
     mkdir: true,
     mode: 0o600,
@@ -709,6 +700,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   });
   const committedIncludeRaw = formatJsonFileValue(includedValueToWrite);
   const committedIncludeHash = hashConfigIncludeRaw(committedIncludeRaw);
+  const callerPreCommit = params.writeOptions?.preCommitRuntimePreflight;
   assertConfigPathForWrite();
   await assertRootConfigStillMatchesSnapshot(params.snapshot);
   const includeRawAtCommit = await readRootBoundFileRawIfExists(includeTarget);
@@ -726,6 +718,9 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     expectedRaw: includeRawAtCommit,
     rootSnapshot: params.snapshot,
     assertConfigPathForWrite,
+    preCommitRuntimePreflight: callerPreCommit
+      ? () => callerPreCommit(runtimeConfigToWrite)
+      : undefined,
   });
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;
@@ -905,7 +900,6 @@ async function replaceConfigFileUnlocked(params: {
       : undefined;
     if (params.io) {
       fallbackWriteOptions.preCommitRuntimePreflight = async (sourceConfig) => {
-        await ioPreCommitRuntimePreflight?.(sourceConfig);
         await preflightRuntimeSnapshotWrite({
           nextSourceConfig: sourceConfig,
           refreshOptions: fallbackWriteOptions.runtimeRefresh,
@@ -916,6 +910,7 @@ async function replaceConfigFileUnlocked(params: {
               { cause },
             ),
         });
+        await ioPreCommitRuntimePreflight?.(sourceConfig);
       };
     }
     writeResult = resolveConfigWriteResult(
