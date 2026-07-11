@@ -567,7 +567,7 @@ describe("Feishu Card Action Handler", () => {
 
   it("does not log raw duplicate callback tokens", async () => {
     const log = vi.fn();
-    const callbackToken = "callback-token-value";
+    const callbackToken = "test-token-placeholder";
     const event = createStructuredQuickActionEvent({
       token: callbackToken,
       action: "feishu.quick_actions.help",
