@@ -105,6 +105,11 @@ function formatAuditRows(events: readonly AuditCliEvent[]): string[] {
 }
 
 function isUnsupportedActivityMethodError(value: unknown): value is Error {
+  // Frozen shipped-gateway strings: pre-activity gateways answer unknown
+  // methods with "unknown method: ..." or fail closed to operator.admin. A
+  // current gateway registers audit.activity.list at operator.read, so it can
+  // never emit these for this method; matching them only triggers the legacy
+  // audit.list fallback.
   return (
     value instanceof Error &&
     value.name === "GatewayClientRequestError" &&

@@ -24,6 +24,9 @@ const AUDIT_IDENTITY_KEY_BYTES = 32;
 const AUDIT_IDENTITY_KEY_ID_BYTES = 16;
 const AUDIT_IDENTITY_KEY_ID_RE = /^[a-f0-9]{32}$/u;
 const AUDIT_IDENTITY_DOMAIN = "openclaw.audit.identity.v1";
+// Only a top-level (depth-0) recordAuditEvent may create the key: the caller's
+// catch clears this cache on rollback, but a rolled-back outer transaction
+// around a nested creation would leave a cached key that was never persisted.
 const identityByDatabase = new WeakMap<DatabaseSync, AuditIdentityKey>();
 
 export type AuditIdentityKey = {

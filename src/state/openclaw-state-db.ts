@@ -426,11 +426,10 @@ function hasCanonicalAuditEventsSchema(db: DatabaseSync): boolean {
 }
 
 function canRepairLegacyAuditEventsSchema(db: DatabaseSync): boolean {
-  if (
-    !tableExists(db, "audit_events") ||
-    tableExists(db, "audit_events_migration_new") ||
-    tableHasColumn(db, "audit_events", "schema_version")
-  ) {
+  // A leftover audit_events_migration_new table cannot survive our own doctor
+  // transaction; repair drops any foreign leftover before the swap, matching
+  // the agent_databases repair.
+  if (!tableExists(db, "audit_events") || tableHasColumn(db, "audit_events", "schema_version")) {
     return false;
   }
   const identityTableIsSafe =
