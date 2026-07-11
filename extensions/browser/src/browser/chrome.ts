@@ -1174,6 +1174,7 @@ export async function launchOpenClawChrome(
   // Then decorate (if needed) before the "real" run.
   if (needsBootstrap) {
     const { pid: bootstrapPid, proc: bootstrap, releaseAbort } = await spawnOnce();
+    let bootstrapError: Error | undefined;
     try {
       const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
       while (Date.now() < deadline) {
@@ -1183,23 +1184,23 @@ export async function launchOpenClawChrome(
         }
         await waitForManagedLaunchPoll(CHROME_BOOTSTRAP_PREFS_POLL_MS, signal);
       }
-    } finally {
-      let exited = await signalChromeProcess(
-        bootstrap,
-        "SIGTERM",
-        CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS,
+    } catch (err) {
+      bootstrapError =
+        err instanceof Error ? err : new Error("Managed Chrome bootstrap failed.", { cause: err });
+    }
+    let exited = await signalChromeProcess(bootstrap, "SIGTERM", CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
+    if (!exited) {
+      exited = await signalChromeProcess(bootstrap, "SIGKILL", CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
+    }
+    releaseAbort();
+    if (!exited) {
+      throw new ManagedChromeCleanupError(
+        `Managed Chrome bootstrap ${bootstrapPid} survived cleanup.`,
+        runningForProcess(bootstrap, bootstrapPid),
       );
-      if (!exited) {
-        exited = await signalChromeProcess(bootstrap, "SIGKILL", CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
-      }
-      if (!exited) {
-        releaseAbort();
-        throw new ManagedChromeCleanupError(
-          `Managed Chrome bootstrap ${bootstrapPid} survived cleanup.`,
-          runningForProcess(bootstrap, bootstrapPid),
-        );
-      }
-      releaseAbort();
+    }
+    if (bootstrapError) {
+      throw bootstrapError;
     }
   }
 

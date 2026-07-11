@@ -343,9 +343,7 @@ function resolveDirectWindowsBrowserExecutable(executablePath: string): string |
       fs.readFileSync(path.win32.join(installDir, "installation_status.json"), "utf8"),
     ) as unknown;
     const subfolder =
-      status && typeof status === "object" && "_subfolder" in status
-        ? (status as { _subfolder?: unknown })._subfolder
-        : null;
+      status && typeof status === "object" ? Reflect.get(status, "_subfolder") : null;
     if (typeof subfolder !== "string" || !WINDOWS_VERSION_DIR_RE.test(subfolder)) {
       return null;
     }

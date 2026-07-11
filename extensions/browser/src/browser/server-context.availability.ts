@@ -320,7 +320,11 @@ export function createProfileAvailability({
       const onAbort = () => {
         clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
-        reject(signal.reason ?? new Error("aborted"));
+        reject(
+          signal.reason instanceof Error
+            ? signal.reason
+            : new Error("Browser availability wait aborted.", { cause: signal.reason }),
+        );
       };
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) {

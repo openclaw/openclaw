@@ -1,8 +1,6 @@
 // Browser tests cover profile reset through the lifecycle actor.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import "./server-context.chrome-test-harness.js";
 import type { RunningChrome } from "./chrome.js";
 import * as chromeModule from "./chrome.js";
@@ -14,6 +12,8 @@ import {
 } from "./server-context.lifecycle.js";
 import { createProfileResetOps } from "./server-context.reset.js";
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
   closeChromeMcpSession: vi.fn(async () => false),
@@ -84,7 +84,7 @@ describe("createProfileResetOps", () => {
   });
 
   it("stops the exact managed child before trashing its profile directory", async () => {
-    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-"));
+    const profileDir = tempDirs.make("openclaw-reset-");
     const { ops, runtime } = createResetHarness(makeBrowserProfile(), profileDir);
     const running = { pid: 1 } as never;
     getProfileLifecycle(runtime).handles.add(running);
@@ -104,7 +104,7 @@ describe("createProfileResetOps", () => {
   });
 
   it("stops a deferred managed launch before trashing without stale adoption", async () => {
-    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-race-"));
+    const profileDir = tempDirs.make("openclaw-reset-race-");
     const profile = makeBrowserProfile();
     const state = makeBrowserServerState({ profile });
     const profileContext = createBrowserRouteContext({ getState: () => state }).forProfile(
@@ -163,11 +163,10 @@ describe("createProfileResetOps", () => {
     expect(chromeModule.stopOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(runtime.running).toBeNull();
     expect(getProfileLifecycle(runtime).handles.size).toBe(0);
-    fs.rmSync(profileDir, { recursive: true, force: true });
   });
 
   it("disconnects adapters and trashes an idle managed profile", async () => {
-    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-idle-"));
+    const profileDir = tempDirs.make("openclaw-reset-idle-");
     const { ops } = createResetHarness(makeBrowserProfile(), profileDir);
 
     await expect(ops.resetProfile()).resolves.toMatchObject({ moved: true, from: profileDir });
@@ -179,7 +178,7 @@ describe("createProfileResetOps", () => {
   });
 
   it("keeps reset reversible when Trash fails after resource cleanup", async () => {
-    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-"));
+    const profileDir = tempDirs.make("openclaw-reset-");
     const { ops, runtime, state } = createResetHarness(makeBrowserProfile(), profileDir);
     mocks.movePathToTrash.mockRejectedValueOnce(new Error("Trash unavailable"));
 

@@ -351,12 +351,10 @@ describe("pw-session connection scoping", () => {
   it("retires a scoped adapter without waiting for a hung CDP disconnect", async () => {
     const first = makeBrowser("A", "https://a.example");
     let releaseClose!: () => void;
-    first.browserClose.mockImplementation(
-      async () =>
-        await new Promise<void>((resolve) => {
-          releaseClose = resolve;
-        }),
-    );
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    first.browserClose.mockReturnValue(closeGate);
     const second = makeBrowser("B", "https://b.example");
     connectOverCdpSpy.mockResolvedValueOnce(first.browser).mockResolvedValueOnce(second.browser);
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
@@ -374,12 +372,10 @@ describe("pw-session connection scoping", () => {
   it("awaits only the retired adapter after a same-URL successor connects", async () => {
     const first = makeBrowser("A", "https://a.example");
     let releaseClose!: () => void;
-    first.browserClose.mockImplementation(
-      async () =>
-        await new Promise<void>((resolve) => {
-          releaseClose = resolve;
-        }),
-    );
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    first.browserClose.mockReturnValue(closeGate);
     const successor = makeBrowser("B", "https://b.example");
     connectOverCdpSpy.mockResolvedValueOnce(first.browser).mockResolvedValueOnce(successor.browser);
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
@@ -425,12 +421,10 @@ describe("pw-session connection scoping", () => {
     vi.useFakeTimers();
     const browser = makeBrowser("A", "https://a.example");
     let releaseClose!: () => void;
-    browser.browserClose.mockImplementation(
-      async () =>
-        await new Promise<void>((resolve) => {
-          releaseClose = resolve;
-        }),
-    );
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    browser.browserClose.mockReturnValue(closeGate);
     connectOverCdpSpy.mockResolvedValue(browser.browser);
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });

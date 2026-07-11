@@ -122,6 +122,10 @@ function lifecycleError(profileName: string, detail: string): BrowserProfileUnav
   );
 }
 
+function toLifecycleError(value: unknown, message: string): Error {
+  return value instanceof Error ? value : new Error(message, { cause: value });
+}
+
 function assertRuntimeAdmission(state: BrowserServerState): void {
   if (!isBrowserRuntimeRunning(state)) {
     throw new BrowserProfileUnavailableError("Browser runtime is stopping.");
@@ -174,7 +178,7 @@ function waitForStart(promise: Promise<void>, signal?: AbortSignal): Promise<voi
   signal.throwIfAborted();
   let onAbort!: () => void;
   const waiting = new Promise<void>((resolve, reject) => {
-    onAbort = () => reject(signal.reason ?? new Error("aborted"));
+    onAbort = () => reject(toLifecycleError(signal.reason, "Browser operation aborted."));
     signal.addEventListener("abort", onAbort, { once: true });
     void promise.then(resolve, reject);
   });
@@ -388,7 +392,7 @@ async function cleanupProfileResources(params: {
   if (params.eagerMcpClose) {
     stopped = (await params.eagerMcpClose) || stopped;
   }
-  let firstError: unknown;
+  let firstError: Error | undefined;
   const actor = getProfileLifecycle(runtime);
   // `running` remains part of the public runtime shape. Include handles
   // installed by older callers that predate lifecycle registration.
@@ -402,32 +406,32 @@ async function cleanupProfileResources(params: {
       releaseProfileHandle(runtime, running);
       stopped = true;
     } catch (err) {
-      firstError ??= err;
+      firstError ??= toLifecycleError(err, "Managed browser cleanup failed.");
     }
   }
 
   if (actor.cleanupChromeMcp.size > 0) {
     try {
       const { closeChromeMcpSession } = await getChromeMcpModule();
-      for (const profileName of [...actor.cleanupChromeMcp]) {
+      for (const profileName of actor.cleanupChromeMcp) {
         stopped = (await closeChromeMcpSession(profileName)) || stopped;
         actor.cleanupChromeMcp.delete(profileName);
       }
     } catch (err) {
-      firstError ??= err;
+      firstError ??= toLifecycleError(err, "Chrome MCP cleanup failed.");
     }
   }
 
   stopped = actor.cleanupPlaywright.size > 0 || stopped;
-  for (const [cdpUrl, retirement] of [...actor.cleanupPlaywright]) {
+  for (const [cdpUrl, retirement] of actor.cleanupPlaywright) {
     try {
       await retirement.close();
       actor.cleanupPlaywright.delete(cdpUrl);
     } catch (err) {
-      firstError ??= err;
+      firstError ??= toLifecycleError(err, "Playwright cleanup failed.");
     }
   }
-  for (const relay of [...actor.cleanupRelays]) {
+  for (const relay of actor.cleanupRelays) {
     try {
       await relay.close();
       actor.cleanupRelays.delete(relay);
@@ -435,7 +439,7 @@ async function cleanupProfileResources(params: {
         params.state.extensionRelays.delete(runtime.profile.name);
       }
     } catch (err) {
-      firstError ??= err;
+      firstError ??= toLifecycleError(err, "Browser relay cleanup failed.");
     }
   }
   if (firstError) {

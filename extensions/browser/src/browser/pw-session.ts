@@ -690,14 +690,14 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
   const awaitClosing = async () => {
     const attempts = [...closeAttempts];
     const results = await Promise.allSettled(attempts.map(([, closing]) => closing));
-    let firstError: unknown;
+    let firstError: Error | undefined;
     for (const [index, result] of results.entries()) {
       if (result.status === "rejected") {
         const [connection, closing] = attempts[index] ?? [];
         if (connection && closeAttempts.get(connection) === closing) {
           closeAttempts.delete(connection);
         }
-        firstError ??= result.reason;
+        firstError ??= toLintErrorObject(result.reason, "Playwright adapter disconnect failed.");
       }
     }
     if (firstError) {
@@ -715,21 +715,21 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
       retainClosingPlaywrightConnection(cached);
     }
     if (pending) {
-      let collection!: Promise<void>;
-      collection = pending.promise
-        .then(
-          (connection) => {
-            connections.add(connection);
-          },
-          () => {
-            if (pending.attempt.retired) {
-              connections.add(pending.attempt.retired);
-            }
-          },
-        )
-        .finally(() => pendingCollections.delete(collection));
+      const collection = pending.promise.then(
+        (connection) => {
+          connections.add(connection);
+        },
+        () => {
+          if (pending.attempt.retired) {
+            connections.add(pending.attempt.retired);
+          }
+        },
+      );
       pendingCollections.add(collection);
-      void collection.then(startClosing);
+      void collection.then(() => {
+        pendingCollections.delete(collection);
+        startClosing();
+      });
     }
     startClosing();
     const captured = Boolean(pending || connections.size > 0);
@@ -746,7 +746,7 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
       await withPlaywrightCloseTimeout(
         (async () => {
           startClosing();
-          await Promise.all([...pendingCollections]);
+          await Promise.all(pendingCollections);
           startClosing();
           await awaitClosing();
         })(),

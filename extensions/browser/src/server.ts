@@ -107,7 +107,9 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
       onWarn: (message) => logServer.warn(message),
     });
   } catch (err) {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
     throw err;
   }
   setBridgeAuthForPort(port, browserAuth);

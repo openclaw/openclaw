@@ -80,7 +80,11 @@ export async function readKeychainSecret(
       (error, stdout) => {
         if (error) {
           if (signal?.aborted) {
-            reject(signal.reason ?? error);
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error("Browser cookie import aborted.", { cause: signal.reason ?? error }),
+            );
             return;
           }
           reject(

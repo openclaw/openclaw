@@ -127,12 +127,8 @@ async function ensureDesiredRelay(params: {
         }
         // Never drop the exact old handle until close succeeds; shutdown can retry it.
         actor.cleanupRelays.add(existing);
-        try {
-          await existing.close();
-          actor.cleanupRelays.delete(existing);
-        } catch (err) {
-          throw err;
-        }
+        await existing.close();
+        actor.cleanupRelays.delete(existing);
         if (map.get(profile.name) === existing) {
           map.delete(profile.name);
         }
@@ -179,14 +175,14 @@ async function ensureDesiredRelay(params: {
 /** Start relays for every extension-driver profile (control service startup). */
 export async function startConfiguredExtensionRelays(
   state: BrowserServerState,
-  resolveProfile: (name: string) => ResolvedBrowserProfile | null,
+  resolveProfileByName: (name: string) => ResolvedBrowserProfile | null,
   onWarn: (message: string) => void,
 ): Promise<void> {
   for (const [name, profile] of Object.entries(state.resolved.profiles)) {
     if (profile.driver !== "extension") {
       continue;
     }
-    const resolved = resolveProfile(name);
+    const resolved = resolveProfileByName(name);
     if (!resolved) {
       continue;
     }
@@ -204,8 +200,8 @@ export async function stopExtensionRelays(state: BrowserServerState): Promise<vo
   if (!map) {
     return;
   }
-  let firstError: unknown;
-  for (const [name, handle] of [...map]) {
+  let firstError: Error | undefined;
+  for (const [name, handle] of map) {
     try {
       await handle.close();
       if (map.get(name) === handle) {
@@ -213,7 +209,8 @@ export async function stopExtensionRelays(state: BrowserServerState): Promise<vo
       }
     } catch (err) {
       log.warn(`extension relay for profile "${name}" failed to stop: ${String(err)}`);
-      firstError ??= err;
+      firstError ??=
+        err instanceof Error ? err : new Error("Extension relay cleanup failed.", { cause: err });
     }
   }
   if (firstError) {

@@ -58,7 +58,7 @@ async function stopBrowserRuntimeInternal(
     return;
   }
   markBrowserRuntimeStopping(current);
-  let firstError: unknown;
+  let firstError: Error | undefined;
 
   // stopKnownBrowserProfiles invalidates every actor synchronously before its
   // first await; only then do we wait for tab cleanup and profile drains.
@@ -77,7 +77,7 @@ async function stopBrowserRuntimeInternal(
   });
   for (const result of await Promise.allSettled([profileDrain, tabCleanup])) {
     if (result.status === "rejected") {
-      firstError ??= result.reason;
+      firstError ??= toRuntimeLifecycleError(result.reason, "Browser profile cleanup failed.");
     }
   }
 
@@ -86,7 +86,7 @@ async function stopBrowserRuntimeInternal(
       const { stopExtensionRelays } = await getExtensionRelayModule();
       await stopExtensionRelays(current);
     } catch (err) {
-      firstError ??= err;
+      firstError ??= toRuntimeLifecycleError(err, "Browser relay cleanup failed.");
     }
   }
 
@@ -96,7 +96,7 @@ async function stopBrowserRuntimeInternal(
         await import("./extension-relay/gateway-relay-route.js");
       disposeGatewayExtensionRelay();
     } catch (err) {
-      firstError ??= err;
+      firstError ??= toRuntimeLifecycleError(err, "Gateway browser relay cleanup failed.");
     }
   }
 
@@ -114,6 +114,10 @@ async function stopBrowserRuntimeInternal(
   if (firstError) {
     throw firstError;
   }
+}
+
+function toRuntimeLifecycleError(value: unknown, message: string): Error {
+  return value instanceof Error ? value : new Error(message, { cause: value });
 }
 
 /** Stops Browser profiles, the optional HTTP server, and loaded Playwright state. */

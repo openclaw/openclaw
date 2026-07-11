@@ -1,7 +1,8 @@
 // Browser tests cover profiles service plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
@@ -13,6 +14,8 @@ import {
   registerProfileHandle,
 } from "./server-context.lifecycle.js";
 import { movePathToTrash } from "./trash.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const configMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
@@ -442,7 +445,7 @@ describe("BrowserProfilesService", () => {
     const { ctx, state } = createCtx(resolved);
     vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
 
-    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
+    const tempDir = tempDirs.make("openclaw-profile-");
     const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
     fs.mkdirSync(userDataDir, { recursive: true });
 
@@ -467,7 +470,7 @@ describe("BrowserProfilesService", () => {
     const { ctx } = createCtx(resolved);
     vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
 
-    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
+    const tempDir = tempDirs.make("openclaw-profile-");
     const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
     fs.mkdirSync(userDataDir, { recursive: true });
 
@@ -565,7 +568,7 @@ describe("BrowserProfilesService", () => {
       },
     });
 
-    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
+    const tempDir = tempDirs.make("openclaw-profile-");
     const userDataDir = path.join(tempDir, "work", "user-data");
     fs.mkdirSync(path.dirname(userDataDir), { recursive: true });
     vi.mocked(resolveOpenClawUserDataDir).mockReturnValue(userDataDir);
@@ -591,7 +594,7 @@ describe("BrowserProfilesService", () => {
         },
       },
     });
-    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-trash-failure-"));
+    const tempDir = tempDirs.make("openclaw-trash-failure-");
     const userDataDir = path.join(tempDir, "work", "user-data");
     fs.mkdirSync(path.dirname(userDataDir), { recursive: true });
     vi.mocked(resolveOpenClawUserDataDir).mockReturnValue(userDataDir);
@@ -603,7 +606,6 @@ describe("BrowserProfilesService", () => {
     expect(state.resolved.profiles).not.toHaveProperty("work");
     expect(state.profiles.has("work")).toBe(false);
     expect(fs.existsSync(path.dirname(userDataDir))).toBe(true);
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("cleans a pending managed start before persisting deletion", async () => {
@@ -624,7 +626,7 @@ describe("BrowserProfilesService", () => {
       throw new Error("Expected work profile");
     }
     const runtime = getOrCreateProfileRuntime(state, profile);
-    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-delete-race-"));
+    const tempDir = tempDirs.make("openclaw-delete-race-");
     const userDataDir = path.join(tempDir, "work", "user-data");
     fs.mkdirSync(userDataDir, { recursive: true });
     vi.mocked(resolveOpenClawUserDataDir).mockReturnValue(userDataDir);
@@ -670,7 +672,6 @@ describe("BrowserProfilesService", () => {
 
     expect(order).toEqual(["stop", "config", "trash"]);
     expect(state.profiles.has("work")).toBe(false);
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("rolls back a delete tombstone when config persistence fails after cleanup", async () => {

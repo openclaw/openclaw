@@ -146,7 +146,7 @@ function createProfileContext(
   });
 
   const withLease = async <T>(
-    signal: AbortSignal | undefined,
+    callerSignal: AbortSignal | undefined,
     run: (signal: AbortSignal, runtime: ProfileRuntimeState) => Promise<T>,
     options?: { commit?: (result: T) => void | Promise<void> },
   ): Promise<T> =>
@@ -154,8 +154,8 @@ function createProfileContext(
       state: state(),
       runtime: profileState,
       configRevision,
-      signal,
-      run: async (signal) => await run(signal, profileState),
+      signal: callerSignal,
+      run: async (lifecycleSignal) => await run(lifecycleSignal, profileState),
       commit: options?.commit,
     });
 
@@ -283,7 +283,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
             async (signal, runtime) => {
               const activeProfile = runtime.profile;
               const capabilities = getBrowserProfileCapabilities(activeProfile);
-              let activeRunning = Boolean(runtime.running);
+              let activeRunning: boolean;
               let activeTabCount = 0;
 
               if (capabilities.usesChromeMcp) {

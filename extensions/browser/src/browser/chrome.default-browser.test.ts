@@ -172,7 +172,7 @@ describe("browser default executable detection", () => {
     const opera = `${installDir}\\100.0.4815.76\\opera.exe`;
     vi.mocked(execFileSync)
       .mockReturnValueOnce("ProgId    REG_SZ    OperaStable")
-      .mockReturnValueOnce(`(Default)    REG_SZ    \"${launcher}\" \"%1\"`);
+      .mockReturnValueOnce(`(Default)    REG_SZ    "${launcher}" "%1"`);
     vi.mocked(fs.existsSync).mockImplementation((candidate) => {
       const value = String(candidate);
       return value === launcher || value === opera;
@@ -196,7 +196,7 @@ describe("browser default executable detection", () => {
     const launcher = "C:\\Users\\test\\AppData\\Local\\Programs\\Opera\\launcher.exe";
     vi.mocked(execFileSync)
       .mockReturnValueOnce("ProgId    REG_SZ    OperaStable")
-      .mockReturnValueOnce(`(Default)    REG_SZ    \"${launcher}\" \"%1\"`);
+      .mockReturnValueOnce(`(Default)    REG_SZ    "${launcher}" "%1"`);
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ _subfolder: "..\\escape" }));
     vi.mocked(fs.existsSync).mockImplementation((candidate) => {
       const value = String(candidate).toLowerCase();

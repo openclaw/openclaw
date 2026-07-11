@@ -228,7 +228,9 @@ describe("profile lifecycle actor", () => {
       configRevision: 0,
       run: async (signal) => {
         admitted.resolve();
-        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()));
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve());
+        });
         return "stale-success";
       },
     });

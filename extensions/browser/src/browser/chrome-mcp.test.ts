@@ -336,7 +336,7 @@ describe("chrome MCP page parsing", () => {
     await listChromeMcpTabs("chrome-live");
 
     expect(factoryCalls).toBe(2);
-    expect(first.client.close).toHaveBeenCalledOnce();
+    expect((first.client.close as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
   it("preserves a healthy cached session when an ephemeral probe is already cancelled", async () => {
@@ -356,7 +356,7 @@ describe("chrome MCP page parsing", () => {
     await expect(listChromeMcpTabs("chrome-live")).resolves.toHaveLength(2);
 
     expect(factory).toHaveBeenCalledOnce();
-    expect(session.client.close).not.toHaveBeenCalled();
+    expect((session.client.close as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
   it("does not invoke the session factory for a pre-aborted ephemeral probe", async () => {
@@ -539,7 +539,9 @@ describe("chrome MCP page parsing", () => {
     const first = listChromeMcpTabs("chrome-live");
     await firstStarted;
     const second = listChromeMcpTabs("chrome-live");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(listCalls).toBe(1);
     releaseFirst();
     await Promise.all([first, second]);
@@ -731,7 +733,9 @@ describe("chrome MCP page parsing", () => {
       explicitCloseSettled = true;
       return closed;
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(explicitCloseSettled).toBe(false);
     releaseClose();
     await expect(active).rejects.toThrow(/transport failed before stop/);
@@ -1869,13 +1873,17 @@ describe("chrome MCP page parsing", () => {
     const tabsExpectation = expect(tabsPromise).rejects.toThrow("caller cancelled");
     await vi.waitFor(() => expect(factoryCalls).toBe(1));
     ctrl.abort(new Error("caller cancelled"));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     let resetSettled = false;
     const resetting = resetChromeMcpSessionsForTest().then(() => {
       resetSettled = true;
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resetSettled).toBe(false);
 
     releaseFactory();
@@ -1912,7 +1920,9 @@ describe("chrome MCP page parsing", () => {
     const blockedReplacement = listChromeMcpTabs("chrome-live");
     const blockedReplacementExpectation =
       expect(blockedReplacement).rejects.toThrow("pending cleanup failed");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(factoryCalls).toBe(1);
     releaseFactory();
 
@@ -1956,7 +1966,9 @@ describe("chrome MCP page parsing", () => {
     ctrl.abort(new Error("caller cancelled"));
 
     const tabsPromise = listChromeMcpTabs("chrome-live");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(factoryCalls).toBe(1);
     releaseFactories[0]?.();
     await abortedTabsExpectation;
@@ -2005,7 +2017,9 @@ describe("chrome MCP page parsing", () => {
     await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledOnce());
 
     const probe = ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(factoryCalls).toBe(1);
     releaseClose();
 
@@ -2089,7 +2103,9 @@ describe("chrome MCP page parsing", () => {
     await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
 
     const tabsPromise = listChromeMcpTabs("chrome-live");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(factoryCalls).toBe(1);
 
     releaseFirstClose();

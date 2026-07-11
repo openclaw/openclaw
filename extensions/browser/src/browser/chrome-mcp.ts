@@ -605,7 +605,7 @@ async function closeChromeMcpSessionsForProfile(
   keepKey?: string,
 ): Promise<boolean> {
   let closed = false;
-  let firstError: unknown;
+  let firstError: Error | undefined;
   const keys = new Set([
     ...pendingSessions.keys(),
     ...sessions.keys(),
@@ -622,14 +622,14 @@ async function closeChromeMcpSessionsForProfile(
       try {
         await drainCancelledChromeMcpPendingSession(pending);
       } catch (err) {
-        firstError ??= err;
+        firstError ??= toLintErrorObject(err, "Chrome MCP pending-session cleanup failed.");
         continue;
       }
     }
     try {
       await drainRetainedChromeMcpCleanup(key);
     } catch (err) {
-      firstError ??= err;
+      firstError ??= toLintErrorObject(err, "Chrome MCP retained-session cleanup failed.");
       continue;
     }
     const session = sessions.get(key);
@@ -638,7 +638,7 @@ async function closeChromeMcpSessionsForProfile(
       try {
         await closeTrackedChromeMcpSession(key, session);
       } catch (err) {
-        firstError ??= err;
+        firstError ??= toLintErrorObject(err, "Chrome MCP session cleanup failed.");
       }
     }
   }
@@ -938,12 +938,12 @@ async function terminateChromeMcpProcessTree(
 
   const deps = chromeMcpProcessCleanupDepsForTest;
   if ((deps?.platform ?? process.platform) === "win32") {
-    let firstError: unknown;
+    let firstError: Error | undefined;
     if ((await currentChromeMcpProcesses([target.root], deps)).length > 0) {
       try {
         await taskkillChromeMcpProcessTree(target.root.pid, deps);
       } catch (err) {
-        firstError ??= err;
+        firstError ??= toLintErrorObject(err, "Chrome MCP process-tree cleanup failed.");
       }
     }
     await (deps?.sleep ?? sleepTimeout)(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
@@ -951,7 +951,7 @@ async function terminateChromeMcpProcessTree(
       try {
         await taskkillChromeMcpProcessTree(descendant.pid, deps);
       } catch (err) {
-        firstError ??= err;
+        firstError ??= toLintErrorObject(err, "Chrome MCP process-tree cleanup failed.");
       }
     }
     await (deps?.sleep ?? sleepTimeout)(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
@@ -995,14 +995,14 @@ async function terminateChromeMcpProcessTree(
 }
 
 async function closeChromeMcpSessionHandle(session: ChromeMcpSession): Promise<void> {
-  let firstError: unknown;
+  let firstError: Error | undefined;
   let cleanupUncertain = session.processCleanup?.status === "uncertain";
   const attempt = async (operation: () => Promise<void>) => {
     try {
       await operation();
     } catch (err) {
       cleanupUncertain ||= err instanceof ChromeMcpProcessSnapshotError;
-      firstError ??= err;
+      firstError ??= toLintErrorObject(err, "Chrome MCP session cleanup failed.");
     }
   };
   await attempt(async () => await refreshChromeMcpCleanupProcess(session));
@@ -1125,13 +1125,13 @@ async function createRealSession(
     {},
   );
   let getStderr = () => "";
-  let session: ChromeMcpSession | undefined;
-  const requireSession = () => {
-    if (!session) {
-      throw new Error("Chrome MCP session initialized out of order.");
-    }
-    return session;
+  const session: ChromeMcpSession = {
+    client,
+    transport,
+    ready: Promise.resolve(),
+    processCleanup: { status: "open" },
   };
+  const requireSession = () => session;
   const ready = (async () => {
     try {
       await withChromeMcpHandshakeTimeout(
@@ -1170,12 +1170,7 @@ async function createRealSession(
   })();
   ready.catch(() => {});
 
-  session = {
-    client,
-    transport,
-    ready,
-    processCleanup: { status: "open" },
-  };
+  session.ready = ready;
   return session;
 }
 
@@ -1949,12 +1944,12 @@ async function stopAllChromeMcpSessions(): Promise<void> {
       (key) => JSON.parse(key)[0] as string,
     ),
   );
-  let firstError: unknown;
+  let firstError: Error | undefined;
   for (const name of names) {
     try {
       await closeChromeMcpSession(name);
     } catch (err) {
-      firstError ??= err;
+      firstError ??= toLintErrorObject(err, "Chrome MCP shutdown failed.");
     }
   }
   if (firstError) {
