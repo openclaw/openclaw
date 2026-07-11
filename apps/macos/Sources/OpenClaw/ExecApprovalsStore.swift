@@ -1199,7 +1199,14 @@ extension ExecApprovalsStore {
 
     private static func ensureSecureStateDirectory() throws {
         let url = self.stateDirURL()
-        try FileManager().createDirectory(at: url, withIntermediateDirectories: true)
+        // Create with the final 0700 mode directly: a default-mode (0755)
+        // create followed by the chmod below leaves a transient window where
+        // the directory is world-listable and concurrent observers see the
+        // wrong permissions.
+        try FileManager().createDirectory(
+            at: url,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: self.secureStateDirPermissions])
         try ExecApprovalsFileIO.assertSafeDirectory(at: url)
         try FileManager().setAttributes(
             [.posixPermissions: self.secureStateDirPermissions],

@@ -15,6 +15,13 @@ on:
         description: Exact full candidate commit SHA
         required: true
         type: string
+    secrets:
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Credential-lease coordinator secret supplied by qa-live-shared
+        required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Credential-lease coordinator URL supplied by qa-live-shared
+        required: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -645,7 +652,13 @@ jobs:
 
           const sourceRoot = process.env.SOURCE_ROOT;
           const candidateRoot = process.env.CANDIDATE_ROOT;
-          const records = execFileSync("git", ["-C", sourceRoot, "ls-files", "-s", "-z"])
+          // Node defaults to 1 MiB, smaller than this repo's tracked-file index output.
+          const trackedFileOutput = execFileSync(
+            "git",
+            ["-C", sourceRoot, "ls-files", "-s", "-z"],
+            { maxBuffer: 16 * 1024 * 1024 },
+          );
+          const records = trackedFileOutput
             .toString("utf8")
             .split("\0")
             .filter(Boolean);

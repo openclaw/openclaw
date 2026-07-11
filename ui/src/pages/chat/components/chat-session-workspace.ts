@@ -15,6 +15,7 @@ import {
   scopedAgentParamsForSession,
   type SessionCapability,
   type SessionScopeHost,
+  type SessionScopeHostWithKey,
 } from "../../../lib/sessions/index.ts";
 import {
   resolveAgentIdFromSessionKey,
@@ -88,7 +89,10 @@ export type SessionWorkspaceHost = {
   handleOpenSidebar: (content: SidebarContent) => void;
 };
 
-function workspaceAgentId(state: SessionWorkspaceHost): string {
+/** Agent owning the pane's current session: explicit key scope first, then the
+ * assistant/default agent. Shared by the workspace and background-tasks rails
+ * so both scope their gateway queries the same way. */
+export function paneSessionAgentId(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const activeAgentId =
     normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
@@ -117,7 +121,7 @@ export function clearSessionWorkspaceTimers(state: SessionWorkspaceHost) {
 
 function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
   const sessionKey = state.sessionKey;
-  const agentId = workspaceAgentId(state);
+  const agentId = paneSessionAgentId(state);
   const current = state.sessionWorkspaceState;
   if (current?.sessionKey === sessionKey && current.agentId === agentId) {
     return current;
@@ -325,7 +329,7 @@ function isCurrentOpenRequest(state: SessionWorkspaceHost, request: OpenRequest)
   const current = currentWorkspaceState(state);
   return (
     currentRequest?.id === request.id &&
-    currentRequest.agentId === workspaceAgentId(state) &&
+    currentRequest.agentId === paneSessionAgentId(state) &&
     currentRequest.itemId === request.itemId &&
     currentRequest.sessionKey === state.sessionKey &&
     current?.agentId === request.agentId &&
