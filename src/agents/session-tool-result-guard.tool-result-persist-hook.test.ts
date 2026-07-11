@@ -16,6 +16,7 @@ import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 let tempDirs: string[] = [];
 
 function writeTempPlugin(params: { dir: string; id: string; body: string }): string {
@@ -52,6 +53,24 @@ function appendToolCallAndResult(sm: ReturnType<typeof SessionManager.inMemory>)
     isError: false,
     content: [{ type: "text", text: "ok" }],
     details: { big: "x".repeat(10_000) },
+  } as any);
+}
+
+function appendToolResultWithTail(
+  sm: ReturnType<typeof SessionManager.inMemory>,
+  tail: string,
+): void {
+  const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+  appendMessage({
+    role: "assistant",
+    content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+  } as AgentMessage);
+  appendMessage({
+    role: "toolResult",
+    toolCallId: "call_1",
+    isError: false,
+    content: [{ type: "text", text: "visible output stays small" }],
+    details: { status: "completed", tail },
   } as any);
 }
 
@@ -363,64 +382,28 @@ describe("tool_result_persist hook", () => {
     expectPersistedToolResultDetailsCapped(sm);
   });
 
-  it("keeps summarized oversized detail strings free of lone surrogates", () => {
+  const redactedScanBoundaryTail = () => {
+    const placeholders = Array.from({ length: 5 }, () => `ghp_${"a".repeat(140)}`).join(" ");
+    return `${placeholders}${"x".repeat(1_999 - placeholders.length)}😀${"z".repeat(9_000)}`;
+  };
+
+  it.each([
+    {
+      name: "retained-prefix surrogate boundary",
+      tail: `${"a".repeat(1_487)}😀${"b".repeat(9_000)}`,
+    },
+    { name: "redaction-scan surrogate boundary", tail: redactedScanBoundaryTail() },
+    { name: "ASCII negative control", tail: "a".repeat(10_000) },
+  ])("keeps $name well formed", ({ tail }) => {
     const sm = guardSessionManager(SessionManager.inMemory(), {
       agentId: "main",
       sessionKey: "main",
     });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        status: "completed",
-        tail: `${"a".repeat(1_487)}😀${"b".repeat(9_000)}`,
-      },
-    } as any);
+    appendToolResultWithTail(sm, tail);
 
-    const toolResult = requirePersistedToolResult(sm);
-    const persistedTail = toolResult.details.tail as string;
+    const persistedTail = requirePersistedToolResult(sm).details.tail as string;
     expect(persistedTail).toContain("boundary overlap omitted");
-    expect(persistedTail).not.toMatch(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
-    );
-  });
-
-  it("keeps redaction scan boundaries free of lone surrogates", () => {
-    const secrets = Array.from({ length: 5 }, () => `ghp_${"a".repeat(140)}`).join(" ");
-    const tail = `${secrets}${"x".repeat(1_999 - secrets.length)}😀${"z".repeat(9_000)}`;
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        status: "completed",
-        tail,
-      },
-    } as any);
-
-    const toolResult = requirePersistedToolResult(sm);
-    const persistedTail = toolResult.details.tail as string;
-    expect(persistedTail).toContain("boundary overlap omitted");
-    expect(persistedTail).not.toMatch(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
-    );
+    expect(persistedTail).not.toMatch(LONE_SURROGATE_RE);
   });
 
   it("redacts summarized oversized toolResult details before persistence", () => {
