@@ -58,10 +58,20 @@ type CliCatalogListRoutedOperation = {
 };
 
 type CliCatalogRuntimeCommandScope = "current-invocation-registered-tree";
-type CliCatalogNodeCommandScope = "caller-supplied";
+type CliCatalogNodeCommandScope = "caller-supplied" | "live-gateway-query" | "mixed";
 
 const RUNTIME_COMMAND_SCOPE: CliCatalogRuntimeCommandScope = "current-invocation-registered-tree";
-const NODE_COMMAND_SCOPE: CliCatalogNodeCommandScope = "caller-supplied";
+function resolveNodeCommandScope(
+  commands: readonly CliCatalogNodeCommand[],
+): CliCatalogNodeCommandScope {
+  const liveCount = commands.filter(
+    (command) => command.discoveryMode === "runtime-node-query",
+  ).length;
+  if (liveCount === 0) {
+    return "caller-supplied";
+  }
+  return liveCount === commands.length ? "live-gateway-query" : "mixed";
+}
 
 export type CliCatalogList = {
   readonly schemaVersion: 1;
@@ -215,7 +225,7 @@ export function buildCatalogList(
       commandRoutes,
       routedOperations,
       runtimeCommandScope: RUNTIME_COMMAND_SCOPE,
-      nodeCommandScope: NODE_COMMAND_SCOPE,
+      nodeCommandScope: resolveNodeCommandScope(nodeCommands),
       runtimeCommands,
       pluginCommands,
       nodeCommands,
@@ -244,7 +254,7 @@ export function renderCatalogListMarkdown(
     `- Runtime commands: ${list.counts.runtimeCommands}`,
     `- Runtime command scope: ${list.cli.runtimeCommandScope}`,
     `- Plugin descriptor commands: ${list.counts.pluginCommands}`,
-    `- Supplied node commands: ${list.counts.nodeCommands}`,
+    `- Node commands: ${list.counts.nodeCommands}`,
     `- Node command scope: ${list.cli.nodeCommandScope}`,
     "",
     "## Routed operations",

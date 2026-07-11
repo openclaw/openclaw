@@ -100,7 +100,7 @@ describe("command inventory list", () => {
     expect(markdown).toContain("- CLI descriptors:");
     expect(markdown).toContain("- Command routes:");
     expect(markdown).toContain("- Runtime command scope: current-invocation-registered-tree");
-    expect(markdown).toContain("- Supplied node commands: 0");
+    expect(markdown).toContain("- Node commands: 0");
     expect(markdown).toContain("- Node command scope: caller-supplied");
     expect(markdown).toContain(
       "| `gateway-status` | `unknown` | `unknown` | unknown | `gateway status` |",
