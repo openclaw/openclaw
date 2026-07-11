@@ -18,6 +18,10 @@ enum CLIInstallBuild {
 }
 
 enum CLIInstallPolicy {
+    static func storedPolicy(defaults: UserDefaults = .standard) -> String? {
+        defaults.string(forKey: cliInstallPolicyKey)
+    }
+
     static func requiredGatewayVersionString(
         appVersion: String?,
         isDebug: Bool,
@@ -26,7 +30,7 @@ enum CLIInstallPolicy {
         guard !CLIInstallBuild.isStable(appVersion: appVersion, isDebug: isDebug) else {
             return appVersion
         }
-        return switch defaults.string(forKey: cliInstallPolicyKey) {
+        return switch self.storedPolicy(defaults: defaults) {
         case "stable", "beta", "dev": nil
         case "exact", nil: appVersion
         default: appVersion
@@ -235,17 +239,17 @@ enum CLIInstaller {
         expectedVersion: String?) -> Status
     {
         let normalized = GatewayEnvironment.normalizeGatewayVersionOutput(output)
-        guard let normalized, let installed = Semver.parse(normalized) else {
+        guard let normalized, Semver.parse(normalized) != nil else {
             return .unusable(location: location)
         }
-        guard let required = Semver.parse(expectedVersion) else {
+        guard Semver.parse(expectedVersion) != nil else {
             return .ready(location: location, version: normalized)
         }
-        guard installed.compatible(with: required) else {
+        guard Semver.satisfiesExpectedGatewayVersion(installed: normalized, expected: expectedVersion) else {
             return .incompatible(
                 location: location,
                 found: normalized,
-                required: expectedVersion ?? required.description)
+                required: expectedVersion ?? "unknown")
         }
         return .ready(location: location, version: normalized)
     }
