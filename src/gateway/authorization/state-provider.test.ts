@@ -5,7 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { GatewayResourceRef } from "./contracts.js";
+import type { GatewayAuthorizationRequest, GatewayResourceRef } from "./contracts.js";
 import { createStateGatewayAuthorizationRuntime } from "./state-provider.js";
 import {
   addIsolationDomainMember,
@@ -44,12 +44,13 @@ function createDatabase() {
   return { path: `${makeTempDir(tempDirs, "openclaw-rbac-")}/openclaw.sqlite` };
 }
 
-function isolatedAuthorize(database: ReturnType<typeof createDatabase>) {
+function isolatedAuthorize(database: ReturnType<typeof createDatabase>, domainId = "domain-1") {
   const runtime = createStateGatewayAuthorizationRuntime({ database });
   if (runtime.mode !== "isolated") {
     throw new Error("expected isolated authorization runtime");
   }
-  return runtime.authorize;
+  return (request: Omit<GatewayAuthorizationRequest, "domain">) =>
+    runtime.authorize({ ...request, domain: { id: domainId } });
 }
 
 function seedDomain(params: {
@@ -122,7 +123,7 @@ describe("state-backed gateway authorization", () => {
     ).resolves.toEqual({ allowed: false, reason: "unbound-resource" });
   });
 
-  it("rejects requests spanning more than one isolation domain", async () => {
+  it("does not resolve a resource outside the trusted request domain", async () => {
     const database = createDatabase();
     seedDomain({ database, domainId: "domain-1", resource: workspace });
     putAuthorizationPrincipal({ ...member, database });
@@ -141,7 +142,7 @@ describe("state-backed gateway authorization", () => {
         permission: "workspaces.tab.write",
         resources: [workspace, tab],
       }),
-    ).resolves.toEqual({ allowed: false, reason: "cross-domain" });
+    ).resolves.toEqual({ allowed: false, reason: "unbound-resource" });
   });
 
   it("rejects a known principal that is not a member of the resource domain", async () => {
@@ -387,7 +388,10 @@ describe("state-backed gateway authorization", () => {
     }
 
     await expect(
-      isolatedAuthorize(database)({
+      isolatedAuthorize(
+        database,
+        "domain-2",
+      )({
         principal: member.principal,
         method: "workspaces.get",
         permission: "workspaces.resource.read",
@@ -400,7 +404,7 @@ describe("state-backed gateway authorization", () => {
     });
   });
 
-  it("refuses to move an existing resource binding across domains", () => {
+  it("isolates identical opaque resource IDs in different domains", async () => {
     const database = createDatabase();
     seedDomain({ database, resource: workspace });
     const secondOwner = {
@@ -410,14 +414,95 @@ describe("state-backed gateway authorization", () => {
     putAuthorizationPrincipal({ ...secondOwner, database });
     createIsolationDomain({ id: "domain-2", ownerPrincipalId: secondOwner.id, database });
 
-    expect(() =>
-      bindAuthorizationResource({
-        domainId: "domain-2",
-        resource: workspace,
-        ownerPrincipalId: secondOwner.id,
+    bindAuthorizationResource({
+      domainId: "domain-2",
+      resource: workspace,
+      ownerPrincipalId: secondOwner.id,
+      database,
+    });
+
+    await expect(
+      isolatedAuthorize(
         database,
+        "domain-1",
+      )({
+        principal: owner.principal,
+        method: "workspaces.get",
+        permission: "workspaces.workspace.read",
+        resources: [workspace],
       }),
-    ).toThrow(/already bound/i);
+    ).resolves.toMatchObject({
+      allowed: true,
+      principalId: owner.id,
+      domain: { id: "domain-1" },
+    });
+    await expect(
+      isolatedAuthorize(
+        database,
+        "domain-2",
+      )({
+        principal: secondOwner.principal,
+        method: "workspaces.get",
+        permission: "workspaces.workspace.read",
+        resources: [workspace],
+      }),
+    ).resolves.toMatchObject({
+      allowed: true,
+      principalId: secondOwner.id,
+      domain: { id: "domain-2" },
+    });
+  });
+
+  it("does not reuse a same-ID grant across domains for a multi-domain member", async () => {
+    const database = createDatabase();
+    seedDomain({ database, domainId: "domain-1", resource: workspace });
+    const secondOwner = {
+      id: "principal-owner-2",
+      principal: { issuer: "trusted-proxy", subject: "owner-2@example.com", kind: "human" },
+    } as const;
+    putAuthorizationPrincipal({ ...secondOwner, database });
+    putAuthorizationPrincipal({ ...member, database });
+    createIsolationDomain({ id: "domain-2", ownerPrincipalId: secondOwner.id, database });
+    bindAuthorizationResource({
+      domainId: "domain-2",
+      resource: workspace,
+      ownerPrincipalId: secondOwner.id,
+      database,
+    });
+    for (const [domainId, addedByPrincipalId] of [
+      ["domain-1", owner.id],
+      ["domain-2", secondOwner.id],
+    ] as const) {
+      addIsolationDomainMember({
+        domainId,
+        principalId: member.id,
+        addedByPrincipalId,
+        database,
+      });
+    }
+    grantAuthorizationPermission({
+      domainId: "domain-1",
+      principalId: member.id,
+      resource: workspace,
+      permission: "workspaces.workspace.read",
+      grantedByPrincipalId: owner.id,
+      database,
+    });
+
+    const request = {
+      principal: member.principal,
+      method: "workspaces.get",
+      permission: "workspaces.workspace.read",
+      resources: [workspace],
+    } as const;
+    await expect(isolatedAuthorize(database, "domain-1")(request)).resolves.toMatchObject({
+      allowed: true,
+      domain: { id: "domain-1" },
+    });
+    await expect(isolatedAuthorize(database, "domain-2")(request)).resolves.toEqual({
+      allowed: false,
+      reason: "forbidden",
+    });
   });
 
   it("does not allow non-human principals to become domain owners", () => {

@@ -5,7 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { GatewayResourceRef } from "./contracts.js";
+import type { GatewayAuthorizationRequest, GatewayResourceRef } from "./contracts.js";
 import { createStateGatewayAuthorizationRuntime } from "./state-provider.js";
 import {
   addIsolationDomainMember,
@@ -85,12 +85,13 @@ function addMember(
   });
 }
 
-function isolatedAuthorize(database: ReturnType<typeof createDatabase>) {
+function isolatedAuthorize(database: ReturnType<typeof createDatabase>, domainId = "domain-1") {
   const runtime = createStateGatewayAuthorizationRuntime({ database });
   if (runtime.mode !== "isolated") {
     throw new Error("expected isolated authorization runtime");
   }
-  return runtime.authorize;
+  return (request: Omit<GatewayAuthorizationRequest, "domain">) =>
+    runtime.authorize({ ...request, domain: { id: domainId } });
 }
 
 afterEach(() => {
@@ -515,7 +516,7 @@ describe("authorization state lifecycle", () => {
     ).toThrow(/human/i);
   });
 
-  it("upgrades the prior resource table additively and installs lifecycle guards", () => {
+  it("upgrades a domain-scoped resource table missing lifecycle columns", () => {
     const database = createDatabase();
     const sqlite = requireNodeSqlite();
     const legacy = new sqlite.DatabaseSync(database.path);
@@ -527,8 +528,7 @@ describe("authorization state lifecycle", () => {
         domain_id TEXT NOT NULL,
         owner_principal_id TEXT NOT NULL,
         created_at INTEGER NOT NULL,
-        PRIMARY KEY (namespace, resource_type, resource_id),
-        UNIQUE (domain_id, namespace, resource_type, resource_id)
+        PRIMARY KEY (domain_id, namespace, resource_type, resource_id)
       );
     `);
     legacy
@@ -570,5 +570,27 @@ describe("authorization state lifecycle", () => {
         )
         .run(workspace.namespace, workspace.type, workspace.id),
     ).toThrow(/retire|delete/i);
+  });
+
+  it("rejects the unpublished global resource-key schema instead of silently weakening isolation", () => {
+    const database = createDatabase();
+    const sqlite = requireNodeSqlite();
+    const legacy = new sqlite.DatabaseSync(database.path);
+    legacy.exec(`
+      CREATE TABLE authorization_resources (
+        namespace TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        domain_id TEXT NOT NULL,
+        owner_principal_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (namespace, resource_type, resource_id)
+      );
+    `);
+    legacy.close();
+
+    expect(() => openOpenClawStateDatabase(database)).toThrow(
+      /noncanonical authorization resource schema/i,
+    );
   });
 });

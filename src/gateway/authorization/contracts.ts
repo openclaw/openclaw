@@ -3,6 +3,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export type IsolationDomainRef = Readonly<{ id: string }>;
 
+export type GatewayAuthorizationContext = Readonly<{
+  principalId: string;
+  domain: IsolationDomainRef;
+}>;
+
 export type GatewayResourceRef = Readonly<{
   namespace: string;
   type: string;
@@ -27,6 +32,7 @@ export type GatewayMethodAccessPolicy =
 
 export type GatewayAuthorizationRequest = Readonly<{
   principal: GatewayPrincipal;
+  domain: IsolationDomainRef;
   method: string;
   permission: string;
   resources: readonly GatewayResourceRef[];

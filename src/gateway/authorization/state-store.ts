@@ -292,6 +292,7 @@ export function bindAuthorizationResource(
           "parent_resource_id",
           "retired_at",
         ])
+        .where("domain_id", "=", domainId)
         .where("namespace", "=", resource.namespace)
         .where("resource_type", "=", resource.type)
         .where("resource_id", "=", resource.id),
@@ -306,7 +307,6 @@ export function bindAuthorizationResource(
           existing.parent_resource_id === null;
       if (
         existing.retired_at !== null ||
-        existing.domain_id !== domainId ||
         existing.owner_principal_id !== ownerPrincipalId ||
         !sameParent
       ) {
@@ -321,11 +321,12 @@ export function bindAuthorizationResource(
         kysely
           .selectFrom("authorization_resources")
           .select(["domain_id", "retired_at"])
+          .where("domain_id", "=", domainId)
           .where("namespace", "=", parent.namespace)
           .where("resource_type", "=", parent.type)
           .where("resource_id", "=", parent.id),
       );
-      if (parentRow?.domain_id !== domainId || parentRow.retired_at !== null) {
+      if (!parentRow || parentRow.retired_at !== null) {
         throw new Error("authorization resource parent must be active in the same domain");
       }
     }
