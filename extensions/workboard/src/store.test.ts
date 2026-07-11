@@ -157,6 +157,82 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("computes active owner ids across boards via the sqlite fast path, matching the full-scan fallback", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-owners-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      await store.upsertBoard({ id: "board-a", name: "A" });
+      await store.upsertBoard({ id: "board-b", name: "B" });
+
+      // Claimed/running on board-a: consumes an owner slot for agent-1.
+      const claimedOnA = await store.create({
+        title: "Claimed on A",
+        boardId: "board-a",
+        status: "ready",
+      });
+      await store.claim(claimedOnA.id, { ownerId: "agent-1" });
+
+      // Ready (unclaimed) on board-b, same owner: dispatch must see agent-1 as busy
+      // even though this card lives on a different board than the running one.
+      const readyOnB = await store.create({
+        title: "Ready on B, same owner",
+        boardId: "board-b",
+        agentId: "agent-1",
+        status: "ready",
+      });
+
+      // Archived running card: must NOT count as an active owner slot.
+      const archived = await store.create({
+        title: "Archived running",
+        boardId: "board-a",
+        status: "ready",
+      });
+      await store.claim(archived.id, { ownerId: "agent-archived" });
+      await store.update(archived.id, { metadata: { archivedAt: Date.now() } });
+
+      // Bulk of unrelated triage-status cards (a different board), the case that
+      // made the original unscoped list() scan expensive. None should appear as
+      // active owners since none are running/claimed.
+      for (let i = 0; i < 25; i++) {
+        await store.create({ title: `Triage ${i}`, boardId: "triage-board", status: "triage" });
+      }
+
+      const activeOwnerIds = await store.listActiveOwnerIds();
+      expect(activeOwnerIds).toContain("agent-1");
+      expect(activeOwnerIds).not.toContain("agent-archived");
+      expect(activeOwnerIds.length).toBe(1);
+
+      // Cross-check the sqlite fast path against the generic list()-based fallback
+      // (what an in-memory/non-sqlite backend would compute) to prove they agree.
+      const fallbackStore = new WorkboardStore(
+        {
+          register: stores.cards.register.bind(stores.cards),
+          lookup: stores.cards.lookup.bind(stores.cards),
+          delete: stores.cards.delete.bind(stores.cards),
+          entries: stores.cards.entries.bind(stores.cards),
+        },
+        {
+          boards: stores.boards,
+          subscriptions: stores.subscriptions,
+          attachments: stores.attachments,
+        },
+      );
+      const fallbackOwnerIds = await fallbackStore.listActiveOwnerIds();
+      expect([...activeOwnerIds].sort()).toEqual([...fallbackOwnerIds].sort());
+
+      expect(readyOnB.metadata?.claim).toBeUndefined();
+      stores.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses rollback journaling on network-backed volumes", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-network-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -1308,6 +1384,33 @@ describe("WorkboardStore", () => {
 
     const lateParent = await store.create({ title: "Late parent" });
     await expect(store.linkCards(lateParent.id, child.id)).rejects.toThrow(/active child/);
+  });
+
+  it("resolves parent dependency status with targeted lookups instead of a full-corpus scan", async () => {
+    const cardStore = createMemoryStore();
+    const entriesSpy = vi.spyOn(cardStore, "entries");
+    const store = new WorkboardStore(cardStore);
+
+    const parent = await store.create({ title: "Parent" });
+    const children = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        store.create({ title: `Child ${i}`, status: "todo", parents: [parent.id] }),
+      ),
+    );
+
+    await store.complete(parent.id, { summary: "Parent done." });
+    entriesSpy.mockClear();
+    const dispatch = await store.dispatch();
+
+    expect(dispatch.promoted.map((card) => card.id).sort()).toEqual(
+      children.map((child) => child.id).sort(),
+    );
+    // Regression guard for the dependencyTargetStatus N+1: before the fix, every
+    // parented card being checked in this pass triggered its own additional
+    // unscoped list() call (an extra full-corpus scan per child, here 8 of them).
+    // Resolving parents via targeted get() calls keeps this flat regardless of
+    // how many dependent cards are promoted together.
+    expect(entriesSpy.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it("rejects terminal children with incomplete dependency parents", async () => {
