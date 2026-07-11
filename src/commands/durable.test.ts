@@ -4,10 +4,10 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDurableRuntimeSqlitePath } from "../durable/config.js";
 import { buildDurableFanInGroupId } from "../durable/fan-in.js";
-import { DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION } from "../durable/sqlite-store.js";
 import { openDurableRuntimeStore } from "../durable/store-factory.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
 import { durableCommand } from "./durable.js";
 
 function createRuntimeCapture() {
@@ -91,7 +91,7 @@ describe("durableCommand", () => {
     }
   });
 
-  it("reports a safe error for enabled inspection of a future durable schema", async () => {
+  it("reports a safe error for enabled inspection of a future shared state schema", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-cli-future-"));
     const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_DURABLE_RUNTIME: "1" };
     const sqlitePath = resolveDurableRuntimeSqlitePath(env);
@@ -99,18 +99,7 @@ describe("durableCommand", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(sqlitePath);
     try {
-      db.exec(`
-        CREATE TABLE durable_schema_migrations (
-          schema_name TEXT NOT NULL PRIMARY KEY,
-          version INTEGER NOT NULL,
-          applied_at INTEGER NOT NULL,
-          metadata_json TEXT
-        );
-      `);
-      db.prepare(
-        `INSERT INTO durable_schema_migrations (schema_name, version, applied_at, metadata_json)
-         VALUES (?, ?, ?, ?)`,
-      ).run("durable_runtime", DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION + 1, 100, null);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     } finally {
       db.close();
     }
@@ -121,7 +110,7 @@ describe("durableCommand", () => {
 
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(errors[0]).toContain("Durable runtime store unavailable");
-      expect(errors[0]).toContain("newer than supported version");
+      expect(errors[0]).toContain("newer schema version");
       const verifyDb = new DatabaseSync(sqlitePath);
       try {
         expect(

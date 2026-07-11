@@ -769,7 +769,7 @@ describe("subagent registry persistence", () => {
     });
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = announceSpy.mock.calls[0]?.[0] as
+    const announce = (announceSpy.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
       | {
           childRunId?: string;
           requesterSessionKey?: string;
@@ -1091,7 +1091,7 @@ describe("subagent registry persistence", () => {
     await waitForRegistryWork(() => announceSpy.mock.calls.length === 1);
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = announceSpy.mock.calls[0]?.[0] as
+    const announce = (announceSpy.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
       | {
           childRunId?: string;
           requesterSessionKey?: string;

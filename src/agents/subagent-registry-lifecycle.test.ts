@@ -13,6 +13,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import type { DeferredCleanupDecision } from "./subagent-registry-cleanup.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -36,7 +37,10 @@ const helperMocks = vi.hoisted(() => ({
 }));
 
 const cleanupMocks = vi.hoisted(() => ({
-  resolveDeferredCleanupDecision: vi.fn(() => ({ kind: "give-up", reason: "retry-limit" })),
+  resolveDeferredCleanupDecision: vi.fn<() => DeferredCleanupDecision>(() => ({
+    kind: "give-up",
+    reason: "retry-limit",
+  })),
 }));
 
 const runtimeMocks = vi.hoisted(() => ({

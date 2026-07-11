@@ -619,13 +619,6 @@ export interface DurableRuntimeTimers {
   timer_type: string;
 }
 
-export interface DurableSchemaMigrations {
-  applied_at: number;
-  metadata_json: string | null;
-  schema_name: string;
-  version: number;
-}
-
 export interface ExecApprovalsConfig {
   agent_count: number;
   allowlist_count: number;
@@ -1220,7 +1213,6 @@ export interface DB {
   durable_runtime_signals: DurableRuntimeSignals;
   durable_runtime_steps: DurableRuntimeSteps;
   durable_runtime_timers: DurableRuntimeTimers;
-  durable_schema_migrations: DurableSchemaMigrations;
   exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
