@@ -137,6 +137,7 @@ function defaultBatchResponse(stage: BatchStage): Response {
         { status: 200 },
       );
   }
+  throw new Error(`unexpected Gemini batch stage: ${stage}`);
 }
 
 function stubBatchFetch(
@@ -306,7 +307,9 @@ describe("Google embedding-batch bounded JSON reads", () => {
         };
         if (url.pathname === "/upload/v1beta/files") {
           request.resume();
-          await new Promise<void>((resolve) => request.once("end", resolve));
+          await new Promise<void>((resolve) => {
+            request.once("end", () => resolve());
+          });
           respondJson({ file: { name: "files/input-0" } });
           return;
         }

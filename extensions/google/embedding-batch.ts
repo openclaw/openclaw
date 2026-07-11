@@ -106,14 +106,14 @@ function getGeminiBatchState(operation: GeminiBatchOperation): GeminiBatchState 
   // REST discovery uses BATCH_STATE_* while the public guide and SDK expose
   // JOB_STATE_* for the same operation metadata.
   const rawState = operation.metadata?.state?.replace(/^(?:BATCH|JOB)_STATE_/, "");
-  switch (rawState) {
-    case "FAILED":
-      return "failed";
-    case "CANCELLED":
-    case "CANCELED":
-      return "cancelled";
-    case "EXPIRED":
-      return "expired";
+  if (rawState === "FAILED") {
+    return "failed";
+  }
+  if (rawState === "CANCELLED" || rawState === "CANCELED") {
+    return "cancelled";
+  }
+  if (rawState === "EXPIRED") {
+    return "expired";
   }
   if (operation.error) {
     return "failed";
