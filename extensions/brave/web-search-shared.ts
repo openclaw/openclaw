@@ -21,7 +21,7 @@ function resolveLegacyTopLevelBraveCredential(
   const tools = isRecord(config.tools) ? config.tools : undefined;
   const web = isRecord(tools?.web) ? tools.web : undefined;
   const search = isRecord(web?.search) ? web.search : undefined;
-  if (!search || !("apiKey" in search)) {
+  if (!search || !Object.hasOwn(search, "apiKey")) {
     return undefined;
   }
   return { path: "tools.web.search.apiKey", value: search.apiKey };
@@ -40,10 +40,11 @@ function resolveBraveWebSearchPluginConfig(config: unknown): Record<string, unkn
 
 /** Resolve Brave credentials from current plugin config or legacy fallback. */
 function resolveConfiguredBraveCredential(config: unknown): unknown {
-  return (
-    resolveBraveWebSearchPluginConfig(config)?.apiKey ??
-    resolveLegacyTopLevelBraveCredential(config)?.value
-  );
+  const pluginConfig = resolveBraveWebSearchPluginConfig(config);
+  if (pluginConfig && Object.hasOwn(pluginConfig, "apiKey")) {
+    return pluginConfig.apiKey;
+  }
+  return resolveLegacyTopLevelBraveCredential(config)?.value;
 }
 
 /** Build the common Brave provider metadata without the runtime tool executor. */
