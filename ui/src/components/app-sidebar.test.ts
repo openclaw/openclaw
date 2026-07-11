@@ -259,25 +259,21 @@ describe("AppSidebar session scroll fade", () => {
       scrollHeight: { configurable: true, get: () => scrollHeight },
     });
 
-    scroller.dispatchEvent(new Event("scroll"));
-    await sidebar.updateComplete;
-    expect(scroller.classList.contains("sidebar-recent-sessions--scroll-none")).toBe(true);
+    const expectScrollState = async (
+      scrollTop: number,
+      expected: "none" | "top" | "middle" | "bottom",
+    ) => {
+      scroller.scrollTop = scrollTop;
+      scroller.dispatchEvent(new Event("scroll"));
+      await sidebar.updateComplete;
+      expect(scroller.classList.contains(`sidebar-recent-sessions--scroll-${expected}`)).toBe(true);
+    };
 
+    await expectScrollState(0, "none");
     scrollHeight = 300;
-    scroller.scrollTop = 0;
-    scroller.dispatchEvent(new Event("scroll"));
-    await sidebar.updateComplete;
-    expect(scroller.classList.contains("sidebar-recent-sessions--scroll-top")).toBe(true);
-
-    scroller.scrollTop = 80;
-    scroller.dispatchEvent(new Event("scroll"));
-    await sidebar.updateComplete;
-    expect(scroller.classList.contains("sidebar-recent-sessions--scroll-middle")).toBe(true);
-
-    scroller.scrollTop = 200;
-    scroller.dispatchEvent(new Event("scroll"));
-    await sidebar.updateComplete;
-    expect(scroller.classList.contains("sidebar-recent-sessions--scroll-bottom")).toBe(true);
+    await expectScrollState(0, "top");
+    await expectScrollState(80, "middle");
+    await expectScrollState(200, "bottom");
   });
 });
 

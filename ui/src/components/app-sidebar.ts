@@ -1387,7 +1387,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         >
           <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
           <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
-          <span class="sidebar-customize-menu__check" aria-hidden="true"></span>
         </button>
       </div>
     `;
