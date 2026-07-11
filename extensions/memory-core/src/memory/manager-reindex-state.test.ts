@@ -104,6 +104,40 @@ describe("memory reindex state", () => {
     ).toBe(true);
   });
 
+  it("keeps Gemini identity valid when only generated client attribution would have differed", () => {
+    // Mirrors the Google adapter: x-goog-api-client is excluded from cacheKeyData before hash.
+    const stableCacheKeyData = {
+      provider: "gemini",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      model: "gemini-embedding-2-preview",
+      outputDimensionality: 768,
+      headers: [
+        ["Content-Type", "application/json"],
+        ["x-custom-endpoint", "https://example.invalid/embed"],
+      ],
+    };
+    const identities = resolveMemoryIndexProviderIdentities({
+      provider: { id: "gemini", model: "gemini-embedding-2-preview" },
+      cacheKeyData: stableCacheKeyData,
+    });
+    const providerKey = identities[0]?.providerKey;
+    expect(providerKey).toEqual(expect.any(String));
+
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "gemini", model: "gemini-embedding-2-preview" },
+          providerKey,
+          meta: createMeta({
+            provider: "gemini",
+            model: "gemini-embedding-2-preview",
+            providerKey,
+          }),
+        }),
+      ),
+    ).toEqual({ status: "valid" });
+  });
+
   it("can defer provider key comparison until provider initialization", () => {
     expect(
       resolveMemoryIndexIdentityState(
