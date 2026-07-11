@@ -96,13 +96,13 @@ openclaw fleet list --json
 
 The table contains:
 
-| Column    | Meaning                                                                                             |
-| --------- | --------------------------------------------------------------------------------------------------- |
-| `tenant`  | Tenant ID.                                                                                          |
-| `state`   | Live container state from Docker or Podman inspection. `unknown` means the runtime was unavailable. |
-| `port`    | Loopback host port mapped to the cell Gateway.                                                      |
-| `image`   | Recorded container image.                                                                           |
-| `created` | Cell creation time.                                                                                 |
+| Column    | Meaning                                                                                                                                                                                                                                                                               |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tenant`  | Tenant ID.                                                                                                                                                                                                                                                                            |
+| `state`   | Live container state from Docker or Podman inspection. `unknown` means the runtime was unavailable, or a container with the cell's name exists but its Fleet ownership labels do not match the registry record (a collision or tampering signal — inspect it manually before acting). |
+| `port`    | Loopback host port mapped to the cell Gateway.                                                                                                                                                                                                                                        |
+| `image`   | Recorded container image.                                                                                                                                                                                                                                                             |
+| `created` | Cell creation time.                                                                                                                                                                                                                                                                   |
 
 Registry rows remain visible when Docker or Podman is unavailable; only live state becomes `unknown`.
 

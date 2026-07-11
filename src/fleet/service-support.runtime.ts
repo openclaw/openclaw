@@ -392,9 +392,9 @@ export async function cleanupFailedCreateContainer(
   }
   const tenantLabel = inspection.labels[FLEET_TENANT_LABEL];
   const ownerLabel = inspection.labels[FLEET_OWNER_LABEL];
-  if (!tenantLabel || !ownerLabel) {
-    return false;
-  }
+  // Fleet always labels what it creates, so a container without fleet labels (or with
+  // another owner's labels) is foreign: leave it untouched but release the reservation,
+  // otherwise a name collision strands a tenant no fleet command can recover.
   if (tenantLabel !== record.tenantId || ownerLabel !== cellOwnerId(record.dataDir)) {
     return true;
   }
@@ -422,9 +422,8 @@ export async function cleanupFailedCreateNetwork(
   }
   const tenantLabel = inspection.labels[FLEET_TENANT_LABEL];
   const ownerLabel = inspection.labels[FLEET_OWNER_LABEL];
-  if (!tenantLabel || !ownerLabel) {
-    return false;
-  }
+  // Same foreign-resource rule as cleanupFailedCreateContainer: unlabeled or
+  // other-owner networks are never fleet's to delete, but must not pin the reservation.
   if (tenantLabel !== record.tenantId || ownerLabel !== cellOwnerId(record.dataDir)) {
     return true;
   }

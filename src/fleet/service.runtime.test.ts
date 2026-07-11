@@ -308,10 +308,18 @@ describe("fleet service", () => {
 
   it("carries inspected environment and resources through upgrade", async () => {
     const containers = createContainerMock();
-    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      now: () => 1000,
+      generateAttemptId: () => NEXT_ATTEMPT_ID,
+    });
     await service.create({ tenant: "acme", gatewayToken: "old-token" });
     containers.run.mockClear();
-    containers.inspect.mockResolvedValue(runningInspection());
+    containers.inspect
+      .mockResolvedValue(runningInspection())
+      .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }));
 
     const result = await service.upgrade("acme", "ghcr.io/openclaw/openclaw:v2");
 
@@ -394,6 +402,7 @@ describe("fleet service", () => {
     containers.remove.mockClear();
     containers.inspect
       .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }))
       .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }));
 
     await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
@@ -402,6 +411,33 @@ describe("fleet service", () => {
     expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
     expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", true);
     expect(containers.removeNetwork).not.toHaveBeenCalled();
+    expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
+  });
+
+  it("restores the previous cell when the replacement container is not running", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      now: () => 1000,
+      generateAttemptId: () => NEXT_ATTEMPT_ID,
+    });
+    await service.create({ tenant: "acme", gatewayToken: "old-token" });
+    containers.run.mockClear();
+    const crashLooping = runningInspection({
+      labels: fleetLabels("acme", NEXT_ATTEMPT_ID),
+      state: "restarting",
+      running: false,
+    });
+    containers.inspect
+      .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValueOnce(crashLooping)
+      .mockResolvedValueOnce(crashLooping);
+
+    await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
+
+    expect(containers.run).toHaveBeenCalledTimes(2);
+    expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
     expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
 
@@ -584,6 +620,37 @@ describe("fleet service", () => {
 
     expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", true);
     expect(containers.start).not.toHaveBeenCalled();
+    expect(getFleetCell(env, "acme")).toBeUndefined();
+  });
+
+  it("releases the reservation when an unlabeled foreign container holds the cell name", async () => {
+    const containers = createContainerMock(runningInspection({ labels: {} }));
+    containers.run.mockRejectedValue(new Error("container name is already in use"));
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+
+    await expect(service.create({ tenant: "acme", gatewayToken: "token" })).rejects.toThrow(
+      /already in use/iu,
+    );
+
+    expect(containers.remove).not.toHaveBeenCalled();
+    expect(getFleetCell(env, "acme")).toBeUndefined();
+  });
+
+  it("releases the reservation when an unlabeled foreign network holds the cell name", async () => {
+    const containers = createContainerMock();
+    containers.createNetwork.mockRejectedValue(new Error("network name is already in use"));
+    containers.inspectNetwork.mockResolvedValue({
+      kind: "ok",
+      labels: {},
+      attachedContainers: [],
+    });
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+
+    await expect(service.create({ tenant: "acme", gatewayToken: "token" })).rejects.toThrow(
+      /already in use/iu,
+    );
+
+    expect(containers.removeNetwork).not.toHaveBeenCalled();
     expect(getFleetCell(env, "acme")).toBeUndefined();
   });
 

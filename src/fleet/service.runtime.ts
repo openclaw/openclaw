@@ -477,6 +477,21 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             await containers.remove(record.runtime, record.containerName, false);
             checkpoint();
             await containers.run(nextProfile, true);
+            // `run -d` succeeds once the container launches; verify the replacement is the
+            // expected attempt and still running so a crash-looping image restores the old
+            // cell instead of being committed. Deeper liveness stays with `fleet status`.
+            const replacement = await containers.inspect(record.runtime, record.containerName);
+            if (
+              replacement.kind !== "ok" ||
+              replacement.labels[FLEET_ATTEMPT_LABEL] !== nextAttemptId ||
+              !replacement.running
+            ) {
+              throw new Error(
+                replacement.kind === "ok"
+                  ? "Replacement cell container is not running after upgrade."
+                  : "Replacement cell container could not be verified after upgrade.",
+              );
+            }
             checkpoint();
             updateImage(env, record.tenantId, image);
           } catch (error) {
