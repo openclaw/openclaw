@@ -15,6 +15,13 @@ on:
         description: Exact full candidate commit SHA
         required: true
         type: string
+    secrets:
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Credential-lease coordinator secret supplied by qa-live-shared
+        required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Credential-lease coordinator URL supplied by qa-live-shared
+        required: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

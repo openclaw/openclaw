@@ -255,6 +255,7 @@ describe("release Telegram QA workflow", () => {
       on?: {
         workflow_call?: {
           inputs?: Record<string, { required?: boolean; type?: string }>;
+          secrets?: Record<string, { description?: string; required?: boolean }>;
         };
       };
     };
@@ -262,6 +263,16 @@ describe("release Telegram QA workflow", () => {
       description: "Resolved main SHA authorized for this trusted reusable workflow",
       required: true,
       type: "string",
+    });
+    expect(reusableWorkflow.on?.workflow_call?.secrets).toEqual({
+      OPENCLAW_QA_CONVEX_SECRET_CI: {
+        description: "Credential-lease coordinator secret supplied by qa-live-shared",
+        required: false,
+      },
+      OPENCLAW_QA_CONVEX_SITE_URL: {
+        description: "Credential-lease coordinator URL supplied by qa-live-shared",
+        required: false,
+      },
     });
   });
 
