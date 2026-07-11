@@ -10,10 +10,15 @@ export type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
-import type { ModelsAuthLoginFlowOptions } from "../commands/models/auth.js";
+import type {
+  ModelsAuthLoginFlowOptions,
+  ModelsAuthLoginFlowResult,
+} from "../commands/models/auth.js";
 
 type ProviderAuthLoginFlowRuntime = typeof import("../commands/models/auth.js");
-type RunModelsAuthLoginFlow = (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
+type RunModelsAuthLoginFlow = (
+  opts: ModelsAuthLoginFlowOptions,
+) => Promise<ModelsAuthLoginFlowResult>;
 
 const CODEX_LOGIN_PROVIDER = "openai";
 const CODEX_LOGIN_METHOD = "device-code";
@@ -134,7 +139,7 @@ async function runCodexDeviceLoginFlow(params: {
   sendMessage: (message: string) => Promise<void>;
   unsupportedPromptMessage: string;
   runLoginFlow?: RunModelsAuthLoginFlow;
-}): Promise<unknown> {
+}): Promise<ModelsAuthLoginFlowResult> {
   return await (params.runLoginFlow ?? runModelsAuthLoginFlow)({
     provider: params.provider,
     method: CODEX_LOGIN_METHOD,

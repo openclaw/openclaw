@@ -43,6 +43,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   formatSqliteSessionFileMarker,
   getSessionEntry,
+  patchSessionEntry,
   resolveStorePath,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -1338,21 +1339,50 @@ export const registerTelegramNativeCommands = ({
               agentId: route.agentId,
               sessionKey: targetSessionKey,
             });
-            const profileId = codexChannelLoginRuntime.resolveProviderScopedProfileId(
+            const previousProfileId = codexChannelLoginRuntime.resolveProviderScopedProfileId(
               targetSessionEntry?.authProfileOverride,
               loginProvider,
             );
-            await codexChannelLoginRuntime.runDeviceLoginFlow({
+            const loginResult = await codexChannelLoginRuntime.runDeviceLoginFlow({
               runLoginFlow: loginFlow,
               provider: loginProvider,
               agentId: route.agentId,
-              ...(profileId ? { profileId } : {}),
               config: runtimeCfg,
               runtime,
               sendMessage: sendLoginMessage,
               unsupportedPromptMessage:
                 "Telegram /login supports only fixed Codex device-code auth.",
             });
+            const nextProfileId = loginResult.profiles.find(
+              (profile) => profile.provider === loginProvider,
+            )?.profileId;
+            if (targetSessionEntry && nextProfileId && nextProfileId !== previousProfileId) {
+              try {
+                const storePath = resolveStorePath(runtimeCfg.session?.store, {
+                  agentId: route.agentId,
+                });
+                await patchSessionEntry({
+                  agentId: route.agentId,
+                  sessionKey: targetSessionKey,
+                  storePath,
+                  fallbackEntry: targetSessionEntry,
+                  preserveActivity: true,
+                  update: () => ({
+                    authProfileOverride: nextProfileId,
+                    authProfileOverrideSource: "user",
+                    authProfileOverrideCompactionCount: undefined,
+                  }),
+                });
+              } catch (error) {
+                runtime.error?.(
+                  danger(
+                    `telegram /login codex completed but failed to update session auth profile: ${String(
+                      error,
+                    )}`,
+                  ),
+                );
+              }
+            }
             await sendLoginMessage("Codex login complete. Try your request again now.");
           } catch {
             runtime.error?.(danger("telegram /login codex failed"));
