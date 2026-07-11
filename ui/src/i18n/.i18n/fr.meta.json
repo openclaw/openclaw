@@ -55,12 +55,12 @@
     "cron.suggestions.weeklyReview.title",
     "cron.tabs.paused"
   ],
-  "generatedAt": "2026-07-11T06:04:20.384Z",
+  "generatedAt": "2026-07-11T07:06:07.569Z",
   "locale": "fr",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "4c7dd3a1387312050459a48b3db201ab6ef4fc9f2b492256966f987ee684ea81",
-  "totalKeys": 2031,
-  "translatedKeys": 1977,
+  "sourceHash": "5db8e660830ede8216d11401a69c68f6dcabc98a03721d5f89f5e41b0ae52967",
+  "totalKeys": 2049,
+  "translatedKeys": 1995,
   "workflow": 1
 }

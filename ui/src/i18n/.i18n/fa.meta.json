@@ -58,12 +58,12 @@
     "cron.tabs.all",
     "cron.tabs.paused"
   ],
-  "generatedAt": "2026-07-11T06:04:22.851Z",
+  "generatedAt": "2026-07-11T07:06:11.620Z",
   "locale": "fa",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "4c7dd3a1387312050459a48b3db201ab6ef4fc9f2b492256966f987ee684ea81",
-  "totalKeys": 2031,
-  "translatedKeys": 1974,
+  "sourceHash": "5db8e660830ede8216d11401a69c68f6dcabc98a03721d5f89f5e41b0ae52967",
+  "totalKeys": 2049,
+  "translatedKeys": 1992,
   "workflow": 1
 }
