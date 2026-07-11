@@ -359,12 +359,16 @@ async function hashSelectedArtifactFiles(
   return hash.digest("hex");
 }
 
-async function resolveCommandPath(command: string, env: NodeJS.ProcessEnv): Promise<string> {
+async function resolveCommandPath(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+): Promise<string> {
   let candidate: string | undefined;
   if (process.platform === "win32") {
     candidate = resolveWindowsExecutablePath(command, env);
   } else if (path.isAbsolute(command) || command.includes("/") || command.includes("\\")) {
-    candidate = path.resolve(command);
+    candidate = path.resolve(cwd, command);
   } else {
     const pathValue = env.PATH;
     if (pathValue === undefined) {
@@ -373,7 +377,7 @@ async function resolveCommandPath(command: string, env: NodeJS.ProcessEnv): Prom
     for (const entry of pathValue.split(path.delimiter)) {
       // POSIX executable lookup treats an empty PATH component as cwd.
       const entryPath =
-        entry === "" ? process.cwd() : path.isAbsolute(entry) ? entry : path.resolve(entry);
+        entry === "" ? cwd : path.isAbsolute(entry) ? entry : path.resolve(cwd, entry);
       const possible = path.join(entryPath, command);
       try {
         await fs.access(possible, fsConstants.X_OK);
@@ -417,6 +421,7 @@ async function readShebang(filePath: string): Promise<string[] | undefined> {
 async function resolvePosixInvocationPaths(params: {
   commandRealPath: string;
   env: NodeJS.ProcessEnv;
+  cwd: string;
   nativeCommand?: string;
 }): Promise<string[]> {
   const paths = [params.commandRealPath];
@@ -429,7 +434,7 @@ async function resolvePosixInvocationPaths(params: {
       "Codex runtime cannot attest a custom script launcher without its native target",
     );
   }
-  const interpreter = await resolveCommandPath(shebang[0]!, params.env);
+  const interpreter = await resolveCommandPath(shebang[0]!, params.env, params.cwd);
   paths.push(await fs.realpath(interpreter));
   if (path.basename(interpreter) !== "env") {
     if (shebang.length !== 1) {
@@ -443,7 +448,7 @@ async function resolvePosixInvocationPaths(params: {
   if (!target || target.startsWith("-") || envArgs.length !== commandIndex + 1) {
     throw new Error("Codex runtime launcher uses unsupported env arguments");
   }
-  const targetPath = await resolveCommandPath(target, params.env);
+  const targetPath = await resolveCommandPath(target, params.env, params.cwd);
   paths.push(await fs.realpath(targetPath));
   return paths;
 }
@@ -507,7 +512,10 @@ async function captureFilesystemDescriptor(params: {
   }
   const env = resolveCodexAppServerSpawnEnv(params.startOptions);
   assertNoRuntimeInjectionEnvironment(env);
-  const commandPath = await resolveCommandPath(params.startOptions.command, env);
+  // child_process resolves relative launchers and PATH entries after applying cwd.
+  // Attestation must use the same base or it can bind bytes that spawn never executes.
+  const spawnCwd = path.resolve(params.startOptions.cwd ?? process.cwd());
+  const commandPath = await resolveCommandPath(params.startOptions.command, env, spawnCwd);
   const commandRealPath = await fs.realpath(commandPath);
   let invocationPaths: string[];
   if (process.platform === "win32") {
@@ -526,13 +534,14 @@ async function captureFilesystemDescriptor(params: {
     const invocationCandidates = [commandRealPath, program.command, ...program.leadingArgv];
     invocationPaths = [];
     for (const candidate of invocationCandidates) {
-      const resolved = await resolveCommandPath(candidate, env);
+      const resolved = await resolveCommandPath(candidate, env, spawnCwd);
       invocationPaths.push(await fs.realpath(resolved));
     }
   } else {
     invocationPaths = await resolvePosixInvocationPaths({
       commandRealPath,
       env,
+      cwd: spawnCwd,
       nativeCommand: params.spawnIdentity.nativeCommand,
     });
   }
@@ -544,7 +553,7 @@ async function captureFilesystemDescriptor(params: {
   if (!nativeCandidate) {
     throw new Error("Codex runtime did not resolve a native executable");
   }
-  const nativePath = await fs.realpath(await resolveCommandPath(nativeCandidate, env));
+  const nativePath = await fs.realpath(await resolveCommandPath(nativeCandidate, env, spawnCwd));
   const packageRoot = await resolvePackageRoot(nativePath);
   const configuredCodeModeHost = readEffectiveSpawnEnvironmentValue(
     env,
@@ -557,7 +566,7 @@ async function captureFilesystemDescriptor(params: {
   const codeModeHostCandidatePath = configuredCodeModeHost
     ? path.isAbsolute(configuredCodeModeHost)
       ? configuredCodeModeHost
-      : path.resolve(configuredCodeModeHost)
+      : path.resolve(spawnCwd, configuredCodeModeHost)
     : adjacentCodeModeHost;
   const codeModeHostPath = await resolveOptionalRegularFile(codeModeHostCandidatePath);
   if (configuredCodeModeHost && !codeModeHostPath) {

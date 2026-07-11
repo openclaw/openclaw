@@ -74,6 +74,49 @@ describe("Codex app-server runtime artifact", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "resolves relative launch paths and shebang targets from the spawn cwd",
+    async () => {
+      await withTempDir("openclaw-codex-runtime-cwd-", async (root) => {
+        const spawnCwd = path.join(root, "workspace");
+        const binDir = path.join(spawnCwd, "bin");
+        const interpreterDir = path.join(spawnCwd, "interpreters");
+        const nativeDir = path.join(spawnCwd, "native");
+        await Promise.all([
+          fs.mkdir(binDir, { recursive: true }),
+          fs.mkdir(interpreterDir, { recursive: true }),
+          fs.mkdir(nativeDir, { recursive: true }),
+        ]);
+        const command = path.join(binDir, "codex");
+        const interpreter = path.join(interpreterDir, "fixture-node");
+        const nativeCommand = path.join(nativeDir, "codex-native");
+        await Promise.all([
+          fs.writeFile(command, "#!/usr/bin/env fixture-node\n"),
+          fs.writeFile(interpreter, "interpreter-v1"),
+          fs.writeFile(nativeCommand, "native-v1"),
+        ]);
+        await Promise.all([
+          fs.chmod(command, 0o755),
+          fs.chmod(interpreter, 0o755),
+          fs.chmod(nativeCommand, 0o755),
+        ]);
+        const options = startOptions("codex", {
+          cwd: spawnCwd,
+          env: { PATH: ["bin", "interpreters"].join(path.delimiter) },
+        });
+
+        const { binding } = await captureBinding({
+          options,
+          nativeCommand: path.join("native", "codex-native"),
+        });
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
+
+        await fs.writeFile(interpreter, "interpreter-v2");
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+      });
+    },
+  );
+
   it("attests that an adjacent code-mode host is absent", async () => {
     await withTempDir("openclaw-codex-runtime-no-host-", async (root) => {
       const command = path.join(root, "codex");
