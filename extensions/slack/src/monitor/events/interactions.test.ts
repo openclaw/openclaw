@@ -1,7 +1,6 @@
 // Slack tests cover interactions plugin behavior.
 import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildOpenClawBulkActionsBlock } from "../../bulk-action-ids.js";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
@@ -2168,7 +2167,7 @@ describe("registerSlackInteractionEvents", () => {
     });
   });
 
-  it("removes bulk action rows when the last individual Slack control is selected", async () => {
+  it("preserves unrelated action rows when the last individual Slack control is selected", async () => {
     enqueueSystemEventMock.mockClear();
     const { ctx, app, getHandler } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
@@ -2185,7 +2184,22 @@ describe("registerSlackInteractionEvents", () => {
           text: "fallback",
           blocks: [
             { type: "divider" },
-            buildOpenClawBulkActionsBlock(),
+            {
+              type: "actions",
+              block_id: "bulk_controls_row",
+              elements: [
+                {
+                  type: "button",
+                  action_id: "select_all",
+                  text: { type: "plain_text", text: "All" },
+                },
+                {
+                  type: "button",
+                  action_id: "deselect_all",
+                  text: { type: "plain_text", text: "None" },
+                },
+              ],
+            },
             { type: "divider" },
             {
               type: "actions",
@@ -2216,6 +2230,19 @@ describe("registerSlackInteractionEvents", () => {
       channel: "C4",
       ts: "444.555",
       blocks: [
+        { type: "divider" },
+        {
+          type: "actions",
+          block_id: "bulk_controls_row",
+          elements: [
+            { type: "button", action_id: "select_all", text: { type: "plain_text", text: "All" } },
+            {
+              type: "button",
+              action_id: "deselect_all",
+              text: { type: "plain_text", text: "None" },
+            },
+          ],
+        },
         { type: "divider" },
         {
           type: "context",
@@ -2399,7 +2426,7 @@ describe("registerSlackInteractionEvents", () => {
     });
   });
 
-  it("keeps non-bulk deploy_all_services rows while another individual control remains", async () => {
+  it("preserves deploy_all_services rows when the last individual control is selected", async () => {
     enqueueSystemEventMock.mockClear();
     const { ctx, app, getHandler } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
@@ -2415,8 +2442,6 @@ describe("registerSlackInteractionEvents", () => {
           ts: "555.666",
           text: "fallback",
           blocks: [
-            { type: "divider" },
-            buildOpenClawBulkActionsBlock(),
             { type: "divider" },
             {
               type: "actions",
@@ -2458,8 +2483,6 @@ describe("registerSlackInteractionEvents", () => {
       channel: "C5",
       ts: "555.666",
       blocks: [
-        { type: "divider" },
-        buildOpenClawBulkActionsBlock(),
         { type: "divider" },
         {
           type: "actions",

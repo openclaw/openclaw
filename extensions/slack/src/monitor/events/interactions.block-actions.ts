@@ -35,7 +35,6 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "../conversation.runtime.js";
-import { isSlackBulkActionsBlock } from "../../bulk-action-ids.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 type InteractionMessageBlock = {
@@ -284,10 +283,6 @@ export function summarizeAction(action: Record<string, unknown>): SlackActionSum
     workflowTriggerUrl: typed.workflow?.trigger_url,
     workflowId: typed.workflow?.workflow_id,
   };
-}
-
-function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
-  return isSlackBulkActionsBlock(block);
 }
 
 function formatInteractionSelectionLabel(params: {
@@ -824,7 +819,7 @@ function buildSlackConfirmationBlocks(params: {
     summary: params.parsed.actionSummary,
     buttonText: params.parsed.typedActionWithText.text?.text,
   });
-  let updatedBlocks = params.originalBlocks.map((block) => {
+  const updatedBlocks = params.originalBlocks.map((block) => {
     const typedBlock = block as InteractionMessageBlock;
     if (typedBlock.type === "actions" && typedBlock.block_id === params.parsed.blockId) {
       return {
@@ -842,23 +837,6 @@ function buildSlackConfirmationBlocks(params: {
     }
     return block;
   });
-  const hasRemainingIndividualActionRows = updatedBlocks.some((block) => {
-    const typedBlock = block as InteractionMessageBlock;
-    return typedBlock.type === "actions" && !isBulkActionsBlock(typedBlock);
-  });
-  if (!hasRemainingIndividualActionRows) {
-    updatedBlocks = updatedBlocks.filter((block, index) => {
-      const typedBlock = block as InteractionMessageBlock;
-      if (isBulkActionsBlock(typedBlock)) {
-        return false;
-      }
-      if (typedBlock.type !== "divider") {
-        return true;
-      }
-      const next = updatedBlocks[index + 1] as InteractionMessageBlock | undefined;
-      return !next || !isBulkActionsBlock(next);
-    });
-  }
   return updatedBlocks as (Block | KnownBlock)[];
 }
 
