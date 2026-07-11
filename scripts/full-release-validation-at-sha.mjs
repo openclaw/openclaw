@@ -7,6 +7,9 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const WORKFLOW = "full-release-validation.yml";
+const RELEASE_BRANCH_PATTERN =
+  /^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u;
+const RELEASE_TAG_PATTERN = /^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)\.[0-9]+)?$/u;
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
@@ -16,7 +19,7 @@ const DEFAULT_INPUTS = {
 };
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
 Creates a temporary remote branch pinned to trusted main release tooling,
 dispatches Full Release Validation with the target commit as its ref input,
@@ -137,22 +140,34 @@ export function parseArgs(argv) {
   }
   if (
     args.targetRef &&
-    !/^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u.test(
-      args.targetRef,
-    )
+    !RELEASE_BRANCH_PATTERN.test(args.targetRef) &&
+    !RELEASE_TAG_PATTERN.test(args.targetRef)
   ) {
-    throw new Error("--target-ref must be a canonical OpenClaw release branch");
+    throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
   }
   return args;
+}
+
+export function resolveRemoteTargetRefSha(targetRef, executeGit = (args) => run("git", args)) {
+  if (RELEASE_BRANCH_PATTERN.test(targetRef)) {
+    return executeGit(["ls-remote", "--heads", "origin", `refs/heads/${targetRef}`]).split(
+      /\s+/u,
+    )[0];
+  }
+
+  const tagRef = `refs/tags/${targetRef}`;
+  const peeledSha = executeGit(["ls-remote", "--tags", "origin", `${tagRef}^{}`]).split(/\s+/u)[0];
+  if (peeledSha) {
+    return peeledSha;
+  }
+  return executeGit(["ls-remote", "--tags", "origin", tagRef]).split(/\s+/u)[0];
 }
 
 function verifyTargetRef(targetRef, targetSha) {
   if (!targetRef) {
     return targetSha;
   }
-  const remoteSha = run("git", ["ls-remote", "--heads", "origin", `refs/heads/${targetRef}`]).split(
-    /\s+/u,
-  )[0];
+  const remoteSha = resolveRemoteTargetRefSha(targetRef);
   if (remoteSha !== targetSha) {
     throw new Error(`Target ref ${targetRef} does not resolve to ${targetSha}`);
   }

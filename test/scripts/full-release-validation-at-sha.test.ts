@@ -6,6 +6,7 @@ import {
   parseArgs,
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
+  resolveRemoteTargetRefSha,
 } from "../../scripts/full-release-validation-at-sha.mjs";
 
 describe("full-release-validation-at-sha", () => {
@@ -39,7 +40,7 @@ describe("full-release-validation-at-sha", () => {
     });
   });
 
-  it("keeps branch context separate from the exact target SHA", () => {
+  it("keeps release context separate from the exact target SHA", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
     expect(source).toContain("ref: targetSha");
     expect(source).toContain("target_context_ref: targetContextRef");
@@ -57,13 +58,40 @@ describe("full-release-validation-at-sha", () => {
     expect(() => parseArgs(["-f", "-h"])).toThrow("-f requires a value");
   });
 
-  it("accepts only canonical release branch context", () => {
+  it("accepts only canonical release branch or tag context", () => {
     expect(parseArgs(["--target-ref", "extended-stable/2026.6.33"]).targetRef).toBe(
       "extended-stable/2026.6.33",
     );
+    expect(parseArgs(["--target-ref", "v2026.7.1-beta.5"]).targetRef).toBe("v2026.7.1-beta.5");
+    expect(parseArgs(["--target-ref", "v2026.7.1"]).targetRef).toBe("v2026.7.1");
     expect(() => parseArgs(["--target-ref", "feature/not-release"])).toThrow(
-      "canonical OpenClaw release branch",
+      "canonical OpenClaw release branch or tag",
     );
+  });
+
+  it("resolves annotated release tags through their peeled commit", () => {
+    const calls: string[][] = [];
+    const sha = resolveRemoteTargetRefSha("v2026.7.1-beta.5", (args) => {
+      calls.push(args);
+      return `b6387afd6d2e0f43c2ae98d2d124dbc277f03cca\t${args.at(-1)}`;
+    });
+    expect(sha).toBe("b6387afd6d2e0f43c2ae98d2d124dbc277f03cca");
+    expect(calls).toEqual([["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1-beta.5^{}"]]);
+  });
+
+  it("falls back to the direct ref for lightweight release tags", () => {
+    const calls: string[][] = [];
+    const sha = resolveRemoteTargetRefSha("v2026.7.1", (args) => {
+      calls.push(args);
+      return args.at(-1)?.endsWith("^{}")
+        ? ""
+        : "0123456789abcdef0123456789abcdef01234567\trefs/tags/v2026.7.1";
+    });
+    expect(sha).toBe("0123456789abcdef0123456789abcdef01234567");
+    expect(calls).toEqual([
+      ["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1^{}"],
+      ["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1"],
+    ]);
   });
 
   it("allows exact-target reuse to be disabled for a forced fresh run", () => {

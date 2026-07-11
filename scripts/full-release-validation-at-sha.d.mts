@@ -15,3 +15,7 @@ export function parseArgs(argv: unknown): {
 };
 export function releaseEvidenceVerificationArgs(parentRunId: unknown): string[];
 export function releaseEvidenceVerifierPath(worktreeRoot: unknown): string;
+export function resolveRemoteTargetRefSha(
+  targetRef: string,
+  executeGit?: (args: string[]) => string,
+): string;
