@@ -20,6 +20,7 @@ const markGatewaySigusr1RestartHandled = vi.fn();
 const peekGatewaySigusr1RestartReason = vi.fn<() => string | undefined>(() => undefined);
 const resetGatewayRestartStateForInProcessRestart = vi.fn();
 const rollbackGatewayRestartSignalAdmission = vi.fn();
+const requestGatewayRestartWithSignalAdmission = vi.fn(() => ({ status: "emitted" as const }));
 const writeGatewayRestartHandoffSync = vi.fn((_opts: unknown) => ({
   kind: "gateway-supervisor-restart-handoff" as const,
   version: 1 as const,
@@ -136,6 +137,7 @@ vi.mock("../../infra/restart.js", () => ({
   peekGatewaySigusr1RestartReason: () => peekGatewaySigusr1RestartReason(),
   resetGatewayRestartStateForInProcessRestart: () => resetGatewayRestartStateForInProcessRestart(),
   rollbackGatewayRestartSignalAdmission: () => rollbackGatewayRestartSignalAdmission(),
+  requestGatewayRestartWithSignalAdmission,
   resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
     if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
       return DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS;
@@ -457,6 +459,10 @@ describe("runGatewayLoop", () => {
       expect(close).toHaveBeenCalledWith({
         reason: "gateway stopping",
         restartExpectedMs: null,
+      });
+      expect(start).toHaveBeenCalledWith({
+        startupStartedAt: expect.any(Number),
+        requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
     });

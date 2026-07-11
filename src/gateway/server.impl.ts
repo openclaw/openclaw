@@ -1096,8 +1096,19 @@ export async function startGatewayServer(
     cronReconciliation.invalidate();
     clearPostReadyMaintenanceTimer();
   };
-  const runClosePrelude = async () => {
+  let configReloaderStopPromise: Promise<void> | null = null;
+  const stopConfigReloaderForClose = () => {
+    configReloaderStopPromise ??= runtimeState.configReloader.stop();
+    return configReloaderStopPromise;
+  };
+  const beginClosePrelude = async () => {
     markClosePreludeStarted();
+    // Join the last reload before any owner it can publish into is torn down.
+    // The close handler re-awaits this same promise to retain warning reporting.
+    await stopConfigReloaderForClose().catch(() => {});
+  };
+  const runClosePrelude = async () => {
+    await beginClosePrelude();
     watchNodeHttpRuntime.close();
     clearPluginMetadataLifecycleCaches();
     const { runGatewayClosePrelude } = await loadGatewayCloseModule();
@@ -1208,7 +1219,7 @@ export async function startGatewayServer(
       },
       getPendingReplyCount: getTotalPendingReplies,
       clients,
-      configReloader: runtimeState.configReloader,
+      configReloader: { stop: stopConfigReloaderForClose },
       wss,
       httpServer,
       httpServers,
@@ -1218,6 +1229,7 @@ export async function startGatewayServer(
   let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
     try {
+      await beginClosePrelude();
       await stopRegisteredGatewayLifetimeSidecars();
       await stopRegisteredPostReadySidecars();
       await runClosePrelude();
@@ -1993,7 +2005,7 @@ export async function startGatewayServer(
   return {
     close: async (optsLocal) => {
       try {
-        markClosePreludeStarted();
+        await beginClosePrelude();
         // Kill any live operator shells before the socket layer tears down.
         terminalSessions.disposeAll();
         await stopRegisteredGatewayLifetimeSidecars();
