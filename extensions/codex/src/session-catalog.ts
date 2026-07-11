@@ -19,6 +19,7 @@ import {
   readCodexPluginConfig,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./app-server/config.js";
+import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
 import type {
   CodexThread,
   CodexThreadListParams,
@@ -92,6 +93,7 @@ export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
 
 export type CodexSessionCatalogControl = {
   assertEnabled(): void;
+  connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
@@ -114,12 +116,16 @@ type CodexSessionCatalogRequestSnapshot = {
 
 function createCodexSessionCatalogControlFromRequests(params: {
   assertEnabled: () => void;
+  connectionFingerprint?: string;
   createRequestSnapshot: () => CodexSessionCatalogRequestSnapshot;
   now: () => number;
   withPinnedConnection: CodexSessionCatalogControl["withPinnedConnection"];
 }): CodexSessionCatalogControl {
   return {
     assertEnabled: params.assertEnabled,
+    ...(params.connectionFingerprint
+      ? { connectionFingerprint: params.connectionFingerprint }
+      : {}),
     withPinnedConnection: params.withPinnedConnection,
     async listPage(pageParams) {
       params.assertEnabled();
@@ -295,6 +301,7 @@ export function createCodexSessionCatalogControl(params: {
       const pinnedControl: CodexSessionCatalogControl =
         createCodexSessionCatalogControlFromRequests({
           assertEnabled,
+          connectionFingerprint: buildCodexAppServerConnectionFingerprint(runtime),
           createRequestSnapshot: () => requests,
           now,
           withPinnedConnection: async (nestedRun) => await nestedRun(pinnedControl),
@@ -1172,7 +1179,12 @@ function lastTerminalTurnId(thread: CodexThread): string | undefined {
 
 function matchesPendingAdoptionBinding(
   binding: CodexAppServerThreadBinding | undefined,
-  expected: { sourceThreadId: string; cwd: string; lastTurnId?: string },
+  expected: {
+    sourceThreadId: string;
+    connectionFingerprint: string;
+    cwd: string;
+    lastTurnId?: string;
+  },
 ): boolean {
   const historyCoveredThrough = binding?.historyCoveredThrough;
   return (
@@ -1183,6 +1195,7 @@ function matchesPendingAdoptionBinding(
     binding.conversationSourceTransferComplete === true &&
     binding.preserveNativeModel === true &&
     binding.pendingSupervisionBranch?.sourceThreadId === expected.sourceThreadId &&
+    binding.pendingSupervisionBranch.connectionFingerprint === expected.connectionFingerprint &&
     binding.pendingSupervisionBranch.lastTurnId === expected.lastTurnId &&
     (binding.pendingSupervisionBranch.cleanupThreadIds?.length ?? 0) === 0 &&
     typeof historyCoveredThrough === "string" &&
@@ -1202,6 +1215,7 @@ function matchesPendingSupervisionOwner(
     binding.connectionScope === "supervision" &&
     binding.supervisionSourceThreadId === expected.sourceThreadId &&
     pending?.sourceThreadId === expected.sourceThreadId &&
+    pending.connectionFingerprint === expected.connectionFingerprint &&
     pending.lastTurnId === expected.lastTurnId &&
     cleanupThreadIds.length === expectedCleanupThreadIds.length &&
     cleanupThreadIds.every((threadId, index) => threadId === expectedCleanupThreadIds[index])
@@ -1213,11 +1227,13 @@ async function ensurePendingAdoptionBinding(params: {
   config: OpenClawConfig;
   identity: ReturnType<typeof sessionBindingIdentity>;
   sourceThreadId: string;
+  connectionFingerprint: string;
   cwd: string;
   lastTurnId?: string;
 }): Promise<void> {
   const pending: CodexAppServerPendingSupervisionBranch = {
     sourceThreadId: params.sourceThreadId,
+    connectionFingerprint: params.connectionFingerprint,
     ...(params.lastTurnId ? { lastTurnId: params.lastTurnId } : {}),
   };
   const ownsGeneration = await reclaimCurrentCodexSessionGeneration({
@@ -1273,6 +1289,7 @@ async function createOrReuseAdoptedSession(params: {
   bindingStore: CodexAppServerBindingStore;
   config: OpenClawConfig;
   sourceThread: CodexThread;
+  connectionFingerprint: string;
 }): Promise<AdoptedSessionEntry> {
   const existing = await findAdoptedSessionEntry({
     bindingStore: params.bindingStore,
@@ -1332,6 +1349,7 @@ async function createOrReuseAdoptedSession(params: {
         });
         createdPendingBinding = {
           sourceThreadId: params.sourceThread.id,
+          connectionFingerprint: params.connectionFingerprint,
           ...(pendingLastTurnId ? { lastTurnId: pendingLastTurnId } : {}),
         };
         await ensurePendingAdoptionBinding({
@@ -1339,6 +1357,7 @@ async function createOrReuseAdoptedSession(params: {
           config: params.config,
           identity: createdBindingIdentity,
           sourceThreadId: params.sourceThread.id,
+          connectionFingerprint: params.connectionFingerprint,
           cwd: spawnedCwd ?? "",
           ...(pendingLastTurnId ? { lastTurnId: pendingLastTurnId } : {}),
         });
@@ -1463,11 +1482,16 @@ async function continueLocalCodexSessionInner(params: {
     requireIdleThread(sourceThread, "continue");
   }
   params.control.assertEnabled();
+  const connectionFingerprint = params.control.connectionFingerprint;
+  if (!connectionFingerprint) {
+    throw new Error("Codex Continue requires a pinned app-server connection");
+  }
   const adopted = await createOrReuseAdoptedSession({
     api: params.api,
     bindingStore: params.bindingStore,
     config: params.config,
     sourceThread,
+    connectionFingerprint,
   });
   return { sessionKey: adopted.key, disposition: "forked" };
 }
@@ -1486,7 +1510,9 @@ export async function continueLocalCodexSession(params: {
     return await current;
   }
   const operation = runSessionActionExclusive(params.threadId, async () =>
-    continueLocalCodexSessionInner(params),
+    params.control.withPinnedConnection(async (control) =>
+      continueLocalCodexSessionInner({ ...params, control }),
+    ),
   );
   continueOperations.set(params.threadId, operation);
   try {

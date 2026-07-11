@@ -85,6 +85,7 @@ const optionalTimestampSchema = z
 const pendingSupervisionBranchSchema = z
   .object({
     sourceThreadId: z.string().trim().min(1),
+    connectionFingerprint: z.string().trim().min(1).optional(),
     lastTurnId: z.string().trim().min(1).optional(),
     cleanupThreadIds: z.array(z.string().trim().min(1)).max(2).optional(),
   })

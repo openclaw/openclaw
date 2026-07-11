@@ -64,6 +64,23 @@ export function buildCodexAppServerRuntimeFingerprint(params: {
   });
 }
 
+/** Fingerprints the configured connection that owns a supervised source thread. */
+export function buildCodexAppServerConnectionFingerprint(
+  appServer: Pick<
+    CodexAppServerRuntimeOptions,
+    "start" | "connectionClass" | "remoteWorkspaceRoot"
+  >,
+): string {
+  return JSON.stringify({
+    endpoint: resolveCodexPluginAppCacheEndpoint(appServer),
+    connectionClass: appServer.connectionClass,
+    remoteWorkspaceRoot: appServer.remoteWorkspaceRoot ?? null,
+    homeScope: appServer.start.homeScope ?? null,
+    codexHome: appServer.start.env?.CODEX_HOME?.trim() || null,
+    cwd: appServer.start.cwd ?? null,
+  });
+}
+
 /** Serializes app-server endpoint identity, including credential fingerprints. */
 export function resolveCodexPluginAppCacheEndpoint(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,

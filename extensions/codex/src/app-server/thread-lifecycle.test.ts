@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 import {
   sessionBindingIdentity,
@@ -222,6 +223,12 @@ async function seedPendingSupervisionBinding(params: {
   cwd: string;
   pending: CodexAppServerPendingSupervisionBranch;
 }) {
+  const pending = {
+    connectionFingerprint: buildCodexAppServerConnectionFingerprint(
+      createThreadLifecycleAppServerOptions(),
+    ),
+    ...params.pending,
+  };
   const identity = sessionBindingIdentity({
     sessionId: params.attempt.sessionId,
     sessionKey: params.attempt.sessionKey,
@@ -232,12 +239,12 @@ async function seedPendingSupervisionBinding(params: {
     kind: "set",
     if: { kind: "absent" },
     binding: {
-      threadId: params.pending.sourceThreadId,
+      threadId: pending.sourceThreadId,
       cwd: params.cwd,
       connectionScope: "supervision",
-      supervisionSourceThreadId: params.pending.sourceThreadId,
+      supervisionSourceThreadId: pending.sourceThreadId,
       preserveNativeModel: true,
-      pendingSupervisionBranch: params.pending,
+      pendingSupervisionBranch: pending,
       conversationSourceTransferComplete: true,
       historyCoveredThrough: new Date(0).toISOString(),
     },
@@ -1639,6 +1646,30 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
   });
 
+  it("rejects materialization after the supervised source connection changes", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId: "thread-source" },
+    });
+    const request = vi.fn();
+    const appServer = createThreadLifecycleAppServerOptions();
+    appServer.start.command = "different-codex";
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer,
+      }),
+    ).rejects.toThrow("source connection changed before branch materialization");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("recovers every persisted orphan before materializing a fresh canonical branch", async () => {
     const sourceThreadId = "thread-source";
     const orphanProbeThreadId = "thread-orphan-probe";
@@ -1657,6 +1688,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
         cleanupThreadIds: [orphanProbeThreadId, orphanFinalThreadId],
       },
     });
+    const connectionFingerprint = buildCodexAppServerConnectionFingerprint(
+      createThreadLifecycleAppServerOptions(),
+    );
     const mutations: Parameters<CodexAppServerBindingStore["mutate"]>[1][] = [];
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
@@ -1719,10 +1753,11 @@ describe("Codex app-server supervised branch lifecycle", () => {
       kind: "patch-pending-supervision-branch",
       expected: {
         sourceThreadId,
+        connectionFingerprint,
         lastTurnId,
         cleanupThreadIds: [orphanProbeThreadId, orphanFinalThreadId],
       },
-      pending: { sourceThreadId, lastTurnId },
+      pending: { sourceThreadId, connectionFingerprint, lastTurnId },
     });
     const persisted = await testCodexAppServerBindingStore.read(identity);
     expect(persisted).toMatchObject({ threadId: finalThreadId });

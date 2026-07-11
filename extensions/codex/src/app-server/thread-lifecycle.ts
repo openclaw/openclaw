@@ -41,6 +41,7 @@ import {
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   isCodexPluginThreadBindingStale,
@@ -1187,6 +1188,10 @@ async function materializePendingSupervisionBranch(
   params: PendingSupervisionMaterializationParams,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   let pending = params.binding.pendingSupervisionBranch;
+  const connectionFingerprint = buildCodexAppServerConnectionFingerprint(params.appServer);
+  if (!pending.connectionFingerprint || pending.connectionFingerprint !== connectionFingerprint) {
+    throw new Error("Codex supervision source connection changed before branch materialization");
+  }
   pending = await recoverPendingSupervisionArtifacts(params, pending);
   params.throwIfAborted();
 
@@ -1687,6 +1692,9 @@ function withPendingSupervisionCleanup(
 ): CodexAppServerPendingSupervisionBranch {
   return {
     sourceThreadId: pending.sourceThreadId,
+    ...(pending.connectionFingerprint
+      ? { connectionFingerprint: pending.connectionFingerprint }
+      : {}),
     ...(pending.lastTurnId ? { lastTurnId: pending.lastTurnId } : {}),
     ...(cleanupThreadIds.length > 0 ? { cleanupThreadIds } : {}),
   };

@@ -45,11 +45,21 @@ export async function connectToolsMcpServerToStdio(
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
     void (async () => {
+      let shutdownError: unknown;
       try {
         await server.close();
+      } catch (error) {
+        shutdownError = error;
+      }
+      try {
         await options.onShutdown?.();
+      } catch (error) {
+        shutdownError ??= error;
       } finally {
         resolveShutdown?.();
+      }
+      if (shutdownError) {
+        process.stderr.write(`MCP stdio shutdown failed: ${String(shutdownError)}\n`);
       }
     })();
   };

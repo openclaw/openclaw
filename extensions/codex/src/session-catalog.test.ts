@@ -90,6 +90,7 @@ function createControl(overrides: Partial<CodexSessionCatalogControl> = {}) {
   ) as unknown as CodexSessionCatalogControl["withPinnedConnection"];
   const control: CodexSessionCatalogControl = {
     assertEnabled: vi.fn(),
+    connectionFingerprint: "catalog-connection",
     withPinnedConnection,
     listPage: vi.fn(async () => ({ sessions: [] })),
     listDescendantPage: vi.fn(async () => ({ data: [] })),
@@ -150,7 +151,12 @@ async function seedSupervisionBinding(params: {
     preserveNativeModel: true,
     historyCoveredThrough: new Date().toISOString(),
     ...(params.pending
-      ? { pendingSupervisionBranch: { sourceThreadId: params.sourceThreadId } }
+      ? {
+          pendingSupervisionBranch: {
+            sourceThreadId: params.sourceThreadId,
+            connectionFingerprint: "catalog-connection",
+          },
+        }
       : { model: "gpt-5.4", modelProvider: "openai" }),
   };
   const stored = await params.bindingStore.mutate(
@@ -1285,6 +1291,7 @@ describe("Codex supervision actions", () => {
       disposition: "forked",
     });
     expect(second).toEqual({ sessionKey: first.sessionKey, disposition: "existing" });
+    expect(control.withPinnedConnection).toHaveBeenCalledTimes(2);
     expect(createSessionEntry).toHaveBeenCalledOnce();
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1335,7 +1342,11 @@ describe("Codex supervision actions", () => {
       historyCoveredThrough: expect.any(String),
       conversationSourceTransferComplete: true,
       preserveNativeModel: true,
-      pendingSupervisionBranch: { sourceThreadId: "thread-1", lastTurnId: "turn-failed" },
+      pendingSupervisionBranch: {
+        sourceThreadId: "thread-1",
+        connectionFingerprint: "catalog-connection",
+        lastTurnId: "turn-failed",
+      },
     });
     expect(control.readThread).toHaveBeenCalledTimes(2);
     expect(control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true);
@@ -1601,7 +1612,10 @@ describe("Codex supervision actions", () => {
         historyCoveredThrough: new Date().toISOString(),
         conversationSourceTransferComplete: true,
         preserveNativeModel: true,
-        pendingSupervisionBranch: { sourceThreadId: "thread-1" },
+        pendingSupervisionBranch: {
+          sourceThreadId: "thread-1",
+          connectionFingerprint: "catalog-connection",
+        },
       },
     });
     const mutate = vi.fn(inner.mutate);
