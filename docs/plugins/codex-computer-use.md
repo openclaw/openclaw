@@ -97,7 +97,7 @@ Computer Use in and lets OpenClaw install or re-enable it before the turn:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-sol",
     },
   },
 }

@@ -51,7 +51,7 @@ const context = {
 } satisfies Context;
 
 describeLive("OpenAI tool projection live", () => {
-  const modelId = process.env.OPENCLAW_LIVE_OPENAI_TOOL_MODEL || "gpt-5.5";
+  const modelId = process.env.OPENCLAW_LIVE_OPENAI_TOOL_MODEL || "gpt-5.6-luna";
   const client = new OpenAI({ apiKey: OPENAI_KEY });
 
   it("calls a healthy Responses function after quarantining an unreadable sibling", async () => {
