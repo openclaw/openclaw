@@ -453,8 +453,7 @@ function buildExaCacheKey(params: {
   dateBefore?: string;
   contents?: ExaContentsArgs;
 }): string {
-  const serializeContentOption = (value: unknown): string | undefined =>
-    value === undefined ? undefined : JSON.stringify(value);
+  const contents = params.contents ?? { highlights: true };
 
   return buildSearchCacheKey([
     "exa",
@@ -465,9 +464,7 @@ function buildExaCacheKey(params: {
     params.freshness,
     params.dateAfter,
     params.dateBefore,
-    serializeContentOption(params.contents?.highlights),
-    serializeContentOption(params.contents?.text),
-    serializeContentOption(params.contents?.summary),
+    JSON.stringify(contents),
   ]);
 }
 
