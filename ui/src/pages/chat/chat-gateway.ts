@@ -281,15 +281,27 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
   // A BTW run that fails before seeding context terminates with a plain chat
-  // event and never emits chat.side_result; drop the pending card so
-  // "Thinking…" cannot outlive its run. Successful runs clear pending via the
-  // side_result handler before their terminal chat event arrives.
+  // event and never emits chat.side_result. Convert the failure into an error
+  // side-result card and swallow the event: detached BTW runs must not reach
+  // normal chat handling, where an idle pane would adopt them into the
+  // transcript. Successful runs clear pending via the side_result handler
+  // before their terminal chat event arrives.
   if (
     isTerminalChatState(payload?.state) &&
     typeof payload?.runId === "string" &&
     state.chatSideResultPending?.runId === payload.runId
   ) {
+    state.chatSideResult = {
+      kind: "btw",
+      runId: payload.runId,
+      sessionKey: payload.sessionKey ?? state.sessionKey,
+      question: state.chatSideResultPending.question,
+      text: extractBtwFailureText(payload) ?? "The side question ended without a result.",
+      isError: true,
+      ts: Date.now(),
+    };
     state.chatSideResultPending = null;
+    return null;
   }
   if (
     isTerminalChatState(payload?.state) &&
@@ -318,8 +330,34 @@ export function handleChatSideResultGatewayEvent(state: ChatState, payload: unkn
   if (!chatScopedEventSessionMatches(state, sideResult.sessionKey, sideResult.agentId)) {
     return false;
   }
+  // Detached BTW sends can overlap: a stale result must not replace a newer
+  // question's pending card. Pending without a runId means its send is not
+  // acked yet; treat an arriving result as its own so the card cannot hang.
+  const pendingRunId = state.chatSideResultPending?.runId;
+  if (pendingRunId && pendingRunId !== sideResult.runId) {
+    state.chatSideResultTerminalRuns?.add(sideResult.runId);
+    return true;
+  }
   state.chatSideResult = sideResult;
   state.chatSideResultPending = null;
   state.chatSideResultTerminalRuns?.add(sideResult.runId);
   return true;
+}
+
+function extractBtwFailureText(payload: ChatEventPayload): string | null {
+  if (typeof payload.errorMessage === "string" && payload.errorMessage.trim()) {
+    return payload.errorMessage;
+  }
+  const message = payload.message as { content?: unknown } | undefined;
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const text = blocks
+    .map((block) =>
+      block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+        ? (block as { text?: unknown }).text
+        : null,
+    )
+    .filter((entry): entry is string => typeof entry === "string")
+    .join("\n")
+    .trim();
+  return text || null;
 }

@@ -231,11 +231,11 @@ describe("chat side result gateway events", () => {
     expect(state.chatSideResult).not.toBeNull();
   });
 
-  it("drops the pending side question when its run terminates without a side result", () => {
+  it("converts a resultless terminal BTW run into an error card and swallows the event", () => {
     const state = createState();
     state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-3" };
 
-    handleChatGatewayEvent(state, {
+    const result = handleChatGatewayEvent(state, {
       runId: "btw-run-3",
       sessionKey: "main",
       state: "final",
@@ -247,7 +247,37 @@ describe("chat side result gateway events", () => {
       },
     });
 
+    expect(result).toBeNull();
     expect(state.chatSideResultPending).toBeNull();
+    expect(state.chatSideResult).toMatchObject({
+      kind: "btw",
+      runId: "btw-run-3",
+      question: "what changed?",
+      text: "⚠️ /btw requires an active session with existing context.",
+      isError: true,
+    });
+    // Swallowed: the detached failure must not be adopted into the transcript.
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("ignores a stale side result while a newer side question is pending", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "newer question", ts: 2, runId: "btw-run-new" };
+
+    expect(
+      handleChatSideResultGatewayEvent(state, {
+        kind: "btw",
+        runId: "btw-run-old",
+        sessionKey: "main",
+        question: "older question",
+        text: "Stale answer.",
+        ts: 123,
+      }),
+    ).toBe(true);
+
+    expect(state.chatSideResult).toBeNull();
+    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-new" });
+    expect(state.chatSideResultTerminalRuns?.has("btw-run-old")).toBe(true);
   });
 
   it("keeps the pending side question when an unrelated run terminates", () => {

@@ -2183,13 +2183,12 @@ export async function handleSendChat(
         // pending card immediately so the send has visible feedback. A new
         // question also supersedes any still-displayed previous answer —
         // renderSideResult prefers results, so a stale one would hide the card.
-        const isBtw = isBtwCommand(message);
-        if (isBtw) {
+        const btwPending = isBtwCommand(message)
+          ? { question: extractSideQuestionDisplayText(message), ts: Date.now() }
+          : null;
+        if (btwPending) {
           host.chatSideResult = null;
-          host.chatSideResultPending = {
-            question: extractSideQuestionDisplayText(message),
-            ts: Date.now(),
-          };
+          host.chatSideResultPending = btwPending;
           host.requestUpdate?.();
         }
         const ack = await sendDetachedCommandMessage(host, message, {
@@ -2197,14 +2196,12 @@ export async function handleSendChat(
           attachments: hasAttachments ? attachmentsToSend : undefined,
           previousAttachments: cleared.previousAttachments,
         });
-        if (isBtw) {
-          if (!isAcceptedChatSendAck(ack)) {
-            host.chatSideResultPending = null;
-          } else if (host.chatSideResultPending) {
-            // The side_result may already have landed and cleared pending;
-            // only tag the run id while the card is still waiting.
-            host.chatSideResultPending = { ...host.chatSideResultPending, runId: ack.runId };
-          }
+        // Touch only this send's card: an early side_result (or a newer
+        // question) may already have replaced it while the ack was in flight.
+        if (btwPending && host.chatSideResultPending === btwPending) {
+          host.chatSideResultPending = isAcceptedChatSendAck(ack)
+            ? { ...btwPending, runId: ack.runId }
+            : null;
           host.requestUpdate?.();
         }
       });
