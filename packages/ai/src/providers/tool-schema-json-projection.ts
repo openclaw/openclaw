@@ -39,54 +39,28 @@ function isJsonObject(value: RuntimeToolInputSchemaJson): value is {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function findNonFiniteNumberPath(
-  value: unknown,
-  path: string,
-  seen = new WeakSet<object>(),
-): string | null {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? null : path;
-  }
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  if (seen.has(value)) {
-    return null;
-  }
-  seen.add(value);
-  const entries = Array.isArray(value)
-    ? value.map((entry, index) => [`${path}[${index}]`, entry] as const)
-    : Object.entries(value as Record<string, unknown>).map(
-        ([key, entry]) => [`${path}.${key}`, entry] as const,
-      );
-  for (const [childPath, child] of entries) {
-    const nestedPath = findNonFiniteNumberPath(child, childPath, seen);
-    if (nestedPath) {
-      return nestedPath;
-    }
-  }
-  return null;
-}
-
 function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInputSchemaProjection {
-  let nonFiniteNumberPath: string | null;
-  try {
-    nonFiniteNumberPath = findNonFiniteNumberPath(value, path);
-  } catch {
-    return {
-      schema: {},
-      violations: [`${path} is not JSON-serializable`],
-    };
-  }
-  if (nonFiniteNumberPath) {
-    return {
-      schema: {},
-      violations: [`${nonFiniteNumberPath} is not JSON-serializable`],
-    };
-  }
+  let nonFiniteNumberPath: string | null = null;
+  const paths = new WeakMap<object, string>();
   let text: string | undefined;
   try {
-    text = JSON.stringify(value);
+    text = JSON.stringify(value, function (this: object, key, entry) {
+      const holderPath = paths.get(this);
+      const entryPath =
+        key === ""
+          ? path
+          : holderPath === undefined
+            ? `${path}.${key}`
+            : Array.isArray(this)
+              ? `${holderPath}[${key}]`
+              : `${holderPath}.${key}`;
+      if (nonFiniteNumberPath === null && typeof entry === "number" && !Number.isFinite(entry)) {
+        nonFiniteNumberPath = entryPath;
+      } else if (entry && typeof entry === "object") {
+        paths.set(entry, entryPath);
+      }
+      return entry;
+    });
   } catch {
     return {
       schema: {},
@@ -97,6 +71,12 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
     return {
       schema: {},
       violations: [`${path} is not JSON-serializable`],
+    };
+  }
+  if (nonFiniteNumberPath) {
+    return {
+      schema: {},
+      violations: [`${nonFiniteNumberPath} is not JSON-serializable`],
     };
   }
   const parsed = JSON.parse(text) as unknown;
