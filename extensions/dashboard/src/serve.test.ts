@@ -127,6 +127,10 @@ describe("serveWidgetAsset security jail", () => {
       expect(captured.statusCode).toBe(200);
       expect(captured.headers["content-type"]).toBe("text/html; charset=utf-8");
       expect(captured.headers["content-security-policy"]).toBe(WIDGET_CSP);
+      // The response itself enforces the same opaque-origin sandbox as the
+      // iframe, so opening this URL directly cannot regain same-origin access.
+      expect(captured.headers["content-security-policy"]).toContain("sandbox allow-scripts");
+      expect(captured.headers["content-security-policy"]).not.toContain("allow-same-origin");
       expect(captured.headers["content-security-policy"]).toContain("connect-src 'none'");
       expect(captured.headers["x-content-type-options"]).toBe("nosniff");
       expect(captured.headers["referrer-policy"]).toBe("no-referrer");

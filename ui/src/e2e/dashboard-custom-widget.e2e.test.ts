@@ -6,7 +6,6 @@
 // and the constant sandbox attribute asserted in the DOM.
 import { chromium, type Browser, type Page, type Route } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -24,19 +23,15 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 // here so the fixture route mirrors production headers and the fetch()-blocked and
 // sandbox assertions run against realistic frame constraints.
 const WIDGET_CSP =
-  "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+  "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; " +
+  "style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; frame-ancestors 'self'";
 
 let browser: Browser;
 let server: ControlUiE2eServer;
 
-function connectResponseWithDashboardTab() {
+function dashboardGatewayScenario() {
   return {
-    auth: {
-      deviceToken: "e2e-device-token",
-      role: "operator",
-      scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
-    },
     controlUiTabs: [
       {
         pluginId: "dashboard",
@@ -46,27 +41,13 @@ function connectResponseWithDashboardTab() {
         order: -10,
       },
     ],
-    features: {
-      events: ["plugin.dashboard.changed"],
-      methods: ["dashboard.workspace.get", "dashboard.widget.approve"],
-    },
-    protocol: PROTOCOL_VERSION,
-    server: { connId: "control-ui-e2e", version: "e2e" },
-    snapshot: {
-      sessionDefaults: {
-        defaultAgentId: "main",
-        mainKey: "main",
-        mainSessionKey: "main",
-        scope: "agent",
-      },
-    },
-    type: "hello-ok",
+    featureMethods: ["dashboard.workspace.get", "dashboard.widget.approve"],
   };
 }
 
 function workspaceDoc(version: number, status: "pending" | "approved") {
   return {
-    workspace: {
+    doc: {
       schemaVersion: 1,
       workspaceVersion: version,
       tabs: [
@@ -93,6 +74,7 @@ function workspaceDoc(version: number, status: "pending" | "approved") {
       },
       prefs: { tabOrder: ["main"] },
     },
+    workspaceVersion: version,
   };
 }
 
@@ -195,8 +177,8 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
     const page = await newPage();
     await routeWidgetAssets(page, FIXTURE_WIDGET_HTML);
     const gateway = await installMockGateway(page, {
+      ...dashboardGatewayScenario(),
       methodResponses: {
-        connect: connectResponseWithDashboardTab(),
         "dashboard.workspace.get": workspaceDoc(1, "pending"),
         "dashboard.widget.approve": { ok: true },
       },
@@ -229,8 +211,8 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
     const page = await newPage();
     await routeWidgetAssets(page, FIXTURE_WIDGET_HTML);
     await installMockGateway(page, {
+      ...dashboardGatewayScenario(),
       methodResponses: {
-        connect: connectResponseWithDashboardTab(),
         "dashboard.workspace.get": workspaceDoc(2, "approved"),
       },
     });
@@ -257,8 +239,8 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
     const page = await newPage();
     await routeWidgetAssets(page, FIXTURE_WIDGET_HTML);
     await installMockGateway(page, {
+      ...dashboardGatewayScenario(),
       methodResponses: {
-        connect: connectResponseWithDashboardTab(),
         "dashboard.workspace.get": workspaceDoc(2, "approved"),
       },
     });
@@ -290,8 +272,8 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
     const page = await newPage();
     await routeWidgetAssets(page, THROWING_WIDGET_HTML);
     await installMockGateway(page, {
+      ...dashboardGatewayScenario(),
       methodResponses: {
-        connect: connectResponseWithDashboardTab(),
         "dashboard.workspace.get": workspaceDoc(2, "approved"),
       },
     });

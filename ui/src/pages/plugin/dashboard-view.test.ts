@@ -126,6 +126,68 @@ describe("renderDashboard", () => {
     const container = renderView(host);
     expect(container.querySelector(".dashboard__toast")?.textContent).toContain("move failed");
   });
+
+  it("reloads a custom-widget manifest after the workspace version changes", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const state = getDashboardState(host);
+    const workspace = (workspaceVersion: number) => ({
+      schemaVersion: 1,
+      workspaceVersion,
+      tabs: [
+        {
+          slug: "main",
+          title: "Main",
+          hidden: false,
+          widgets: [
+            {
+              id: "custom",
+              kind: "custom:revenue-chart",
+              title: "Revenue",
+              grid: { x: 0, y: 0, w: 6, h: 4 },
+              collapsed: false,
+            },
+          ],
+        },
+      ],
+      widgetsRegistry: { "revenue-chart": { status: "approved" as const } },
+      prefs: { tabOrder: ["main"] },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ entrypoint: "old.html", bindings: [], capabilities: ["prompt:send"] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ entrypoint: "new.html", bindings: [], capabilities: [] }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    state.loaded = true;
+    state.activeSlug = "main";
+    try {
+      state.workspace = workspace(1);
+      render(renderDashboard({ host, client: null, connected: false }), host);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => {
+        render(renderDashboard({ host, client: null, connected: false }), host);
+        expect(host.querySelector("iframe")?.getAttribute("src")).toContain("old.html");
+      });
+
+      state.workspace = workspace(2);
+      render(renderDashboard({ host, client: null, connected: false }), host);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        render(renderDashboard({ host, client: null, connected: false }), host);
+        expect(host.querySelector("iframe")?.getAttribute("src")).toContain("new.html");
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      stopDashboard(host);
+      host.remove();
+    }
+  });
 });
 
 describe("drag ghost (#4)", () => {

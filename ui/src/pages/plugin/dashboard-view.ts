@@ -91,9 +91,10 @@ type DashboardViewState = {
   bindingResults: Map<string, DashboardBindingResult>;
   bindingLoads: Set<string>;
   bindingVersion: number;
-  /** Loaded custom-widget manifests keyed by widget name; survives doc changes. */
+  /** Loaded custom-widget manifests keyed by widget name for one workspace version. */
   manifestCache: Map<string, WidgetManifestView>;
   manifestLoads: Set<string>;
+  manifestVersion: number;
   /**
    * Monotonic data-refresh counter bumped by the per-widget polling timer.
    * Folded into the binding cache key so a poll tick re-resolves data-widget
@@ -217,6 +218,7 @@ function getViewState(host: object): DashboardViewState {
       bindingVersion: -1,
       manifestCache: new Map(),
       manifestLoads: new Set(),
+      manifestVersion: -1,
       dataVersion: 0,
       dialog: null,
       onboardingDismissed: isOnboardingDismissed(),
@@ -458,7 +460,9 @@ function renderTabStrip(state: DashboardUiState, workspace: DashboardWorkspace):
 /**
  * Load `widget.json` manifests for the APPROVED custom widgets on the active tab.
  * Only approved widgets ever build an iframe, so only they need a manifest; a
- * pending/rejected widget never fetches one. Cached across doc changes by name.
+ * pending/rejected widget never fetches one. A workspace-version change clears
+ * the cache because it may represent a new approval with a narrower manifest;
+ * reusing the old capabilities would grant the new code more than was approved.
  */
 function ensureManifests(
   viewState: DashboardViewState,
@@ -466,6 +470,12 @@ function ensureManifests(
   workspace: DashboardWorkspace,
   tab: DashboardTab,
 ): void {
+  if (viewState.manifestVersion !== workspace.workspaceVersion) {
+    viewState.manifestCache.clear();
+    viewState.manifestLoads.clear();
+    viewState.manifestVersion = workspace.workspaceVersion;
+  }
+  const manifestVersion = viewState.manifestVersion;
   const basePath = props.basePath ?? "";
   for (const widget of tab.widgets) {
     const name = customWidgetName(widget.kind);
@@ -479,6 +489,11 @@ function ensureManifests(
     }
     viewState.manifestLoads.add(name);
     void loadWidgetManifestView(basePath, name).then((manifest) => {
+      // A fetch started for an older approval must not repopulate the cache after
+      // a workspace update invalidated it.
+      if (viewState.manifestVersion !== manifestVersion) {
+        return;
+      }
       viewState.manifestLoads.delete(name);
       if (manifest) {
         viewState.manifestCache.set(name, manifest);

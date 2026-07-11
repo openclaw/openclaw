@@ -27,7 +27,8 @@ export const WIDGETS_ROUTE_PREFIX = "/plugins/dashboard/widgets";
 // convention. `frame-ancestors 'self'` keeps the frame embeddable only by the
 // Control UI.
 export const WIDGET_CSP =
-  "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+  "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; " +
+  "style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; frame-ancestors 'self'";
 
 export type WidgetServeDeps = {
