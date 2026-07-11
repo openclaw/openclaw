@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { estimateStringChars } from "../../utils/cjk-chars.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -65,6 +66,16 @@ const aggregateToolResultRecoveryWarnings = new Set<string>();
 type ToolResultTruncationOptions = {
   suffix?: string | ((truncatedChars: number) => string);
   minKeepChars?: number;
+  /**
+   * When provided, truncation also enforces an independent CJK-aware
+   * estimated-character budget derived from the context-window share
+   * (`contextWindowTokens * MAX_TOOL_RESULT_CONTEXT_SHARE * 4`). A dense-CJK
+   * result whose physical length is under the physical cap but whose
+   * CJK-weighted estimate exceeds the context share is truncated to fit the
+   * estimated budget. Omitting this preserves the legacy physical-only
+   * behavior for callers that have not opted in. See issue #103847.
+   */
+  contextWindowTokens?: number;
 };
 
 const DEFAULT_SUFFIX = (truncatedChars: number) =>
@@ -281,6 +292,21 @@ export function calculateMaxToolResultCharsWithCap(
   return Math.min(maxChars, Math.max(1, hardCapChars));
 }
 
+/**
+ * The CJK-aware estimated-character budget for a single tool result, derived
+ * from the context-window share (`contextWindowTokens * share * 4` estimated
+ * chars). Unlike {@link calculateMaxToolResultChars} (a physical-character cap
+ * clamped by the configured/auto hard cap), this is the independent token-share
+ * budget measured in CJK-weighted estimated characters. A tool result whose
+ * CJK-aware estimate exceeds this budget occupies more than the intended share
+ * of the context window even when its raw physical length is under the physical
+ * cap. See issue #103847.
+ */
+export function calculateMaxToolResultEstimatedChars(contextWindowTokens: number): number {
+  const maxTokens = Math.floor(contextWindowTokens * MAX_TOOL_RESULT_CONTEXT_SHARE);
+  return maxTokens * 4;
+}
+
 export function resolveLiveToolResultMaxChars(params: {
   contextWindowTokens: number;
   cfg?: OpenClawConfig;
@@ -347,6 +373,34 @@ export function getToolResultTextLength(msg: AgentMessage): number {
 }
 
 /**
+ * Get the CJK-aware estimated character count of text content blocks in a tool
+ * result message. Each non-Latin (CJK etc.) character is weighted as ~4 chars
+ * so the standard `chars / 4` token estimate stays accurate for any script.
+ * For pure ASCII/Latin this equals {@link getToolResultTextLength}. Used to
+ * enforce the independent estimated-character context-share budget from
+ * {@link calculateMaxToolResultEstimatedChars}. See issue #103847.
+ */
+export function estimateToolResultChars(msg: AgentMessage): number {
+  if (!msg || (msg as { role?: string }).role !== "toolResult") {
+    return 0;
+  }
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let totalEstimated = 0;
+  for (const block of content) {
+    if (isToolResultTextBlock(block)) {
+      const text = block.text;
+      if (typeof text === "string") {
+        totalEstimated += estimateStringChars(text);
+      }
+    }
+  }
+  return totalEstimated;
+}
+
+/**
  * Truncate a tool result message's text content blocks to fit within maxChars.
  * Returns a new message (does not mutate the original).
  */
@@ -366,9 +420,38 @@ export function truncateToolResultMessage(
     return msg;
   }
 
-  // Calculate total text size
+  // Calculate total text size (physical chars).
   const totalTextChars = getToolResultTextLength(msg);
-  if (totalTextChars <= maxChars) {
+
+  // Two-budget gate (issue #103847): the physical `maxChars` cap is unchanged,
+  // but when contextWindowTokens is provided we also enforce an independent
+  // CJK-aware estimated-character context-share budget. A dense-CJK result can
+  // be under the physical cap yet blow past the token share it is meant to
+  // occupy. When the estimate is the binding constraint, tighten the effective
+  // physical budget so the retained slice fits the estimated budget too.
+  let effectiveMaxChars = maxChars;
+  if (
+    options.contextWindowTokens !== undefined &&
+    Number.isFinite(options.contextWindowTokens) &&
+    totalTextChars > 0
+  ) {
+    const estimatedBudget = calculateMaxToolResultEstimatedChars(options.contextWindowTokens);
+    const estimatedTotal = estimateToolResultChars(msg);
+    if (estimatedTotal > estimatedBudget) {
+      // Project the estimated budget back to physical chars using the result's
+      // own average CJK density, then measure the actual retained slice and
+      // re-tighten if its density is higher than the whole-input average (the
+      // mixed-script retained-slice overflow from PR #103901's review).
+      const density = estimatedTotal / totalTextChars;
+      const projected = Math.floor(estimatedBudget / Math.max(1, density));
+      effectiveMaxChars = Math.max(1, Math.min(effectiveMaxChars, projected));
+    }
+  }
+
+  if (totalTextChars <= effectiveMaxChars) {
+    // Physical length is under the (possibly tightened) budget. When the
+    // estimated budget is the binding constraint and the whole result already
+    // fits it, there is nothing to truncate.
     return msg;
   }
 
@@ -384,12 +467,15 @@ export function truncateToolResultMessage(
     // Proportional budget for this block
     const blockShare = textBlock.text.length / totalTextChars;
     const defaultSuffix = suffixFactory(
-      Math.max(1, textBlock.text.length - Math.floor(maxChars * blockShare)),
+      Math.max(1, textBlock.text.length - Math.floor(effectiveMaxChars * blockShare)),
     );
-    const proportionalBudget = Math.floor(maxChars * blockShare);
+    const proportionalBudget = Math.floor(effectiveMaxChars * blockShare);
     const blockBudget = Math.max(
       1,
-      Math.min(maxChars, Math.max(minKeepChars + defaultSuffix.length, proportionalBudget)),
+      Math.min(
+        effectiveMaxChars,
+        Math.max(minKeepChars + defaultSuffix.length, proportionalBudget),
+      ),
     );
     const truncatedText = truncateToolResultText(textBlock.text, blockBudget, {
       suffix: suffixFactory,
@@ -402,7 +488,57 @@ export function truncateToolResultMessage(
     return nextBlock;
   });
 
-  return { ...msg, content: newContent } as AgentMessage;
+  const truncatedMessage = { ...msg, content: newContent } as AgentMessage;
+
+  // Re-measure the actual retained slice against the estimated budget. The head
+  // of a mixed-script result can be CJK-denser than the whole-input average, so
+  // the density projection above may still leave the retained estimate over the
+  // budget. If so, re-tighten once using the retained slice's own density.
+  if (options.contextWindowTokens !== undefined && Number.isFinite(options.contextWindowTokens)) {
+    const estimatedBudget = calculateMaxToolResultEstimatedChars(options.contextWindowTokens);
+    const retainedEstimated = estimateToolResultChars(truncatedMessage);
+    const retainedPhysical = getToolResultTextLength(truncatedMessage);
+    if (retainedEstimated > estimatedBudget && retainedPhysical > 0) {
+      const retainedDensity = retainedEstimated / retainedPhysical;
+      const reprojected = Math.floor(estimatedBudget / Math.max(1, retainedDensity));
+      const reTightenedMax = Math.max(1, Math.min(effectiveMaxChars, reprojected));
+      if (reTightenedMax < retainedPhysical) {
+        const reContent = content.map((block: unknown) => {
+          if (!isToolResultTextBlock(block)) {
+            return block;
+          }
+          const textBlock = block;
+          if (typeof textBlock.text !== "string") {
+            return block;
+          }
+          const blockShare = textBlock.text.length / totalTextChars;
+          const defaultSuffix = suffixFactory(
+            Math.max(1, textBlock.text.length - Math.floor(reTightenedMax * blockShare)),
+          );
+          const proportionalBudget = Math.floor(reTightenedMax * blockShare);
+          const blockBudget = Math.max(
+            1,
+            Math.min(
+              reTightenedMax,
+              Math.max(minKeepChars + defaultSuffix.length, proportionalBudget),
+            ),
+          );
+          const truncatedText = truncateToolResultText(textBlock.text, blockBudget, {
+            suffix: suffixFactory,
+            minKeepChars,
+          });
+          const nextBlock = Object.assign({}, textBlock, { text: truncatedText });
+          if (typeof textBlock.content === "string") {
+            nextBlock.content = truncatedText;
+          }
+          return nextBlock;
+        });
+        return { ...msg, content: reContent } as AgentMessage;
+      }
+    }
+  }
+
+  return truncatedMessage;
 }
 
 function isToolResultTextBlock(
@@ -584,6 +720,7 @@ export function truncateOversizedToolResultsInMessages(
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
     protectTrailingToolResults: Boolean(projectionState),
+    contextWindowTokens,
   });
   if (projectionState) {
     for (const [index] of messages.entries()) {
@@ -978,6 +1115,7 @@ function buildOversizedToolResultReplacements(params: {
   maxChars: number;
   minKeepChars?: number;
   protectedEntryIds?: Set<string>;
+  contextWindowTokens?: number;
 }): ToolResultReplacement[] {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
   const replacements: ToolResultReplacement[] = [];
@@ -990,7 +1128,16 @@ function buildOversizedToolResultReplacements(params: {
     if ((msg as { role?: string }).role !== "toolResult") {
       continue;
     }
-    if (getToolResultTextLength(msg) <= params.maxChars) {
+    // Two-budget gate (issue #103847): a dense-CJK result can be under the
+    // physical cap yet over the CJK-aware context-share estimate. When
+    // contextWindowTokens is provided, skip only if BOTH budgets are satisfied.
+    const physicalOver = getToolResultTextLength(msg) > params.maxChars;
+    const estimatedOver =
+      params.contextWindowTokens !== undefined &&
+      Number.isFinite(params.contextWindowTokens) &&
+      estimateToolResultChars(msg) >
+        calculateMaxToolResultEstimatedChars(params.contextWindowTokens);
+    if (!physicalOver && !estimatedOver) {
       continue;
     }
     const replacementMinKeepChars = params.protectedEntryIds?.has(entry.id)
@@ -1004,6 +1151,9 @@ function buildOversizedToolResultReplacements(params: {
       message: truncateToolResultMessage(msg, maxChars, {
         minKeepChars: replacementMinKeepChars,
         ...(suffixFactory ? { suffix: suffixFactory } : {}),
+        ...(params.contextWindowTokens !== undefined
+          ? { contextWindowTokens: params.contextWindowTokens }
+          : {}),
       }),
     });
   }
@@ -1063,6 +1213,7 @@ function buildToolResultReplacementPlan(params: {
   aggregateBudgetChars: number;
   minKeepChars?: number;
   protectTrailingToolResults?: boolean;
+  contextWindowTokens?: number;
 }): {
   replacements: ToolResultReplacement[];
   oversizedReplacementCount: number;
@@ -1080,6 +1231,9 @@ function buildToolResultReplacementPlan(params: {
     maxChars: params.maxChars,
     minKeepChars,
     protectedEntryIds,
+    ...(params.contextWindowTokens !== undefined
+      ? { contextWindowTokens: params.contextWindowTokens }
+      : {}),
   });
   const oversizedReducibleChars = calculateReplacementReduction(
     params.branch,

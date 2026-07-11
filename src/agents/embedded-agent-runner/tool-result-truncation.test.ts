@@ -29,6 +29,8 @@ let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
 let resolveLiveToolResultAggregateMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars;
 let createToolResultPromptProjectionState: typeof import("./tool-result-truncation.js").createToolResultPromptProjectionState;
+let estimateToolResultChars: typeof import("./tool-result-truncation.js").estimateToolResultChars;
+let calculateMaxToolResultEstimatedChars: typeof import("./tool-result-truncation.js").calculateMaxToolResultEstimatedChars;
 let tmpDir: string | undefined;
 
 async function loadFreshToolResultTruncationModuleForTest() {
@@ -49,6 +51,8 @@ async function loadFreshToolResultTruncationModuleForTest() {
     resolveLiveToolResultMaxChars,
     resolveLiveToolResultAggregateMaxChars,
     createToolResultPromptProjectionState,
+    estimateToolResultChars,
+    calculateMaxToolResultEstimatedChars,
   } = await import("./tool-result-truncation.js"));
 }
 
@@ -1308,5 +1312,137 @@ describe("truncateToolResultText head+tail strategy", () => {
     expect(result).toContain("normal line");
     expect(result).not.toContain("middle content omitted");
     expect(result).toContain("truncated");
+  });
+});
+
+// CJK-aware tool-result budget accounting (issue #103847).
+//
+// The live tool-result truncation cap converts a token budget to a character
+// budget with a flat 4-chars-per-token heuristic and no CJK correction, so a
+// tool result of dense CJK text is accepted as fitting under the cap while its
+// real token count is ~4x the intended budget. The fix keeps the physical
+// `toolResultMaxChars` ceiling intact (UTF-16 safe slicing, unchanged ASCII
+// behavior) AND adds an independent CJK-aware estimated-character budget tied
+// to the context-window share; truncation is triggered when EITHER budget is
+// exceeded, and the retained slice is measured (not average-projected) against
+// the estimated budget. See the maintainer's two-budget design on PR #103901.
+const CJK_CHAR = "中"; // "中" - 1 code point, ~1 token for CJK tokenizers
+
+describe("estimateToolResultChars (CJK-aware)", () => {
+  it("counts pure ASCII identically to raw text length", () => {
+    const msg = makeToolResult("a".repeat(1000));
+    expect(estimateToolResultChars(msg)).toBe(1000);
+  });
+
+  it("inflates CJK content so chars/4 yields an accurate token estimate", () => {
+    // 1000 CJK chars: estimateStringChars = 1000 + 1000*(4-1) = 4000
+    const msg = makeToolResult(CJK_CHAR.repeat(1000));
+    expect(estimateToolResultChars(msg)).toBe(4000);
+  });
+
+  it("returns 0 for non-toolResult messages", () => {
+    expect(estimateToolResultChars(makeAssistantMessage("hello"))).toBe(0);
+  });
+});
+
+describe("calculateMaxToolResultEstimatedChars (context-share budget)", () => {
+  it("is the CJK-aware context-share budget (ctx * share * 4)", () => {
+    // 50K context * 0.3 share * 4 chars/token = 60000 estimated chars
+    expect(calculateMaxToolResultEstimatedChars(50_000)).toBe(60_000);
+  });
+
+  it("scales with the context window", () => {
+    expect(calculateMaxToolResultEstimatedChars(200_000)).toBeGreaterThan(
+      calculateMaxToolResultEstimatedChars(50_000),
+    );
+  });
+});
+
+describe("CJK-aware tool-result truncation (two-budget, issue #103847)", () => {
+  it("truncates dense CJK content that bypasses the physical cap (the reported bug)", () => {
+    // 16000 CJK chars: physical 16000 (== physical cap at 50K, boundary),
+    // estimated 64000 > 60000 context-share budget. Current main accepts this
+    // without truncation; the fix must truncate.
+    const ctx = 50_000;
+    const physicalCap = calculateMaxToolResultChars(ctx); // 16000
+    const estimatedBudget = calculateMaxToolResultEstimatedChars(ctx); // 60000
+    const text = CJK_CHAR.repeat(16_000);
+    const msg = makeToolResult(text);
+
+    // Sanity: physical length sits at the cap, but the estimate overshoots.
+    expect(getToolResultTextLength(msg)).toBe(16_000);
+    expect(estimateToolResultChars(msg)).toBe(64_000);
+    expect(estimatedBudget).toBe(60_000);
+    expect(physicalCap).toBe(16_000);
+
+    const result = truncateToolResultMessage(msg, physicalCap, {
+      contextWindowTokens: ctx,
+    });
+    const retained = getFirstToolResultText(result);
+    // Must have been truncated (the bug was: no truncation at all).
+    expect(retained.length).toBeLessThan(16_000);
+    // The retained slice's CJK-aware estimate must respect the estimated budget.
+    expect(estimateToolResultChars(result)).toBeLessThanOrEqual(estimatedBudget);
+  });
+
+  it("leaves a no-op 8K CJK result intact on a 50K context (50K no-op case)", () => {
+    // 8000 CJK chars: physical 8000 < 16000 cap, estimated 32000 < 60000 budget.
+    // This must NOT be truncated - the fix must not regress reasonable CJK output.
+    const ctx = 50_000;
+    const physicalCap = calculateMaxToolResultChars(ctx);
+    const msg = makeToolResult(CJK_CHAR.repeat(8000));
+    const result = truncateToolResultMessage(msg, physicalCap, {
+      contextWindowTokens: ctx,
+    });
+    expect(getFirstToolResultText(result)).toBe(CJK_CHAR.repeat(8000));
+  });
+
+  it("preserves the configured physical cap's character semantics for ASCII", () => {
+    // A configured physical cap of 8000 chars must keep 8000 ASCII chars intact
+    // (physical 8000 <= 8000, estimated 2000 <= 60000 budget). The fix must not
+    // turn the physical cap into a CJK-weighted ceiling (the #103901 regression).
+    const ctx = 50_000;
+    const configuredPhysicalCap = 8000;
+    const msg = makeToolResult("a".repeat(8000));
+    const result = truncateToolResultMessage(msg, configuredPhysicalCap, {
+      contextWindowTokens: ctx,
+    });
+    expect(getFirstToolResultText(result)).toBe("a".repeat(8000));
+  });
+
+  it("measures the actual retained mixed-script slice against the estimated budget", () => {
+    // 4000 CJK + 4000 ASCII = 8000 physical chars. On an 8K context:
+    //   physical cap = min(8000*0.3*4=9600, hardCap 16000) = 9600
+    //   estimated budget = 8000*0.3*4 = 9600
+    //   estimated chars = 8000 + 4000*3 = 20000  -> exceeds 9600 estimated budget
+    // Current main does not truncate (physical 8000 < 9600); the fix must
+    // truncate AND the retained slice's estimate must stay within budget.
+    // The CJK head must not let the retained estimate overshoot the way an
+    // average-ratio projection would (the #103901 mixed-block failure).
+    const ctx = 8_000;
+    const physicalCap = calculateMaxToolResultChars(ctx); // 9600
+    const estimatedBudget = calculateMaxToolResultEstimatedChars(ctx); // 9600
+    const text = CJK_CHAR.repeat(4000) + "a".repeat(4000);
+    const msg = makeToolResult(text);
+
+    expect(estimateToolResultChars(msg)).toBe(20_000);
+    expect(physicalCap).toBe(9600);
+    expect(estimatedBudget).toBe(9600);
+
+    const result = truncateToolResultMessage(msg, physicalCap, {
+      contextWindowTokens: ctx,
+    });
+    const retained = getFirstToolResultText(result);
+    expect(retained.length).toBeLessThan(8000);
+    expect(estimateToolResultChars(result)).toBeLessThanOrEqual(estimatedBudget);
+  });
+
+  it("does not truncate when contextWindowTokens is omitted (legacy single-budget callers)", () => {
+    // Callers that do not pass contextWindowTokens keep the original physical-only
+    // behavior, so existing call sites are unaffected until they opt in.
+    const msg = makeToolResult(CJK_CHAR.repeat(20_000));
+    const result = truncateToolResultMessage(msg, 16_000);
+    // Physical-only: 20000 > 16000 -> truncates by physical cap (unchanged behavior).
+    expect(getFirstToolResultText(result).length).toBeLessThanOrEqual(16_000);
   });
 });
