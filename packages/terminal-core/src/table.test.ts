@@ -268,6 +268,40 @@ describe("renderTable", () => {
     },
   );
 
+  it.each([
+    ["BEL ST", "\x1b]8;;https://openclaw.ai\x07", "\x1b]8;;\x07"],
+    ["ESC-backslash ST", "\x1b]8;;https://openclaw.ai\x1b\\", "\x1b]8;;\x1b\\"],
+    ["C1 ST", "\x9d8;;https://openclaw.ai\x9c", "\x9d8;;\x9c"],
+  ])(
+    "does not reopen a leading OSC-8 link onto wrapped suffix lines (%s)",
+    (_label, openSeq, closeSeq) => {
+      const link = `${openSeq}OpenClaw${closeSeq}`;
+      const out = renderTable({
+        width: 20,
+        columns: [
+          { key: "K", header: "K", minWidth: 3 },
+          { key: "V", header: "V", flex: true, minWidth: 10 },
+        ],
+        rows: [{ K: "X", V: `${link} after` }],
+      });
+
+      // "after" wraps onto a continuation line after the link's close. The
+      // leading opener must not be prepended to that line, or "after" plus its
+      // padding become an unclosed hyperlink that bleeds past the cell border.
+      const lines = out.split("\n");
+      const afterLines = lines.filter((line) => line.includes("after"));
+      expect(afterLines.length).toBeGreaterThan(0);
+      for (const line of afterLines) {
+        expect(line.includes(openSeq)).toBe(false);
+      }
+      // The link itself stays intact on the OpenClaw line: open + close present.
+      const linkLine = lines.find((line) => line.includes("OpenClaw"));
+      expect(linkLine).toBeDefined();
+      expect(linkLine?.includes(openSeq)).toBe(true);
+      expect(linkLine?.includes(closeSeq)).toBe(true);
+    },
+  );
+
   it("respects explicit newlines in cell values", () => {
     const out = renderTable({
       width: 48,

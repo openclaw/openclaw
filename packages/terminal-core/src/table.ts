@@ -187,17 +187,36 @@ function wrapLine(text: string, width: number): string[] {
       break;
     }
   }
-  const prefixAnsi = tokens
-    .slice(0, firstCharIndex)
-    .filter((t) => t.kind === "ansi")
+  // OSC-8 token predicate: matches ESC ] 8 ;; or C1 OSC 8 ;; introducers
+  // (both openers with a target and closers with empty params).
+  const isOsc8Token = (value: string): boolean =>
+    value.startsWith(`${ESC}]8;;`) || value.startsWith(`${C1_OSC}8;;`);
+
+  const leadingAnsiTokens = tokens.slice(0, firstCharIndex).filter((t) => t.kind === "ansi");
+  const trailingAnsiTokens = tokens.slice(lastCharIndex + 1).filter((t) => t.kind === "ansi");
+  // SGR styling that brackets the cell is reapplied to every wrapped line.
+  // OSC-8 openers are deliberately excluded: a leading hyperlink opener must be
+  // carried as initial state into the wrap state machine so it closes at its
+  // matching closer, instead of being prepended to every continuation line and
+  // reopening the link onto trailing plain text and padding (e.g. `${link} after`
+  // wrapping would otherwise leave "after" + padding inside an unclosed link).
+  const prefixAnsi = leadingAnsiTokens
+    .filter((t) => !isOsc8Token(t.value))
     .map((t) => t.value)
     .join("");
-  const suffixAnsi = tokens
-    .slice(lastCharIndex + 1)
-    .filter((t) => t.kind === "ansi")
+  const suffixAnsi = trailingAnsiTokens
+    .filter((t) => !isOsc8Token(t.value))
     .map((t) => t.value)
     .join("");
-  const coreTokens = tokens.slice(firstCharIndex, lastCharIndex + 1);
+  const leadingOsc8Tokens = leadingAnsiTokens.filter((t) => isOsc8Token(t.value));
+  const trailingOsc8Tokens = trailingAnsiTokens.filter((t) => isOsc8Token(t.value));
+  // Seed leading OSC-8 openers and append trailing closers so flushAt's
+  // close/reopen logic owns hyperlink state end to end across wrap boundaries.
+  const coreTokens = [
+    ...leadingOsc8Tokens,
+    ...tokens.slice(firstCharIndex, lastCharIndex + 1),
+    ...trailingOsc8Tokens,
+  ];
 
   const lines: string[] = [];
   const isBreakChar = (ch: string) =>
