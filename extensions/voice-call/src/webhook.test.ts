@@ -166,6 +166,31 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
   return call;
 }
 
+function createCapturingLogger() {
+  const messages: string[] = [];
+  const capture = (message: string) => messages.push(message);
+  return {
+    messages,
+    logger: { info: capture, warn: capture, error: capture },
+  };
+}
+
+function expectPrivateLogMetadata(params: {
+  messages: readonly string[];
+  identifiers: readonly string[];
+  privateText: readonly string[];
+}) {
+  const output = params.messages.join(" ");
+  expect(output).toContain("[voice-call]");
+  expect(output).toContain("chars=");
+  for (const identifier of params.identifiers) {
+    expect(output).toContain(identifier);
+  }
+  for (const privateText of params.privateText) {
+    expect(output).not.toContain(privateText);
+  }
+}
+
 function expectWebhookUrl(url: string, expectedPath: string) {
   const parsed = new URL(url);
   expect(parsed.pathname).toBe(expectedPath);
@@ -1747,18 +1772,7 @@ describe("VoiceCallWebhookServer classic response routing", () => {
       speak,
     } as unknown as CallManager;
 
-    const logEntries: string[] = [];
-    const spyLogger = {
-      info: (msg: string) => {
-        logEntries.push(msg);
-      },
-      warn: (msg: string) => {
-        logEntries.push(msg);
-      },
-      error: (msg: string) => {
-        logEntries.push(msg);
-      },
-    };
+    const { logger, messages } = createCapturingLogger();
 
     const server = new VoiceCallWebhookServer(
       createConfig({ agentId: "main" }),
@@ -1767,7 +1781,7 @@ describe("VoiceCallWebhookServer classic response routing", () => {
       {} as never,
       undefined,
       {} as never,
-      spyLogger,
+      logger,
     );
 
     const userMessage = "sensitive user speech content";
@@ -1784,16 +1798,11 @@ describe("VoiceCallWebhookServer classic response routing", () => {
       }
     ).handleInboundResponse(call.callId, userMessage);
 
-    const logOutput = logEntries.join(" ");
-    // Voice-call attribution must be present on every log message.
-    expect(logOutput).toContain("[voice-call]");
-    // Call identifier and character count metadata must be present.
-    expect(logOutput).toContain(call.callId);
-    expect(logOutput).toContain("chars=");
-    // Raw message bodies must never appear in log output.
-    expect(logOutput).not.toContain(userMessage);
-    expect(logOutput).not.toContain(earlyText);
-    expect(logOutput).not.toContain(finalText);
+    expectPrivateLogMetadata({
+      messages,
+      identifiers: [call.callId],
+      privateText: [userMessage, earlyText, finalText],
+    });
   });
 });
 
@@ -2011,18 +2020,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       },
     });
 
-    const logEntries: string[] = [];
-    const spyLogger = {
-      info: (msg: string) => {
-        logEntries.push(msg);
-      },
-      warn: (msg: string) => {
-        logEntries.push(msg);
-      },
-      error: (msg: string) => {
-        logEntries.push(msg);
-      },
-    };
+    const { logger, messages } = createCapturingLogger();
 
     const server = new VoiceCallWebhookServer(
       config,
@@ -2031,25 +2029,19 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       undefined,
       undefined,
       undefined,
-      spyLogger,
+      logger,
     );
     await server.start();
 
     try {
-      // Transcript content with emoji must not appear in log output.
-      // The injected logger asserts the boundary: only char counts and
-      // identifiers, never the raw transcript body.
       const transcript = `${"a".repeat(199)}\uD83D\uDE80tail`;
       getMediaCallbacks(server).config.onTranscript?.("CA-utf16", transcript);
 
-      const logOutput = logEntries.join(" ");
-      // Voice-call attribution must be present on every log message.
-      expect(logOutput).toContain("[voice-call]");
-      // Caller identifier and character count metadata must be present.
-      expect(logOutput).toContain("CA-utf16");
-      expect(logOutput).toContain("chars=");
-      // Raw transcript body must never appear in log output.
-      expect(logOutput).not.toContain(transcript);
+      expectPrivateLogMetadata({
+        messages,
+        identifiers: ["CA-utf16"],
+        privateText: [transcript],
+      });
     } finally {
       await server.stop();
     }
@@ -2075,18 +2067,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       },
     });
 
-    const logEntries: string[] = [];
-    const spyLogger = {
-      info: (msg: string) => {
-        logEntries.push(msg);
-      },
-      warn: (msg: string) => {
-        logEntries.push(msg);
-      },
-      error: (msg: string) => {
-        logEntries.push(msg);
-      },
-    };
+    const { logger, messages } = createCapturingLogger();
 
     const server = new VoiceCallWebhookServer(
       config,
@@ -2095,7 +2076,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       undefined,
       undefined,
       undefined,
-      spyLogger,
+      logger,
     );
     await server.start();
 
@@ -2103,14 +2084,11 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       const partialText = "user is saying something sensitive";
       getMediaCallbacks(server).config.onPartialTranscript?.("CA-partial", partialText);
 
-      const logOutput = logEntries.join(" ");
-      // Voice-call attribution must be present on every log message.
-      expect(logOutput).toContain("[voice-call]");
-      // Caller identifier and character count metadata must be present.
-      expect(logOutput).toContain("CA-partial");
-      expect(logOutput).toContain("chars=");
-      // Raw partial transcript text must never appear in log output.
-      expect(logOutput).not.toContain(partialText);
+      expectPrivateLogMetadata({
+        messages,
+        identifiers: ["CA-partial"],
+        privateText: [partialText],
+      });
     } finally {
       await server.stop();
     }
