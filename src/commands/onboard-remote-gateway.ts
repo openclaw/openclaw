@@ -58,14 +58,18 @@ function toSetupInferenceDetection(result: CrestodianSetupDetectResult): SetupIn
       label: provider.label,
       ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
     })),
-    authOptions: (result.authOptions ?? []).map((option) => ({
-      id: option.id,
-      label: option.label,
-      ...(option.hint !== undefined ? { hint: option.hint } : {}),
-      ...(option.groupLabel !== undefined ? { groupLabel: option.groupLabel } : {}),
-      kind: option.kind,
-      featured: option.featured,
-    })),
+    authOptions: (result.authOptions ?? []).map((option) =>
+      Object.assign(
+        {
+          id: option.id,
+          label: option.label,
+          kind: option.kind,
+          featured: option.featured,
+        },
+        option.hint !== undefined ? { hint: option.hint } : {},
+        option.groupLabel !== undefined ? { groupLabel: option.groupLabel } : {},
+      ),
+    ),
     workspace: result.workspace,
     ...(result.configuredModel !== undefined ? { configuredModel: result.configuredModel } : {}),
     setupComplete: result.setupComplete,
