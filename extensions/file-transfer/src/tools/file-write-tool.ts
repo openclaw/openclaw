@@ -1,9 +1,9 @@
 // File Transfer plugin module implements file write tool behavior.
 import crypto from "node:crypto";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { appendFileTransferAudit } from "../shared/audit.js";
+import { inspectStrictBase64 } from "../shared/base64.js";
 import { humanSize, readBoolean } from "../shared/params.js";
 import {
   FILE_TRANSFER_SUBDIR,
@@ -17,7 +17,10 @@ function normalizeBase64ForCompare(value: string): string {
 }
 
 function decodeStrictBase64(value: string): Buffer {
-  const decodedBytes = estimateBase64DecodedBytes(value);
+  const decodedBytes = inspectStrictBase64(value);
+  if (decodedBytes === undefined) {
+    throw new Error("contentBase64 is not valid base64");
+  }
   if (decodedBytes > FILE_WRITE_HARD_MAX_BYTES) {
     throw new Error(
       `decoded content is ${decodedBytes} bytes; maximum is ${FILE_WRITE_HARD_MAX_BYTES} bytes (${humanSize(FILE_WRITE_HARD_MAX_BYTES)})`,

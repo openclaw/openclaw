@@ -146,6 +146,9 @@ const loadGatewayModelCatalogModule = createLazyRuntimeModule(
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
   () => import("./worker-environments/runtime.js"),
 );
+const loadWorkerTunnelRuntimeModule = createLazyRuntimeModule(
+  () => import("./worker-environments/tunnel.js"),
+);
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
   const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
@@ -767,6 +770,10 @@ export async function startGatewayServer(
       });
     return await workerNpmArtifact;
   };
+  const workerTunnelManager =
+    workerEnvironmentStore && shouldStartWorkerEnvironmentService
+      ? (await loadWorkerTunnelRuntimeModule()).createWorkerTunnelManager()
+      : undefined;
   const workerEnvironmentService =
     workerEnvironmentStore && shouldStartWorkerEnvironmentService
       ? createWorkerEnvironmentService({
@@ -774,7 +781,25 @@ export async function startGatewayServer(
           getConfig: getRuntimeConfig,
           resolveProvider: (providerId) => resolveWorkerProvider(pluginRegistry, providerId),
           prepareInstallation: prepareWorkerInstallation,
-          bootstrapWorker: async ({ sshEndpoint, installation, signal }) => {
+          tunnelManager: workerTunnelManager,
+          resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
+            const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
+            return await workerEnvironmentRuntime.resolveWorkerSshIdentity({
+              provider,
+              leaseId,
+              profile,
+              keyRef,
+              resolveGeneric: async (genericKeyRef) => ({
+                kind: "material",
+                contents: await workerEnvironmentRuntime.resolveSecretRefString(genericKeyRef, {
+                  config:
+                    getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
+                  env: getActiveSecretsRuntimeEnv(),
+                }),
+              }),
+            });
+          },
+          bootstrapWorker: async ({ sshEndpoint, installation, resolveIdentity, signal }) => {
             const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
             return await workerEnvironmentRuntime.bootstrapWorker(
               {
@@ -784,14 +809,7 @@ export async function startGatewayServer(
               },
               {
                 signal,
-                resolveIdentity: async (keyRef) => ({
-                  kind: "material",
-                  contents: await workerEnvironmentRuntime.resolveSecretRefString(keyRef, {
-                    config:
-                      getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
-                    env: getActiveSecretsRuntimeEnv(),
-                  }),
-                }),
+                resolveIdentity,
               },
             );
           },

@@ -1,5 +1,9 @@
 // File Transfer tests cover file write tool plugin behavior.
-import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  callGatewayTool,
+  listNodes,
+  resolveNodeIdFromList,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { humanSize } from "../shared/params.js";
 import { FILE_WRITE_HARD_MAX_BYTES } from "./descriptors.js";
@@ -13,6 +17,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/media-store", () => ({
   readMediaBuffer: vi.fn(),
+}));
+
+vi.mock("../shared/audit.js", () => ({
+  appendFileTransferAudit: vi.fn(),
 }));
 
 describe("file_write tool", () => {
@@ -50,5 +58,47 @@ describe("file_write tool", () => {
     );
 
     expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects whitespace-heavy malformed input without decoding or dispatching", async () => {
+    const bufferFrom = vi.spyOn(Buffer, "from");
+    const tool = createFileWriteTool();
+
+    await expect(
+      tool.execute("tool-call-1", {
+        node: "node-1",
+        path: "/tmp/out.bin",
+        contentBase64: " ".repeat(1024 * 1024),
+      }),
+    ).rejects.toThrow("contentBase64 is not valid base64");
+
+    expect(bufferFrom).not.toHaveBeenCalled();
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("accepts exactly 16 MiB of inline data", async () => {
+    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node 1" }]);
+    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+    vi.mocked(callGatewayTool).mockResolvedValue({
+      payload: {
+        ok: true,
+        path: "/tmp/out.bin",
+        size: FILE_WRITE_HARD_MAX_BYTES,
+        sha256: "a".repeat(64),
+        overwritten: false,
+      },
+    });
+    const tool = createFileWriteTool();
+    const contentBase64 = Buffer.alloc(FILE_WRITE_HARD_MAX_BYTES).toString("base64");
+
+    await expect(
+      tool.execute("tool-call-1", {
+        node: "node-1",
+        path: "/tmp/out.bin",
+        contentBase64,
+      }),
+    ).resolves.toMatchObject({ details: { size: FILE_WRITE_HARD_MAX_BYTES } });
+
+    expect(callGatewayTool).toHaveBeenCalledOnce();
   });
 });

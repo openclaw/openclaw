@@ -20,8 +20,9 @@ import {
   type WorkerEnvironmentService,
 } from "./service.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+import type { WorkerTunnelManager } from "./tunnel.js";
 
-const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
+const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 const SSH_ENDPOINT: WorkerSshEndpoint = {
   host: "worker.example.test",
   port: 22,
@@ -100,7 +101,12 @@ describe("worker environment service", () => {
 
   function createService(
     provider: WorkerProvider,
-    serviceOptions: Pick<WorkerEnvironmentServiceOptions, "bootstrapCallTimeoutMs"> = {},
+    serviceOptions: Partial<
+      Pick<
+        WorkerEnvironmentServiceOptions,
+        "bootstrapCallTimeoutMs" | "providerCallTimeoutMs" | "resolveSshIdentity" | "tunnelManager"
+      >
+    > = {},
   ) {
     service = createWorkerEnvironmentService({
       store,
@@ -109,6 +115,7 @@ describe("worker environment service", () => {
         providersEnabled && providerId === "fake" ? provider : undefined,
       prepareInstallation,
       bootstrapWorker,
+      resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
       reconcileIntervalMs: 25,
       ...serviceOptions,
     });
@@ -327,6 +334,30 @@ describe("worker environment service", () => {
       sshEndpoint: null,
       lastError: expect.stringContaining("remote bootstrap failed"),
     });
+  });
+
+  it("bounds worker identity resolution as a provider operation", async () => {
+    bootstrapWorker = vi.fn(async ({ installation, resolveIdentity }) => {
+      await resolveIdentity(SSH_ENDPOINT.keyRef);
+      return {
+        bundleHash: installation.bundleHash,
+        openclawVersion: installation.openclawVersion,
+        protocolFeatures: [...installation.protocolFeatures],
+      };
+    });
+    const destroy = vi.fn(async () => {});
+    const workerService = createService(createProvider({ destroy }), {
+      providerCallTimeoutMs: 5,
+      resolveSshIdentity: async () => await new Promise<never>(() => {}),
+    });
+
+    await expect(
+      workerService.create("development", "request-identity-timeout"),
+    ).rejects.toMatchObject({
+      code: "bootstrap_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
   });
 
   it("aborts a timed-out SSH bootstrap before tearing down its lease", async () => {
@@ -659,10 +690,22 @@ describe("worker environment service", () => {
         }
         throw new Error("released npm artifact is unavailable");
       });
-      const destroy = vi.fn(async () => {});
+      const order: string[] = [];
+      const tunnelManager = {
+        status: () => "connected" as const,
+        start: vi.fn(),
+        stop: vi.fn(async () => {
+          order.push("tunnel-stop");
+        }),
+        stopAll: vi.fn(async () => {}),
+      } as unknown as WorkerTunnelManager;
+      const destroy = vi.fn(async () => {
+        order.push("provider-destroy");
+      });
 
-      await createService(createProvider({ destroy })).reconcileOnce();
+      await createService(createProvider({ destroy }), { tunnelManager }).reconcileOnce();
 
+      expect(order).toEqual(["tunnel-stop", "provider-destroy"]);
       expect(destroy).toHaveBeenCalledWith({
         leaseId: `lease:${environmentId}`,
         profile: { region: "test" },
@@ -745,6 +788,7 @@ describe("worker environment service", () => {
     expect(bootstrapWorker).toHaveBeenCalledWith({
       sshEndpoint: SSH_ENDPOINT,
       installation: NPM_ARTIFACT,
+      resolveIdentity: expect.any(Function),
       signal: expect.any(AbortSignal),
     });
   });
@@ -914,6 +958,109 @@ describe("worker environment service", () => {
       { leaseId: "lease:worker-destroy", profile: { region: "test" } },
       { leaseId: "lease:worker-destroy", profile: { region: "test" } },
     ]);
+  });
+
+  it("projects live tunnel status and fences the tunnel before provider teardown", async () => {
+    seedReady("worker-tunnel");
+    const order: string[] = [];
+    let tunnelStatus: "stopped" | "connected" = "stopped";
+    const tunnelManager = {
+      status: () => tunnelStatus,
+      start: vi.fn(async (request) => {
+        tunnelStatus = "connected";
+        return {
+          environmentId: request.environmentId,
+          ownerEpoch: request.ownerEpoch,
+          remoteSocketPath: "/tmp/worker/gateway.sock",
+          runWorkspaceCommand: vi.fn(),
+          stop: async () => {},
+        };
+      }),
+      stop: vi.fn(async () => {
+        tunnelStatus = "stopped";
+        order.push("tunnel-stop");
+      }),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const provider = createProvider({
+      destroy: async () => {
+        order.push("provider-destroy");
+      },
+    });
+    const workerService = createService(provider, { tunnelManager });
+
+    await workerService.startTunnel({
+      environmentId: "worker-tunnel",
+      ownerEpoch: 2,
+      gateway: { host: "127.0.0.1", port: 18789 },
+    });
+    expect(workerService.get("worker-tunnel")).toMatchObject({ tunnelStatus: "connected" });
+
+    await workerService.destroy("worker-tunnel");
+    expect(order).toEqual(["tunnel-stop", "provider-destroy"]);
+    expect(workerService.get("worker-tunnel")).toMatchObject({
+      state: "destroyed",
+      tunnelStatus: "stopped",
+    });
+  });
+
+  it("fences a draining tunnel before reporting an unavailable provider", async () => {
+    seedReady("worker-provider-missing");
+    const tunnelManager = {
+      status: () => "connected" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = createService(createProvider(), { tunnelManager });
+    providersEnabled = false;
+
+    await expect(workerService.destroy("worker-provider-missing")).rejects.toMatchObject({
+      code: "provider_not_found",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+
+    expect(tunnelManager.stop).toHaveBeenCalledWith("worker-provider-missing");
+    expect(store.get("worker-provider-missing")).toMatchObject({
+      state: "draining",
+      destroyRequestedAtMs: expect.any(Number),
+    });
+  });
+
+  it("does not hold the environment lock while a tunnel is connecting", async () => {
+    seedReady("worker-tunnel-pending");
+    let rejectStart: ((error: Error) => void) | undefined;
+    const pendingStart = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const order: string[] = [];
+    const tunnelManager = {
+      status: () => "connecting" as const,
+      start: vi.fn(() => pendingStart),
+      stop: vi.fn(async () => {
+        order.push("tunnel-stop");
+        rejectStart?.(new Error("tunnel stopped"));
+      }),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const provider = createProvider({
+      destroy: async () => {
+        order.push("provider-destroy");
+      },
+    });
+    const workerService = createService(provider, { tunnelManager });
+
+    const starting = workerService.startTunnel({
+      environmentId: "worker-tunnel-pending",
+      ownerEpoch: 3,
+      gateway: { host: "127.0.0.1", port: 18789 },
+    });
+    const rejectedStart = expect(starting).rejects.toThrow("tunnel stopped");
+    await vi.waitFor(() => expect(tunnelManager.start).toHaveBeenCalledOnce());
+
+    await workerService.destroy("worker-tunnel-pending");
+
+    await rejectedStart;
+    expect(order).toEqual(["tunnel-stop", "provider-destroy"]);
   });
 
   it("adopts an unpersisted provision result before destroying", async () => {
