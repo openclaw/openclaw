@@ -175,8 +175,13 @@ export interface AuthorizationResources {
   domain_id: string;
   namespace: string;
   owner_principal_id: string;
+  parent_namespace: string | null;
+  parent_resource_id: string | null;
+  parent_resource_type: string | null;
   resource_id: string;
   resource_type: string;
+  retired_at: number | null;
+  updated_at: number;
 }
 
 export interface BackupRuns {
