@@ -103,7 +103,10 @@ describe("loadWidgetManifestView", () => {
 
     const view = await loadWidgetManifestView("", "revenue-chart");
     expect(Object.keys(view?.bindings ?? {})).toEqual(["__proto__"]);
-    expect(view?.bindings["__proto__"]).toEqual({ source: "static", value: 1 });
+    expect(Reflect.get(view?.bindings ?? {}, "__proto__")).toEqual({
+      source: "static",
+      value: 1,
+    });
   });
 });
 
