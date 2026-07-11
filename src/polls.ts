@@ -34,6 +34,14 @@ export function resolvePollMaxSelections(
   return allowMultiselect ? Math.max(2, optionCount) : 1;
 }
 
+function normalizePositiveDuration(raw: unknown, label: string): number | undefined {
+  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : undefined;
+  if (value !== undefined && value < 1) {
+    throw new Error(`${label} must be at least 1`);
+  }
+  return value;
+}
+
 export function normalizePollInput(
   input: PollInput,
   options: NormalizePollOptions = {},
@@ -62,23 +70,8 @@ export function normalizePollInput(
     throw new Error("maxSelections cannot exceed option count");
   }
 
-  const durationSecondsRaw = input.durationSeconds;
-  const durationSeconds =
-    typeof durationSecondsRaw === "number" && Number.isFinite(durationSecondsRaw)
-      ? Math.floor(durationSecondsRaw)
-      : undefined;
-  if (durationSeconds !== undefined && durationSeconds < 1) {
-    throw new Error("durationSeconds must be at least 1");
-  }
-
-  const durationRaw = input.durationHours;
-  const durationHours =
-    typeof durationRaw === "number" && Number.isFinite(durationRaw)
-      ? Math.floor(durationRaw)
-      : undefined;
-  if (durationHours !== undefined && durationHours < 1) {
-    throw new Error("durationHours must be at least 1");
-  }
+  const durationSeconds = normalizePositiveDuration(input.durationSeconds, "durationSeconds");
+  const durationHours = normalizePositiveDuration(input.durationHours, "durationHours");
   if (durationSeconds !== undefined && durationHours !== undefined) {
     throw new Error("durationSeconds and durationHours are mutually exclusive");
   }
