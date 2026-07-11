@@ -547,6 +547,12 @@ describe("scripts/changed-lanes", () => {
     expect(result.lanes.all).toBe(false);
   });
 
+  it("routes a subagent-announce-only Docker diff through the live Docker lane", () => {
+    const result = detectChangedLanes(["scripts/test-live-subagent-announce-docker.sh"]);
+
+    expectLanes(result.lanes, { liveDockerTooling: true });
+  });
+
   it("exposes the shared changed-lane test path classifier", () => {
     expect(isChangedLaneTestPath("src/shared/string-normalization.test.ts")).toBe(true);
     expect(isChangedLaneTestPath("packages/foo/__tests__/helper.ts")).toBe(true);
