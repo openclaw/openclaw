@@ -842,6 +842,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   let restartRequestGeneration = 0;
   let restartRequestTransaction: { state: GatewayRestartTransactionState } | null = null;
 
+  const isCurrentRestartRetry = (retry: { requestGeneration: number }) =>
+    !restartRetryStopped &&
+    retry.requestGeneration === restartRequestGeneration &&
+    myGeneration === currentReloadGeneration;
+
   const supersedeRestartRequest = () => {
     restartRequestGeneration += 1;
     restartPending = false;
@@ -864,12 +869,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     intent?: GatewayRestartIntent;
     requestGeneration: number;
   }) => {
-    if (
-      restartRetryStopped ||
-      restartRetryTimer ||
-      retry.requestGeneration !== restartRequestGeneration ||
-      myGeneration !== currentReloadGeneration
-    ) {
+    if (restartRetryTimer || !isCurrentRestartRetry(retry)) {
       return;
     }
     // Retry the exact failed emission. Re-entering request planning would start
@@ -877,18 +877,25 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     restartPending = true;
     restartRetryTimer = setTimeout(() => {
       restartRetryTimer = null;
-      if (
-        restartRetryStopped ||
-        retry.requestGeneration !== restartRequestGeneration ||
-        myGeneration !== currentReloadGeneration
-      ) {
+      if (!isCurrentRestartRetry(retry)) {
         return;
       }
-      restartPending = false;
-      const emitResult = params.requestRecoveryRestart?.(retry.reason, retry.intent);
-      if (!emitResult || emitResult.status === "failed") {
-        scheduleRestartEmissionRetry(retry);
-      }
+      // Timer callbacks outlive the config transaction root. Re-enter process
+      // admission so prepared host suspension cannot race signal delivery.
+      void runWithGatewayIndependentRootWorkAdmission(async () => {
+        if (!isCurrentRestartRetry(retry)) {
+          return;
+        }
+        restartPending = false;
+        const emitResult = params.requestRecoveryRestart?.(retry.reason, retry.intent);
+        if (!emitResult || emitResult.status === "failed") {
+          scheduleRestartEmissionRetry(retry);
+        }
+      }).catch((err: unknown) => {
+        if (isCurrentRestartRetry(retry)) {
+          params.logReload.warn(`gateway restart recovery retry stopped: ${String(err)}`);
+        }
+      });
     }, RESTART_EMISSION_RETRY_MS);
     restartRetryTimer.unref?.();
   };
@@ -899,6 +906,23 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     supersedeRestartRequest();
     return true;
+  };
+
+  const beginGatewayRestartLifecycle = () => {
+    if (restartRequestTransaction?.state === "rejected") {
+      supersedeRestartRequest();
+    }
+    const transaction = { state: "pending" as GatewayRestartTransactionState };
+    // Preflight failure must be retireable, but it cannot displace an older
+    // accepted restart whose terminal restrictions remain process-owned.
+    restartRequestTransaction ??= transaction;
+    return {
+      settle: (state: Exclude<GatewayRestartTransactionState, "pending">) => {
+        if (transaction.state === "pending") {
+          transaction.state = state;
+        }
+      },
+    };
   };
 
   const requestGatewayRestartForGeneration = (
@@ -1050,6 +1074,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
   return {
     applyHotReload,
+    beginGatewayRestartLifecycle,
     requestGatewayRestart,
     retireRejectedRestartRequest,
     stopRestartRetries,
@@ -1081,6 +1106,7 @@ export function startManagedGatewayConfigReloader(
   };
   const {
     applyHotReload,
+    beginGatewayRestartLifecycle,
     requestGatewayRestart,
     retireRejectedRestartRequest,
     stopRestartRetries,
@@ -1368,6 +1394,7 @@ export function startManagedGatewayConfigReloader(
       }
     },
     onRestart: async (plan, nextConfig) => {
+      const restartLifecycle = beginGatewayRestartLifecycle();
       let preparation:
         | {
             ownership: SharedGatewaySessionGenerationOwnership;
@@ -1376,30 +1403,35 @@ export function startManagedGatewayConfigReloader(
             nextGeneration: string | undefined;
           }
         | undefined;
-      for (;;) {
-        const ownership = captureSharedGatewaySessionGenerationOwnership(
-          params.sharedGatewaySessionGenerationState,
-        );
-        const previousRequired = params.sharedGatewaySessionGenerationState.required;
-        const prepared = await params.activateRuntimeSecrets(nextConfig, {
-          reason: "restart-check",
-          activate: false,
-        });
-        if (
-          !isSharedGatewaySessionGenerationOwnershipCurrent(
+      try {
+        for (;;) {
+          const ownership = captureSharedGatewaySessionGenerationOwnership(
             params.sharedGatewaySessionGenerationState,
+          );
+          const previousRequired = params.sharedGatewaySessionGenerationState.required;
+          const prepared = await params.activateRuntimeSecrets(nextConfig, {
+            reason: "restart-check",
+            activate: false,
+          });
+          if (
+            !isSharedGatewaySessionGenerationOwnershipCurrent(
+              params.sharedGatewaySessionGenerationState,
+              ownership,
+            )
+          ) {
+            continue;
+          }
+          preparation = {
             ownership,
-          )
-        ) {
-          continue;
+            previousRequired,
+            previousCurrent: ownership.generation,
+            nextGeneration: params.resolveSharedGatewaySessionGenerationForConfig(prepared.config),
+          };
+          break;
         }
-        preparation = {
-          ownership,
-          previousRequired,
-          previousCurrent: ownership.generation,
-          nextGeneration: params.resolveSharedGatewaySessionGenerationForConfig(prepared.config),
-        };
-        break;
+      } catch (error) {
+        restartLifecycle.settle("rejected");
+        throw error;
       }
       const {
         ownership: preparationOwnership,
@@ -1431,8 +1463,10 @@ export function startManagedGatewayConfigReloader(
           });
         }
         restartTransaction.settle("committed");
+        restartLifecycle.settle("committed");
       } catch (error) {
         restartTransaction?.settle("rejected");
+        restartLifecycle.settle("rejected");
         if (requiredOwnership) {
           setRequiredSharedGatewaySessionGenerationIfOwned(
             params.sharedGatewaySessionGenerationState,

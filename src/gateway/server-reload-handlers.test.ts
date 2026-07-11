@@ -26,8 +26,10 @@ import {
 import {
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
   tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import {
@@ -50,6 +52,7 @@ import {
   createGatewayReloadHandlers as createGatewayReloadHandlersImpl,
   startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl,
 } from "./server-reload-handlers.js";
+import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlersImpl>[0];
 type ManagedReloaderParams = Parameters<typeof startManagedGatewayConfigReloaderImpl>[0];
@@ -849,18 +852,81 @@ describe("gateway restart deferral preflight", () => {
     }
   });
 
+  it("defers a restart emission retry while host suspension is prepared", async () => {
+    let recordRetryEmission: (() => void) | undefined;
+    const retryEmitted = new Promise<void>((resolve) => {
+      recordRetryEmission = resolve;
+    });
+    const requestRecoveryRestart = vi
+      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
+      .mockReturnValueOnce({ status: "failed" })
+      .mockImplementationOnce(() => {
+        recordRetryEmission?.();
+        return { status: "emitted" };
+      });
+    const { requestGatewayRestart, stopRestartRetries } = createReloadHandlersForTest(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+    let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
+    vi.useFakeTimers();
+
+    try {
+      const initialResult = await runWithGatewayIndependentRootWorkAdmission(async () =>
+        requestGatewayRestart(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          {},
+        ),
+      );
+      expect(initialResult.status).toBe("recovery-pending");
+      suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension?.commit()).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestRecoveryRestart).toHaveBeenCalledTimes(1);
+
+      expect(suspension?.release()).toBe(true);
+      await retryEmitted;
+      expect(requestRecoveryRestart).toHaveBeenCalledTimes(2);
+    } finally {
+      suspension?.release();
+      stopRestartRetries();
+    }
+  });
+
   it("retires only retries owned by a rejected config transaction", async () => {
     const requestRecoveryRestart = vi
       .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
       .mockReturnValue({ status: "failed" });
-    const { requestGatewayRestart, retireRejectedRestartRequest, stopRestartRetries } =
-      createReloadHandlersForTest(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        requestRecoveryRestart,
-      );
+    const {
+      beginGatewayRestartLifecycle,
+      requestGatewayRestart,
+      retireRejectedRestartRequest,
+      stopRestartRetries,
+    } = createReloadHandlersForTest(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
     const restartPlan = {
       changedPaths: ["gateway.port"],
       restartGateway: true,
@@ -887,6 +953,8 @@ describe("gateway restart deferral preflight", () => {
 
       const committed = requestGatewayRestart(restartPlan, {});
       committed.settle("committed");
+      const rejectedPreflight = beginGatewayRestartLifecycle();
+      rejectedPreflight.settle("rejected");
       expect(retireRejectedRestartRequest()).toBe(false);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(requestRecoveryRestart).toHaveBeenCalledTimes(3);
@@ -2282,6 +2350,173 @@ describe("gateway Gmail hot reload handlers", () => {
     });
     expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
     await reloader.stop();
+  });
+
+  it("retires terminal restrictions after restart secrets preflight rejects and config reverts", async () => {
+    vi.useFakeTimers();
+    const writeListenerRef: { current: ((event: ConfigWriteNotification) => void) | null } = {
+      current: null,
+    };
+    const initialConfig = {
+      gateway: {
+        port: 18789,
+        reload: { debounceMs: 0 },
+        terminal: { enabled: true },
+      },
+    } as OpenClawConfig;
+    const rejectedConfig = {
+      gateway: {
+        port: 18790,
+        reload: { debounceMs: 0 },
+        terminal: { enabled: false },
+      },
+    } as OpenClawConfig;
+    const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
+    const expectedReloadError = "config reload failed: Error: restart secrets preflight failed";
+    let recordReloadFailure: (() => void) | undefined;
+    const reloadFailed = new Promise<void>((resolve) => {
+      recordReloadFailure = resolve;
+    });
+    let recordRestartRetired: (() => void) | undefined;
+    const restartRetired = new Promise<void>((resolve) => {
+      recordRestartRetired = resolve;
+    });
+    const logReload = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn((message: string) => {
+        if (message === expectedReloadError) {
+          recordReloadFailure?.();
+        }
+      }),
+    };
+    const acceptTerminalConfig = (options: { retireRejectedRestart: boolean }) => {
+      terminalPolicy.acceptConfig(options);
+      if (options.retireRejectedRestart) {
+        recordRestartRetired?.();
+      }
+    };
+    const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig) => {
+      if (config === rejectedConfig) {
+        throw new Error("restart secrets preflight failed");
+      }
+      return {
+        sourceConfig: config,
+        config,
+        authStores: [],
+        warnings: [],
+        webTools: createEmptyRuntimeWebToolsMetadata(),
+      };
+    });
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const reloader = startManagedGatewayConfigReloader({
+      minimalTestGateway: false,
+      initialConfig,
+      initialCompareConfig: initialConfig,
+      initialInternalWriteHash: null,
+      watchPath: "/tmp/openclaw.json",
+      readSnapshot: vi.fn(async () => ({
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: initialConfig,
+        sourceConfig: initialConfig,
+        resolved: initialConfig,
+        valid: true,
+        runtimeConfig: initialConfig,
+        config: initialConfig,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+        hash: "accepted-revert",
+      })) as never,
+      promoteSnapshot: vi.fn(async () => true) as never,
+      subscribeToWrites: ((listener: (event: ConfigWriteNotification) => void) => {
+        writeListenerRef.current = listener;
+        return () => {
+          if (writeListenerRef.current === listener) {
+            writeListenerRef.current = null;
+          }
+        };
+      }) as never,
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel: vi.fn(async () => {}),
+      stopChannel: vi.fn(async () => {}),
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload,
+      channelManager: {} as never,
+      activateRuntimeSecrets: activateRuntimeSecrets as never,
+      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      clients: [],
+      reconcileTerminalSessions: (plan, nextConfig) => {
+        terminalPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
+      },
+      commitTerminalConfig: terminalPolicy.commitConfig,
+      acceptTerminalConfig,
+      requestRecoveryRestart,
+    });
+    const registeredWriteListener = writeListenerRef.current;
+    if (!registeredWriteListener) {
+      throw new Error("Expected config write listener to be registered");
+    }
+
+    try {
+      registeredWriteListener({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: rejectedConfig,
+        runtimeConfig: rejectedConfig,
+        persistedHash: "rejected-restart",
+        revision: 1,
+        fingerprint: "runtime-rejected-restart",
+        sourceFingerprint: "source-rejected-restart",
+        writtenAtMs: Date.now(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await reloadFailed;
+
+      expect(terminalPolicy.isEnabled()).toBe(false);
+      expect(logReload.error).toHaveBeenCalledWith(expectedReloadError);
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+
+      registeredWriteListener({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: initialConfig,
+        runtimeConfig: initialConfig,
+        persistedHash: "accepted-revert",
+        revision: 2,
+        fingerprint: "runtime-accepted-revert",
+        sourceFingerprint: "source-accepted-revert",
+        writtenAtMs: Date.now(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await restartRetired;
+
+      expect(terminalPolicy.isEnabled()).toBe(true);
+    } finally {
+      await reloader.stop();
+    }
   });
 
   it("retries managed hot reload when secrets change before publication", async () => {
