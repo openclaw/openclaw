@@ -3391,8 +3391,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               ) {
                 logProgress(`${progressLabel}: tool-only regression`);
                 const runId2 = randomUUID();
-                const historyLeft = randomUUID();
-                const historyRight = randomUUID();
+                // Keep these fresh and file-only without making harmless test values look like
+                // credentials that providers may partially mask in the follow-up response.
+                const historyLeft = randomBytes(4).toString("hex").toUpperCase();
+                const historyRight = randomBytes(4).toString("hex").toUpperCase();
                 const historyToolProbePath = path.join(
                   workspaceDir,
                   `.openclaw-live-tool-history-${randomBytes(4).toString("hex")}.txt`,
