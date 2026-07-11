@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 
 type QaWebSession = {
@@ -225,7 +226,7 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
   return {
     url: session.page.url(),
     title: await session.page.title().catch(() => ""),
-    text: maxChars ? text.slice(0, maxChars) : text,
+    text: maxChars ? truncateUtf16Safe(text, maxChars) : text,
     diagnostics: [...session.diagnostics],
   };
 }

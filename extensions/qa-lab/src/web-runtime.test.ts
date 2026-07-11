@@ -157,6 +157,16 @@ describe("qa web runtime", () => {
     expect(browserClose).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps bounded snapshot text on UTF-16 boundaries", async () => {
+    bodyLocator.textContent.mockResolvedValueOnce(`${"a".repeat(1999)}😀tail`);
+    const opened = await qaWebOpenPage({ url: "http://127.0.0.1:3000/chat" });
+
+    const snapshot = await qaWebSnapshot({ pageId: opened.pageId, maxChars: 2000 });
+
+    expect(snapshot.text).toBe("a".repeat(1999));
+    await closeQaWebSessions();
+  });
+
   it("launches an explicit Chromium executable override when configured", async () => {
     vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "/custom/chromium");
     existsSync.mockImplementation((candidate) => candidate === "/custom/chromium");
