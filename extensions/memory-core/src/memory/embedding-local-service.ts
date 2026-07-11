@@ -7,3 +7,7 @@ export type MemoryCoreAcquireLocalService = (
   },
   signal?: AbortSignal | null,
 ) => Promise<{ release: () => void } | undefined>;
+
+export type MemoryCoreLocalServiceHost = {
+  acquireLocalService?: MemoryCoreAcquireLocalService;
+};
