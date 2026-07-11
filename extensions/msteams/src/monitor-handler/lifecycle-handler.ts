@@ -102,6 +102,27 @@ function matchesSessionKey(params: {
   );
 }
 
+type MSTeamsResetCandidateEntry = {
+  updatedAt?: number;
+  route?: unknown;
+  deliveryContext?: unknown;
+  lastChannel?: unknown;
+  lastTo?: unknown;
+  lastAccountId?: unknown;
+  origin?: unknown;
+};
+
+function hasMSTeamsProviderBinding(entry: MSTeamsResetCandidateEntry): boolean {
+  return Boolean(
+    entry.route ||
+    entry.deliveryContext ||
+    entry.lastChannel ||
+    entry.lastTo ||
+    entry.lastAccountId ||
+    entry.origin,
+  );
+}
+
 export async function rotateMSTeamsSessions(params: {
   deps: MSTeamsMessageHandlerDeps;
   routeSessionKey: string;
@@ -121,7 +142,7 @@ export async function rotateMSTeamsSessions(params: {
         routeSessionKey: params.routeSessionKey,
         includeChannelThreads: params.includeChannelThreads,
       }) ||
-      entry.updatedAt === 0
+      (entry.updatedAt === 0 && !hasMSTeamsProviderBinding(entry))
     ) {
       continue;
     }
@@ -132,10 +153,10 @@ export async function rotateMSTeamsSessions(params: {
       sessionKey,
       replaceEntry: true,
       update: (current) => {
-        if (current.updatedAt === 0) {
+        if (current.updatedAt !== entry.updatedAt || current.sessionId !== entry.sessionId) {
           return null;
         }
-        if (current.updatedAt !== entry.updatedAt || current.sessionId !== entry.sessionId) {
+        if (current.updatedAt === 0 && !hasMSTeamsProviderBinding(current)) {
           return null;
         }
         resetEntry = true;

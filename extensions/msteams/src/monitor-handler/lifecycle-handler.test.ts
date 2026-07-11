@@ -144,6 +144,90 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:other-user"].updatedAt).toBe(2_000);
   });
 
+  it("rotates a zero-timestamp session that still has Teams provider bindings", async () => {
+    const store = {
+      "msteams:direct:user-aad": {
+        sessionId: "stale-provider-bound-session",
+        updatedAt: 0,
+        route: { channel: "msteams" },
+        deliveryContext: { channel: "msteams", to: "user:user-aad" },
+        lastChannel: "msteams",
+        lastTo: "user:user-aad",
+        lastAccountId: "default",
+        origin: { provider: "msteams" },
+      },
+    };
+    setupStore(store);
+    const { deps, remove } = createDeps();
+
+    const result = await handleMSTeamsLifecycleRemove(
+      createContext({
+        type: "installationUpdate",
+        action: "remove",
+        from: { id: "user-bf", aadObjectId: "user-aad" },
+        recipient: { id: "bot-id" },
+        conversation: {
+          id: "19:personal-chat",
+          conversationType: "personal",
+        },
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reason: "installation-remove",
+      conversationRemoved: true,
+      sessionsReset: 1,
+    });
+    expect(remove).toHaveBeenCalledWith("19:personal-chat");
+    expect(store["msteams:direct:user-aad"].updatedAt).toBe(0);
+    expect(store["msteams:direct:user-aad"].sessionId).not.toBe("stale-provider-bound-session");
+    expect(store["msteams:direct:user-aad"].route).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].deliveryContext).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].lastChannel).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].lastTo).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].lastAccountId).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].origin).toBeUndefined();
+  });
+
+  it("does not recount a clean zero-timestamp session that has no Teams provider bindings", async () => {
+    const store = {
+      "msteams:direct:user-aad": {
+        sessionId: "already-reset-session",
+        updatedAt: 0,
+      },
+    };
+    setupStore(store);
+    const { deps, remove } = createDeps();
+
+    const result = await handleMSTeamsLifecycleRemove(
+      createContext({
+        type: "installationUpdate",
+        action: "remove",
+        from: { id: "user-bf", aadObjectId: "user-aad" },
+        recipient: { id: "bot-id" },
+        conversation: {
+          id: "19:personal-chat",
+          conversationType: "personal",
+        },
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reason: "installation-remove",
+      conversationRemoved: true,
+      sessionsReset: 0,
+    });
+    expect(remove).toHaveBeenCalledWith("19:personal-chat");
+    expect(store["msteams:direct:user-aad"]).toEqual({
+      sessionId: "already-reset-session",
+      updatedAt: 0,
+    });
+  });
+
   it("treats remove-upgrade as a removal boundary", async () => {
     const store = {
       "msteams:direct:user-aad": { sessionId: "old-session", updatedAt: 1_000 },
