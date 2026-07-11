@@ -785,6 +785,12 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SessionGroups {
+  created_at: number;
+  name: string;
+  position: number;
+}
+
 export interface SkillCuratorState {
   id: Generated<number>;
   last_attempt_at_ms: number;
@@ -1074,6 +1080,7 @@ export interface DB {
   plugin_state_entries: PluginStateEntries;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
+  session_groups: SessionGroups;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
   skill_uploads: SkillUploads;

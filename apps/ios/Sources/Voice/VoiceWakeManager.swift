@@ -255,12 +255,8 @@ final class VoiceWakeManager: NSObject {
 
     func start() async {
         guard self.isEnabled else { return }
-        if self.isListening {
-            return
-        }
-        if self.isStarting {
-            return
-        }
+        if self.isListening { return }
+        if self.isStarting { return }
 
         self.isStarting = true
         defer { self.isStarting = false }
@@ -377,9 +373,7 @@ final class VoiceWakeManager: NSObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 40_000_000)
                 let drained = queue.drain()
-                if drained.isEmpty {
-                    continue
-                }
+                if drained.isEmpty { continue }
                 for buf in drained {
                     request.append(buf)
                 }
@@ -453,9 +447,7 @@ final class VoiceWakeManager: NSObject {
         guard let transcript else { return }
         guard let cmd = self.extractCommand(from: transcript, segments: segments) else { return }
 
-        if cmd == self.lastDispatched {
-            return
-        }
+        if cmd == self.lastDispatched { return }
         self.lastDispatched = cmd
         self.lastTriggeredCommand = cmd
         self.statusText = "Triggered"

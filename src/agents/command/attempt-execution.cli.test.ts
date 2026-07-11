@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -1347,11 +1347,7 @@ describe("CLI attempt execution", () => {
       setTestEnvValue("HOME", tmpDir);
       setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tmpDir, "state"));
       const visibleSessionFile = resolveSessionTranscriptPath(sessionId, "main");
-      const internalSessionFile = path.join(
-        tmpDir,
-        "internal-agent-runs",
-        `${sessionId}.jsonl`,
-      );
+      const internalSessionFile = path.join(tmpDir, "internal-agent-runs", `${sessionId}.jsonl`);
       const sessionEntry: SessionEntry = {
         sessionId,
         sessionFile: visibleSessionFile,
@@ -2138,9 +2134,22 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-configured-claude-auth-order",
-      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-      spawnedBy: undefined,
+      opts: {
+        messageProvider: "discord",
+        bashElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "ask",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "runtime",
+        },
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {
+        groupId: "group-a",
+        groupChannel: "ops",
+        groupSpace: "guild-a",
+      } as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: "agent:main:discord:channel:parent",
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
@@ -2155,7 +2164,20 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
+      modelProvider: "anthropic",
       model: "claude-opus-4-7",
+      messageProvider: "discord",
+      groupId: "group-a",
+      groupChannel: "ops",
+      groupSpace: "guild-a",
+      spawnedBy: "agent:main:discord:channel:parent",
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "ask",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      },
     });
     expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
   });
@@ -3246,6 +3268,55 @@ describe("embedded attempt harness pinning", () => {
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       agentHarnessId: undefined,
+    });
+  });
+
+  it("honors an explicit OpenClaw session runtime override", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "explicit-openclaw-session",
+      updatedAt: Date.now(),
+      agentRuntimeOverride: "openclaw",
+      agentHarnessId: "codex",
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.6-luna",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      agentHarnessRuntimeOverride: "openclaw",
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "ultra",
+      timeoutMs: 1_000,
+      runId: "run-explicit-openclaw-runtime",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionHasHistory: true,
+    });
+
+    expectMockArgFields(runEmbeddedAgentMock, {
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentHarnessId: "openclaw",
+      agentHarnessRuntimeOverride: "openclaw",
+      thinkLevel: "ultra",
     });
   });
 

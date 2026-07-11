@@ -955,6 +955,24 @@ describe("redactSensitiveText", () => {
     }
   });
 
+  it("masks Telegram bot tokens that cross bounded-replacement chunk boundaries", () => {
+    const chunkSize = 16_384;
+    const credential = `123456:${"A".repeat(28)}WXYZ`;
+    const cases = [
+      { token: `bot${credential}`, redacted: "bot123456…WXYZ" },
+      { token: credential, redacted: "123456…WXYZ" },
+    ];
+
+    for (const { token, redacted } of cases) {
+      const tokenStart = chunkSize - 12;
+      const prefix = `${"x".repeat(tokenStart - 1)} `;
+      const suffix = ` ${"y".repeat(chunkSize * 2)}`;
+      expect(redactSensitiveText(`${prefix}${token}${suffix}`, { mode: "tools" })).toBe(
+        `${prefix}${redacted}${suffix}`,
+      );
+    }
+  });
+
   it("does not corrupt base64 blobs that embed token-prefix shapes", () => {
     // Tiny-PNG base64 contains a gAAAA run from zero-filled IHDR bytes; pure-base64-alphabet
     // prefixes must not fire mid-blob or media payloads get mangled.
