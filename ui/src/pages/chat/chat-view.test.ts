@@ -727,6 +727,18 @@ describe("direct thread avatar mode", () => {
     ).toBe(false);
   });
 
+  it("keeps avatars in global sessions, which can aggregate group senders", () => {
+    const globalThread = renderChatView({
+      sessionKey: "global",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(globalThread, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
   it("matches session metadata across equivalent alias keys", () => {
     // Default session travels as "main" or "agent:main:main" depending on caller.
     const aliased = renderChatView({

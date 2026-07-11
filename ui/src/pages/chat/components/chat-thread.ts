@@ -721,7 +721,11 @@ export function renderChatThread(props: ChatThreadProps) {
   const rowKind = activeSession?.kind;
   const sessionKind =
     rowKind && rowKind !== "unknown" ? rowKind : classifySessionKind(props.sessionKey);
-  const isDirectThread = sessionKind !== "group";
+  // Only agent-solo kinds qualify: "global" aggregates every inbound context
+  // under session.scope="global" (including group/channel senders), so it
+  // keeps avatars like "group" and "unknown" do.
+  const isDirectThread =
+    sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child";
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
