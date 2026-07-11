@@ -63,6 +63,10 @@ import {
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  classifySessionStateActor,
+  recordSessionHumanDirectMessage,
+} from "../sessions/session-state-events.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
@@ -1009,6 +1013,15 @@ async function agentCommandInternal(
   assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
+  const sessionStateActor = classifySessionStateActor({
+    inputProvenance: opts.inputProvenance,
+    internalEvents: opts.internalEvents,
+    sessionEffects: opts.sessionEffects,
+  });
+  // Subagent-lane turns are the parent's own task dispatch into the child (they
+  // carry no inter_session provenance today); classifying them as human would tell
+  // the parent a human interjected on every spawn, for embedded and ACP children alike.
+  const isSubagentLaneTurn = normalizeOptionalString(opts.lane) === AGENT_LANE_SUBAGENT;
   let sessionReboundDuringRun = false;
   let trackedRestartRecoveryDeliveryContext = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
@@ -1193,6 +1206,7 @@ async function agentCommandInternal(
           await acpManager.runTurn({
             cfg,
             sessionKey,
+            provenance: isSubagentLaneTurn ? "agent" : sessionStateActor.actorType,
             text: body,
             attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
             mode: "prompt",
@@ -1477,6 +1491,16 @@ async function agentCommandInternal(
           entry: next,
         });
         sessionEntry = persisted;
+      }
+      if (sessionKey && !isSubagentLaneTurn) {
+        recordSessionHumanDirectMessage({
+          sessionKey,
+          entry: sessionEntry,
+          agentId: sessionAgentId,
+          actor: sessionStateActor,
+          channel: opts.channel,
+          runId,
+        });
       }
 
       const configuredDefaultRef = resolveDefaultModelForAgent({
@@ -2763,6 +2787,9 @@ async function agentCommandInternal(
           !sessionReboundDuringRun
         ) {
           const entry = sessionStore[sessionKey] ?? sessionEntry;
+          if (!entry) {
+            throw new Error("Cannot clear pending delivery without a session entry");
+          }
           const noPendingTextForThisRun =
             opts.deliver === true &&
             pendingFinalDeliveryTextForThisRun === undefined &&

@@ -63,6 +63,7 @@ import {
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
+import { handleSessionStateSessionReset } from "../sessions/session-state-events.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -1242,6 +1243,7 @@ export async function performGatewaySessionReset(params: {
           });
         },
       });
+      handleSessionStateSessionReset(target.canonicalKey ?? params.key);
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
       const resolved = {

@@ -110,7 +110,7 @@ import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import {
   isBrowserOperatorUiClient,
-  isGatewayCliClient,
+  isEphemeralGatewayClient,
   isOperatorUiClient,
   isWebchatClient,
 } from "../../../utils/message-channel.js";
@@ -2152,7 +2152,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.permissions = reconciliation.effectivePermissions;
         }
 
-        const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
+        // Presence lists user-visible clients/nodes. Ephemeral control-plane connections
+        // (CLI, backend RPC probes, tests) churn for the full TTL and stay excluded.
+        const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
         const clientId = connectParams.client.id;
         const instanceId = connectParams.client.instanceId;
         const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;

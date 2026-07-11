@@ -1,11 +1,12 @@
 // SQLite sessions/transcripts flip proof runner exercises an isolated live gateway lifecycle.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
   appendTranscriptMessage,
@@ -33,6 +34,7 @@ import { sleep } from "../../src/utils.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 
 type DoctorMode = "import" | "inspect" | "validate" | "restore";
+type ProofChildProcess = ChildProcessByStdio<null, Readable, Readable>;
 
 type DoctorMigrationRunEvidence = {
   failureReportJsonPath?: string;
@@ -294,6 +296,9 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     startTimeoutMs: 90_000,
     stopTimeoutMs: 3_000,
   });
+  // The proof mixes child-process CLI calls with in-process SDK accessors.
+  // Apply the fixture environment so both paths resolve the same isolated DB.
+  inst.state.applyEnv();
   const context = buildProofContext(inst.stateDir);
   const checkpoints: ProofCheckpoint[] = [];
   const failures: string[] = [];
@@ -301,7 +306,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
   let busyContention: BusyContentionEvidence | undefined;
   let downgradeReupgrade: DowngradeReupgradeEvidence | undefined;
   let manualCompaction: ManualCompactionEvidence | undefined;
-  let mockOpenAi: ChildProcessWithoutNullStreams | undefined;
+  let mockOpenAi: ProofChildProcess | undefined;
   let pluginSdkConsumer: PluginSdkConsumerEvidence | undefined;
   let rollbackRestore: RollbackRestoreEvidence | undefined;
   let scaleMigration: ScaleMigrationEvidence | undefined;
@@ -669,7 +674,7 @@ async function startMockOpenAiServer(params: {
   port: number;
   requestLogPath: string;
   responseText: string;
-}): Promise<ChildProcessWithoutNullStreams> {
+}): Promise<ProofChildProcess> {
   const child = spawn("node", ["scripts/e2e/mock-openai-server.mjs"], {
     cwd: process.cwd(),
     env: {
@@ -707,7 +712,7 @@ async function startMockOpenAiServer(params: {
   throw new Error(`timeout waiting for mock OpenAI server\n${tail(output)}`);
 }
 
-async function stopChildProcess(child: ChildProcessWithoutNullStreams | undefined): Promise<void> {
+async function stopChildProcess(child: ProofChildProcess | undefined): Promise<void> {
   if (!child || child.exitCode !== null || child.signalCode !== null) {
     return;
   }
@@ -875,7 +880,7 @@ function legacyEntry(
   };
 }
 
-function legacySessionEvent(sessionId: string): TranscriptEvent {
+function legacySessionEvent(sessionId: string): TranscriptEvent & Record<string, unknown> {
   return { type: "session", sessionId };
 }
 
@@ -2086,7 +2091,7 @@ async function waitForFile(filePath: string, timeoutMs: number, poll: () => void
 }
 
 async function waitForChildExit(
-  child: ChildProcessWithoutNullStreams,
+  child: ProofChildProcess,
   timeoutMs: number,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   if (child.exitCode !== null || child.signalCode !== null) {
@@ -2402,7 +2407,7 @@ function parseEntryJson(entryJson: string): Record<string, unknown> | undefined 
   }
 }
 
-function scalarNumber(db: DatabaseSync, sql: string, values: unknown[] = []): number {
+function scalarNumber(db: DatabaseSync, sql: string, values: SQLInputValue[] = []): number {
   const row = db.prepare(sql).get(...values) as { count?: unknown } | undefined;
   return typeof row?.count === "number" ? row.count : 0;
 }
@@ -2426,8 +2431,9 @@ function validateCheckpointInvariants(
         .join(", ")}`,
     );
   }
-  if (checkpoint.label.startsWith("after-doctor") && checkpoint.doctor?.code !== 0) {
-    failures.push(`${checkpoint.label}: doctor ${checkpoint.doctor.mode} exited non-zero`);
+  const doctor = checkpoint.doctor;
+  if (checkpoint.label.startsWith("after-doctor") && doctor?.code !== 0) {
+    failures.push(`${checkpoint.label}: doctor ${doctor?.mode ?? "unknown"} exited non-zero`);
   }
   if (
     checkpoint.label === "after-startup-import" &&

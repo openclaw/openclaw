@@ -57,6 +57,7 @@ function runCiManifestFixture(options: {
   eventName?: "pull_request" | "workflow_dispatch";
   historicalCompatibility?: boolean;
   iosCapabilities?: boolean;
+  protocolCoverage?: boolean;
 }) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
@@ -122,6 +123,9 @@ function runCiManifestFixture(options: {
       for (const name of ["install-swift-tools.sh", "lint-swift.sh", "format-swift.sh"]) {
         writeFileSync(path.join(root, "scripts", name), "#!/bin/sh\n");
       }
+    }
+    if (options.protocolCoverage ?? options.bundledPlanner) {
+      writeFileSync(path.join(root, "scripts", "check-protocol-event-coverage.mjs"), "");
     }
     const outputPath = path.join(root, "manifest.out");
     writeFileSync(outputPath, "", "utf8");
@@ -1355,7 +1359,9 @@ describe("ci workflow guards", () => {
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
 
-    const runStep = additionalJob.steps.find((step) => step.name === "Run additional check shard");
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
     expect(runStep.run).toContain("session-accessor-boundary)");
     expect(runStep.run).toContain(
       'run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary',
@@ -1467,8 +1473,10 @@ describe("ci workflow guards", () => {
       stepNames.indexOf("Check SQLite sessions/transcripts schema baseline drift"),
     ).toBeLessThan(stepNames.indexOf("Check plugin SDK surface budget"));
     expect(
-      steps.find((step) => step.name === "Check SQLite sessions/transcripts schema baseline drift")
-        .run,
+      steps.find(
+        (step: WorkflowStep) =>
+          step.name === "Check SQLite sessions/transcripts schema baseline drift",
+      ).run,
     ).toBe("pnpm sqlite:sessions-schema:check");
     expect(
       steps.find((step: WorkflowStep) => step.name === "Check plugin SDK surface budget").run,
@@ -1665,6 +1673,7 @@ describe("ci workflow guards", () => {
     expect(current.outputs.run_native_i18n).toBe("true");
     expect(current.outputs.run_qa_smoke_ci).toBe("true");
     expect(current.outputs.run_channel_contracts_shards).toBe("true");
+    expect(current.outputs.run_protocol_event_coverage).toBe("true");
     expect(JSON.parse(current.outputs.checks_node_core_nondist_matrix).include).toContainEqual(
       expect.objectContaining({
         check_name: "bundled-node-plan",
@@ -1680,6 +1689,27 @@ describe("ci workflow guards", () => {
     expect(currentMissingIos.status, currentMissingIos.output).toBe(0);
     expect(currentMissingIos.outputs.historical_target).toBe("false");
     expect(currentMissingIos.outputs.run_ios_build).toBe("true");
+
+    const currentMissingProtocolCoverage = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      protocolCoverage: false,
+    });
+    expect(currentMissingProtocolCoverage.status, currentMissingProtocolCoverage.output).toBe(0);
+    expect(currentMissingProtocolCoverage.outputs.historical_target).toBe("false");
+    expect(currentMissingProtocolCoverage.outputs.run_protocol_event_coverage).toBe("false");
+
+    const pullRequestMissingProtocolCoverage = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      protocolCoverage: false,
+    });
+    expect(
+      pullRequestMissingProtocolCoverage.status,
+      pullRequestMissingProtocolCoverage.output,
+    ).toBe(0);
+    expect(pullRequestMissingProtocolCoverage.outputs.historical_target).toBe("false");
+    expect(pullRequestMissingProtocolCoverage.outputs.run_protocol_event_coverage).toBe("true");
 
     const currentMissingPlanner = runCiManifestFixture({
       bundledPlanner: false,

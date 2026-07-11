@@ -1148,6 +1148,7 @@ async function deliverTextCompletionDirect(params: {
       threadId: params.deliveryTarget.threadId,
       requesterSessionKey: params.requesterSessionKey,
       agentId,
+      conversationType: "direct",
       content,
       idempotencyKey,
       mirror: {
