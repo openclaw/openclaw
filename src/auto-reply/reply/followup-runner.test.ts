@@ -781,6 +781,49 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(events).toEqual(["admission-started", "admitted", "run", "complete"]);
   });
 
+  it("stops an aborted queued followup after asynchronous owner admission", async () => {
+    const events: string[] = [];
+    const abortController = new AbortController();
+    let releaseAdmission!: () => void;
+    const admissionBarrier = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+      opts: { onBlockReply },
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        abortSignal: abortController.signal,
+        queuedLifecycle: {
+          onAdmitted: async () => {
+            events.push("admission-started");
+            await admissionBarrier;
+            events.push("admitted");
+          },
+          onComplete: () => events.push("complete"),
+        },
+        run: { provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    await vi.waitFor(() => expect(events).toEqual(["admission-started"]));
+    abortController.abort();
+    releaseAdmission();
+    await pending;
+
+    expect(events).toEqual(["admission-started", "admitted", "complete"]);
+    expect(runPreflightCompactionIfNeededMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("passes prepared media user turns to embedded runtime dispatch", async () => {
     const preparedUserTurnMessage = {
       role: "user",
@@ -1335,7 +1378,17 @@ describe("createFollowupRunner runtime config", () => {
           messageProvider: "telegram",
           clientCaps: ["tool-events", "inline-widgets"],
           senderId: "sender-42",
+          senderName: "Sender 42",
+          senderUsername: "sender-42-user",
+          senderE164: "+15550003333",
           senderIsOwner: true,
+          execOverrides: { host: "node", node: "mac-b" },
+          bashElevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+          groupId: "group-42",
+          groupChannel: "ops",
+          groupSpace: "workspace-42",
+          spawnedBy: "agent:main:telegram:group:parent",
+          runtimePolicySessionKey: "agent:agent:telegram:default:direct:sender-42",
           cwd: "/tmp/task-repo",
           inputProvenance: {
             kind: "internal_system",
@@ -1350,6 +1403,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
     expect(call.provider).toBe("claude-cli");
+    expect(call.modelProvider).toBe("anthropic");
     expect(call.model).toBe("claude-opus-4-7");
     expect(call.config).toBe(runtimeConfig);
     expect(call.cliSessionId).toBe("cli-session-1");
@@ -1359,7 +1413,17 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-42");
     expect(call.senderId).toBe("sender-42");
+    expect(call.senderName).toBe("Sender 42");
+    expect(call.senderUsername).toBe("sender-42-user");
+    expect(call.senderE164).toBe("+15550003333");
     expect(call.senderIsOwner).toBe(true);
+    expect(call.execOverrides).toEqual({ host: "node", node: "mac-b" });
+    expect(call.bashElevated).toEqual({ enabled: true, allowed: true, defaultLevel: "ask" });
+    expect(call.groupId).toBe("group-42");
+    expect(call.groupChannel).toBe("ops");
+    expect(call.groupSpace).toBe("workspace-42");
+    expect(call.spawnedBy).toBe("agent:main:telegram:group:parent");
+    expect(call.runtimePolicySessionKey).toBe("agent:agent:telegram:default:direct:sender-42");
     expect(call).toMatchObject({
       sessionId: "session-cli-followup",
       sessionKey: "main",
@@ -2176,6 +2240,55 @@ describe("createFollowupRunner runtime config", () => {
     const embeddedCall = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
     expect(lifecyclePhases).toEqual(["start", "start", "finishing", "end"]);
+  });
+
+  it("revalidates immutable Ultra for embedded and CLI followup fallback candidates", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await params.run("openai", "gpt-5.6-sol");
+        return {
+          result: await params.run("anthropic", "claude-opus-4-7"),
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        };
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    runCliAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const queued = createQueuedRun({
+      run: {
+        config: runtimeConfig,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        thinkLevel: "ultra",
+      },
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.6-sol",
+    });
+
+    await runner(queued);
+
+    expect(requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent").thinkLevel).toBe(
+      "ultra",
+    );
+    expect(requireLastMockCallArg(runCliAgentMock, "run cli agent").thinkLevel).toBe("max");
+    expect(queued.run.thinkLevel).toBe("ultra");
   });
 
   it("delivers an exhausted embedded followup as a failed lifecycle", async () => {

@@ -55,10 +55,7 @@ import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-p
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isMissingProviderAuthError } from "../../agents/model-auth.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import {
-  isCliRuntimeAliasForProvider,
-  resolveCliRuntimeExecutionProvider,
-} from "../../agents/model-runtime-aliases.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   isCliProvider,
   resolveModelRefFromString,
@@ -72,6 +69,8 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
@@ -1357,26 +1356,6 @@ function emitModelFallbackStepLifecycle(params: {
   });
 }
 
-/** Resolves runtime provider override stored on the session entry. */
-export function resolveSessionRuntimeOverrideForProvider(params: {
-  provider: string;
-  entry?: Pick<SessionEntry, "agentRuntimeOverride">;
-  cfg?: OpenClawConfig;
-}): string | undefined {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const runtime = normalizeLowercaseStringOrEmpty(params.entry?.agentRuntimeOverride);
-  if (!runtime || runtime === "auto" || runtime === "default") {
-    return undefined;
-  }
-  if (provider === "openai" && runtime === "codex") {
-    return "codex";
-  }
-  if (isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg })) {
-    return runtime;
-  }
-  return undefined;
-}
-
 /** Decides whether to retry after rechecking auto-fallback primary probe state. */
 export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   run: FollowupRun["run"];
@@ -1534,6 +1513,7 @@ async function runAgentTurnWithFallbackInternal(
     }
     return effectiveRun;
   };
+  let liveModelSwitchRuntimeEntry: Pick<SessionEntry, "agentRuntimeOverride"> | undefined;
   const applyLiveModelSwitchToRun = (
     run: FollowupRun["run"],
     err: LiveSessionModelSwitchError,
@@ -1543,6 +1523,9 @@ async function runAgentTurnWithFallbackInternal(
     run.authProfileId = err.authProfileId;
     run.authProfileIdSource = err.authProfileId ? err.authProfileIdSource : undefined;
     run.autoFallbackPrimaryProbe = undefined;
+    // Keep runtime paired with the error's model/auth winner even if the
+    // active in-memory session snapshot lags the persisted directive write.
+    liveModelSwitchRuntimeEntry = { agentRuntimeOverride: err.agentRuntimeOverride };
   };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
@@ -1917,7 +1900,7 @@ async function runAgentTurnWithFallbackInternal(
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({
               provider,
-              entry: params.getActiveSessionEntry(),
+              entry: liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry(),
               cfg: runtimeConfig,
             }),
           prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
@@ -1960,6 +1943,15 @@ async function runAgentTurnWithFallbackInternal(
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
             const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateThinkLevel = resolveCandidateThinkingLevel({
+              cfg: runtimeConfig,
+              provider,
+              modelId: model,
+              level: params.followupRun.run.thinkLevel,
+              agentId: params.followupRun.run.agentId,
+              sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+              sessionEntry: params.getActiveSessionEntry(),
+            });
             const candidateFastMode = resolveRunFastModeForFallbackCandidate({
               run: candidateRun,
               config: runtimeConfig,
@@ -1979,14 +1971,14 @@ async function runAgentTurnWithFallbackInternal(
             params.opts?.onModelSelected?.({
               provider,
               model,
-              thinkLevel: params.followupRun.run.thinkLevel,
+              thinkLevel: candidateThinkLevel,
             });
             const { sessionRuntimeOverride, cliExecutionProvider } = agentTurnTiming.measureSync(
               "fallback_resolve_runtime",
               () => {
                 const resolvedSessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                   provider,
-                  entry: params.getActiveSessionEntry(),
+                  entry: liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry(),
                   cfg: runtimeConfig,
                 });
                 const resolvedSelectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
@@ -2160,6 +2152,9 @@ async function runAgentTurnWithFallbackInternal(
                   runParams: {
                     sessionId: params.followupRun.run.sessionId,
                     sessionKey: params.sessionKey,
+                    runtimePolicySessionKey:
+                      params.followupRun.run.runtimePolicySessionKey ??
+                      params.runtimePolicySessionKey,
                     agentId: params.followupRun.run.agentId,
                     trigger: params.isHeartbeat ? "heartbeat" : "user",
                     sessionFile: params.followupRun.run.sessionFile,
@@ -2178,9 +2173,12 @@ async function runAgentTurnWithFallbackInternal(
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
                     inputProvenance: params.followupRun.run.inputProvenance,
+                    modelProvider: provider,
                     provider: cliExecutionProvider,
+                    execOverrides: params.followupRun.run.execOverrides,
+                    bashElevated: params.followupRun.run.bashElevated,
                     model,
-                    thinkLevel: params.followupRun.run.thinkLevel,
+                    thinkLevel: candidateThinkLevel,
                     fastMode: candidateFastMode.fastMode,
                     fastModeStartedAtMs,
                     fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
@@ -2220,6 +2218,13 @@ async function runAgentTurnWithFallbackInternal(
                       params.sessionCtx.OriginatingTo ??
                       params.sessionCtx.To,
                     senderId: params.followupRun.run.senderId,
+                    senderName: params.followupRun.run.senderName,
+                    senderUsername: params.followupRun.run.senderUsername,
+                    senderE164: params.followupRun.run.senderE164,
+                    groupId: params.followupRun.run.groupId,
+                    groupChannel: params.followupRun.run.groupChannel,
+                    groupSpace: params.followupRun.run.groupSpace,
+                    spawnedBy: params.followupRun.run.spawnedBy,
                     chatId: params.followupRun.originatingChatId,
                     channelContext: params.followupRun.run.channelContext,
                     currentThreadTs:
@@ -2253,7 +2258,7 @@ async function runAgentTurnWithFallbackInternal(
             }
             const { embeddedContext, senderContext, runBaseParams } =
               buildEmbeddedRunExecutionParams({
-                run: { ...candidateRun, ...candidateFastMode },
+                run: { ...candidateRun, ...candidateFastMode, thinkLevel: candidateThinkLevel },
                 replyRoute: params.followupRun,
                 sessionCtx: params.sessionCtx,
                 hasRepliedRef: params.opts?.hasRepliedRef,
