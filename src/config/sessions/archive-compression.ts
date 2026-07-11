@@ -82,15 +82,39 @@ export function materializeSessionArchiveForRead(filePath: string): string {
     return filePath;
   }
   const cacheDir = path.join(resolvePreferredOpenClawTmpDir(), "session-archive-read-cache");
-  const cacheName = `${createHash("sha256").update(filePath).digest("hex").slice(0, 32)}.jsonl`;
-  const cachePath = path.join(cacheDir, cacheName);
+  const pathKey = createHash("sha256").update(filePath).digest("hex").slice(0, 32);
+  // Source identity gates every hit: a deleted or replaced archive must never
+  // keep serving plaintext from the cache (budget eviction deletes archives).
+  let sourceStat: fs.Stats;
+  try {
+    sourceStat = fs.statSync(filePath);
+  } catch (error) {
+    removeMaterializedArchiveCacheEntries(cacheDir, pathKey);
+    throw error;
+  }
+  const cachePath = path.join(cacheDir, `${pathKey}-${sourceStat.size}.jsonl`);
   if (fs.existsSync(cachePath)) {
     return cachePath;
   }
   const content = readSessionArchiveContentSync(filePath);
+  removeMaterializedArchiveCacheEntries(cacheDir, pathKey);
   fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
   const tempPath = `${cachePath}.${process.pid}.tmp`;
   fs.writeFileSync(tempPath, content, { encoding: "utf8", mode: 0o600 });
   fs.renameSync(tempPath, cachePath);
   return cachePath;
+}
+
+function removeMaterializedArchiveCacheEntries(cacheDir: string, pathKey: string): void {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(cacheDir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.startsWith(`${pathKey}-`)) {
+      fs.rmSync(path.join(cacheDir, entry), { force: true });
+    }
+  }
 }
