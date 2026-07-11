@@ -19,7 +19,7 @@ function manifest(overrides?: Partial<WidgetManifestView>): WidgetManifestView {
   return {
     name: "revenue-chart",
     entrypoint: "index.html",
-    bindingIds: ["value"],
+    bindings: { value: { source: "static", value: null } },
     capabilities: ["data:read"],
     ...overrides,
   };

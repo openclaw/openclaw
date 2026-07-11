@@ -32,11 +32,11 @@ Nine trusted widgets ship with the plugin and render as first-party UI:
 
 Widgets declare data through **bindings**, they never fetch on their own:
 
-| Binding  | Resolves to |
-| -------- | ----------- |
-| `static` | A literal value stored in the document (8 KB max). |
+| Binding  | Resolves to                                                                                              |
+| -------- | -------------------------------------------------------------------------------------------------------- |
+| `static` | A literal value stored in the document (8 KB max).                                                       |
 | `file`   | A JSON, Markdown, or CSV file under `<stateDir>/dashboard/data/`, optionally narrowed by a JSON pointer. |
-| `rpc`    | One of a fixed allowlist of read-only gateway methods, resolved by the trusted Control UI. |
+| `rpc`    | One of a fixed allowlist of read-only gateway methods, resolved by the trusted Control UI.               |
 
 The `file` binding is the simplest way to put your own numbers on a dashboard: write a
 JSON file into the data directory and point a `stat-card` at it.
@@ -59,11 +59,13 @@ An agent can author a real HTML widget with `dashboard_widget_scaffold` (or you 
 - An approved widget renders in an `<iframe sandbox="allow-scripts">` — never
   `allow-same-origin` — so its origin is opaque and it cannot reach the parent's DOM,
   storage, or cookies.
-- Its assets are served with `connect-src 'none'`, so the widget cannot make network
-  requests at all. It holds no credential and never talks to the gateway.
-- Data reaches it only through a versioned `postMessage` bridge, where the trusted parent
-  resolves the bindings the widget's own manifest declared. A widget cannot ask for data
-  it was not granted.
+- Its assets are served with `connect-src 'none'`, blocking script networking such as
+  `fetch`, XHR, and WebSockets. It holds no credential and never talks to the gateway.
+- Data reaches it only through a versioned `postMessage` bridge. Custom code can receive
+  declared `static` bindings, which are already agent- or operator-authored workspace
+  values. RPC and file bindings stay in trusted built-in widgets: browsers allow a
+  sandboxed child to navigate its own frame, so privileged data is never posted into
+  agent-authored HTML.
 
 Sending a prompt into chat from a widget additionally requires a manifest capability, a
 per-invocation confirmation quoting the exact text, and passes a rate limit.

@@ -62,6 +62,7 @@ export function normalizeDashboardDataLogicalPath(value: string): string {
   const parts = normalized.split("/").filter(Boolean);
   if (
     parts.length === 0 ||
+    parts[0] === "~" ||
     parts.some((part) => part === "." || part === ".." || part.includes(":"))
   ) {
     throw new DashboardBindingResolutionError("binding_invalid", "file binding path is invalid");

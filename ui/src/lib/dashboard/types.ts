@@ -84,14 +84,14 @@ export type DashboardWidgetCapability = "data:read" | "prompt:send";
 
 /**
  * The subset of a custom widget's `widget.json` manifest the parent bridge needs
- * to gate child requests: which binding ids are declared and which capabilities
- * the operator approved. Loaded on demand by the host from the served manifest.
+ * to gate child requests: the approved binding grants and capabilities. Loaded
+ * on demand by the host from the content-pinned served manifest.
  */
 export type WidgetManifestView = {
   name: string;
   /** The file the sandboxed iframe loads; the manifest declares it. */
   entrypoint: string;
-  bindingIds: string[];
+  bindings: Record<string, DashboardBinding>;
   capabilities: DashboardWidgetCapability[];
 };
 

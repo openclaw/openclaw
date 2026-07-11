@@ -202,7 +202,7 @@ function customManifest(): WidgetManifestView {
   return {
     name: "chart",
     entrypoint: "index.html",
-    bindingIds: ["value"],
+    bindings: { value: { source: "static", value: null } },
     capabilities: ["data:read"],
   };
 }

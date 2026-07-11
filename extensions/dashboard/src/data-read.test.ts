@@ -69,6 +69,9 @@ describe("dashboard data binding resolver", () => {
       await expect(
         resolveBinding({ source: "file", path: "../secrets.json" }, { stateDir }),
       ).rejects.toMatchObject({ code: "binding_invalid" });
+      await expect(
+        resolveBinding({ source: "file", path: "~/metrics.json" }, { stateDir }),
+      ).rejects.toMatchObject({ code: "binding_invalid" });
 
       await fs.mkdir(path.join(stateDir, "dashboard", "data"), { recursive: true });
       await fs.writeFile(
@@ -79,6 +82,41 @@ describe("dashboard data binding resolver", () => {
       await expect(
         resolveBinding({ source: "file", path: "big.csv" }, { stateDir }),
       ).rejects.toMatchObject({ code: "binding_too_large" });
+    });
+  });
+
+  it("rejects leaf and ancestor symlinks that escape the dashboard data jail", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const dataDir = path.join(stateDir, "dashboard", "data");
+      const outsideDir = path.join(stateDir, "outside");
+      const outsideFile = path.join(outsideDir, "secret.json");
+      await fs.mkdir(dataDir, { recursive: true });
+      await fs.mkdir(outsideDir);
+      await fs.writeFile(outsideFile, JSON.stringify({ secret: true }));
+      await fs.symlink(outsideFile, path.join(dataDir, "leak.json"));
+      await fs.symlink(outsideDir, path.join(dataDir, "leak-dir"));
+
+      await expect(
+        resolveBinding({ source: "file", path: "leak.json" }, { stateDir }),
+      ).rejects.toMatchObject({ code: "binding_invalid" });
+      await expect(
+        resolveBinding({ source: "file", path: "leak-dir/secret.json" }, { stateDir }),
+      ).rejects.toMatchObject({ code: "binding_invalid" });
+    });
+  });
+
+  it("rejects a dashboard data root replaced with a symlink", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const dashboardDir = path.join(stateDir, "dashboard");
+      const outsideDir = path.join(stateDir, "outside");
+      await fs.mkdir(dashboardDir);
+      await fs.mkdir(outsideDir);
+      await fs.writeFile(path.join(outsideDir, "secret.json"), JSON.stringify({ secret: true }));
+      await fs.symlink(outsideDir, path.join(dashboardDir, "data"));
+
+      await expect(
+        resolveBinding({ source: "file", path: "secret.json" }, { stateDir }),
+      ).rejects.toMatchObject({ code: "binding_invalid" });
     });
   });
 });

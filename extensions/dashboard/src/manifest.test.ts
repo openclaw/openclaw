@@ -30,7 +30,7 @@ const VALID_MANIFEST = {
   name: "revenue-chart",
   title: "Revenue Chart",
   entrypoint: "index.html",
-  bindings: [{ id: "rev", source: "file", path: "q3.json" }],
+  bindings: [{ id: "rev", source: "static", value: { revenue: 42 } }],
   capabilities: ["data:read"],
   preferredSize: { w: 6, h: 4 },
 };
@@ -52,30 +52,22 @@ describe("validateWidgetManifest", () => {
     );
   });
 
-  it("rejects an rpc binding whose method is not allowlisted", () => {
+  it("rejects rpc bindings for custom code", () => {
     expect(() =>
       validateWidgetManifest({
         ...VALID_MANIFEST,
         bindings: [{ id: "x", source: "rpc", method: "sessions.delete" }],
       }),
-    ).toThrow(/not allowlisted/);
+    ).toThrow(/source must be static/);
   });
 
-  it("accepts an allowlisted rpc binding", () => {
-    const manifest = validateWidgetManifest({
-      ...VALID_MANIFEST,
-      bindings: [{ id: "s", source: "rpc", method: "sessions.list" }],
-    });
-    expect(manifest.bindings[0]).toEqual({ id: "s", source: "rpc", method: "sessions.list" });
-  });
-
-  it("rejects a file binding path that traverses out of the data jail", () => {
+  it("rejects file bindings for custom code", () => {
     expect(() =>
       validateWidgetManifest({
         ...VALID_MANIFEST,
         bindings: [{ id: "x", source: "file", path: "../../etc/passwd" }],
       }),
-    ).toThrow();
+    ).toThrow(/source must be static/);
   });
 
   it("rejects an entrypoint that escapes the widget dir", () => {

@@ -25,7 +25,7 @@ function manifest(overrides?: Partial<WidgetManifestView>): WidgetManifestView {
   return {
     name: "revenue-chart",
     entrypoint: "index.html",
-    bindingIds: ["value"],
+    bindings: { value: { source: "static", value: null } },
     capabilities: ["data:read"],
     ...overrides,
   };
@@ -75,7 +75,7 @@ describe("loadWidgetManifestView", () => {
     expect(view).toEqual({
       name: "revenue-chart",
       entrypoint: "index.html",
-      bindingIds: ["value"],
+      bindings: { value: { source: "static", value: 1 } },
       capabilities: ["data:read", "prompt:send"],
     });
   });
@@ -86,6 +86,24 @@ describe("loadWidgetManifestView", () => {
       vi.fn(async () => ({ ok: false, json: async () => ({}) })),
     );
     expect(await loadWidgetManifestView("", "revenue-chart")).toBeNull();
+  });
+
+  it("represents schema-valid binding ids without prototype collisions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          entrypoint: "index.html",
+          bindings: [{ id: "__proto__", source: "static", value: 1 }],
+          capabilities: ["data:read"],
+        }),
+      })),
+    );
+
+    const view = await loadWidgetManifestView("", "revenue-chart");
+    expect(Object.keys(view?.bindings ?? {})).toEqual(["__proto__"]);
+    expect(view?.bindings.__proto__).toEqual({ source: "static", value: 1 });
   });
 });
 
@@ -188,22 +206,21 @@ describe("attachWidgetBridge accept filter (identity, not origin)", () => {
   });
 });
 
-describe("attachWidgetBridge rpc allowlist re-check", () => {
-  it("denies a non-allowlisted rpc binding at resolve time WITHOUT calling the gateway", async () => {
+describe("attachWidgetBridge privileged-data boundary", () => {
+  it("denies an rpc binding without calling the gateway", async () => {
     const iframe = document.createElement("iframe");
     document.body.appendChild(iframe);
     const posts: unknown[] = [];
     if (iframe.contentWindow) {
       iframe.contentWindow.postMessage = ((message: unknown) => posts.push(message)) as never;
     }
-    // A widget whose declared binding names a method NOT in the allowlist. Even
-    // though the write-time schema should have rejected it, the parent must not
-    // call the gateway on the widget's behalf.
     const request = vi.fn(async () => ({ leaked: true }));
     const detach = attachWidgetBridge({
       iframe,
       widget: widget({ bindings: { value: { source: "rpc", method: "sessions.delete" } } }),
-      manifest: manifest(),
+      manifest: manifest({
+        bindings: { value: { source: "rpc", method: "sessions.delete" } },
+      }),
       context: host({ client: { request } as never }),
     });
     window.dispatchEvent(
@@ -222,7 +239,7 @@ describe("attachWidgetBridge rpc allowlist re-check", () => {
     detach();
   });
 
-  it("allows an allowlisted rpc binding to resolve through the gateway", async () => {
+  it("denies an allowlisted rpc binding without calling the gateway", async () => {
     const iframe = document.createElement("iframe");
     document.body.appendChild(iframe);
     const posts: unknown[] = [];
@@ -233,7 +250,7 @@ describe("attachWidgetBridge rpc allowlist re-check", () => {
     const detach = attachWidgetBridge({
       iframe,
       widget: widget({ bindings: { value: { source: "rpc", method: "sessions.list" } } }),
-      manifest: manifest(),
+      manifest: manifest({ bindings: { value: { source: "rpc", method: "sessions.list" } } }),
       context: host({ client: { request } as never }),
     });
     window.dispatchEvent(
@@ -243,8 +260,42 @@ describe("attachWidgetBridge rpc allowlist re-check", () => {
       }),
     );
     await vi.waitFor(() => expect(posts.length).toBeGreaterThan(0));
-    expect(posts[0]).toMatchObject({ type: "dashboard:data", requestId: "r1" });
-    expect(request).toHaveBeenCalledWith("sessions.list", {});
+    expect(posts[0]).toMatchObject({
+      type: "dashboard:error",
+      code: "binding_denied",
+      requestId: "r1",
+    });
+    expect(request).not.toHaveBeenCalled();
+    detach();
+  });
+
+  it("denies a file binding without reading through the gateway", async () => {
+    const iframe = document.createElement("iframe");
+    document.body.appendChild(iframe);
+    const posts: unknown[] = [];
+    if (iframe.contentWindow) {
+      iframe.contentWindow.postMessage = ((message: unknown) => posts.push(message)) as never;
+    }
+    const request = vi.fn(async () => ({ secret: true }));
+    const detach = attachWidgetBridge({
+      iframe,
+      widget: widget({ bindings: { value: { source: "file", path: "private.json" } } }),
+      manifest: manifest({ bindings: { value: { source: "file", path: "private.json" } } }),
+      context: host({ client: { request } as never }),
+    });
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { v: 1, type: "dashboard:getData", requestId: "r1", bindingId: "value" },
+        source: iframe.contentWindow,
+      }),
+    );
+    await vi.waitFor(() => expect(posts.length).toBeGreaterThan(0));
+    expect(posts[0]).toMatchObject({
+      type: "dashboard:error",
+      code: "binding_denied",
+      requestId: "r1",
+    });
+    expect(request).not.toHaveBeenCalled();
     detach();
   });
 

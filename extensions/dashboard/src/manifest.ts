@@ -1,16 +1,16 @@
 // Custom-widget `widget.json` manifest load + validation (schema per 00 §2).
 //
 // The manifest is the sole source of truth for what a sandboxed widget is allowed
-// to do: which binding ids it may request, which capabilities it holds, and its
-// entrypoint. The parent bridge (UI side) re-checks every child request against
-// the manifest the operator approved, so validation here is a security boundary,
-// not a convenience. Hand-written guards mirror `schema.ts` (no zod).
+// to do: which static binding ids it may request, which capabilities it holds, and
+// its entrypoint. The parent bridge (UI side) re-checks every child request against
+// the manifest the operator approved and never resolves RPC/file bindings for custom
+// code. Hand-written guards mirror `schema.ts` (no zod).
 
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { DATA_READ_RPC_ALLOWLIST, normalizeDashboardDataLogicalPath } from "./binding-contract.js";
+import { normalizeDashboardDataLogicalPath } from "./binding-contract.js";
 
 export const CUSTOM_WIDGET_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -143,10 +143,7 @@ export const WIDGET_CAPABILITIES = ["data:read", "prompt:send"] as const;
 
 export type WidgetCapability = (typeof WIDGET_CAPABILITIES)[number];
 
-export type WidgetManifestBinding =
-  | { id: string; source: "rpc"; method: string }
-  | { id: string; source: "file"; path: string; pointer?: string }
-  | { id: string; source: "static"; value: unknown };
+export type WidgetManifestBinding = { id: string; source: "static"; value: unknown };
 
 export type WidgetManifest = {
   schemaVersion: 1;
@@ -191,21 +188,6 @@ function requireString(record: Record<string, unknown>, key: string, at: string)
   return value;
 }
 
-function optionalString(
-  record: Record<string, unknown>,
-  key: string,
-  at: string,
-): string | undefined {
-  const value = record[key];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error(`${at}.${key} must be a string`);
-  }
-  return value;
-}
-
 function assertIntegerRange(value: unknown, at: string, min: number, max: number): number {
   if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) {
     throw new Error(`${at} must be an integer from ${min} to ${max}`);
@@ -220,27 +202,11 @@ function validateBinding(value: unknown, at: string): WidgetManifestBinding {
     throw new Error(`${at}.id is invalid`);
   }
   const source = requireString(record, "source", at);
-  if (source === "rpc") {
-    assertKnownKeys(record, ["id", "source", "method"], at);
-    const method = requireString(record, "method", at);
-    if (!DATA_READ_RPC_ALLOWLIST.includes(method as (typeof DATA_READ_RPC_ALLOWLIST)[number])) {
-      throw new Error(`${at}.method is not allowlisted`);
-    }
-    return { id, source, method };
-  }
-  if (source === "file") {
-    assertKnownKeys(record, ["id", "source", "path", "pointer"], at);
-    const bindingPath = requireString(record, "path", at);
-    // Reuse the data-jail normalizer: rejects traversal / absolute / control chars.
-    normalizeDashboardDataLogicalPath(bindingPath);
-    const pointer = optionalString(record, "pointer", at);
-    return { id, source, path: bindingPath, ...(pointer !== undefined ? { pointer } : {}) };
-  }
   if (source === "static") {
     assertKnownKeys(record, ["id", "source", "value"], at);
     return { id, source, value: record.value };
   }
-  throw new Error(`${at}.source is invalid`);
+  throw new Error(`${at}.source must be static`);
 }
 
 function validateCapabilities(value: unknown): WidgetCapability[] {

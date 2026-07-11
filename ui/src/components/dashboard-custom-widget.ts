@@ -10,8 +10,9 @@
 // - The parent accepts a message ONLY when `event.source === iframe.contentWindow`
 //   (identity check; the sandboxed origin serializes as "null", so origin strings
 //   are never compared). All other windows are dropped.
-// - Parent→child posts use targetOrigin "*" (opaque origin) and carry only binding
-//   data / theme tokens the manifest entitles the widget to.
+// - Parent→child posts use targetOrigin "*" (opaque origin) and carry only static
+//   workspace values / theme tokens the manifest entitles the widget to. Privileged
+//   RPC/file data never enters agent-authored code: sandboxed children can navigate.
 
 import { html, type TemplateResult } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
@@ -19,11 +20,9 @@ import { directive } from "lit/directive.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createWidgetBridge,
-  isRpcMethodAllowed,
   type WidgetBridge,
   type WidgetOutboundMessage,
 } from "../lib/dashboard/bridge.ts";
-import { resolveBinding as resolveDashboardBinding } from "../lib/dashboard/index.ts";
 import type {
   DashboardBinding,
   DashboardWidget,
@@ -94,6 +93,26 @@ function primaryBindingByManifestId(
   return binding ?? null;
 }
 
+function parseManifestBinding(value: unknown): { id: string; binding: DashboardBinding } | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = record.id;
+  if (typeof id !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(id)) {
+    return null;
+  }
+  if (record.source === "static" && Object.hasOwn(record, "value")) {
+    return { id, binding: { source: "static", value: record.value } };
+  }
+  return null;
+}
+
+/** Custom code may receive only static workspace values granted by its manifest. */
+function bindingMatchesManifestGrant(binding: DashboardBinding, grant: DashboardBinding): boolean {
+  return binding.source === "static" && grant.source === "static";
+}
+
 /** Fetches and shapes a widget's manifest into the bridge's read model. */
 export async function loadWidgetManifestView(
   basePath: string,
@@ -116,14 +135,17 @@ export async function loadWidgetManifestView(
       return null;
     }
     const record = parsed as Record<string, unknown>;
-    const bindings = Array.isArray(record.bindings) ? record.bindings : [];
-    const bindingIds = bindings
-      .map((binding) =>
-        typeof binding === "object" && binding !== null
-          ? (binding as Record<string, unknown>).id
-          : undefined,
-      )
-      .filter((id): id is string => typeof id === "string");
+    const manifestBindings = Array.isArray(record.bindings) ? record.bindings : [];
+    // Binding ids may legally be `__proto__`; a null-prototype record represents
+    // every allowed id without invoking Object.prototype's legacy setter.
+    const bindings = Object.create(null) as Record<string, DashboardBinding>;
+    for (const value of manifestBindings) {
+      const parsed = parseManifestBinding(value);
+      if (!parsed || Object.hasOwn(bindings, parsed.id)) {
+        return null;
+      }
+      bindings[parsed.id] = parsed.binding;
+    }
     const capabilities = (Array.isArray(record.capabilities) ? record.capabilities : []).filter(
       (cap): cap is DashboardWidgetCapability => cap === "data:read" || cap === "prompt:send",
     );
@@ -133,7 +155,7 @@ export async function loadWidgetManifestView(
     if (!entrypoint) {
       return null;
     }
-    return { name, entrypoint, bindingIds, capabilities };
+    return { name, entrypoint, bindings, capabilities };
   } catch {
     return null;
   }
@@ -160,13 +182,12 @@ export function attachWidgetBridge(params: {
     manifest,
     post,
     assertBindingAllowed: (bindingId) => {
-      // Resolve-time defense-in-depth: an rpc binding may only name a method in the
-      // read allowlist, re-checked here before the parent ever calls the gateway on
-      // the widget's behalf (the write-time schema gate is the first line). A miss
-      // returns the same binding_denied the bridge uses for undeclared bindings, and
-      // the bridge then skips resolveBinding entirely (no gateway call).
+      // Agent-authored frames can navigate themselves despite their sandbox/CSP.
+      // Never place privileged RPC/file data in them; built-in widgets own those
+      // bindings. Static values are already agent/operator-authored workspace data.
       const binding = primaryBindingByManifestId(widget, bindingId);
-      if (binding?.source === "rpc" && !isRpcMethodAllowed(binding.method ?? "")) {
+      const grant = manifest.bindings[bindingId];
+      if (!binding || !grant || !bindingMatchesManifestGrant(binding, grant)) {
         return "binding_denied";
       }
       return null;
@@ -176,11 +197,10 @@ export function attachWidgetBridge(params: {
       if (!binding) {
         throw new Error(`binding not configured: ${bindingId}`);
       }
-      const result = await resolveDashboardBinding(context.client, binding);
-      if ("error" in result) {
-        throw new Error(result.error);
+      if (binding.source !== "static") {
+        throw new Error(`binding not allowed: ${bindingId}`);
       }
-      return result.value;
+      return binding.value;
     },
     resolveTheme: context.readThemeTokens ?? readThemeTokensFromRoot,
     confirmPrompt: async (text) => {

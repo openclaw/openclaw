@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   DashboardBindingResolutionError,
@@ -22,16 +22,6 @@ const MAX_FILE_BYTES = 1024 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function resolveDashboardDataPath(bindingPath: string, stateDir = resolveStateDir()): string {
-  const normalized = normalizeDashboardDataLogicalPath(bindingPath);
-  const dataRoot = path.resolve(stateDir, "dashboard", "data");
-  const candidate = path.resolve(dataRoot, normalized);
-  if (!(candidate === dataRoot || candidate.startsWith(`${dataRoot}${path.sep}`))) {
-    throw new DashboardBindingResolutionError("binding_invalid", "file binding path is invalid");
-  }
-  return candidate;
 }
 
 function readBinding(value: unknown): DashboardBinding {
@@ -103,24 +93,43 @@ async function resolveFileBinding(
   binding: Extract<DashboardBinding, { source: "file" }>,
   options: ResolveBindingOptions,
 ): Promise<unknown> {
-  const filePath = resolveDashboardDataPath(binding.path, options.stateDir);
-  let stat;
+  const logicalPath = normalizeDashboardDataLogicalPath(binding.path);
+  const stateDir = path.resolve(options.stateDir ?? resolveStateDir());
+  const dataRoot = path.join(stateDir, "dashboard", "data");
+  let content: string;
   try {
-    stat = await fs.stat(filePath);
+    const state = await fsRoot(stateDir);
+    const data = await fsRoot(dataRoot);
+    const expectedDataRoot = path.join(state.rootReal, "dashboard", "data");
+    // The data directory itself is part of the jail, not a trusted alias. Once
+    // this matches, fs-safe pins its canonical root and rejects later swaps.
+    if (data.rootReal !== expectedDataRoot) {
+      throw new DashboardBindingResolutionError("binding_invalid", "file binding path is invalid");
+    }
+    // The schema rejects leading `~/`, so this absolute path never invokes the
+    // shared root helper's home-expansion convenience.
+    const read = await data.readAbsolute(path.join(data.rootDir, logicalPath), {
+      hardlinks: "reject",
+      maxBytes: MAX_FILE_BYTES,
+      symlinks: "reject",
+    });
+    content = read.buffer.toString("utf8");
   } catch (error) {
+    if (error instanceof FsSafeError) {
+      if (error.code === "too-large") {
+        throw new DashboardBindingResolutionError("binding_too_large", "file binding is too large");
+      }
+      if (error.code === "not-found" || error.code === "not-file") {
+        throw new DashboardBindingResolutionError("binding_not_found", "file binding not found");
+      }
+      throw new DashboardBindingResolutionError("binding_invalid", "file binding path is invalid");
+    }
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new DashboardBindingResolutionError("binding_not_found", "file binding not found");
     }
     throw error;
   }
-  if (!stat.isFile()) {
-    throw new DashboardBindingResolutionError("binding_not_found", "file binding not found");
-  }
-  if (stat.size > MAX_FILE_BYTES) {
-    throw new DashboardBindingResolutionError("binding_too_large", "file binding is too large");
-  }
-  const content = await fs.readFile(filePath, "utf8");
-  const extension = path.extname(filePath).toLowerCase();
+  const extension = path.extname(logicalPath).toLowerCase();
   if (extension === ".md" || extension === ".csv") {
     return content;
   }

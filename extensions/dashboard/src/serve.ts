@@ -22,10 +22,11 @@ import type { DashboardStore } from "./store.js";
 
 export const WIDGETS_ROUTE_PREFIX = "/plugins/dashboard/widgets";
 
-// Spec §Server side: strict CSP on every widget response. `connect-src 'none'` is
-// the structural backstop that makes "no network" a property of the frame, not a
-// convention. `frame-ancestors 'self'` keeps the frame embeddable only by the
-// Control UI.
+// Spec §Server side: strict CSP on every widget response. `connect-src 'none'`
+// blocks script networking and `frame-ancestors 'self'` keeps the frame embeddable
+// only by the Control UI. Custom code receives only static workspace values: a
+// sandboxed child can navigate itself, so privileged RPC/file data stays in the
+// trusted built-in renderers.
 export const WIDGET_CSP =
   "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; " +
   "style-src 'self' 'unsafe-inline'; " +

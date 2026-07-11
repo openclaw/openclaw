@@ -181,7 +181,7 @@ export function isWellFormedInbound(
 export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
   const now = deps.now ?? (() => Date.now());
   const getDataTimeoutMs = deps.getDataTimeoutMs ?? DEFAULT_GET_DATA_TIMEOUT_MS;
-  const declaredBindingIds = new Set(deps.manifest.bindingIds);
+  const declaredBindingIds = new Set(Object.keys(deps.manifest.bindings));
   const capabilities = new Set(deps.manifest.capabilities);
   let dropped = 0;
   let disposed = false;
