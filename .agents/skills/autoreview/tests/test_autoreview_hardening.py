@@ -87,6 +87,26 @@ class AutoreviewHardeningTests(unittest.TestCase):
             self.assertIn("## image.bin\n[binary file omitted]", bundle)
             self.assertTrue(truncated)
 
+    def test_tracked_binary_changes_are_blocked_in_all_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            binary = repo / "artifact.bin"
+            binary.write_bytes(b"\0base")
+            git(repo, "add", "artifact.bin")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+
+            binary.write_bytes(b"\0changed")
+            git(repo, "add", "artifact.bin")
+            with self.assertRaisesRegex(SystemExit, "refusing binary changes"):
+                self.helper["local_bundle"](repo)
+
+            git(repo, "commit", "-q", "-m", "binary change")
+            with self.assertRaisesRegex(SystemExit, "refusing binary changes"):
+                self.helper["commit_bundle"](repo, "HEAD")
+            with self.assertRaisesRegex(SystemExit, "refusing binary changes"):
+                self.helper["branch_bundle"](repo, base)
+
     def test_codex_config_rejects_capability_bearing_overrides(self) -> None:
         for override in (
             'mcp_servers.review.command="touch /tmp/owned"',
@@ -225,6 +245,17 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
             self.assertIn(rel, paths)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires raw non-UTF-8 filename support")
+    def test_git_path_list_rejects_non_utf8_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            rel = os.fsdecode(b"invalid-\xff.txt")
+            (repo / rel).write_text("content\n", encoding="utf-8")
+            git(repo, "add", "--", rel)
+
+            with self.assertRaisesRegex(SystemExit, "non-UTF-8 Git output"):
+                self.helper["git_path_list"](repo, "ls-files", "-z")
+
     def test_review_patch_rejects_oversized_content(self) -> None:
         with self.assertRaisesRegex(SystemExit, "too large to review safely"):
             self.helper["validate_review_patch"]("local staged diff", ["safe.txt"], "x" * 25, 10)
@@ -273,6 +304,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             "private/parser.py",
             ".agents/skills/openclaw-secret-scanning-maintainer/SKILL.md",
             "design-tokens/colors.json",
+            "tokens/default.json",
             "token_count/generated.py",
             ".docker/Dockerfile",
             ".docker/scripts/build.sh",
@@ -650,8 +682,12 @@ class AutoreviewHardeningTests(unittest.TestCase):
             repo = init_repo(Path(tempdir))
             (repo / "AGENTS.md").write_text("hostile instructions\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(SystemExit, "droid engine is unavailable"):
+            with self.assertRaisesRegex(
+                SystemExit,
+                r"droid engine is unavailable.*use codex, claude, or pi",
+            ) as error:
                 self.helper["run_droid"](argparse.Namespace(), repo, "prompt")
+            self.assertNotIn("opencode", str(error.exception))
 
     def test_prompt_file_keeps_recoverable_repo_path(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -747,6 +783,16 @@ class AutoreviewHardeningTests(unittest.TestCase):
             self.assertIn("[truncated at 180000 characters]", text)
             self.assertNotEqual(text, "[binary file omitted]")
 
+    def test_read_text_marks_unreadable_input_incomplete(self) -> None:
+        with mock.patch.dict(
+            self.helper["read_text_with_status"].__globals__,
+            {"read_prefix": lambda *_args: (_ for _ in ()).throw(SystemExit("denied"))},
+        ):
+            text, incomplete = self.helper["read_text_with_status"](Path("blocked"))
+
+        self.assertIn("[unreadable:", text)
+        self.assertTrue(incomplete)
+
     def test_evidence_file_must_be_repo_relative_and_not_symlinked(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -812,12 +858,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 os.environ["OPENROUTER_API_KEY"] = "test-provider-key"
                 os.environ["GITHUB_TOKEN"] = "test-token-placeholder"
                 os.environ["HTTPS_PROXY"] = "http://proxy.example.invalid:8080"
-                os.environ["HTTP_PROXY"] = (
-                    "http://review-user:review-password@proxy.example.invalid:8080"
-                )
-                os.environ["ALL_PROXY"] = (
-                    "socks5://review-user:review-password@proxy.example.invalid:1080"
-                )
+                os.environ["HTTP_PROXY"] = "proxy.example.invalid:8080"
+                os.environ["ALL_PROXY"] = "socks5://proxy.example.invalid:1080"
                 os.environ["DO_NOT_TRACK"] = "1"
                 os.environ["DISABLE_TELEMETRY"] = "1"
                 os.environ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
@@ -848,8 +890,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 self.assertNotIn("COPILOT_ALLOW_ALL", env)
                 self.assertNotIn("GITHUB_TOKEN", env)
                 self.assertEqual(env["HTTPS_PROXY"], "http://proxy.example.invalid:8080")
-                self.assertNotIn("HTTP_PROXY", env)
-                self.assertNotIn("ALL_PROXY", env)
+                self.assertEqual(env["HTTP_PROXY"], "proxy.example.invalid:8080")
+                self.assertEqual(env["ALL_PROXY"], "socks5://proxy.example.invalid:1080")
                 self.assertEqual(env["DO_NOT_TRACK"], "1")
                 self.assertEqual(env["DISABLE_TELEMETRY"], "1")
                 self.assertEqual(env["CODEX_HOME"], "/tmp/codex-auth")
@@ -864,6 +906,10 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 self.assertEqual(
                     claude_env["CLAUDE_CONFIG_DIR"],
                     "/tmp/claude-auth",
+                )
+                self.assertEqual(
+                    claude_env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"],
+                    "1",
                 )
                 self.assertEqual(pi_env["PI_CODING_AGENT_DIR"], "/tmp/pi-auth")
                 self.assertEqual(claude_env["CLAUDE_CODE_USE_FOUNDRY"], "1")
@@ -917,6 +963,20 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertFalse(self.helper["safe_proxy_url"](value))
 
+    def test_safe_engine_env_rejects_credentialed_proxy(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir, mock.patch.dict(
+            os.environ,
+            {
+                "HTTPS_PROXY": (
+                    "http://review-user:review-password@proxy.example.invalid:8080"
+                )
+            },
+            clear=False,
+        ):
+            repo = init_repo(Path(tempdir))
+            with self.assertRaisesRegex(SystemExit, "credentialed or malformed proxy"):
+                self.helper["safe_engine_env"](repo, engine="codex")
+
     def test_safe_temp_root_rejects_reviewed_repo_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
@@ -961,6 +1021,71 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 "2.1.170",
             ):
                 self.helper["ensure_claude_isolation_supported"](args, repo)
+
+    def test_claude_runs_outside_repo_with_auto_memory_disabled(self) -> None:
+        args = argparse.Namespace(
+            claude_allowed_tools=None,
+            claude_bin="claude",
+            fallback_model=None,
+            model=None,
+            stream_engine_output=False,
+            thinking=None,
+            tools=False,
+            web_search=False,
+        )
+        observed: dict[str, object] = {}
+
+        def fake_run(
+            _cmd: list[str],
+            cwd: Path,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            observed["cwd"] = cwd
+            observed["env"] = kwargs["env"]
+            return subprocess.CompletedProcess([], 0, "{}", "")
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            with mock.patch.dict(
+                self.helper["run_claude"].__globals__,
+                {
+                    "ensure_claude_isolation_supported": lambda *_args: None,
+                    "resolve_command": lambda *_args: "/usr/bin/claude",
+                    "run_with_heartbeat": fake_run,
+                    "safe_engine_env": lambda *_args, **_kwargs: {
+                        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"
+                    },
+                },
+            ):
+                self.helper["run_claude"](args, repo, "prompt")
+
+            self.assertFalse(
+                self.helper["is_within"](observed["cwd"], repo.resolve())
+            )
+            self.assertEqual(
+                observed["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"],
+                "1",
+            )
+
+    def test_build_prompt_rejects_secret_like_git_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            secret = "ghp_" + "A" * 24
+            git(repo, "checkout", "-q", "-b", f"feature/{secret}")
+
+            with self.assertRaisesRegex(SystemExit, "secret-like content"):
+                self.helper["build_prompt"](repo, "local", None, "diff", "", "")
+
+            git(repo, "checkout", "-q", "-B", "safe-branch")
+            with self.assertRaisesRegex(SystemExit, "secret-like content"):
+                self.helper["build_prompt"](
+                    repo,
+                    "branch",
+                    f"origin/{secret}",
+                    "diff",
+                    "",
+                    "",
+                )
 
     def test_codex_env_rejects_executable_dbus_transport(self) -> None:
         old = os.environ.copy()
@@ -1291,12 +1416,16 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
-            with self.assertRaisesRegex(SystemExit, "ignored repository secrets"):
+            with self.assertRaisesRegex(
+                SystemExit,
+                r"ignored repository secrets; use codex, claude, or pi",
+            ) as error:
                 self.helper["run_copilot"](
                     args,
                     repo,
                     "Repository root: .\n\nprompt",
                 )
+            self.assertNotIn("opencode", str(error.exception))
 
     def test_claude_inventory_is_bundle_and_web_only(self) -> None:
         args = argparse.Namespace(
