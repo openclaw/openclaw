@@ -176,8 +176,8 @@ export function createImageLifecycleCore() {
   }));
   // Keep the mock arity aligned with PluginRuntime.saveRemoteMedia so
   // mockImplementation callbacks that inspect timeout options typecheck.
-  const saveRemoteMediaMock = vi.fn(
-    async (_params: Parameters<PluginRuntime["channel"]["media"]["saveRemoteMedia"]>[0]) => ({
+  const saveRemoteMediaMock = vi.fn<PluginRuntime["channel"]["media"]["saveRemoteMedia"]>(
+    async (_params) => ({
       path: "/tmp/zalo-photo.jpg",
       contentType: "image/jpeg",
     }),
