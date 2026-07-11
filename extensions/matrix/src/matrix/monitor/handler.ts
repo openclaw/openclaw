@@ -27,6 +27,7 @@ import {
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   isFutureDateTimestampMs,
@@ -43,6 +44,7 @@ import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   CoreConfig,
   MatrixConfig,
@@ -433,7 +435,7 @@ function formatMatrixToolProgressMarkdownCode(text: string): string {
   const clipped =
     text.length <= MATRIX_TOOL_PROGRESS_MAX_CHARS
       ? text
-      : `${text.slice(0, MATRIX_TOOL_PROGRESS_MAX_CHARS - 1).trimEnd()}...`;
+      : `${truncateUtf16Safe(text, MATRIX_TOOL_PROGRESS_MAX_CHARS - 1).trimEnd()}...`;
   const safe = clipped.replaceAll("`", "'");
   return `\`${safe}\``;
 }
@@ -529,7 +531,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     logVerboseMessage,
   });
   const roomHistoryTracker = createRoomHistoryTracker();
-  const roomIngressTails = new Map<string, Promise<void>>();
+  const roomIngressQueue = new KeyedAsyncQueue();
   const sharedDmContextNoticeRooms = new Set<string>();
 
   const readStoreAllowFrom = async (): Promise<string[]> => {
@@ -576,22 +578,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   };
 
   const runRoomIngress = async <T>(roomId: string, task: () => Promise<T>): Promise<T> => {
-    const previous = roomIngressTails.get(roomId) ?? Promise.resolve();
-    let releaseCurrent!: () => void;
-    const current = new Promise<void>((resolve) => {
-      releaseCurrent = resolve;
-    });
-    const chain = previous.catch(() => {}).then(() => current);
-    roomIngressTails.set(roomId, chain);
-    await previous.catch(() => {});
-    try {
-      return await task();
-    } finally {
-      releaseCurrent();
-      if (roomIngressTails.get(roomId) === chain) {
-        roomIngressTails.delete(roomId);
-      }
-    }
+    return await roomIngressQueue.enqueue(roomId, task);
   };
 
   return async (roomId: string, event: MatrixRawEvent) => {
@@ -683,7 +670,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return undefined;
         }
         if (eventId && inboundDeduper) {
-          claimedInboundEvent = inboundDeduper.claimEvent({ roomId, eventId });
+          claimedInboundEvent = await inboundDeduper.claimEvent({ roomId, eventId });
           if (!claimedInboundEvent) {
             logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
             return undefined;
@@ -1670,7 +1657,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         logVerboseMessage(`matrix: drop reply context (mode=${contextVisibilityMode})`);
       }
 
-      const preview = bodyText.slice(0, 200).replace(/\n/g, "\\n");
+      const preview = truncateUtf16Safe(bodyText, 200).replace(/\n/g, "\\n");
       logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} preview="${preview}"`);
 
       const replyTarget = ctxPayload.To;

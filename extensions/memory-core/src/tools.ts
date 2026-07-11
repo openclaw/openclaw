@@ -1,6 +1,9 @@
 // Memory Core plugin module implements tools behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemoryReadResult,
+  MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   asToolParamsRecord,
   jsonResult,
@@ -187,13 +190,32 @@ function buildPausedMemoryIndexUnavailableResult(reason: string) {
   });
 }
 
-function sortMemorySearchToolResults<T extends { score: number; path: string }>(results: T[]): T[] {
-  return results.toSorted((left, right) => {
-    if (left.score !== right.score) {
-      return right.score - left.score;
+function mergeRankedMemorySearchToolStreams(
+  memoryResults: MemorySearchToolResult[],
+  supplementResults: MemorySearchToolResult[],
+): MemorySearchToolResult[] {
+  const merged: MemorySearchToolResult[] = [];
+  let memoryIndex = 0;
+  let supplementIndex = 0;
+  // Each backend owns its ranking. Memory scores intentionally omit some
+  // precedence facts, so compare only stream heads and never reorder a stream.
+  while (memoryIndex < memoryResults.length && supplementIndex < supplementResults.length) {
+    const memory = memoryResults[memoryIndex];
+    const supplement = supplementResults[supplementIndex];
+    if ((memory?.score ?? 0) >= (supplement?.score ?? 0)) {
+      if (memory) {
+        merged.push(memory);
+      }
+      memoryIndex += 1;
+    } else {
+      if (supplement) {
+        merged.push(supplement);
+      }
+      supplementIndex += 1;
     }
-    return left.path.localeCompare(right.path);
-  });
+  }
+  merged.push(...memoryResults.slice(memoryIndex), ...supplementResults.slice(supplementIndex));
+  return merged;
 }
 
 function mergeMemorySearchCorpusResults(params: {
@@ -202,29 +224,35 @@ function mergeMemorySearchCorpusResults(params: {
   maxResults: number;
   balanceCorpora: boolean;
 }): MemorySearchToolResult[] {
-  const memoryResults = sortMemorySearchToolResults(params.memoryResults);
-  const supplementResults = sortMemorySearchToolResults(params.supplementResults);
+  const memoryResults = params.memoryResults;
+  const supplementResults = params.supplementResults;
   if (!params.balanceCorpora || memoryResults.length === 0 || supplementResults.length === 0) {
-    return sortMemorySearchToolResults([...memoryResults, ...supplementResults]).slice(
+    return mergeRankedMemorySearchToolStreams(memoryResults, supplementResults).slice(
       0,
       params.maxResults,
     );
   }
 
   const perCorpusCap = Math.ceil(params.maxResults / 2);
-  const selectedMemory = memoryResults.slice(0, perCorpusCap);
-  const selectedSupplements = supplementResults.slice(0, perCorpusCap);
-  const selected = [...selectedMemory, ...selectedSupplements];
-  if (selected.length < params.maxResults) {
-    selected.push(
-      ...sortMemorySearchToolResults([
-        ...memoryResults.slice(selectedMemory.length),
-        ...supplementResults.slice(selectedSupplements.length),
-      ]).slice(0, params.maxResults - selected.length),
-    );
+  let memoryTake = Math.min(perCorpusCap, memoryResults.length);
+  let supplementTake = Math.min(perCorpusCap, supplementResults.length);
+  while (memoryTake + supplementTake < params.maxResults) {
+    const memory = memoryResults[memoryTake];
+    const supplement = supplementResults[supplementTake];
+    if (!memory && !supplement) {
+      break;
+    }
+    if (!supplement || (memory && memory.score >= supplement.score)) {
+      memoryTake += 1;
+    } else {
+      supplementTake += 1;
+    }
   }
 
-  return sortMemorySearchToolResults(selected).slice(0, params.maxResults);
+  return mergeRankedMemorySearchToolStreams(
+    memoryResults.slice(0, memoryTake),
+    supplementResults.slice(0, supplementTake),
+  ).slice(0, params.maxResults);
 }
 
 function isClosedMemoryStoreError(error: unknown): boolean {
@@ -316,14 +344,18 @@ async function getSupplementMemoryReadResult(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all";
 }) {
   const supplement = await getMemoryCorpusSupplementResult({
     lookup: params.relPath,
     fromLine: params.from,
     lineCount: params.lines,
+    agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
     corpus: params.corpus,
   });
   if (!supplement) {
@@ -342,34 +374,64 @@ async function resolveMemoryReadFailureResult(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 }) {
   if (params.requestedCorpus === "all") {
-    const supplement = await getSupplementMemoryReadResult({
-      relPath: params.relPath,
-      from: params.from,
-      lines: params.lines,
-      agentSessionKey: params.agentSessionKey,
-      corpus: params.requestedCorpus,
-    });
-    if (supplement) {
-      return jsonResult(supplement);
+    try {
+      const supplement = await getSupplementMemoryReadResult({
+        relPath: params.relPath,
+        from: params.from,
+        lines: params.lines,
+        agentId: params.agentId,
+        agentSessionKey: params.agentSessionKey,
+        sandboxed: params.sandboxed,
+        corpus: params.requestedCorpus,
+      });
+      if (supplement) {
+        return jsonResult(supplement);
+      }
+    } catch {
+      // Supplement lookup is best-effort after the primary memory read failed.
+      // Preserve the original structured error instead of rejecting the tool call.
     }
   }
   const message = formatErrorMessage(params.error);
   return jsonResult({ path: params.relPath, text: "", disabled: true, error: message });
 }
 
-async function executeMemoryReadResult<T>(params: {
-  read: () => Promise<T>;
+function isMissingMemoryReadResult(result: MemoryReadResult, relPath: string): boolean {
+  return result.path === relPath && result.text === "" && result.from === undefined;
+}
+
+async function executeMemoryReadResult(params: {
+  read: () => Promise<MemoryReadResult>;
   requestedCorpus?: "memory" | "wiki" | "all";
   relPath: string;
   from?: number;
   lines?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 }) {
   try {
-    return jsonResult(await params.read());
+    const result = await params.read();
+    if (params.requestedCorpus === "all" && isMissingMemoryReadResult(result, params.relPath)) {
+      const supplement = await getSupplementMemoryReadResult({
+        relPath: params.relPath,
+        from: params.from,
+        lines: params.lines,
+        agentId: params.agentId,
+        agentSessionKey: params.agentSessionKey,
+        sandboxed: params.sandboxed,
+        corpus: params.requestedCorpus,
+      });
+      if (supplement) {
+        return jsonResult(supplement);
+      }
+    }
+    return jsonResult(result);
   } catch (error) {
     return await resolveMemoryReadFailureResult({
       error,
@@ -377,7 +439,9 @@ async function executeMemoryReadResult<T>(params: {
       relPath: params.relPath,
       from: params.from,
       lines: params.lines,
+      agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
+      sandboxed: params.sandboxed,
     });
   }
 }
@@ -652,7 +716,9 @@ export function createMemorySearchTool(options: {
                       await searchMemoryCorpusSupplements({
                         query,
                         maxResults,
+                        agentId,
                         agentSessionKey: options.agentSessionKey,
+                        sandboxed: options.sandboxed,
                         corpus: requestedCorpus,
                       }),
                   )
@@ -708,6 +774,7 @@ export function createMemoryGetTool(options: {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 }) {
   return createMemoryTool({
     options,
@@ -734,7 +801,9 @@ export function createMemoryGetTool(options: {
             relPath,
             from: from ?? undefined,
             lines: lines ?? undefined,
+            agentId,
             agentSessionKey: options.agentSessionKey,
+            sandboxed: options.sandboxed,
             corpus: requestedCorpus,
           });
           return jsonResult(
@@ -761,7 +830,9 @@ export function createMemoryGetTool(options: {
             relPath,
             from: from ?? undefined,
             lines: lines ?? undefined,
+            agentId,
             agentSessionKey: options.agentSessionKey,
+            sandboxed: options.sandboxed,
           });
         }
         const memory = await getMemoryManagerContextWithPurpose({
@@ -783,7 +854,9 @@ export function createMemoryGetTool(options: {
           relPath,
           from: from ?? undefined,
           lines: lines ?? undefined,
+          agentId,
           agentSessionKey: options.agentSessionKey,
+          sandboxed: options.sandboxed,
         });
       },
   });

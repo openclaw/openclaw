@@ -241,7 +241,10 @@ export function parseArgs(argv) {
     "OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS",
     DEFAULT_MAX_WORKSPACE_REG_FDS,
   );
-  options.invokeTimeoutMs ??= readTimerTimeoutNumberEnv("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS", 30_000);
+  options.invokeTimeoutMs ??= readTimerTimeoutNumberEnv(
+    "OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS",
+    30_000,
+  );
   options.sampleDelayMs ??= readTimerTimeoutNumberEnv(
     "OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS",
     1_000,
@@ -331,7 +334,6 @@ export function writeConfig({ homeDir, workspaceDir, port, token }) {
   const configDir = path.join(homeDir, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
   const configPath = path.join(configDir, "openclaw.json");
-  const indexPath = path.join(configDir, "memory", "main.sqlite");
   const config = {
     agents: {
       defaults: {
@@ -340,7 +342,6 @@ export function writeConfig({ homeDir, workspaceDir, port, token }) {
           provider: "none",
           model: "",
           store: {
-            path: indexPath,
             vector: { enabled: false },
           },
           sync: {

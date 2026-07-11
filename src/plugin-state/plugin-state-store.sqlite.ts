@@ -21,6 +21,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import {
   PluginStateStoreError,
   type PluginStateEntry,
+  type PluginStateOverflowPolicy,
   type PluginStateStoreErrorCode,
   type PluginStateStoreOperation,
   type PluginStateStoreProbeResult,
@@ -376,9 +377,13 @@ function enforcePostRegisterLimits(params: {
   pluginId: string;
   namespace: string;
   maxEntries: number;
+  overflowPolicy: PluginStateOverflowPolicy;
   now: number;
   protectedKey: string;
 }): void {
+  if (params.overflowPolicy === "reject-new") {
+    return;
+  }
   const namespaceCount = countLivePluginStateNamespaceEntries(params.store.db, {
     pluginId: params.pluginId,
     namespace: params.namespace,
@@ -425,6 +430,45 @@ function enforcePostRegisterLimits(params: {
   }
 }
 
+function assertCanInsertPluginStateEntry(params: {
+  store: PluginStateDatabase;
+  pluginId: string;
+  namespace: string;
+  maxEntries: number;
+  overflowPolicy: PluginStateOverflowPolicy;
+  now: number;
+}): void {
+  if (params.overflowPolicy !== "reject-new") {
+    return;
+  }
+  const namespaceCount = countLivePluginStateNamespaceEntries(params.store.db, {
+    pluginId: params.pluginId,
+    namespace: params.namespace,
+    now: params.now,
+  });
+  if (namespaceCount >= params.maxEntries) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      operation: "register",
+      message: `Plugin state namespace ${params.namespace} for ${params.pluginId} reached its ${params.maxEntries}-row limit.`,
+      path: params.store.path,
+    });
+  }
+  const maxPluginEntries = resolveMaxPluginStateEntriesPerPlugin();
+  const pluginCount = countLivePluginStateEntries(params.store.db, {
+    pluginId: params.pluginId,
+    now: params.now,
+  });
+  if (pluginCount >= maxPluginEntries) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      operation: "register",
+      message: `Plugin state for ${params.pluginId} reached the ${maxPluginEntries} live row limit.`,
+      path: params.store.path,
+    });
+  }
+}
+
 function resolveMaxPluginStateEntriesPerPlugin(): number {
   return maxPluginStateEntriesPerPluginForTests ?? MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN;
 }
@@ -435,6 +479,7 @@ export function pluginStateRegister(params: {
   key: string;
   valueJson: string;
   maxEntries: number;
+  overflowPolicy: PluginStateOverflowPolicy;
   ttlMs?: number;
   env?: NodeJS.ProcessEnv;
 }): void {
@@ -454,6 +499,22 @@ export function pluginStateRegister(params: {
           namespace: params.namespace,
           now,
         });
+        const existing = selectPluginStateEntry(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          now,
+        });
+        if (!existing) {
+          assertCanInsertPluginStateEntry({
+            store,
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            maxEntries: params.maxEntries,
+            overflowPolicy: params.overflowPolicy,
+            now,
+          });
+        }
         upsertPluginStateEntry(
           store.db,
           bindPluginStateEntry({
@@ -470,6 +531,7 @@ export function pluginStateRegister(params: {
           pluginId: params.pluginId,
           namespace: params.namespace,
           maxEntries: params.maxEntries,
+          overflowPolicy: params.overflowPolicy,
           now,
           protectedKey: params.key,
         });
@@ -492,6 +554,7 @@ export function pluginStateRegisterIfAbsent(params: {
   key: string;
   valueJson: string;
   maxEntries: number;
+  overflowPolicy: PluginStateOverflowPolicy;
   ttlMs?: number;
   env?: NodeJS.ProcessEnv;
 }): boolean {
@@ -509,6 +572,23 @@ export function pluginStateRegisterIfAbsent(params: {
         deleteExpiredPluginStateNamespaceEntries(store.db, {
           pluginId: params.pluginId,
           namespace: params.namespace,
+          now,
+        });
+        const existing = selectPluginStateEntry(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          now,
+        });
+        if (existing) {
+          return false;
+        }
+        assertCanInsertPluginStateEntry({
+          store,
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          maxEntries: params.maxEntries,
+          overflowPolicy: params.overflowPolicy,
           now,
         });
         const inserted = insertPluginStateEntryIfAbsent(
@@ -530,6 +610,7 @@ export function pluginStateRegisterIfAbsent(params: {
           pluginId: params.pluginId,
           namespace: params.namespace,
           maxEntries: params.maxEntries,
+          overflowPolicy: params.overflowPolicy,
           now,
           protectedKey: params.key,
         });
@@ -552,6 +633,7 @@ export function pluginStateUpdate(params: {
   namespace: string;
   key: string;
   maxEntries: number;
+  overflowPolicy: PluginStateOverflowPolicy;
   updateValueJson: (current: unknown) => { valueJson: string; ttlMs?: number } | undefined;
   env?: NodeJS.ProcessEnv;
 }): boolean {
@@ -577,6 +659,16 @@ export function pluginStateUpdate(params: {
         if (!next) {
           return false;
         }
+        if (!existing) {
+          assertCanInsertPluginStateEntry({
+            store,
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            maxEntries: params.maxEntries,
+            overflowPolicy: params.overflowPolicy,
+            now,
+          });
+        }
         const expiresAt = resolvePluginStateExpiresAtMs({
           ttlMs: next.ttlMs,
           now,
@@ -599,6 +691,7 @@ export function pluginStateUpdate(params: {
           pluginId: params.pluginId,
           namespace: params.namespace,
           maxEntries: params.maxEntries,
+          overflowPolicy: params.overflowPolicy,
           now,
           protectedKey: params.key,
         });

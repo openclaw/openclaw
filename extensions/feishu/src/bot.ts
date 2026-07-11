@@ -1,6 +1,7 @@
 // Feishu plugin module implements bot behavior.
 import {
   buildChannelInboundEventContext,
+  formatInboundMediaUnavailableText,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
@@ -38,6 +39,7 @@ import {
   parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
+  resolveFeishuMediaFailurePresentation,
 } from "./bot-content.js";
 import {
   evaluateSupplementalContextVisibility,
@@ -48,7 +50,8 @@ import type { ClawdbotConfig, RuntimeEnv } from "./bot-runtime-api.js";
 import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
 import { getChatInfo } from "./chat.js";
 import { createFeishuClient } from "./client.js";
-import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
+import { resolveConfiguredFeishuGroupSessionScope } from "./conversation-id.js";
+import { finalizeFeishuMessageProcessing, recordProcessedFeishuMessage } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
@@ -86,8 +89,6 @@ const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
 const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const GROUP_NAME_CACHE_MAX_SIZE = 500; // hard cap
 
-type FeishuGroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
-
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
   failedCounts?: { final?: number };
@@ -110,26 +111,9 @@ function shouldSendNoVisibleReplyFallback(dispatchResult: {
   );
 }
 
-function resolveConfiguredFeishuGroupSessionScope(params: {
-  groupConfig?: {
-    groupSessionScope?: FeishuGroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-  };
-  feishuCfg?: {
-    groupSessionScope?: FeishuGroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-  };
-}): FeishuGroupSessionScope {
-  const legacyTopicSessionMode =
-    params.groupConfig?.topicSessionMode ?? params.feishuCfg?.topicSessionMode ?? "disabled";
-  return (
-    params.groupConfig?.groupSessionScope ??
-    params.feishuCfg?.groupSessionScope ??
-    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group")
-  );
-}
-
-function isFeishuTopicSessionScope(scope: FeishuGroupSessionScope): boolean {
+function isFeishuTopicSessionScope(
+  scope: ReturnType<typeof resolveConfiguredFeishuGroupSessionScope>,
+): boolean {
   return scope === "group_topic" || scope === "group_topic_sender";
 }
 
@@ -317,8 +301,9 @@ export function parseFeishuMessageEvent(
   };
 
   // Detect mention forward request: message mentions bot + at least one other user
-  if (isMentionForwardRequest(event, botOpenId)) {
-    const mentionTargets = extractMentionTargets(event, botOpenId);
+  const mentionForwardBotOpenId = botOpenId?.trim();
+  if (mentionForwardBotOpenId && isMentionForwardRequest(event, mentionForwardBotOpenId)) {
+    const mentionTargets = extractMentionTargets(event, mentionForwardBotOpenId);
     if (mentionTargets.length > 0) {
       ctx.mentionTargets = mentionTargets;
     }
@@ -1018,7 +1003,7 @@ export async function handleFeishuMessage(params: {
 
     // Resolve media from message
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
-    const mediaList = await resolveFeishuMediaList({
+    const mediaResolution = await resolveFeishuMediaList({
       cfg,
       messageId: ctx.messageId,
       messageType: event.message.message_type,
@@ -1027,6 +1012,19 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
+    const mediaList = mediaResolution.media;
+    const mediaFailurePresentation = resolveFeishuMediaFailurePresentation(
+      event.message.content,
+      event.message.message_type,
+    );
+    const mediaFailureContent =
+      mediaResolution.unavailableCount > 0
+        ? formatInboundMediaUnavailableText({
+            body: mediaFailurePresentation.unavailableBody ?? ctx.content,
+            mediaPlaceholder: mediaFailurePresentation.mediaPlaceholder,
+            notice: `[feishu ${mediaResolution.unavailableCount > 1 ? `${mediaResolution.unavailableCount} attachments` : "attachment"} unavailable]`,
+          })
+        : ctx.content;
     // Fetch quoted/replied message content before the empty-message guard
     // so a reply with only @bot (no text, no media) is not dropped when
     // the quoted message carries meaningful content.
@@ -1075,7 +1073,7 @@ export async function handleFeishuMessage(params: {
     // be empty" errors. Logging the skip avoids silent loss without polluting
     // the agent session. Quoted content is checked too so a reply-only @bot
     // with quoted context is not dropped.
-    if (!ctx.content.trim() && mediaList.length === 0 && !quotedContent?.trim()) {
+    if (!mediaFailureContent.trim() && mediaList.length === 0 && !quotedContent?.trim()) {
       log(
         `feishu[${account.accountId}]: skipping empty message (no text, no media, no quoted) from ${ctx.senderOpenId}`,
       );
@@ -1096,13 +1094,14 @@ export async function handleFeishuMessage(params: {
     const inboundMedia = toInboundMediaFacts(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     });
-    const agentFacingContent = audioTranscript ?? ctx.content;
+    const agentFacingContent = audioTranscript ?? mediaFailureContent;
+    const commandFacingContent = audioTranscript ?? ctx.content;
     const agentFacingCtx =
-      audioTranscript === undefined
+      agentFacingContent === ctx.content
         ? ctx
         : {
             ...ctx,
-            content: audioTranscript,
+            content: agentFacingContent,
           };
     const effectiveCommandProbeBody =
       audioTranscript === undefined
@@ -1417,6 +1416,7 @@ export async function handleFeishuMessage(params: {
         conversation: {
           kind: isGroup ? "group" : "direct",
           id: ctx.chatId,
+          nativeChannelId: ctx.chatId,
           label: isGroup && groupName && !isTopicSessionForThread ? groupName : undefined,
           threadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
         },
@@ -1434,8 +1434,8 @@ export async function handleFeishuMessage(params: {
           body: combinedBody,
           bodyForAgent: messageBody,
           inboundHistory,
-          rawBody: agentFacingContent,
-          commandBody: agentFacingContent,
+          rawBody: commandFacingContent,
+          commandBody: commandFacingContent,
         },
         access: {
           mentions: {
@@ -1534,7 +1534,7 @@ export async function handleFeishuMessage(params: {
       // Uses a shared "broadcast" namespace (not per-account) so the first handler
       // to reach this point claims the message; subsequent accounts skip.
       if (
-        !(await tryRecordMessagePersistent(messageDedupeKey ?? ctx.messageId, "broadcast", log))
+        !(await recordProcessedFeishuMessage(messageDedupeKey ?? ctx.messageId, "broadcast", log))
       ) {
         log(
           `feishu[${account.accountId}]: broadcast already claimed by another account for message ${ctx.messageId}; skipping`,

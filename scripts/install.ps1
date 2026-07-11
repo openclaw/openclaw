@@ -149,18 +149,33 @@ if ([string]::IsNullOrWhiteSpace($GitDir)) {
 }
 
 # Check for Node.js
+function Test-NodeVersionSupported {
+    param([string]$Version)
+
+    $versionMatch = [regex]::Match($Version, '^v?(?<major>\d+)\.(?<minor>\d+)\.')
+    if (-not $versionMatch.Success) {
+        return $false
+    }
+    $major = [int]$versionMatch.Groups["major"].Value
+    $minor = [int]$versionMatch.Groups["minor"].Value
+    if ($major -eq 22) {
+        return ($minor -ge 19)
+    }
+    if ($major -eq 23) {
+        return ($minor -ge 11)
+    }
+    return ($major -gt 23)
+}
+
 function Check-Node {
     try {
         $nodeVersion = (node -v 2>$null)
         if ($nodeVersion) {
-            $versionMatch = [regex]::Match($nodeVersion, '^v(?<major>\d+)\.(?<minor>\d+)\.')
-            $major = if ($versionMatch.Success) { [int]$versionMatch.Groups["major"].Value } else { 0 }
-            $minor = if ($versionMatch.Success) { [int]$versionMatch.Groups["minor"].Value } else { 0 }
-            if (($major -gt 22) -or (($major -eq 22) -and ($minor -ge 19))) {
+            if (Test-NodeVersionSupported -Version $nodeVersion) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
             } else {
-                Write-Host "[!] Node.js $nodeVersion found, but v22.19+ required" -ForegroundColor Yellow
+                Write-Host "[!] Node.js $nodeVersion found, but Node 22.19+, Node 23.11+, or Node 24+ is required" -ForegroundColor Yellow
                 return $false
             }
         }

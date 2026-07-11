@@ -24,6 +24,16 @@ export function registerGroupIntroPromptCases(): void {
       'If no response is needed, reply with exactly "NO_REPLY" (and nothing else) so OpenClaw stays silent.';
     const groupSilentProseGuard =
       'Any prose describing silence is wrong; the whole final answer must be only "NO_REPLY".';
+    const automaticGroupDeliveryGuidance = [
+      "Your text replies are automatically sent to this group chat unless the current-turn context says final replies stay private.",
+      "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
+      "Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+    ];
+    const automaticChannelDeliveryGuidance = [
+      "Your text replies are automatically sent to this channel unless the current-turn context says final replies stay private.",
+      "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
+      "Use message(action=send) only when you need to send files, images, or other attachments to this same channel/thread.",
+    ];
     const cases: GroupIntroCase[] = [
       {
         name: "discord",
@@ -55,7 +65,8 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "whatsapp",
         },
         expected: [
-          "You are in a WhatsApp group chat. Your text replies are automatically sent to this group chat. For ordinary text, do not use the message tool to send to this same destination; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+          "You are in a WhatsApp group chat.",
+          ...automaticGroupDeliveryGuidance,
           groupParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,
@@ -93,7 +104,7 @@ export function registerGroupIntroPromptCases(): void {
         },
         expected: [
           "You are in a Mattermost channel.",
-          "Your text replies are automatically sent to this channel. For ordinary text, do not use the message tool to send to this same destination; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same channel/thread.",
+          ...automaticChannelDeliveryGuidance,
           groupParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,

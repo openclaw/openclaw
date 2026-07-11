@@ -6,7 +6,7 @@ import { createDiscordRestClient } from "../client.js";
 import type { RequestClient } from "../internal/discord.js";
 import { sendTyping } from "./typing.js";
 
-export const DISCORD_REPLY_TYPING_MAX_DURATION_MS = 20 * 60_000;
+const DISCORD_REPLY_TYPING_MAX_DURATION_MS = 20 * 60_000;
 
 // Discord can keep long tool-heavy replies alive, but not forever.
 // The dispatch restart path refreshes this TTL after queue wait time.

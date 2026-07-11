@@ -62,12 +62,15 @@ extension AgentProTab {
 
     var agentFilters: some View {
         HStack(spacing: 10) {
-            Picker("Agent status", selection: self.$agentRosterFilter) {
+            Picker(selection: self.$agentRosterFilter) {
                 ForEach(AgentRosterFilter.allCases) { filter in
                     Text(filter.title)
                         .font(OpenClawType.captionSemiBold)
                         .tag(filter)
                 }
+            } label: {
+                Text("Agent status")
+                    .font(OpenClawType.captionSemiBold)
             }
             .pickerStyle(.segmented)
 
@@ -93,12 +96,15 @@ extension AgentProTab {
 
     var agentFilterMenu: some View {
         Menu {
-            Picker("Agent status", selection: self.$agentRosterFilter) {
+            Picker(selection: self.$agentRosterFilter) {
                 ForEach(AgentRosterFilter.allCases) { filter in
                     Label(filter.title, systemImage: filter.systemImage)
                         .font(OpenClawType.subhead)
                         .tag(filter)
                 }
+            } label: {
+                Text("Agent status")
+                    .font(OpenClawType.subhead)
             }
             if self.agentFiltersActive {
                 Divider()
@@ -187,6 +193,13 @@ extension AgentProTab {
                     detail: self.usageDetail,
                     color: self.gatewayConnected ? OpenClawBrand.accent : .secondary,
                     route: .usage)
+                self.metricTile(
+                    icon: "folder",
+                    title: "Files",
+                    value: self.activeAgentID,
+                    detail: "Workspace files",
+                    color: self.gatewayConnected ? OpenClawBrand.accent : .secondary,
+                    route: .files)
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
 

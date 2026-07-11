@@ -13,8 +13,10 @@ import {
   validateConnectParams,
   validateModelsListParams,
   validateNodeEventResult,
-  validateNodePairRequestParams,
+  validateNodePluginToolsUpdateParams,
+  validateNodeSkillsUpdateParams,
   validateNodePresenceAlivePayload,
+  validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
   validateTalkCatalogResult,
@@ -86,6 +88,90 @@ describe("lazy protocol validators", () => {
     expect(validateConnectParams.errors).toBeNull();
   });
 
+  it("rejects the removed connect-time node plugin tools surface", () => {
+    expect(
+      validateConnectParams({
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: {
+          id: "test",
+          version: "1.0.0",
+          platform: "test",
+          mode: "test",
+        },
+        nodePluginTools: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects provider-unsafe node plugin tool names", () => {
+    expect(
+      validateNodePluginToolsUpdateParams({
+        tools: [
+          {
+            pluginId: "demo",
+            name: "demo_echo",
+            description: "Echo through a node",
+            command: "demo.echo",
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodePluginToolsUpdateParams({
+        tools: [
+          {
+            pluginId: "demo",
+            name: "demo.echo",
+            description: "Invalid tool name",
+            command: "demo.echo",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("validates bounded node skill updates", () => {
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [
+          {
+            name: "release-helper",
+            description: "Prepare a release",
+            content: "---\nname: release-helper\ndescription: Prepare a release\n---\n\n# Release",
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [{ name: "Release Helper", description: "Invalid", content: "invalid" }],
+      }),
+    ).toBe(false);
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [
+          {
+            name: "oversized",
+            description: "Too large",
+            content: "x".repeat(64 * 1024 + 1),
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: Array.from({ length: 65 }, (_, index) => ({
+          name: `skill-${index}`,
+          description: "Too many",
+          content: "content",
+        })),
+      }),
+    ).toBe(false);
+  });
+
   it("accepts selected-agent scope on chat send, history, and abort params", () => {
     expect(
       validateChatHistoryParams({
@@ -118,6 +204,7 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         runId: "run-global-work",
+        preserveSideRuns: true,
       }),
     ).toBe(true);
     expect(
@@ -133,6 +220,13 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
     expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
+  });
+
+  it("accepts an IANA time zone for session usage while retaining UTC offsets", () => {
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "Europe/Vienna" })).toBe(true);
+    expect(validateSessionsUsageParams({ mode: "specific", utcOffset: "UTC+2" })).toBe(true);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "" })).toBe(false);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: 2 })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {
@@ -321,7 +415,12 @@ describe("validateTalkConfigResult", () => {
               instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
+              vadThreshold: 0.45,
+              silenceDurationMs: 650,
+              prefixPaddingMs: 250,
+              reasoningEffort: "low",
               brain: "agent-consult",
+              consultRouting: "force-agent-consult",
             },
           },
         },
@@ -750,6 +849,18 @@ describe("validateChatEvent", () => {
     ).toBe(true);
   });
 
+  it("accepts an argument-free diagnostic on aborted chat events", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-chat",
+        sessionKey: "agent:main:main",
+        seq: 2,
+        state: "aborted",
+        errorMessage: "edit tool validation failed: path: must be string",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects v3-style chat deltas without deltaText", () => {
     expect(
       validateChatEvent({
@@ -776,6 +887,12 @@ describe("validateChatSendParams", () => {
     };
 
     expect(validateChatSendParams(base)).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        expectedSessionRoutingContract: "per-sender|main|main",
+      }),
+    ).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
@@ -836,27 +953,6 @@ describe("validateNodePresenceAlivePayload", () => {
       validateNodePresenceAlivePayload({
         trigger: "silent_push",
         arbitrary: true,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("validateNodePairRequestParams", () => {
-  it("accepts node pairing permissions", () => {
-    expect(
-      validateNodePairRequestParams({
-        nodeId: "ios-node-1",
-        commands: ["canvas.snapshot"],
-        permissions: { camera: true, notifications: false },
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects non-boolean node pairing permissions", () => {
-    expect(
-      validateNodePairRequestParams({
-        nodeId: "ios-node-1",
-        permissions: { camera: "yes" },
       }),
     ).toBe(false);
   });

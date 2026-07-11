@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Installs context guards for oversized tool-result histories.
  */
@@ -164,8 +165,8 @@ function truncateTextToBudget(text: string, maxChars: number): string {
     cutPoint = newline;
   }
 
-  const omittedChars = text.length - cutPoint;
-  return text.slice(0, cutPoint) + formatContextLimitTruncationNotice(omittedChars);
+  const prefix = truncateUtf16Safe(text, cutPoint);
+  return prefix + formatContextLimitTruncationNotice(text.length - prefix.length);
 }
 
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {

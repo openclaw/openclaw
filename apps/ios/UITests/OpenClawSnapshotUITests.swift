@@ -45,7 +45,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.app = app
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["Security"].exists)
+        XCTAssertTrue(app.staticTexts["Security notice"].exists)
         let disclosure = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS[c] 'camera' AND label CONTAINS[c] 'trust the gateway and agent'")).firstMatch
         XCTAssertTrue(disclosure.exists)
@@ -125,6 +125,59 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(backgroundAllowed.waitForExistence(timeout: 5))
         Thread.sleep(forTimeInterval: 1)
         self.attachScreenshot(named: "location-always-granted-after-slow-prompt")
+    }
+
+    func testLocationWhileUsingStaysSelectedAfterSlowSystemPermissionResponse() throws {
+        XCUIApplication().resetAuthorizationStatus(for: .location)
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "location-while-using-slow-prompt"))
+
+        let permissions = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
+        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
+        permissions.tap()
+
+        let offMode = try XCTUnwrap(self.app?.buttons["Off"])
+        if !offMode.isSelected {
+            offMode.tap()
+            XCTAssertTrue(offMode.isSelected)
+        }
+        let whileUsingMode = try XCTUnwrap(self.app?.buttons["While Using"])
+        XCTAssertTrue(whileUsingMode.waitForExistence(timeout: 5))
+        whileUsingMode.tap()
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let prompt = springboard.alerts.firstMatch
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 3)
+        XCTAssertTrue(prompt.exists)
+        XCTAssertTrue(whileUsingMode.isSelected)
+        XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
+
+        let allow = prompt.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] 'While Using'")).firstMatch
+        XCTAssertTrue(allow.exists)
+        allow.tap()
+
+        self.app?.activate()
+        XCTAssertTrue(whileUsingMode.waitForExistence(timeout: 5))
+        XCTAssertTrue(whileUsingMode.isSelected)
+        XCTAssertFalse(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
+        let foregroundAllowed = try XCTUnwrap(self.app?.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Foreground location requests")).firstMatch)
+        XCTAssertTrue(foregroundAllowed.waitForExistence(timeout: 5))
+
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "location-while-using-relaunch"))
+        let relaunchedPermissions = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
+        XCTAssertTrue(relaunchedPermissions.waitForExistence(timeout: 8))
+        relaunchedPermissions.tap()
+        XCTAssertTrue(self.app?.buttons["While Using"].isSelected == true)
     }
 
     func testSettingsBackReturnsToOriginatingPhoneTab() throws {
@@ -291,6 +344,103 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.buttons["chat-gateway-status"].waitForExistence(timeout: 8) == true)
         XCTAssertTrue(self.app?.otherElements["chat-composer-surface"].exists == true)
         self.attachScreenshot(named: "chat-light")
+    }
+
+    func testEmptyChatStarterPromptSendsMessage() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-empty-starters"),
+            additionalArguments: ["--openclaw-empty-chat-fixture"])
+
+        let starter = try XCTUnwrap(self.app?.buttons["chat-starter-summarize-status"])
+        XCTAssertTrue(starter.waitForExistence(timeout: 8))
+        XCTAssertTrue(self.app?.staticTexts["What would you like to work on?"].exists == true)
+        self.attachScreenshot(named: "chat-empty-starters")
+
+        starter.tap()
+        let sentText = "Summarize the current OpenClaw status and tell me what needs attention."
+        let sentRows = self.app?.staticTexts.matching(NSPredicate(format: "label == %@", sentText))
+        XCTAssertTrue(sentRows?.firstMatch.waitForExistence(timeout: 5) == true)
+        XCTAssertEqual(sentRows?.count, 1)
+        XCTAssertTrue(
+            self.app?.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I can help with"))
+                .firstMatch.waitForExistence(timeout: 5) == true)
+        self.attachScreenshot(named: "chat-starter-response")
+    }
+
+    func testEmptyChatStarterPromptsLocalizeInGerman() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-empty-starters-german"),
+            additionalArguments: [
+                "--openclaw-empty-chat-fixture",
+                "-AppleLanguages",
+                "(de)",
+                "-AppleLocale",
+                "de_DE",
+            ])
+
+        XCTAssertTrue(self.app?.staticTexts["Woran möchtest du arbeiten?"].waitForExistence(timeout: 8) == true)
+        let starter = try XCTUnwrap(self.app?.buttons["OpenClaw-Status prüfen"])
+        XCTAssertTrue(starter.exists)
+        starter.tap()
+        XCTAssertTrue(
+            self.app?.staticTexts[
+                "Fasse den aktuellen OpenClaw-Status zusammen und sage mir, was Aufmerksamkeit erfordert.",
+            ].waitForExistence(timeout: 5) == true)
+        self.attachScreenshot(named: "chat-empty-starters-german")
+    }
+
+    func testOnboardingPairCommandAndCompletionOpenChat() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone onboarding proof only")
+        self.addUIInterruptionMonitor(withDescription: "Local network access") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap()
+            return true
+        }
+
+        let app = XCUIApplication()
+        setupSnapshot(app)
+        app.launchArguments += [
+            "--openclaw-reset-onboarding",
+            "--openclaw-initial-tab",
+            "settings",
+            "--openclaw-initial-destination",
+            "settings",
+        ]
+        app.launch()
+        self.app = app
+
+        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
+        app.tap()
+
+        let copySetupCommand = app.buttons["Copy setup code command"]
+        XCTAssertTrue(copySetupCommand.waitForExistence(timeout: 8))
+        copySetupCommand.tap()
+        XCTAssertEqual(copySetupCommand.value as? String, "Copied")
+        self.attachScreenshot(named: "onboarding-copy-setup-code-command")
+
+        app.buttons["Connect Manually"].tap()
+        let setupCode = app.textFields["Enter setup code"]
+        XCTAssertTrue(setupCode.waitForExistence(timeout: 5))
+        setupCode.tap()
+        setupCode.typeText("APPLE-REVIEW-DEMO")
+        app.buttons["Dismiss Keyboard"].tap()
+        app.buttons["Apply"].tap()
+
+        XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Apple Review Demo Gateway"].exists)
+        XCTAssertTrue(app.staticTexts["Local demo mode"].exists)
+        self.attachScreenshot(named: "onboarding-connected-go-to-chat")
+
+        app.buttons["Go to Chat"].tap()
+        XCTAssertTrue(app.tabBars.buttons["Chat"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["Chat"].isSelected)
     }
 
     func testTalkUsesNativeControls() throws {
@@ -525,29 +675,33 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
         app.tap()
-        XCTAssertTrue(app.buttons["Set Up Manually"].waitForExistence(timeout: 8))
-        app.buttons["Set Up Manually"].tap()
-        let developerMode = app.buttons["Developer mode"]
-        if developerMode.value as? String != "On" {
-            developerMode.tap()
-        }
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Same Machine (Dev)")).firstMatch.tap()
+        XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
+        app.buttons["Connect Manually"].tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Home Network")).firstMatch.tap()
         app.buttons["Continue"].tap()
+
+        let host = app.textFields["Host"]
+        XCTAssertTrue(host.waitForExistence(timeout: 5))
+        host.tap()
+        host.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 32) + "localhost")
 
         let port = app.textFields["Port"]
         XCTAssertTrue(port.waitForExistence(timeout: 5))
         port.tap()
         port.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "18920")
+        let unencrypted = app.buttons["Unencrypted"]
+        XCTAssertTrue(unencrypted.waitForExistence(timeout: 5))
+        unencrypted.tap()
         app.buttons["Connect"].tap()
 
         let tokenField = app.secureTextFields["Gateway Auth Token"]
         XCTAssertTrue(tokenField.waitForExistence(timeout: 20))
         tokenField.tap()
         tokenField.typeText(token)
-        app.buttons["Done"].tap()
+        app.buttons["Dismiss Keyboard"].tap()
         app.buttons["Retry Connection"].tap()
 
-        XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 30))
         self.attachScreenshot(named: "manual-auth-retry-connected")
     }
 
@@ -602,7 +756,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
     private func launchApp(
         for target: ScreenshotTarget,
         appearance: String? = "dark",
-        screenshotMode: Bool = true)
+        screenshotMode: Bool = true,
+        additionalArguments: [String] = [])
     {
         self.app?.terminate()
 
@@ -619,6 +774,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         if screenshotMode {
             app.launchArguments.append("--openclaw-screenshot-mode")
         }
+        app.launchArguments += additionalArguments
         if let appearance {
             app.launchArguments += ["--openclaw-appearance", appearance]
         }
@@ -671,20 +827,19 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
         app.tap()
-        XCTAssertTrue(app.buttons["Set Up Manually"].waitForExistence(timeout: 8))
-        app.buttons["Set Up Manually"].tap()
+        XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
+        app.buttons["Connect Manually"].tap()
 
-        let setupCodeField = app.textFields["Paste setup code"]
+        let setupCodeField = app.textFields["Enter setup code"]
         XCTAssertTrue(setupCodeField.waitForExistence(timeout: 5))
         setupCodeField.tap()
         setupCodeField.press(forDuration: 1)
         XCTAssertTrue(app.menuItems["Paste"].waitForExistence(timeout: 3))
         app.menuItems["Paste"].tap()
-        app.buttons["Done"].tap()
-        app.buttons["Apply Setup Code"].tap()
+        app.buttons["Apply"].tap()
 
-        XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 45))
-        app.buttons["Open OpenClaw"].tap()
+        XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 45))
+        app.buttons["Go to Chat"].tap()
         return app
     }
 

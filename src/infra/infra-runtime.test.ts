@@ -6,6 +6,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   testing,
@@ -136,6 +140,35 @@ describe("infra runtime", () => {
       await vi.runAllTimersAsync();
     });
 
+    it("holds root admission from scheduled emission until the signal is handled", async () => {
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+
+        markGatewaySigusr1RestartHandled();
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+        const root = tryBeginGatewayRootWorkAdmission();
+        expect(root).not.toBeNull();
+        root?.release();
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("backs off before an emoji that crosses the restart reason limit", () => {
+      const restart = scheduleGatewaySigusr1Restart({
+        delayMs: 0,
+        reason: "x".repeat(199) + "🧠tail",
+      });
+
+      expect(restart.reason).toBe("x".repeat(199));
+    });
+
     it("tracks external restart policy", () => {
       expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(false);
       setGatewaySigusr1RestartPolicy({ allowExternal: true });
@@ -230,19 +263,59 @@ describe("infra runtime", () => {
       }
     });
 
-    it("preserves update restart reason when a scheduled restart coalesces", async () => {
+    it.each(["update.run", "update.auto"] as const)(
+      "preserves %s restart reason when a scheduled restart coalesces",
+      async (reason) => {
+        const handler = () => {};
+        process.on("SIGUSR1", handler);
+        try {
+          const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "config.patch" });
+          const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason });
+
+          expect(first.coalesced).toBe(false);
+          expect(second.coalesced).toBe(true);
+
+          await vi.advanceTimersByTimeAsync(1_000);
+
+          expect(peekGatewaySigusr1RestartReason()).toBe(reason);
+        } finally {
+          process.removeListener("SIGUSR1", handler);
+        }
+      },
+    );
+
+    it("promotes update.auto while restart preparation is in flight", async () => {
+      let releasePreparation: () => void = () => {};
+      const preparationBlocked = new Promise<void>((resolve) => {
+        releasePreparation = resolve;
+      });
+      const beforeEmit = vi.fn(async () => {
+        await preparationBlocked;
+      });
       const handler = () => {};
       process.on("SIGUSR1", handler);
       try {
-        const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "config.patch" });
-        const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "update.run" });
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "config.patch",
+          emitHooks: { beforeEmit },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
 
-        expect(first.coalesced).toBe(false);
-        expect(second.coalesced).toBe(true);
+        const update = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.auto",
+          skipDeferral: true,
+        });
+        expect(update.coalesced).toBe(true);
 
-        await vi.advanceTimersByTimeAsync(1_000);
+        releasePreparation();
+        await Promise.resolve();
+        await Promise.resolve();
 
-        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.auto");
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -583,6 +656,7 @@ describe("infra runtime", () => {
 
       expect(beforeEmit).toHaveBeenCalledTimes(1);
       expect(afterEmitRejected).toHaveBeenCalledTimes(1);
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
     });
 
     it("still emits restart when preparation fails", async () => {

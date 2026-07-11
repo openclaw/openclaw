@@ -131,6 +131,7 @@ function humanizeId(value) {
     ["litellm", "LiteLLM"],
     ["llm", "LLM"],
     ["lmstudio", "LM Studio"],
+    ["longcat", "LongCat"],
     ["mdns", "mDNS"],
     ["minimax", "MiniMax"],
     ["modelstudio", "Model Studio"],
@@ -217,6 +218,7 @@ function resolveDescription({ manifest, packageJson }) {
     webContentExtractors: "Adds readable web content extraction.",
     webFetchProviders: "Adds web fetch provider support.",
     webSearchProviders: "Adds web search provider support.",
+    workerProviders: "Adds cloud worker provider support.",
   };
   const describedContracts = contracts
     .map((contract) => contractDescriptions[contract])

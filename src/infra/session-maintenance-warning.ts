@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { enqueueSystemEvent } from "./system-events.js";
 
@@ -18,7 +19,21 @@ type WarningParams = {
   warning: SessionMaintenanceWarning;
 };
 
+// Bound process-lifetime dedupe while keeping several agents' default 500-session
+// windows resident. Eviction can re-emit one warning for an old session.
+const MAX_WARNED_CONTEXTS = 4096;
 const warnedContexts = new Map<string, string>();
+
+function shouldSuppressWarning(sessionKey: string, contextKey: string): boolean {
+  const duplicate = warnedContexts.get(sessionKey) === contextKey;
+  // Refresh insertion order even for suppressed duplicates; otherwise active sessions
+  // become eviction candidates and can receive repeated warnings under key churn.
+  warnedContexts.delete(sessionKey);
+  warnedContexts.set(sessionKey, contextKey);
+  pruneMapToMaxSize(warnedContexts, MAX_WARNED_CONTEXTS);
+  return duplicate;
+}
+
 const log = createSubsystemLogger("session-maintenance-warning");
 const messageRuntimeLoader = createLazyPromiseLoader(
   () => import("../channels/message/runtime.js"),
@@ -54,20 +69,20 @@ function buildWarningContext(params: WarningParams): string {
 }
 
 function formatDuration(ms: number): string {
-  if (ms >= 86_400_000) {
-    const days = Math.round(ms / 86_400_000);
-    return `${days} day${days === 1 ? "" : "s"}`;
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) {
+    return `${secs} second${secs === 1 ? "" : "s"}`;
   }
-  if (ms >= 3_600_000) {
-    const hours = Math.round(ms / 3_600_000);
-    return `${hours} hour${hours === 1 ? "" : "s"}`;
-  }
-  if (ms >= 60_000) {
-    const mins = Math.round(ms / 60_000);
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) {
     return `${mins} minute${mins === 1 ? "" : "s"}`;
   }
-  const secs = Math.round(ms / 1000);
-  return `${secs} second${secs === 1 ? "" : "s"}`;
+  const hours = Math.round(ms / 3_600_000);
+  if (hours < 24) {
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  const days = Math.round(ms / 86_400_000);
+  return `${days} day${days === 1 ? "" : "s"}`;
 }
 
 function buildWarningText(warning: SessionMaintenanceWarning): string {
@@ -111,12 +126,11 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
 
   const contextKey = buildWarningContext(params);
-  if (warnedContexts.get(params.sessionKey) === contextKey) {
-    return;
-  }
   // Dedupe by effective warning context so repeated maintenance scans do not
   // spam the same session, but changed limits still produce a fresh warning.
-  warnedContexts.set(params.sessionKey, contextKey);
+  if (shouldSuppressWarning(params.sessionKey, contextKey)) {
+    return;
+  }
 
   const text = buildWarningText(params.warning);
   const target = resolveWarningDeliveryTarget(params.entry);

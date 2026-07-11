@@ -51,7 +51,7 @@ export function registerSetupCommand(program: Command): void {
     )
     .option(
       "--workspace <dir>",
-      "Agent workspace directory (default: ~/.openclaw/workspace; stored as agents.defaults.workspace)",
+      "Workspace proposal for guided setup; persisted by baseline/classic/non-interactive setup",
     )
     .option("--wizard", "Run interactive onboarding", false)
     .option(
@@ -65,6 +65,7 @@ export function registerSetupCommand(program: Command): void {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run onboarding without prompts", false)
+    .option("--classic", "Use the classic multi-step setup wizard", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
@@ -124,6 +125,7 @@ export function registerSetupCommand(program: Command): void {
             workspace: opts.workspace as string | undefined,
             nonInteractive: Boolean(opts.nonInteractive),
             acceptRisk: Boolean(opts.acceptRisk),
+            classic: Boolean(opts.classic),
             flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
             mode: opts.mode as "local" | "remote" | undefined,
             ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),

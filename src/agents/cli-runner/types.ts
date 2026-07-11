@@ -1,7 +1,10 @@
 /**
  * Shared types for preparing and executing CLI-backed agent runs.
  */
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
@@ -21,6 +24,7 @@ import type {
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
@@ -32,6 +36,7 @@ import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
 } from "../embedded-agent-runner/run/params.js";
+import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
@@ -39,16 +44,24 @@ import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Session identity used only for sandbox and tool-policy resolution. */
+  runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
   agentId?: string;
   trigger?: EmbeddedRunTrigger;
   sessionFile: string;
   workspaceDir: string;
+  /** Trusted model/auth owner directory. Defaults to the session agent directory. */
+  agentDir?: string;
   /** Task working directory for CLI execution. Defaults to workspaceDir. */
   cwd?: string;
+  /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
+  disableCliLiveSession?: boolean;
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  /** Undecorated current-turn prompt used to merge inline and offloaded images. */
+  imagePrompt?: string;
   /**
    * Execution mode for the generic CLI runner. Side questions are one-shot
    * background answers and must not reuse or mutate normal agent sessions.
@@ -64,6 +77,8 @@ export type RunCliAgentParams = {
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;
+  /** Selected model provider used for tool policy; distinct from a CLI runtime id. */
+  modelProvider?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -89,6 +104,7 @@ export type RunCliAgentParams = {
   jobId?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   allowEmptyAssistantReplyAsSilent?: boolean;
@@ -100,6 +116,17 @@ export type RunCliAgentParams = {
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
   authProfileId?: string;
+  /** Private seam: report the credential/runtime owner only after a successful real turn. */
+  onSuccessfulAuthBinding?: (binding: {
+    authProfileId?: string;
+    authFingerprint?: string;
+    runtimeOwnerFingerprint?: string;
+    runtimeOwnerKind?: "cli-runtime" | "plugin-harness" | "aws-sdk";
+    runtimeOwnerId?: string;
+    runtimeArtifactFingerprint?: string;
+    runtimeArtifactId?: string;
+    skipLocalCredential?: true;
+  }) => void;
   onBeforeFreshCliSessionRetry?: (params: {
     provider: string;
     reason: FailoverReason;
@@ -114,6 +141,8 @@ export type RunCliAgentParams = {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   messageProvider?: string;
+  /** Capabilities declared by the gateway client that originated this run. */
+  clientCaps?: string[];
   currentChannelId?: string;
   chatId?: string;
   channelContext?: PluginHookChannelContext;
@@ -125,10 +154,29 @@ export type RunCliAgentParams = {
   senderId?: string | null;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
+  /** Additional trusted sender identities used by toolsBySender policy. */
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  /** Group policy context captured from the originating run. */
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  /** Parent session provenance used to validate inherited group policy. */
+  spawnedBy?: string | null;
+  /** Effective turn-local exec policy resolved before entering the CLI runtime. */
+  execOverrides?: ExecPolicyOverrides;
+  /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
+  bashElevated?: ExecElevatedDefaults;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
   toolsAllow?: string[];
+  /** Exact native surface plus host-isolated MCP permissions for a selectable CLI backend. */
+  cliToolAvailability?: {
+    native: [];
+    mcp: string[];
+  };
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
@@ -163,6 +211,11 @@ export type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Gateway-owned capture fence for this prepared bundle-MCP client. */
+  mcpClientGrantCapture?: {
+    activate: (captureKey: string) => void;
+    deactivate: (captureKey: string) => void;
+  };
   mcpConfigHash?: string;
   mcpResumeHash?: string;
   env?: Record<string, string>;
@@ -186,12 +239,15 @@ export type CliSessionBindingFacts = {
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
   effectiveAuthProfileId?: string;
+  agentDir?: string;
   started: number;
   workspaceDir: string;
   cwd?: string;
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
   reusableCliSession: CliReusableSession;
+  /** Resume is safe only while the exact managed Claude stdio child still exists. */
+  requiredClaudeLiveSessionGeneration?: string;
   hadSessionFile: boolean;
   contextEngineConfig: OpenClawConfig;
   contextEngine?: ContextEngine;
@@ -207,6 +263,13 @@ export type PreparedCliRunContext = {
   openClawHistoryPrompt?: string;
   heartbeatPrompt?: string;
   authEpoch?: string;
+  /** Strict owner fingerprint captured for live inference verification only. */
+  authBindingFingerprint?: string;
+  /** Stable CLI backend/profile owner shape, usable only with a successful native session. */
+  runtimeOwnerFingerprint?: string;
+  /** Exact executable/package implementation used by this CLI process. */
+  runtimeArtifactFingerprint?: string;
+  authBindingSkipsLocalCredential?: true;
   authEpochVersion: number;
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;

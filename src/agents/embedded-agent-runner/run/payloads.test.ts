@@ -40,6 +40,48 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toStrictEqual([]);
   });
 
+  it("strips provider reasoning close tags from streamed assistant payload text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["</mm:think>Scan complete. No new actionable inbox items."],
+    });
+
+    expectSinglePayloadText(payloads, "Scan complete. No new actionable inbox items.");
+  });
+
+  it("suppresses streamed text that only contains hidden reasoning", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["<mm:think>private reasoning</mm:think>"],
+    });
+
+    expect(payloads).toStrictEqual([]);
+  });
+
+  it("sanitizes every streamed text while preserving multiple visible answers", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        '<tool_call>{"name":"exec","arguments":{"command":"secret"}}</tool_call>',
+        "</mm:think>First visible answer.",
+        "Second visible answer.",
+      ],
+    });
+
+    expect(payloads.map((payload) => payload.text)).toStrictEqual([
+      "First visible answer.",
+      "Second visible answer.",
+    ]);
+  });
+
+  it("keeps media directives while sanitizing streamed assistant text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Attached image");
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+  });
+
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {
     const payloads = buildPayloads({
       lastAssistant: {
@@ -69,6 +111,18 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("marks runtime-persisted final replies as transcript owned", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Already persisted."],
+      assistantTranscriptOwned: true,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantTranscriptOwned: true,
+    });
   });
 
   it("does not revive signed unphased text when explicit final-answer text is empty", () => {
@@ -458,13 +512,15 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
   it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
     // Middleware failures after useful assistant output warn the user without
-    // replacing the successful answer as the terminal payload.
+    // replacing the successful answer as the terminal payload. Uses a non-exec
+    // mutating tool so the warning still surfaces under the recovery policy.
     const payloads = buildPayloads({
       assistantTexts: ["Queued 3 topics."],
       lastToolError: {
-        toolName: "exec",
+        toolName: "write",
         error: "Tool output unavailable due to post-processing error",
         middlewareError: true,
+        mutatingAction: true,
       },
       verboseLevel: "off",
     });
@@ -474,7 +530,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[1]).toMatchObject({
       isError: true,
     });
-    expect(payloads[1]?.text).toContain("Exec failed");
+    expect(payloads[1]?.text).toContain("Write failed");
     expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
       nonTerminalToolErrorWarning: true,
     });

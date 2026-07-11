@@ -258,13 +258,7 @@ class CameraCaptureManager(
       val deviceId = parseDeviceId(params)
       if (includeAudio) ensureMicPermission()
 
-      android.util.Log.w(
-        "CameraCaptureManager",
-        "clip: start facing=$facing duration=$durationMs audio=$includeAudio deviceId=${deviceId ?: "-"}",
-      )
-
       val provider = context.cameraProvider()
-      android.util.Log.w("CameraCaptureManager", "clip: got camera provider")
 
       // Use LOWEST quality for smallest files over WebSocket
       val recorder =
@@ -300,65 +294,39 @@ class CameraCaptureManager(
           check(!file.exists() || file.delete()) { "failed to delete temporary camera clip" }
         },
       ).use { session ->
-        android.util.Log.w("CameraCaptureManager", "clip: binding preview + videoCapture to lifecycle")
-        val camera = provider.bindToLifecycle(owner, selector, preview, videoCapture)
-        android.util.Log.w("CameraCaptureManager", "clip: bound, cameraInfo=${camera.cameraInfo}")
+        provider.bindToLifecycle(owner, selector, preview, videoCapture)
 
         // Give camera pipeline time to initialize before recording
-        android.util.Log.w("CameraCaptureManager", "clip: warming up camera 1.5s...")
         kotlinx.coroutines.delay(1_500)
 
         val clipFile = session.ownFile(File.createTempFile("openclaw-clip-", ".mp4", context.cacheDir))
         val outputOptions = FileOutputOptions.Builder(clipFile).build()
 
         val finalized = kotlinx.coroutines.CompletableDeferred<VideoRecordEvent.Finalize>()
-        android.util.Log.w("CameraCaptureManager", "clip: starting recording to ${clipFile.absolutePath}")
         val recording =
           videoCapture.output
             .prepareRecording(context, outputOptions)
             .apply {
               if (includeAudio) withAudioEnabled()
             }.start(context.mainExecutor()) { event ->
-              android.util.Log.w("CameraCaptureManager", "clip: event ${event.javaClass.simpleName}")
-              if (event is VideoRecordEvent.Status) {
-                android.util.Log.w("CameraCaptureManager", "clip: recording status update")
-              }
               if (event is VideoRecordEvent.Finalize) {
-                android.util.Log.w(
-                  "CameraCaptureManager",
-                  "clip: finalize hasError=${event.hasError()} error=${event.error} cause=${event.cause}",
-                )
                 finalized.complete(event)
               }
             }
         session.ownRecording(recording)
 
-        android.util.Log.w("CameraCaptureManager", "clip: recording started, delaying ${durationMs}ms")
         kotlinx.coroutines.delay(durationMs.toLong())
-        android.util.Log.w("CameraCaptureManager", "clip: stopping recording")
         recording.close()
 
         val finalizeEvent =
           try {
             withTimeout(15_000) { finalized.await() }
-          } catch (err: kotlinx.coroutines.TimeoutCancellationException) {
-            android.util.Log.e("CameraCaptureManager", "clip: finalize timed out", err)
+          } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
             throw IllegalStateException("UNAVAILABLE: camera clip finalize timed out")
           }
         if (finalizeEvent.hasError()) {
-          android.util.Log.e(
-            "CameraCaptureManager",
-            "clip: FAILED error=${finalizeEvent.error}, cause=${finalizeEvent.cause}",
-            finalizeEvent.cause,
-          )
-          // Check file size for debugging
-          val fileSize = withContext(Dispatchers.IO) { if (clipFile.exists()) clipFile.length() else -1 }
-          android.util.Log.e("CameraCaptureManager", "clip: file exists=${clipFile.exists()} size=$fileSize")
           throw IllegalStateException("UNAVAILABLE: camera clip failed (error=${finalizeEvent.error})")
         }
-
-        val fileSize = withContext(Dispatchers.IO) { clipFile.length() }
-        android.util.Log.w("CameraCaptureManager", "clip: SUCCESS file size=$fileSize")
 
         FilePayload(
           file = session.transferFile(),

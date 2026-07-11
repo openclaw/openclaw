@@ -16,6 +16,7 @@ import {
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
+import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -24,6 +25,7 @@ import {
   createSessionGoal,
   formatSessionGoalStatus,
   getSessionGoal,
+  updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
@@ -35,8 +37,9 @@ import {
 } from "../gateway/chat-display-projection.js";
 import { augmentChatHistoryWithCliSessionImports } from "../gateway/cli-session-history.js";
 import {
-  normalizeLiveAssistantEventText,
+  normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
+  resolveAssistantLiveChatInput,
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
@@ -48,6 +51,7 @@ import {
   replaceOversizedChatHistoryMessages,
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
+import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
 import {
   capArrayByJsonBytes,
@@ -67,6 +71,11 @@ import {
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import {
+  clearEmbeddedPluginApprovalBroker,
+  EmbeddedPluginApprovalBroker,
+  setEmbeddedPluginApprovalBroker,
+} from "../infra/embedded-plugin-approval-broker.js";
 import { logInfo, logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -75,11 +84,13 @@ import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
+  TuiApprovalDecision,
   TuiBackend,
   TuiChatSendResult,
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
+  TuiSessionCreateOptions,
 } from "./tui-backend.js";
 
 type LocalRunState = {
@@ -93,6 +104,7 @@ type LocalRunState = {
   finishing: boolean;
   lifecycleEnded: boolean;
   lifecycleStopReason?: string;
+  toolErrorSummary?: string;
   finalSent: boolean;
   registered: boolean;
   queuedRunReady: Promise<void>;
@@ -306,6 +318,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker();
+  private unsubscribePluginApprovals?: () => void;
   // Resolves once the one-time session-key migration has run; store methods await it.
   private ready: Promise<void> = Promise.resolve();
 
@@ -321,8 +335,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.previousRuntimeError = defaultRuntime.error;
     defaultRuntime.log = silentRuntime.log;
     defaultRuntime.error = silentRuntime.error;
-    this.unsubscribe = onAgentEvent((evt) => {
-      void this.handleAgentEvent(evt);
+    // Keep this synchronous so the shared event bus can isolate listener failures.
+    this.unsubscribe = onAgentEvent((evt) => this.handleAgentEvent(evt));
+    setEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
+    this.unsubscribePluginApprovals = this.pluginApprovalBroker.subscribe((event) => {
+      this.emit(event.event, event.payload);
     });
     // Local mode never runs gateway startup; canonicalize orphaned keys once here.
     this.ready = (async () => {
@@ -340,6 +357,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async stop() {
+    clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
+    this.unsubscribePluginApprovals?.();
+    this.unsubscribePluginApprovals = undefined;
     const maintenancePromises: Promise<void>[] = [];
     for (const [runId, run] of this.runs) {
       if (run.finishing || run.lifecycleEnded) {
@@ -351,6 +371,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
       run.controller.abort();
     }
+    this.pluginApprovalBroker.stop();
     const maintenanceCompleted = await waitForLocalRunShutdown(maintenancePromises);
     if (!maintenanceCompleted) {
       for (const run of this.runs.values()) {
@@ -426,24 +447,52 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return { runId };
   }
 
-  async abortChat(opts: { sessionKey: string; agentId?: string; runId: string }) {
+  async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
+    if (!opts.runId) {
+      // Session-scoped abort for local embedded: abort all matching runs.
+      let aborted = false;
+      const runIds: string[] = [];
+      for (const [runId, run] of this.runs) {
+        if (run.isBtw) {
+          continue;
+        }
+        if (run.sessionKey !== opts.sessionKey) {
+          continue;
+        }
+        if (opts.sessionKey === "global") {
+          const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+          const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
+          const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
+          if (runAgentId !== requestedAgentId) {
+            continue;
+          }
+        }
+        if (!this.isAbortableRun(runId, run)) {
+          continue;
+        }
+        run.controller.abort();
+        aborted = true;
+        runIds.push(runId);
+      }
+      return { ok: true, aborted, runIds };
+    }
     const run = this.runs.get(opts.runId);
     if (!run || run.sessionKey !== opts.sessionKey) {
-      return { ok: true, aborted: false };
+      return { ok: true, aborted: false, runIds: [] };
     }
     if (opts.sessionKey === "global") {
       const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
       const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
       const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
       if (runAgentId !== requestedAgentId) {
-        return { ok: true, aborted: false };
+        return { ok: true, aborted: false, runIds: [] };
       }
     }
     if (!this.isAbortableRun(opts.runId, run)) {
-      return { ok: true, aborted: false };
+      return { ok: true, aborted: false, runIds: [] };
     }
     run.controller.abort();
-    return { ok: true, aborted: true };
+    return { ok: true, aborted: true, runIds: [opts.runId] };
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
@@ -627,7 +676,28 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!result.ok) {
       throw new Error(result.error.message);
     }
-    return { ok: true as const, key: result.key, entry: result.entry };
+    return { ok: true as const, key: result.key, entry: result.entry, resolved: result.resolved };
+  }
+
+  async createSession(opts: TuiSessionCreateOptions) {
+    await this.ready;
+    const cfg = getRuntimeConfig();
+    const result = await createGatewaySession({
+      cfg,
+      ...opts,
+      emitCommandHooks: Boolean(opts.parentSessionKey),
+      commandSource: "tui:embedded",
+      loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
+    });
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    return {
+      ok: true as const,
+      key: result.key,
+      entry: result.entry,
+      resolved: result.resolved,
+    };
   }
 
   private async runBtwTurn(params: {
@@ -691,6 +761,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return `local embedded mode${this.runs.size > 0 ? ` (${String(this.runs.size)} active run${this.runs.size === 1 ? "" : "s"})` : ""}`;
   }
 
+  async listPluginApprovals(): Promise<unknown> {
+    return this.pluginApprovalBroker.listPending();
+  }
+
+  async resolvePluginApproval(id: string, decision: TuiApprovalDecision) {
+    return { ok: this.pluginApprovalBroker.resolve(id, decision) };
+  }
+
   async listModels(): Promise<TuiModelChoice[]> {
     const cfg = getRuntimeConfig();
     const catalog = await loadEmbeddedTuiModelCatalog(cfg);
@@ -737,14 +815,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
           storePath,
           objective,
           fallbackEntry,
+          actor: { type: "human" },
+          agentId: opts.agentId,
         });
         return { text: `Goal started: ${goal.objective}` };
+      }
+      case "edit": {
+        const objective = parsed.text.trim();
+        if (!objective) {
+          return { text: "Usage: /goal edit <objective>" };
+        }
+        const goal = await updateSessionGoalObjective({
+          sessionKey,
+          storePath,
+          objective,
+          actor: { type: "human" },
+          agentId: opts.agentId,
+        });
+        return { text: `Goal updated: ${goal.objective}` };
       }
       case "pause": {
         const goal = await updateSessionGoalStatus({
           sessionKey,
           storePath,
           status: "paused",
+          actor: { type: "human" },
+          agentId: opts.agentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         return { text: `Goal paused: ${goal.objective}` };
@@ -754,6 +850,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
           sessionKey,
           storePath,
           status: "active",
+          actor: { type: "human" },
+          agentId: opts.agentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         return { text: `Goal resumed: ${goal.objective}` };
@@ -764,6 +862,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
           sessionKey,
           storePath,
           status: "complete",
+          actor: { type: "human" },
+          agentId: opts.agentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         return { text: `Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}` };
@@ -774,17 +874,24 @@ export class EmbeddedTuiBackend implements TuiBackend {
           sessionKey,
           storePath,
           status: "blocked",
+          actor: { type: "human" },
+          agentId: opts.agentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         return { text: `Goal blocked: ${goal.objective}` };
       }
       case "clear": {
-        const removed = await clearSessionGoal({ sessionKey, storePath });
+        const removed = await clearSessionGoal({
+          sessionKey,
+          storePath,
+          actor: { type: "human" },
+          agentId: opts.agentId,
+        });
         return { text: removed ? "Goal cleared." : "No goal to clear." };
       }
       default:
         return {
-          text: "Usage: /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
+          text: "Usage: /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
         };
     }
   }
@@ -876,7 +983,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatDelta(runId: string, run: LocalRunState) {
-    const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
+    const normalizedText = normalizeLiveAssistantBufferedText(run.buffer).trim();
+    const projected = projectLiveAssistantBufferedText(normalizedText, {
       suppressLeadFragments: true,
     });
     const text = projected.text.trim();
@@ -914,7 +1022,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.registered = true;
     run.lastBroadcastText = undefined;
-    const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
+    const normalizedText = normalizeLiveAssistantBufferedText(run.buffer).trim();
+    const projected = projectLiveAssistantBufferedText(normalizedText, {
       suppressLeadFragments: false,
     });
     const text = projected.text.trim();
@@ -936,7 +1045,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
-  private emitChatAborted(runId: string, run: LocalRunState) {
+  private emitChatAborted(runId: string, run: LocalRunState, errorMessage?: string) {
     this.clearPendingLifecycleError(runId);
     run.markQueuedRunReady();
     const alreadyFinal = run.finalSent;
@@ -948,10 +1057,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.registered = true;
     run.lastBroadcastText = undefined;
+    const diagnostic = errorMessage ?? run.toolErrorSummary;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
       state: "aborted",
+      ...(diagnostic ? { errorMessage: diagnostic } : {}),
     });
   }
 
@@ -994,7 +1105,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
-  private async handleAgentEvent(evt: AgentEventPayload) {
+  private handleAgentEvent(evt: AgentEventPayload) {
     const run = this.runs.get(evt.runId);
     if (!run) {
       return;
@@ -1016,20 +1127,23 @@ export class EmbeddedTuiBackend implements TuiBackend {
       data: evt.data,
     });
 
+    if (evt.stream === "assistant" || (evt.stream === "tool" && evt.data?.phase === "start")) {
+      run.toolErrorSummary = undefined;
+    } else if (evt.stream === "tool" && evt.data?.phase === "result") {
+      run.toolErrorSummary = readToolValidationErrorSummary(evt.data.toolErrorSummary);
+    }
+
+    const assistantLiveChatInput =
+      evt.stream === "assistant" ? resolveAssistantLiveChatInput(evt.data) : undefined;
     if (
-      evt.stream === "assistant" &&
+      assistantLiveChatInput &&
       !run.isBtw &&
-      typeof evt.data?.text === "string" &&
       !shouldSuppressAssistantEventForLiveChat(evt.data)
     ) {
-      const cleaned = normalizeLiveAssistantEventText({
-        text: evt.data.text,
-        delta: evt.data.delta,
-      });
       run.buffer = resolveMergedAssistantText({
         previousText: run.buffer,
-        nextText: cleaned.text,
-        nextDelta: cleaned.delta,
+        nextText: assistantLiveChatInput.text,
+        nextDelta: assistantLiveChatInput.delta,
       });
       this.emitChatDelta(evt.runId, run);
       return;
@@ -1041,6 +1155,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
+    const toolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
     if (phase === "finishing") {
       run.finishing = true;
       run.markQueuedRunReady();
@@ -1051,7 +1166,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (phase === "end") {
       run.finishing = false;
       if (aborted) {
-        this.emitChatAborted(evt.runId, run);
+        this.emitChatAborted(evt.runId, run, toolErrorSummary);
         return;
       }
       run.lifecycleEnded = true;
@@ -1064,7 +1179,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (phase === "error") {
       run.finishing = false;
       if (aborted) {
-        this.emitChatAborted(evt.runId, run);
+        this.emitChatAborted(evt.runId, run, toolErrorSummary);
         return;
       }
       const errorMessage = typeof evt.data?.error === "string" ? evt.data.error : undefined;

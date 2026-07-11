@@ -21,6 +21,7 @@ import {
 } from "./config-reload-plan.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./server-methods/types.js";
 import {
   disconnectStaleSharedGatewayAuthClients,
@@ -72,6 +73,7 @@ export function createGatewayAuxHandlers(params: {
   clients: Iterable<SharedGatewayAuthClient>;
   startChannel: (name: ChannelKind) => Promise<void>;
   stopChannel: (name: ChannelKind) => Promise<void>;
+  getChannelAutostartSuppression?: () => ChannelAutostartSuppression | null;
   logChannels: { info: (msg: string) => void };
 }) {
   const execApprovalManager = new ExecApprovalManager();
@@ -177,6 +179,11 @@ export function createGatewayAuxHandlers(params: {
                       `secrets.reload requires restarting channels: ${restartChannels.join(", ")}`,
                     );
                   }
+                  if (params.getChannelAutostartSuppression?.()) {
+                    throw new Error(
+                      `secrets.reload requires restarting channels but channel autostart is suppressed by crash-loop breaker: ${restartChannels.join(", ")}`,
+                    );
+                  }
                   const restartFailures: ChannelKind[] = [];
                   for (const channel of restartChannels) {
                     params.logChannels.info(`restarting ${channel} channel after secrets reload`);
@@ -270,6 +277,7 @@ export function createGatewayAuxHandlers(params: {
 
   return {
     execApprovalManager,
+    forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
     pluginApprovalManager,
     extraHandlers: {
       "exec.approval.get": createLazyHandler("exec.approval.get", loadExecApprovalHandlers),

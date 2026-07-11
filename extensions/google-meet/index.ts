@@ -12,7 +12,9 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
   buildGoogleMeetCalendarDayWindow,
@@ -348,13 +350,6 @@ function asParamRecord(params: unknown): Record<string, unknown> {
     : {};
 }
 
-function json(payload: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-    details: payload,
-  };
-}
-
 function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
   return value === "chrome" || value === "chrome-node" || value === "twilio" ? value : undefined;
 }
@@ -478,8 +473,16 @@ async function callGoogleMeetGatewayFromTool(params: {
   config: GoogleMeetConfig;
   action: GoogleMeetGatewayToolAction;
   raw: Record<string, unknown>;
+  runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
   try {
+    if (params.runtime) {
+      return await params.runtime.gateway.request(
+        googleMeetGatewayMethodForToolAction(params.action),
+        params.raw,
+        { timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config) },
+      );
+    }
     return await googleMeetToolDeps.callGatewayFromCli(
       googleMeetGatewayMethodForToolAction(params.action),
       {
@@ -496,6 +499,18 @@ async function callGoogleMeetGatewayFromTool(params: {
     }
     throw err;
   }
+}
+
+function keepTrustedToolAgentId(
+  raw: Record<string, unknown>,
+  client: GatewayRequestHandlerOptions["client"],
+): Record<string, unknown> {
+  const { agentId: rawAgentId, ...rest } = raw;
+  if (client?.internal?.pluginRuntimeOwnerId !== "google-meet") {
+    return rest;
+  }
+  const agentId = normalizeOptionalString(rawAgentId);
+  return agentId ? { ...rest, agentId } : rest;
 }
 
 async function createMeetFromParams(params: {
@@ -730,18 +745,20 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "googlemeet.join",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
+          const trustedParams = keepTrustedToolAgentId(asParamRecord(params), client);
           const rt = await ensureRuntime();
           const result = await rt.join({
-            url: resolveMeetingInput(config, params?.url),
-            transport: normalizeTransport(params?.transport),
-            mode: normalizeMode(params?.mode),
-            dialInNumber: normalizeOptionalString(params?.dialInNumber),
-            pin: normalizeOptionalString(params?.pin),
-            dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
-            message: normalizeOptionalString(params?.message),
-            requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
+            url: resolveMeetingInput(config, trustedParams.url),
+            transport: normalizeTransport(trustedParams.transport),
+            mode: normalizeMode(trustedParams.mode),
+            dialInNumber: normalizeOptionalString(trustedParams.dialInNumber),
+            pin: normalizeOptionalString(trustedParams.pin),
+            dtmfSequence: normalizeOptionalString(trustedParams.dtmfSequence),
+            message: normalizeOptionalString(trustedParams.message),
+            requesterSessionKey: normalizeOptionalString(trustedParams.requesterSessionKey),
+            agentId: normalizeOptionalString(trustedParams.agentId),
           });
           respond(true, result);
         } catch (err) {
@@ -752,9 +769,9 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "googlemeet.create",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const raw = asParamRecord(params);
+          const raw = keepTrustedToolAgentId(asParamRecord(params), client);
           respond(
             true,
             shouldJoinCreatedMeet(raw)
@@ -982,18 +999,20 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "googlemeet.testSpeech",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
+          const trustedParams = keepTrustedToolAgentId(asParamRecord(params), client);
           const rt = await ensureRuntime();
           const result = await rt.testSpeech({
-            url: resolveMeetingInput(config, params?.url),
-            transport: normalizeTransport(params?.transport),
-            mode: normalizeMode(params?.mode),
-            dialInNumber: normalizeOptionalString(params?.dialInNumber),
-            pin: normalizeOptionalString(params?.pin),
-            dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
-            message: normalizeOptionalString(params?.message),
-            requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
+            url: resolveMeetingInput(config, trustedParams.url),
+            transport: normalizeTransport(trustedParams.transport),
+            mode: normalizeMode(trustedParams.mode),
+            dialInNumber: normalizeOptionalString(trustedParams.dialInNumber),
+            pin: normalizeOptionalString(trustedParams.pin),
+            dtmfSequence: normalizeOptionalString(trustedParams.dtmfSequence),
+            message: normalizeOptionalString(trustedParams.message),
+            requesterSessionKey: normalizeOptionalString(trustedParams.requesterSessionKey),
+            agentId: normalizeOptionalString(trustedParams.agentId),
           });
           respond(true, result);
         } catch (err) {
@@ -1004,14 +1023,16 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "googlemeet.testListen",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
+          const trustedParams = keepTrustedToolAgentId(asParamRecord(params), client);
           const rt = await ensureRuntime();
           const result = await rt.testListen({
-            url: resolveMeetingInput(config, params?.url),
-            transport: normalizeTransport(params?.transport),
-            mode: normalizeMode(params?.mode),
-            timeoutMs: readPositiveIntegerParam(asParamRecord(params), "timeoutMs"),
+            url: resolveMeetingInput(config, trustedParams.url),
+            transport: normalizeTransport(trustedParams.transport),
+            mode: normalizeMode(trustedParams.mode),
+            agentId: normalizeOptionalString(trustedParams.agentId),
+            timeoutMs: readPositiveIntegerParam(trustedParams, "timeoutMs"),
           });
           respond(true, result);
         } catch (err) {
@@ -1030,8 +1051,17 @@ export default definePluginEntry({
         async execute(_toolCallId, params) {
           const raw = asParamRecord(params);
           const requesterSessionKey = normalizeOptionalString(toolContext.sessionKey);
-          const rawWithRequester = requesterSessionKey ? { ...raw, requesterSessionKey } : raw;
+          const agentId = toolContext.agentId ? normalizeAgentId(toolContext.agentId) : undefined;
           try {
+            const useTrustedRuntime = agentId ? await api.runtime.gateway.isAvailable() : false;
+            if (agentId && agentId !== "main" && !useTrustedRuntime) {
+              throw new Error("Per-agent Google Meet routing requires a Gateway-hosted agent run.");
+            }
+            const rawWithRequester = {
+              ...raw,
+              ...(requesterSessionKey ? { requesterSessionKey } : {}),
+              ...(useTrustedRuntime ? { agentId } : {}),
+            };
             assertGoogleMeetAgentToolActionSupported({ config, raw });
             switch (raw.action) {
               case "join": {
@@ -1040,6 +1070,7 @@ export default definePluginEntry({
                     config,
                     action: "join",
                     raw: rawWithRequester,
+                    runtime: useTrustedRuntime ? api.runtime : undefined,
                   }),
                 );
               }
@@ -1049,6 +1080,7 @@ export default definePluginEntry({
                     config,
                     action: "create",
                     raw: rawWithRequester,
+                    runtime: useTrustedRuntime ? api.runtime : undefined,
                   }),
                 );
               }
@@ -1058,12 +1090,18 @@ export default definePluginEntry({
                     config,
                     action: "test_speech",
                     raw: rawWithRequester,
+                    runtime: useTrustedRuntime ? api.runtime : undefined,
                   }),
                 );
               }
               case "test_listen": {
                 return json(
-                  await callGoogleMeetGatewayFromTool({ config, action: "test_listen", raw }),
+                  await callGoogleMeetGatewayFromTool({
+                    config,
+                    action: "test_listen",
+                    raw: rawWithRequester,
+                    runtime: useTrustedRuntime ? api.runtime : undefined,
+                  }),
                 );
               }
               case "status": {

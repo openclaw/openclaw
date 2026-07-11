@@ -1,4 +1,5 @@
 // Openai tests cover openai chatgpt oauth flow plugin behavior.
+import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const ssrfMocks = vi.hoisted(() => ({
@@ -173,5 +174,104 @@ describe("OpenAI Codex OAuth flow", () => {
       type: "failed",
       message: "OpenAI Codex token refresh response missing fields: expires_in",
     });
+  });
+});
+
+async function listenLoopbackServer(server: Server): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("expected loopback TCP address"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
+describe("OpenAI Codex OAuth bounded token response reads", () => {
+  it("reads under-cap token exchange responses from a real loopback HTTP server", async () => {
+    const validPayload = {
+      access_token: "access-token-loopback",
+      refresh_token: "refresh-token-loopback",
+      expires_in: 3600,
+    };
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(validPayload));
+    });
+    const port = await listenLoopbackServer(server);
+    const release = vi.fn(async () => undefined);
+
+    try {
+      ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
+        const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
+          ...init,
+          signal,
+        });
+        return { response, release };
+      });
+
+      const result = await testing.exchangeAuthorizationCode(
+        "code-loopback",
+        "verifier-loopback",
+        "http://localhost:1455/auth/callback",
+        { timeoutMs: 5000 },
+      );
+
+      expect(result).toMatchObject({
+        type: "success",
+        access: "access-token-loopback",
+        refresh: "refresh-token-loopback",
+      });
+      expect(
+        (result as { type: "success"; access: string; refresh: string; expires: number }).expires,
+      ).toBeGreaterThan(0);
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("rejects oversized token exchange responses from a real loopback HTTP server", async () => {
+    const oversizedPayload = "o".repeat(2 * 1024 * 1024); // 2 MiB > 1 MiB cap
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(oversizedPayload);
+    });
+    const port = await listenLoopbackServer(server);
+    const release = vi.fn(async () => undefined);
+
+    try {
+      ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
+        const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
+          ...init,
+          signal,
+        });
+        return { response, release };
+      });
+
+      const result = await testing.exchangeAuthorizationCode(
+        "code-loopback",
+        "verifier-loopback",
+        "http://localhost:1455/auth/callback",
+        { timeoutMs: 5000 },
+      );
+
+      expect(result).toMatchObject({ type: "failed" });
+      expect((result as { type: "failed"; message: string }).message).toContain("too large");
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      await closeServer(server);
+    }
   });
 });

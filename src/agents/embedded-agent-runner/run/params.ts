@@ -3,8 +3,10 @@
  */
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
+  BlockReplyContext,
   PartialReplyPayload,
   SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
 } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
@@ -29,12 +31,14 @@ import type {
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
 import type { FastModeAutoProgressState } from "../../fast-mode.js";
+import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
+import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
@@ -51,6 +55,8 @@ export type CurrentInboundPromptContext = {
   text: string;
   resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
+  /** Generated goal blocks owned by inbound-context assembly, never user text. */
+  injectedGoalContexts?: string[];
 };
 
 export type RunEmbeddedAgentParams = {
@@ -67,6 +73,8 @@ export type RunEmbeddedAgentParams = {
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
+  /** Capabilities declared by the gateway client that originated this run. */
+  clientCaps?: string[];
   chatType?: ChatType;
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
@@ -87,6 +95,8 @@ export type RunEmbeddedAgentParams = {
   groupSpace?: string | null;
   /** Trusted provider role ids for the requester in this group turn. */
   memberRoleIds?: string[];
+  /** Opaque host-issued capability for current-turn channel message actions. */
+  messageActionTurnCapability?: string;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
   /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
@@ -139,6 +149,12 @@ export type RunEmbeddedAgentParams = {
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
   cwd?: string;
   agentDir?: string;
+  /**
+   * Run config consumed by core paths (model selection, tools, plugin
+   * activation). Plugin harnesses resolve `plugins.entries.<id>.config` from
+   * the live global config, NOT from this object — per-run plugin-config
+   * overrides are unsupported; use an explicit run param instead.
+   */
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
@@ -158,8 +174,12 @@ export type RunEmbeddedAgentParams = {
   modelFallbacksOverride?: string[];
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
+  /** True when the pinned non-default harness owns model selection for this session. */
+  modelSelectionLocked?: boolean;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */
   agentHarnessRuntimeOverride?: string;
+  /** Verified setup continuation: pin both the harness and its local implementation. */
+  expectedAgentHarnessRuntimeArtifact?: ExpectedAgentHarnessRuntimeArtifact;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;
@@ -231,8 +251,8 @@ export type RunEmbeddedAgentParams = {
   shouldEmitToolOutput?: () => boolean;
   onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
-  onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
-  onBlockReplyFlush?: () => void | Promise<void>;
+  onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
+  onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
@@ -258,6 +278,7 @@ export type RunEmbeddedAgentParams = {
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;

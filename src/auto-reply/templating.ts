@@ -1,5 +1,6 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { ReplyToMode } from "../config/types.base.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -143,6 +144,8 @@ export type MsgContext = {
   AmbientTranscriptPreviousTimestampMs?: number;
   /** Per-turn reply-threading overrides. */
   ReplyThreading?: ReplyThreadingPolicy;
+  /** Effective channel reply mode prepared for this turn. */
+  ReplyToMode?: ReplyToMode;
   ReplyToId?: string;
   /**
    * Root message id for thread reconstruction (used by Feishu for root_id).
@@ -297,6 +300,8 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
+  /** Gateway client capabilities when the message originates from the gateway. */
+  GatewayClientCaps?: string[];
   /** Gateway device id allowed to review approvals initiated by this turn. */
   ApprovalReviewerDeviceId?: string;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */

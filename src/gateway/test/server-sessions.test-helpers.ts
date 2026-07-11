@@ -116,7 +116,7 @@ const subagentLifecycleHookState = vi.hoisted(() => ({
 }));
 
 const threadBindingMocks = vi.hoisted(() => ({
-  unbindThreadBindingsBySessionKey: vi.fn((_params?: unknown) => []),
+  unbindThreadBindingsBySessionKey: vi.fn(async (_params?: unknown) => []),
 }));
 const acpRuntimeMocks = vi.hoisted(() => ({
   cancel: vi.fn(async () => {}),
@@ -586,6 +586,12 @@ export function expectActiveRunCleanup(
     cfg: expect.any(Object),
     requesterSessionKey,
   });
+  expectSessionQueueCleanup(expectedQueueKeys);
+  expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
+  expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
+}
+
+export function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
   expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
   const clearedKeys = (
     sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
@@ -593,8 +599,6 @@ export function expectActiveRunCleanup(
   for (const key of expectedQueueKeys) {
     expect(clearedKeys).toContain(key);
   }
-  expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
-  expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }
 
 export async function getMainPreviewEntry(ws: import("ws").WebSocket) {

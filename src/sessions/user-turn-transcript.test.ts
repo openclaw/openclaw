@@ -17,6 +17,7 @@ import {
   mergePreparedUserTurnMessageForRuntime,
   persistUserTurnTranscript,
   resolvePersistedUserTurnText,
+  type UserTurnInput,
 } from "./user-turn-transcript.js";
 
 describe("user turn transcript persistence", () => {
@@ -201,6 +202,33 @@ describe("user turn transcript persistence", () => {
       });
     });
 
+    it("preserves runtime metadata when adding prepared sender attribution", () => {
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "group prompt",
+          sender: { id: "user-42", name: "Ada" },
+        },
+        target: { transcriptPath: "/tmp/session.jsonl" },
+      });
+
+      expect(
+        mergePreparedUserTurnMessageForRuntime({
+          runtimeMessage: castAgentMessage({
+            role: "user",
+            content: "runtime prompt",
+            __openclaw: { mirrorIdentity: "run-1:prompt" },
+          }),
+          preparedMessage: recorder.message,
+        }),
+      ).toMatchObject({
+        __openclaw: {
+          mirrorIdentity: "run-1:prompt",
+          senderId: "user-42",
+          senderName: "Ada",
+        },
+      });
+    });
+
     it("does not replace blocked before_agent_run user markers", () => {
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "raw prompt" },
@@ -218,6 +246,31 @@ describe("user turn transcript persistence", () => {
           preparedMessage: recorder.message,
         }),
       ).toBe(blocked);
+    });
+
+    it("preserves runtime multimodal content while merging prepared metadata", () => {
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "canonical image caption", timestamp: 123 },
+        target: { transcriptPath: "/tmp/session.jsonl" },
+      });
+      const runtimeContent = [
+        { type: "text", text: "canonical image caption" },
+        { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+      ];
+
+      expect(
+        mergePreparedUserTurnMessageForRuntime({
+          runtimeMessage: castAgentMessage({
+            role: "user",
+            content: runtimeContent,
+          }),
+          preparedMessage: recorder.message,
+        }),
+      ).toMatchObject({
+        role: "user",
+        content: runtimeContent,
+        timestamp: 123,
+      });
     });
 
     it("does not apply prepared user metadata to assistant messages", () => {
@@ -295,6 +348,67 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("persists sender metadata as __openclaw envelope", async () => {
+      const dir = createTempDir("openclaw-user-turn-append-sender-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello from group",
+          sender: {
+            id: "8489979671",
+            name: "Ram Shenoy",
+            username: "ram_s",
+          },
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: "hello from group",
+        __openclaw: {
+          senderId: "8489979671",
+          senderName: "Ram Shenoy",
+          senderUsername: "ram_s",
+        },
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello from group",
+          __openclaw: {
+            senderId: "8489979671",
+            senderName: "Ram Shenoy",
+            senderUsername: "ram_s",
+          },
+        }),
+      ]);
+    });
+
+    it("omits __openclaw when no sender metadata is provided", async () => {
+      const dir = createTempDir("openclaw-user-turn-append-nosender-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello without sender",
+          sender: { id: "", name: null },
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).not.toHaveProperty("__openclaw");
+    });
+
     it("uses inline update mode by default", async () => {
       const dir = createTempDir("openclaw-user-turn-append-inline-");
       const transcriptPath = path.join(dir, "session.jsonl");
@@ -369,7 +483,7 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
-    it("preserves idempotency keys when before_message_write replaces a user turn", async () => {
+    it("preserves transcript metadata when before_message_write replaces a user turn", async () => {
       let hookCalls = 0;
       const provenance = {
         kind: "inter_session" as const,
@@ -386,6 +500,7 @@ describe("user turn transcript persistence", () => {
                 message: castAgentMessage({
                   role: "user",
                   content: "[redacted by hook]",
+                  __openclaw: { hookOwned: true },
                 }),
               };
             },
@@ -402,6 +517,7 @@ describe("user turn transcript persistence", () => {
           idempotencyKey: "chat-run-1:user",
           senderIsOwner: true,
           provenance,
+          sender: { id: "user-42", name: "Ada" },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -412,6 +528,7 @@ describe("user turn transcript persistence", () => {
           idempotencyKey: "chat-run-1:user",
           senderIsOwner: true,
           provenance,
+          sender: { id: "user-42", name: "Ada" },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -421,8 +538,11 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "[redacted by hook]",
           idempotencyKey: "chat-run-1:user",
-          __openclaw: { senderIsOwner: true },
           provenance,
+          __openclaw: {
+            hookOwned: true,
+            senderIsOwner: true,
+          },
         }),
       ]);
       expect(hookCalls).toBe(1);
@@ -594,6 +714,101 @@ describe("user turn transcript persistence", () => {
           content: "describe this",
           MediaPath: path.join(dir, "image.png"),
           MediaType: "image/png",
+        }),
+      ]);
+    });
+
+    it("appends #99495 media that resolves after the admitted turn reached the provider", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-late-media-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const admittedInput = {
+        text: "describe this",
+        timestamp: 123,
+        idempotencyKey: "chat-run-late:user",
+      };
+      let resolveMedia!: (input: UserTurnInput) => void;
+      let markResolverStarted!: () => void;
+      const resolverStarted = new Promise<void>((resolve) => {
+        markResolverStarted = resolve;
+      });
+      const mediaInput = new Promise<UserTurnInput>((resolve) => {
+        resolveMedia = resolve;
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: admittedInput,
+        resolveInput: async () => {
+          markResolverStarted();
+          return await mediaInput;
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+      });
+      const persistence = recorder.persistFallback();
+      await resolverStarted;
+      await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        input: admittedInput,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+      });
+      recorder.markRuntimePersisted(recorder.message);
+      recorder.markSentToProvider?.();
+      resolveMedia({
+        ...admittedInput,
+        media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+      });
+
+      await persistence;
+
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          content: "describe this",
+          idempotencyKey: "chat-run-late:user",
+        }),
+        expect.objectContaining({
+          content: `[media attached: ${path.join(dir, "image.png")}]`,
+          idempotencyKey: "chat-run-late:user:late-media",
+          MediaPath: path.join(dir, "image.png"),
+        }),
+      ]);
+    });
+
+    it("keeps #99495 media inline when it resolves before first serialization", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-early-media-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "describe this",
+          timestamp: 123,
+          idempotencyKey: "chat-run-early:user",
+        },
+        resolveInput: async () => ({
+          text: "describe this",
+          timestamp: 123,
+          idempotencyKey: "chat-run-early:user",
+          media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+        }),
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+      });
+
+      await recorder.persistFallback();
+      recorder.markSentToProvider?.();
+
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          content: "describe this",
+          idempotencyKey: "chat-run-early:user",
+          MediaPath: path.join(dir, "image.png"),
         }),
       ]);
     });

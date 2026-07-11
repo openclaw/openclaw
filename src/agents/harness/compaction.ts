@@ -11,8 +11,12 @@ import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
-import { getApiKeyForModel } from "../model-auth.js";
+import { applySecretRefHeaderSentinels, getApiKeyForModel } from "../model-auth.js";
 import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
+import {
+  unwrapModelHeaderSentinelsForProviderEgress,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../provider-secret-egress.js";
 import { resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy } from "./policy.js";
 import { selectAgentHarness } from "./selection.js";
 import type {
@@ -84,27 +88,29 @@ async function resolveHarnessCompactApiKey(params: {
   if (!model) {
     return existing ? { apiKey: existing } : {};
   }
+  const runtimeModel = applySecretRefHeaderSentinels(model, compactParams.config);
   if (existing) {
-    return { apiKey: existing, runtimeModel: model };
+    return { apiKey: existing, runtimeModel };
   }
   try {
     const apiKeyInfo = await getApiKeyForModel({
-      model,
+      model: runtimeModel,
       cfg: compactParams.config,
       profileId: authProfileId,
       agentDir,
       workspaceDir,
       fallbackOnIncompatibleProfile: true,
+      secretSentinels: true,
     });
     return {
       apiKey: apiKeyInfo.apiKey?.trim() || undefined,
-      runtimeModel: model,
+      runtimeModel,
     };
   } catch (err) {
     log.debug("agent harness compaction credential lookup failed", {
       error: formatErrorMessage(err),
     });
-    return { runtimeModel: model };
+    return { runtimeModel };
   }
 }
 
@@ -113,7 +119,14 @@ export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedAgentSessionParams,
   options: InternalAgentHarnessCompactionOptions = {},
 ): Promise<EmbeddedAgentCompactResult | undefined> {
-  if (params.provider && isCliRuntimeProvider(params.provider, { config: params.config })) {
+  const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
+  const pinnedHarnessId =
+    selectedRuntime && !isDefaultAgentRuntimeId(selectedRuntime) ? selectedRuntime : undefined;
+  if (
+    !pinnedHarnessId &&
+    params.provider &&
+    isCliRuntimeProvider(params.provider, { config: params.config })
+  ) {
     return undefined;
   }
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
@@ -128,33 +141,23 @@ export async function maybeCompactAgentHarnessSession(
     agentId: runtimePolicyAgentId,
     sessionKey: runtimePolicySessionKey,
   }).runtime;
-  if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider, cfg: params.config })) {
+  if (
+    isCliRuntimeAliasForProvider({
+      runtime: pinnedHarnessId ?? runtime,
+      provider: params.provider,
+      cfg: params.config,
+    })
+  ) {
     return undefined;
   }
-  const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
-  const agentHarnessRuntimeOverride =
-    selectedRuntime && !isDefaultAgentRuntimeId(selectedRuntime) ? selectedRuntime : undefined;
-  let harness: AgentHarness;
-  try {
-    harness = selectAgentHarness({
-      provider: params.provider ?? "",
-      modelId: params.model,
-      config: params.config,
-      agentId: runtimePolicyAgentId,
-      sessionKey: runtimePolicySessionKey,
-      agentHarnessRuntimeOverride,
-    });
-  } catch (err) {
-    if (agentHarnessRuntimeOverride) {
-      const message = formatErrorMessage(err);
-      if (message.includes("does not support")) {
-        // Explicit runtime overrides can name a harness that cannot serve this model. Falling back
-        // to native compaction preserves existing OpenClaw behavior instead of failing rotation.
-        return undefined;
-      }
-    }
-    throw err;
-  }
+  const harness = selectAgentHarness({
+    provider: params.provider ?? "",
+    modelId: params.model,
+    config: params.config,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+    agentHarnessId: pinnedHarnessId,
+  });
   const internalHarness = harness as InternalAgentHarness;
   const shouldCompactAfterContextEngine =
     options.nativeCompactionRequest === "after_context_engine";
@@ -196,8 +199,22 @@ export async function maybeCompactAgentHarnessSession(
     resolvedApiKey || runtimeModel
       ? {
           ...compactParams,
-          ...(resolvedApiKey ? { resolvedApiKey } : {}),
-          ...(runtimeModel ? { runtimeModel } : {}),
+          ...(resolvedApiKey
+            ? {
+                resolvedApiKey: unwrapSecretSentinelsForProviderEgress(
+                  resolvedApiKey,
+                  "plugin harness compaction handoff",
+                ),
+              }
+            : {}),
+          ...(runtimeModel
+            ? {
+                runtimeModel: unwrapModelHeaderSentinelsForProviderEgress(
+                  runtimeModel,
+                  "plugin harness compaction handoff",
+                ),
+              }
+            : {}),
         }
       : compactParams;
   if (shouldCompactAfterContextEngine) {

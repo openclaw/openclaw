@@ -14,6 +14,7 @@ type TerminalNote = (message: string, title?: string) => void;
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
+const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   vi.fn<(cfg: unknown) => string[]>(() => []),
@@ -1301,7 +1302,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
   }
 
   return {
-    runDoctorConfigPreflight: vi.fn(async () => {
+    runDoctorConfigPreflight: vi.fn(async (options: unknown) => {
+      runDoctorConfigPreflightOptionsMock(options);
       const injected = getDoctorConfigInputForTest();
       const configPath = injected?.path ?? resolveConfigPath();
       let parsed: Record<string, unknown> = injected?.config
@@ -1501,7 +1503,24 @@ describe("doctor config flow", () => {
       import("./doctor/shared/legacy-config-issues.js"),
       import("./doctor/shared/plugin-tool-allowlist-warnings.js"),
       import("./doctor/shared/preview-warnings.js"),
+      import("./doctor/shared/hooks-token-reuse-repair.js"),
     ]);
+    await collectDoctorWarnings({
+      channels: {
+        slack: {
+          dangerouslyAllowNameMatching: true,
+          accounts: { work: { allowFrom: ["alice"] } },
+        },
+      },
+    });
+    await collectDoctorWarnings({
+      channels: {
+        googlechat: {
+          groupPolicy: "allowlist",
+          accounts: { work: { groupPolicy: "allowlist" } },
+        },
+      },
+    });
   });
 
   beforeEach(() => {
@@ -1513,6 +1532,31 @@ describe("doctor config flow", () => {
     collectImplicitFallbackClobberWarningsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
     noteImplicitFallbackClobberWarningsMock.mockClear();
+    runDoctorConfigPreflightOptionsMock.mockClear();
+  });
+
+  it("grants config preflight cross-state imports only with repair and direct capability", async () => {
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: ({ options, confirm }) =>
+        loadAndMaybeMigrateDoctorConfig({
+          options: { ...options, crossStateDirImports: true },
+          confirm: async () => confirm(),
+        }),
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ crossStateDirImports: true }),
+    );
+
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ crossStateDirImports: false }),
+    );
   });
 
   it("preserves invalid config for doctor repairs", async () => {
@@ -1582,6 +1626,37 @@ describe("doctor config flow", () => {
       params: { refresh: true },
       timeoutMs: 3000,
     });
+  });
+
+  it("does not refresh gateway before writing a config-only auth repair", async () => {
+    runDoctorRepairSequenceMock.mockImplementation(
+      async (params: {
+        state: { cfg: Record<string, unknown>; candidate: Record<string, unknown> };
+      }) => {
+        const repaired = { ...params.state.candidate, auth: { order: {} } };
+        return {
+          state: {
+            ...params.state,
+            cfg: repaired,
+            candidate: repaired,
+            pendingChanges: true,
+          },
+          changeNotes: ["Removed a stale configured auth order."],
+          warningNotes: [],
+          authProfilesRepaired: false,
+        };
+      },
+    );
+
+    const result = await runDoctorConfigWithInput({
+      config: { auth: { order: { anthropic: ["anthropic:missing"] } } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.auth?.order).toEqual({});
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("keeps doctor repair silent when gateway secrets reload fails", async () => {
@@ -1987,9 +2062,10 @@ describe("doctor config flow", () => {
     });
     const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
     expect(browser.relayBindHost).toBeUndefined();
+    // driver "extension" is the live Chrome extension relay driver; repair keeps it.
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
-    ).toBe("existing-session");
+    ).toBe("extension");
     expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);

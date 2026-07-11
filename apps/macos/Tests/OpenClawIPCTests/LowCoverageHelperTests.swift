@@ -200,6 +200,135 @@ struct LowCoverageHelperTests {
         #expect(!localDockerReport.offenders.isEmpty)
     }
 
+    @Test func `port guardian matches only its own ssh tunnel command`() {
+        let full = "/usr/bin/ssh -o BatchMode=yes -o ControlMaster=no -o ControlPath=none "
+            + "-o ExitOnForwardFailure=yes -n -N -L 18789:127.0.0.1:18789 -- user@host"
+        #expect(PortGuardian.isTunnelCommand(full, localPort: 18789))
+        #expect(PortGuardian.isTunnelCommand("ssh -N -L18789:127.0.0.1:18789 user@host", localPort: 18789))
+
+        // Wrong local port, missing -N (interactive forward), other binaries, or a
+        // forward to a non-loopback host are not ours to kill.
+        #expect(!PortGuardian.isTunnelCommand(full, localPort: 18790))
+        #expect(!PortGuardian.isTunnelCommand("ssh -L 18789:127.0.0.1:18789 user@host", localPort: 18789))
+        #expect(!PortGuardian.isTunnelCommand("ssh -N -L 18789:example.com:80 user@host", localPort: 18789))
+        #expect(!PortGuardian.isTunnelCommand("sshd: user [priv]", localPort: 18789))
+        #expect(!PortGuardian.isTunnelCommand("node server.js -N -L 18789:127.0.0.1:18789", localPort: 18789))
+        #expect(!PortGuardian.isTunnelCommand("", localPort: 18789))
+    }
+
+    @Test func `port guardian classifies tunnel records for reaping`() {
+        let recordedAt: TimeInterval = 1_000_000
+        let record = PortGuardian.Record(
+            port: 18789, pid: 4242, command: "/usr/bin/ssh", mode: "remote", timestamp: recordedAt)
+        let tunnel = "/usr/bin/ssh -o BatchMode=yes -n -N -L 18789:127.0.0.1:18789 -- user@host"
+        let spawnedBeforeRecord = recordedAt - 2
+
+        // Process gone → stale record.
+        #expect(PortGuardian.classifyTunnelRecord(record, process: nil) == .drop)
+        // Pid reused by an unrelated process → drop the record, never kill.
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 1, startedAt: spawnedBeforeRecord, fullCommand: "node server.js"))
+            == .drop)
+        // Pid reused by a look-alike tunnel started after the record was written →
+        // different process, drop without killing.
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 1, startedAt: recordedAt + 3600, fullCommand: tunnel)) == .drop)
+        // Reparented to launchd → owning app instance died → reap.
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 1, startedAt: spawnedBeforeRecord, fullCommand: tunnel)) == .reap)
+        // Parent alive (e.g. a concurrent OpenClaw instance) → hands off.
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 987, startedAt: spawnedBeforeRecord, fullCommand: tunnel)) == .keep)
+        // Command unreadable → cannot prove ownership → keep.
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 1, startedAt: spawnedBeforeRecord, fullCommand: nil)) == .keep)
+    }
+
+    @Test func `port guardian reap plan merges disk records and drops stale ones`() {
+        func record(pid: Int32, port: Int, timestamp: TimeInterval) -> PortGuardian.Record {
+            PortGuardian.Record(
+                port: port, pid: pid, command: "/usr/bin/ssh", mode: "remote", timestamp: timestamp)
+        }
+        func tunnel(port: Int) -> String {
+            "/usr/bin/ssh -o BatchMode=yes -n -N -L \(port):127.0.0.1:18789 -- user@host"
+        }
+
+        // pid 10: our live tunnel (parent alive). Disk-only records from a crashed
+        // sibling instance: pid 20 orphaned, pid 30 already gone.
+        let own = [record(pid: 10, port: 18790, timestamp: 300)]
+        let disk = [
+            record(pid: 20, port: 18789, timestamp: 100),
+            record(pid: 30, port: 18791, timestamp: 200),
+            record(pid: 10, port: 1, timestamp: 1), // superseded by the own record
+        ]
+        let plan = PortGuardian.planTunnelReap(own: own, disk: disk, processInfo: { pid in
+            switch pid {
+            case 10: .init(parentPid: 987, startedAt: 299, fullCommand: tunnel(port: 18790))
+            case 20: .init(parentPid: 1, startedAt: 99, fullCommand: tunnel(port: 18789))
+            default: nil
+            }
+        })
+        #expect(plan.reap.map(\.pid) == [20])
+        #expect(plan.keep.map(\.pid) == [10])
+        #expect(plan.keep.first?.port == 18790)
+        // The dead pid 30 is reported as a drop; the shadowed pid-10 disk record is
+        // superseded, not dropped, so a reap cycle cannot delete the fresh record.
+        #expect(plan.drop.map(\.pid) == [30])
+    }
+
+    @Test func `port guardian classifies a real orphaned tunnel process for reaping`() async throws {
+        // Real ssh that hangs safely: ProxyCommand replaces the TCP transport, so no
+        // network traffic happens and the -L port is never bound (forwards only bind
+        // after auth). Spawned through sh so the parent exits and ssh reparents to
+        // launchd — the exact orphan shape the reaper must detect.
+        let port = 45871
+        // Detach the child's stdio: the pipe must reach EOF when sh exits, not when ssh dies.
+        let script = "/usr/bin/ssh -o BatchMode=yes -o ProxyCommand='sleep 60' " +
+            "-N -L \(port):127.0.0.1:\(port) orphan-reap-test-host >/dev/null 2>&1 & echo $!"
+        let spawn = Process()
+        spawn.executableURL = URL(fileURLWithPath: "/bin/sh")
+        spawn.arguments = ["-c", script]
+        let out = Pipe()
+        spawn.standardOutput = out
+        try spawn.run()
+        spawn.waitUntilExit()
+        let pidText = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let pid = try #require(Int32(pidText.trimmingCharacters(in: .whitespacesAndNewlines)))
+        defer { kill(pid, SIGKILL) }
+
+        // Reparenting to launchd is immediate once sh exits, but give ps/sysctl a beat.
+        var info: PortGuardian.TunnelProcessInfo?
+        for _ in 0..<40 {
+            info = PortGuardian._testTunnelProcessInfo(pid: pid)
+            if info?.parentPid == 1, info?.fullCommand?.isEmpty == false { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let orphan = try #require(info)
+        #expect(orphan.parentPid == 1)
+        // Kernel start time must be sane so the pid-reuse gate can rely on it.
+        #expect(abs(orphan.startedAt - Date().timeIntervalSince1970) < 60)
+        let recordedAt = Date().timeIntervalSince1970
+        let record = PortGuardian.Record(
+            port: port, pid: pid, command: "/usr/bin/ssh", mode: "remote", timestamp: recordedAt)
+        #expect(PortGuardian.classifyTunnelRecord(record, process: orphan) == .reap)
+
+        // Same process under a different recorded port must never be reap-eligible.
+        let mismatched = PortGuardian.Record(
+            port: port + 1, pid: pid, command: "/usr/bin/ssh", mode: "remote", timestamp: recordedAt)
+        #expect(PortGuardian.classifyTunnelRecord(mismatched, process: orphan) == .drop)
+
+        // A record predating this process (reused pid) must drop, not reap.
+        let predates = PortGuardian.Record(
+            port: port, pid: pid, command: "/usr/bin/ssh", mode: "remote",
+            timestamp: orphan.startedAt - 3600)
+        #expect(PortGuardian.classifyTunnelRecord(predates, process: orphan) == .drop)
+    }
+
     @Test @MainActor func `canvas scheme handler resolves files and errors`() throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("canvas-\(UUID().uuidString)", isDirectory: true)

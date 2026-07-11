@@ -149,14 +149,14 @@ export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
 /**
  * Lists generated plugin SDK root-alias outputs.
  */
-export function listPluginSdkRootAliasOutputs() {
+function listPluginSdkRootAliasOutputs() {
   return [PLUGIN_SDK_ROOT_ALIAS_OUTPUT];
 }
 
 /**
  * Lists generated official channel catalog outputs.
  */
-export function listOfficialChannelCatalogOutputs() {
+function listOfficialChannelCatalogOutputs() {
   return [OFFICIAL_CHANNEL_CATALOG_OUTPUT];
 }
 
@@ -232,7 +232,7 @@ function resolveStableRootRuntimeAliasCandidate(params) {
 /**
  * Lists stable aliases for hashed root runtime/contract chunks.
  */
-export function listStableRootRuntimeAliasOutputs(params = {}) {
+function listStableRootRuntimeAliasOutputs(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
@@ -252,7 +252,7 @@ export function listStableRootRuntimeAliasOutputs(params = {}) {
 /**
  * Lists compatibility chunk outputs required for old CLI exit paths.
  */
-export function listLegacyCliExitCompatOutputs(params = {}) {
+function listLegacyCliExitCompatOutputs(params = {}) {
   const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
   return chunks
     .map(({ dest }) => dest.replace(/\\/g, "/"))
@@ -262,7 +262,7 @@ export function listLegacyCliExitCompatOutputs(params = {}) {
 /**
  * Lists legacy hashed runtime aliases that may be needed during live upgrades.
  */
-export function listLegacyRootRuntimeCompatOutputs(params = {}) {
+function listLegacyRootRuntimeCompatOutputs(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
@@ -549,17 +549,35 @@ function shouldCopyStaticExtensionAssets(params) {
  * Runs every runtime postbuild phase after the main dist build.
  */
 export function runRuntimePostBuild(params = {}) {
-  const timingsEnabled = params.timings ?? process.env.OPENCLAW_RUNTIME_POSTBUILD_TIMINGS !== "0";
+  const timingsSetting = params.timings ?? process.env.OPENCLAW_RUNTIME_POSTBUILD_TIMINGS;
+  const timingsEnabled = timingsSetting !== "0" && timingsSetting !== false;
+  // Per-phase lines are debug detail; default output is one summary line so a
+  // routine rebuild does not print nine near-identical timing rows.
+  const perPhaseEnabled = timingsSetting === "verbose" || timingsSetting === true;
+  const phaseTimings = [];
   const runPhase = (label, action) => {
     const startedAt = performance.now();
     try {
       return action();
     } finally {
-      if (timingsEnabled) {
-        const durationMs = Math.round(performance.now() - startedAt);
+      const durationMs = Math.round(performance.now() - startedAt);
+      phaseTimings.push({ label, durationMs });
+      if (perPhaseEnabled) {
         console.error(`runtime-postbuild: ${label} completed in ${durationMs}ms`);
       }
     }
+  };
+  const logSummary = () => {
+    if (!timingsEnabled || perPhaseEnabled || phaseTimings.length === 0) {
+      return;
+    }
+    const totalMs = phaseTimings.reduce((sum, phase) => sum + phase.durationMs, 0);
+    const slowest = phaseTimings.reduce((max, phase) =>
+      phase.durationMs > max.durationMs ? phase : max,
+    );
+    console.error(
+      `runtime-postbuild: ${phaseTimings.length} phases completed in ${totalMs}ms (slowest: ${slowest.label} ${slowest.durationMs}ms)`,
+    );
   };
   runPhase("plugin SDK root alias", () => copyPluginSdkRootAlias(params));
   runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(params));
@@ -580,6 +598,7 @@ export function runRuntimePostBuild(params = {}) {
   runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(params));
   runPhase("legacy root runtime compat aliases", () => writeLegacyRootRuntimeCompatAliases(params));
   runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(params));
+  logSummary();
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

@@ -1,3 +1,4 @@
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 // System prompt tests cover the main prompt facade, prompt-surface routing, and
 // user-visible sections for owners, tools, safety, skills, and subagents.
 import { describe, expect, it } from "vitest";
@@ -5,8 +6,8 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
+import { buildSkillWorkshopPromptSection } from "./skill-workshop-prompt.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
   buildAgentBootstrapSystemContext,
   buildAgentBootstrapSystemPromptSections,
@@ -733,12 +734,20 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("instructs models to use skill_workshop only when the tool is available", () => {
+    const section = buildSkillWorkshopPromptSection();
+    const sectionText = section.join("\n");
+    expect(section.length).toBeLessThanOrEqual(4);
+    expect(sectionText).toContain("Route durable skill work");
+    expect(sectionText).toContain("through the `skill_workshop` tool");
+    expect(sectionText).toContain("Generated skills are pending proposals.");
+    expect(sectionText).toContain("only when the user explicitly asks");
+
     const withoutTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["read"],
     });
     expect(withoutTool).not.toContain("## Skill Workshop");
-    expect(withoutTool).not.toContain("use `skill_workshop`");
+    expect(withoutTool).not.toContain("Route durable skill work");
 
     const withTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -748,32 +757,8 @@ describe("buildAgentSystemPrompt", () => {
       "- skill_workshop: Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     );
     expect(withTool).toContain("## Skill Workshop");
-    expect(withTool).toContain(
-      "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
-    );
-    expect(withTool).toContain(
-      "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
-    );
-    expect(withTool).toContain(
-      "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations.",
-    );
-    expect(withTool).toContain("keep `description` under 160 bytes");
-    expect(withTool).toContain("`proposal_content` within the configured body limit");
-    expect(withTool).toContain(
-      "Use `action=list` or `action=inspect` only for pending proposal discovery/inspection. Do not use filesystem search for proposal discovery.",
-    );
-    expect(withTool).toContain("`action=revise` for an existing pending proposal");
-    expect(withTool).toContain("pass the proposal or skill name in `name`");
-    expect(withTool).toContain(
-      "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal.",
-    );
-    expect(withTool).toContain("Generated skills are pending proposals by default.");
-    expect(withTool).toContain(
-      "Do not apply, reject, or quarantine proposals manually with filesystem operations or shell commands.",
-    );
-    expect(withTool).toContain(
-      "You may gather context first, but the durable proposal write or lifecycle change must use `skill_workshop`.",
-    );
+    expect(withTool).toContain("Route durable skill work");
+    expect(withTool).toContain("Generated skills are pending proposals.");
   });
 
   it("appends available skills when provided", () => {
@@ -966,6 +951,49 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds run-scoped Ultra orchestration only when sessions_spawn is callable", () => {
+    const base = {
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+      subagentDelegationMode: "prefer",
+    } satisfies Parameters<typeof buildAgentSystemPrompt>[0];
+    const maxPrompt = buildAgentSystemPrompt(base);
+    const ultraPrompt = buildAgentSystemPrompt({
+      ...base,
+      proactiveSubagentOrchestration: true,
+    });
+    const deferredUltraPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["tool_search"],
+      capabilityToolNames: ["sessions_spawn"],
+      proactiveSubagentOrchestration: true,
+    });
+    const minimalUltraPrompt = buildAgentSystemPrompt({
+      ...base,
+      promptMode: "minimal",
+      proactiveSubagentOrchestration: true,
+    });
+    const unavailablePrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["subagents"],
+      proactiveSubagentOrchestration: true,
+    });
+    const rawPrompt = buildAgentSystemPrompt({
+      ...base,
+      promptMode: "none",
+      proactiveSubagentOrchestration: true,
+    });
+
+    expect(maxPrompt).not.toContain("## Proactive Sub-Agent Orchestration");
+    expect(ultraPrompt).toContain("## Proactive Sub-Agent Orchestration");
+    expect(ultraPrompt).toContain("Ultra mode is active");
+    expect(ultraPrompt).not.toContain("Mode: prefer");
+    expect(deferredUltraPrompt).toContain("## Proactive Sub-Agent Orchestration");
+    expect(minimalUltraPrompt).toContain("## Proactive Sub-Agent Orchestration");
+    expect(unavailablePrompt).not.toContain("## Proactive Sub-Agent Orchestration");
+    expect(rawPrompt).not.toContain("## Proactive Sub-Agent Orchestration");
+  });
+
   it("omits prefer delegation guidance when sessions_spawn is unavailable", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1116,7 +1144,10 @@ describe("buildAgentSystemPrompt", () => {
         },
       });
 
-      expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
+      expect(prompt).toContain(
+        "you MUST call `message(action=send)` for visible source-channel output",
+      );
+      expect(prompt).toContain("skipping the tool means the user receives nothing");
       expect(prompt).toContain(
         "Tool/generated media paths are attachments, not prose; send one with `media`, multiple with `attachments: [{media: ...}]`.",
       );
@@ -1195,7 +1226,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
+    expect(prompt).toContain(
+      "you MUST call `message(action=send)` for visible source-channel output",
+    );
     expect(prompt).not.toContain("Group/channel etiquette");
   });
 
@@ -1328,6 +1361,40 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("channel=telegram");
     expect(line).toContain("capabilities=inlinebuttons");
     expect(line).toContain("thinking=low");
+  });
+
+  it("keeps the runtime line cache-stable across isolated cron runs", () => {
+    // Isolated cron run-scoped keys carry a fresh per-run id every run (forceNew). Rendering it
+    // verbatim re-busts byte-exact prefix caching for the tool catalog after it (#96677 / #43148).
+    const buildForRun = (runId: string) =>
+      buildRuntimeLine({
+        agentId: "work",
+        sessionKey: `agent:work:cron:nightly-job:run:${runId}`,
+        sessionId: runId,
+        host: "host",
+        os: "linux",
+      });
+    const lineA = buildForRun("11111111-1111-1111-1111-111111111111");
+    const lineB = buildForRun("22222222-2222-2222-2222-222222222222");
+
+    expect(lineA).toContain("session=agent:work:cron:nightly-job");
+    expect(lineA).not.toContain(":run:");
+    expect(lineA).not.toContain("sessionId=");
+    // Two runs of the same job render identical bytes, so the cached prefix is reused.
+    expect(lineA).toBe(lineB);
+  });
+
+  it("preserves a stable session id that is not the run-scope id", () => {
+    const line = buildRuntimeLine({
+      agentId: "work",
+      sessionKey: "agent:work:cron:nightly-job:run:run-id",
+      sessionId: "stable-session-id",
+      host: "host",
+      os: "linux",
+    });
+
+    expect(line).toContain("session=agent:work:cron:nightly-job");
+    expect(line).toContain("sessionId=stable-session-id");
   });
 
   it("renders extra system prompt exactly once", () => {

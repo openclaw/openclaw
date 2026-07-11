@@ -24,7 +24,7 @@ import { resolveOAuthDir } from "../config/paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
-import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
+import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import type { ExecFn } from "./windows-acl.js";
 
@@ -93,38 +93,6 @@ export async function collectPluginsTrustFindings(
 // Helpers
 // --------------------------------------------------------------------------
 
-async function safeStat(targetPath: string): Promise<{
-  ok: boolean;
-  isSymlink: boolean;
-  isDir: boolean;
-  mode: number | null;
-  uid: number | null;
-  gid: number | null;
-  error?: string;
-}> {
-  try {
-    const lst = await fs.lstat(targetPath);
-    return {
-      ok: true,
-      isSymlink: lst.isSymbolicLink(),
-      isDir: lst.isDirectory(),
-      mode: typeof lst.mode === "number" ? lst.mode : null,
-      uid: typeof lst.uid === "number" ? lst.uid : null,
-      gid: typeof lst.gid === "number" ? lst.gid : null,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      isSymlink: false,
-      isDir: false,
-      mode: null,
-      uid: null,
-      gid: null,
-      error: String(err),
-    };
-  }
-}
-
 function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   if (!p.startsWith("~")) {
     return p;
@@ -181,27 +149,6 @@ function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string):
       return `  - [${finding.ruleId}] ${finding.message} (${normalizedPath}:${finding.line})`;
     })
     .join("\n");
-}
-
-async function listInstalledPluginDirs(params: {
-  stateDir: string;
-  onReadError?: (error: unknown) => void;
-}): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
-  const extensionsDir = path.join(params.stateDir, "extensions");
-  const st = await safeStat(extensionsDir);
-  if (!st.ok || !st.isDir) {
-    return { extensionsDir, pluginDirs: [] };
-  }
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err: unknown) => {
-    params.onReadError?.(err);
-    return [];
-  });
-  const pluginDirs = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .filter((name) => !shouldIgnoreInstalledPluginDirName(name))
-    .filter(Boolean);
-  return { extensionsDir, pluginDirs };
 }
 
 function buildCodeSafetySummaryCacheKey(params: {
@@ -549,6 +496,7 @@ export async function collectIncludeFilePermFindings(params: {
   const includePaths = await collectIncludePathsRecursive({
     configPath,
     parsed: params.configSnapshot.parsed,
+    env: params.env,
   });
   if (includePaths.length === 0) {
     return findings;
@@ -930,7 +878,10 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const { loadWorkspaceSkillEntries } = await loadSkillsModule();
 
   for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: params.cfg,
+      includeArchived: true,
+    });
     for (const entry of entries) {
       if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
         continue;

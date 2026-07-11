@@ -1,30 +1,9 @@
 // Telegram tests cover bot message context.require mention plugin behavior.
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const { defaultRouteConfig } = vi.hoisted(() => ({
-  defaultRouteConfig: {
-    agents: {
-      list: [{ id: "main", default: true }],
-    },
-    channels: { telegram: {} },
-    messages: { groupChat: { mentionPatterns: [] } },
-  },
-}));
-
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return {
-    ...actual,
-    getRuntimeConfig: vi.fn(() => defaultRouteConfig),
-  };
-});
+import { describe, expect, it, vi } from "vitest";
 
 const { buildTelegramMessageContextForTest } =
   await import("./bot-message-context.test-harness.js");
-const { buildTelegramGroupHistorySelfSender } = await import("./group-history-window.js");
+const { buildTelegramSelfSenderName } = await import("./group-history-window.js");
 
 describe("buildTelegramMessageContext requireMention precedence", () => {
   function buildForumMessage(threadId = 99) {
@@ -42,10 +21,6 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       from: { id: 42, first_name: "Alice" },
     };
   }
-
-  beforeEach(() => {
-    vi.mocked(getRuntimeConfig).mockReturnValue(defaultRouteConfig as never);
-  });
 
   it("lets explicit topic requireMention=false override group requireMention=true", async () => {
     const ctx = await buildTelegramMessageContextForTest({
@@ -90,6 +65,27 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     expect(ctx?.ctxPayload.InboundEventKind).toBe("room_event");
+  });
+
+  it("keeps explicit bot mentions as user requests in always-on room-event groups", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg: { messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } } },
+      message: {
+        ...buildForumMessage(),
+        text: "@bot status",
+        entities: [{ type: "mention", offset: 0, length: "@bot".length }],
+      },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
+    expect(ctx?.ctxPayload.WasMentioned).toBe(true);
+    expect(ctx?.ctxPayload.ExplicitlyMentionedBot).toBe(true);
   });
 
   it("keeps ambient abort phrases as user requests", async () => {
@@ -288,7 +284,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
         [
           { sender: "Alice", body: "before self marker", timestamp: 1, messageId: "1" },
           {
-            sender: buildTelegramGroupHistorySelfSender("OpenClaw"),
+            sender: buildTelegramSelfSenderName("OpenClaw"),
             body: "self marker body",
             timestamp: 2,
             messageId: "2",

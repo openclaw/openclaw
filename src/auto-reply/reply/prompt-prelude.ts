@@ -78,7 +78,7 @@ export function buildReplyPromptBodies(params: {
 }
 
 /** Startup action associated with a reply prompt envelope. */
-export type ReplyPromptEnvelopeStartupAction = "new" | "reset";
+type ReplyPromptEnvelopeStartupAction = "new" | "reset";
 
 /** Full prompt envelope passed into reply run preparation. */
 export type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
@@ -106,6 +106,7 @@ type ReplyPromptEnvelopeBaseParams = {
   baseBody: string;
   hasUserBody: boolean;
   inboundUserContext: string;
+  activeGoalContext?: string;
   inboundUserContextPromptJoiner?: CurrentInboundPromptContext["promptJoiner"];
   isBareSessionReset: boolean;
   startupAction: ReplyPromptEnvelopeStartupAction;
@@ -243,6 +244,7 @@ export function buildReplyPromptEnvelopeBase(
           text: currentInboundContextText,
           ...(resumableRoomEventContext ? { resumableText: resumableRoomEventContext } : {}),
           promptJoiner: params.inboundUserContextPromptJoiner,
+          ...(params.activeGoalContext ? { injectedGoalContexts: [params.activeGoalContext] } : {}),
         }
       : undefined;
 

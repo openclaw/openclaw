@@ -3,14 +3,12 @@ import {
   type BuildChannelInboundEventContextParams,
   type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
-  classifyChannelInboundEvent,
   formatInboundEnvelope,
-  resolveUnmentionedGroupInboundPolicy,
   resolveEnvelopeFormatOptions,
   toLocationContext,
   type NormalizedLocation,
+  type InboundEventKind,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -25,6 +23,7 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import type {
@@ -60,7 +59,7 @@ import {
 } from "./group-history-window.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
-export type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
+type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
   From: string;
   To: string;
   ChatType: string;
@@ -195,6 +194,7 @@ export async function buildTelegramInboundContextPayload(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
+  inboundEventKind: InboundEventKind;
   groupRequireMention: boolean;
   mentionFacts: TelegramMentionFacts;
   hasControlCommand: boolean;
@@ -246,6 +246,7 @@ export async function buildTelegramInboundContextPayload(params: {
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
+    inboundEventKind,
     groupRequireMention,
     mentionFacts,
     hasControlCommand,
@@ -321,17 +322,18 @@ export async function buildTelegramInboundContextPayload(params: {
   const visibleReplyTargetEntry = visibleReplyTarget
     ? replyTargetToChainEntry(visibleReplyTarget)
     : undefined;
-  const visibleReplyTargetById = new Map<string, TelegramReplyChainEntry>(
-    visibleReplyTargetEntry?.messageId
-      ? [[visibleReplyTargetEntry.messageId, visibleReplyTargetEntry]]
-      : [],
-  );
   const rawReplyChain =
     replyChain.length > 0 ? replyChain : visibleReplyTargetEntry ? [visibleReplyTargetEntry] : [];
   const visibleReplyChain = rawReplyChain.flatMap((entry) => {
+    const selectedReplyEntry =
+      entry.messageId === visibleReplyTargetEntry?.messageId ? visibleReplyTargetEntry : undefined;
     const visibleEntry = {
       ...entry,
-      ...(entry.messageId ? visibleReplyTargetById.get(entry.messageId) : undefined),
+      ...selectedReplyEntry,
+      // Preserve authenticated identity while Telegram's selected quote body wins.
+      sender: entry.sender,
+      senderId: entry.senderId,
+      senderUsername: entry.senderUsername,
     };
     if (
       !shouldIncludeGroupSupplementalContext({
@@ -430,22 +432,7 @@ export async function buildTelegramInboundContextPayload(params: {
   const commandSource =
     options?.commandSource ??
     (commandAuthorized && hasControlCommand ? ("text" as const) : undefined);
-  const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({
-    cfg,
-    agentId: route.agentId,
-  });
-  const hasAbortRequest = isAbortRequestText(rawBody, {
-    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
-  });
   const conversationKind = isGroup ? "group" : "direct";
-  const inboundEventKind = classifyChannelInboundEvent({
-    conversation: { kind: conversationKind },
-    unmentionedGroupPolicy,
-    wasMentioned: effectiveWasMentioned,
-    hasControlCommand,
-    hasAbortRequest,
-    commandSource,
-  });
   let watermarkedGroupHistoryEntries: HistoryEntry[] | undefined;
   let groupHistoryPromptEntries: HistoryEntry[] = [];
   if (hasGroupHistoryContext && historyKey && historyLimit > 0) {
@@ -698,7 +685,7 @@ export async function buildTelegramInboundContextPayload(params: {
       : undefined;
 
   if (visibleReplyTarget && shouldLogVerbose()) {
-    const preview = (visibleReplyTarget.body ?? "").replace(/\s+/g, " ").slice(0, 120);
+    const preview = truncateUtf16Safe((visibleReplyTarget.body ?? "").replace(/\s+/g, " "), 120);
     logVerbose(
       `telegram reply-context: replyToId=${visibleReplyTarget.id} replyToSender=${visibleReplyTarget.sender} replyToBody="${preview}"`,
     );
@@ -711,7 +698,7 @@ export async function buildTelegramInboundContextPayload(params: {
   }
 
   if (shouldLogVerbose()) {
-    const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+    const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");
     const mediaInfo = allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
     const topicInfo = resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
     logVerbose(

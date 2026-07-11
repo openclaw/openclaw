@@ -94,7 +94,7 @@ internal class AndroidAudioInputSession private constructor(
     buffer: ByteArray,
     offset: Int,
     size: Int,
-  ): Int = audioRecord.read(buffer, offset, size)
+  ): Int = checkAudioRecordReadResult(audioRecord.read(buffer, offset, size))
 
   private fun openRoute() {
     audioManager.registerAudioDeviceCallback(deviceCallback, callbackHandler)
@@ -202,6 +202,20 @@ private class BluetoothCommunicationRoute {
 }
 
 private val bluetoothCommunicationRoute = BluetoothCommunicationRoute()
+
+/** Converts AudioRecord's negative return codes into capture-session failures. */
+internal fun checkAudioRecordReadResult(result: Int): Int {
+  if (result >= 0) return result
+  val label =
+    when (result) {
+      AudioRecord.ERROR -> "ERROR"
+      AudioRecord.ERROR_BAD_VALUE -> "ERROR_BAD_VALUE"
+      AudioRecord.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION"
+      AudioRecord.ERROR_DEAD_OBJECT -> "ERROR_DEAD_OBJECT"
+      else -> "code=$result"
+    }
+  throw IllegalStateException("microphone read failed: $label")
+}
 
 private fun selectBluetoothDevice(
   devices: List<AudioDeviceInfo>,

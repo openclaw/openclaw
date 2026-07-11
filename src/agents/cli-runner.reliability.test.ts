@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
@@ -23,6 +24,7 @@ import {
   resolveMcpLoopbackYieldContext,
   updateMcpLoopbackToolCallCapture,
 } from "../gateway/mcp-http.loopback-runtime.js";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -32,7 +34,11 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import { runSkillResearchAutoCapture } from "../skills/research/autocapture.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { runPreparedCliAgent } from "./cli-runner.js";
+import {
+  restoreCliRunnerTestDeps,
+  runPreparedCliAgent,
+  setCliRunnerTestDeps,
+} from "./cli-runner.js";
 import {
   createManagedRun,
   enqueueSystemEventMock,
@@ -46,9 +52,11 @@ import {
   resolveCliRunTimeoutOverrideMs,
 } from "./cli-runner/helpers.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
+import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import { MAX_CLI_SESSION_HISTORY_MESSAGES } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
@@ -301,7 +309,17 @@ const CLI_RESEED_PROMPT =
   "Continue this conversation using the OpenClaw transcript below as prior session history.\n\n<conversation_history>\nUser: earlier context\n</conversation_history>\n\n<next_user_message>\nhi\n</next_user_message>";
 
 describe("runCliAgent reliability", () => {
+  beforeEach(() => {
+    // Binding-flush retry timing has dedicated coverage. Reliability cases only
+    // need its stable not-yet-flushed outcome, without filesystem polling/sleeps.
+    setCliRunnerTestDeps({
+      claudeCliSessionTranscriptHasContent: async () => false,
+      delay: async () => {},
+    });
+  });
+
   afterEach(() => {
+    restoreCliRunnerTestDeps();
     replyRunTesting.resetReplyRunRegistry();
     mockGetGlobalHookRunner.mockReset();
     mockAutoCapture.mockReset();
@@ -311,6 +329,8 @@ describe("runCliAgent reliability", () => {
     sessionFileEnvSnapshot?.restore();
     sessionFileEnvSnapshot = undefined;
     resetClaudeLiveSessionsForTest();
+    resetDiagnosticEventsForTest();
+    vi.useRealTimers();
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {
@@ -591,11 +611,60 @@ describe("runCliAgent reliability", () => {
       model: "opus",
       openClawHistoryPrompt: CLI_RESEED_PROMPT,
     });
+    context.preparedBackend.backend = {
+      ...context.preparedBackend.backend,
+      resumeArgs: ["exec", "resume", "{sessionId}", "--json"],
+      imageArg: "--image",
+      imageMode: "repeat",
+    };
+    const stateDir = autoCleanupTempDirs.make("openclaw-cli-retry-images-");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "offloaded.png";
+    const offloadedImage = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const inlineImage = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.mkdirSync(inboundDir, { recursive: true });
+    fs.writeFileSync(path.join(inboundDir, mediaId), offloadedImage);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const currentTurn = `compare these\n[media attached: media://inbound/${mediaId}]`;
+    context.workspaceDir = workspaceDir;
+    context.params = {
+      ...context.params,
+      workspaceDir,
+      prompt: `[Retry after failure]\n\n${currentTurn}`,
+      imagePrompt: currentTurn,
+      images: [
+        {
+          type: "image",
+          data: inlineImage.toString("base64"),
+          mimeType: "image/png",
+        },
+      ],
+      imageOrder: ["offloaded", "inline"],
+    };
 
     const result = await runPreparedCliAgent(context);
 
     expect(result.payloads).toEqual([{ text: "hello from fresh cli" }]);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    for (const [index, label] of ["resumed", "fresh"].entries()) {
+      const spawn = requireRecord(
+        callArg(supervisorSpawnMock, index, 0, `${label} image CLI spawn`),
+        `${label} image CLI spawn`,
+      );
+      const argv = requireArray(spawn.argv, `${label} image CLI argv`);
+      const imagePaths = argv.flatMap((arg, argIndex) =>
+        arg === "--image" && typeof argv[argIndex + 1] === "string"
+          ? [argv[argIndex + 1] as string]
+          : [],
+      );
+      expect(imagePaths).toHaveLength(2);
+      expect(fs.readFileSync(imagePaths[0])).toEqual(offloadedImage);
+      expect(fs.readFileSync(imagePaths[1])).toEqual(inlineImage);
+      expect(argv.includes("resume")).toBe(index === 0);
+      expect(argv.includes("stale-cli-session")).toBe(index === 0);
+    }
   });
 
   it("does not retry or fail over after a confirmed message send", async () => {
@@ -629,7 +698,7 @@ describe("runCliAgent reliability", () => {
             mediaUrl: "https://example.com/done.png",
           },
           result: { status: "sent" },
-          isError: false,
+          outcome: "completed",
         });
         markMcpLoopbackToolCallFinished(captureHandle);
       }, 10);
@@ -694,8 +763,8 @@ describe("runCliAgent reliability", () => {
           target: "chat123",
           message: "sent before failure",
         },
+        outcome: "completed",
         result: { status: "sent" },
-        isError: false,
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       return createManagedRun({
@@ -760,7 +829,7 @@ describe("runCliAgent reliability", () => {
           message: "sent before overflow",
         },
         result: { status: "sent" },
-        isError: false,
+        outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       return createManagedRun({
@@ -823,7 +892,7 @@ describe("runCliAgent reliability", () => {
             sourceReply: { text: "sent before failure" },
           },
         },
-        isError: false,
+        outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       return createManagedRun({
@@ -843,6 +912,8 @@ describe("runCliAgent reliability", () => {
       provider: "claude-cli",
       model: "opus",
     });
+    context.preparedBackend.backend.sessionMode = "none";
+    context.backendResolved.config = context.preparedBackend.backend;
     context.mcpDeliveryCapture = true;
     context.params.sourceReplyDeliveryMode = "message_tool_only";
     context.preparedBackend.cleanup = async () => {
@@ -864,7 +935,7 @@ describe("runCliAgent reliability", () => {
       },
     });
     expect(result.meta.agentMeta?.sessionId).toBe("");
-    expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
@@ -934,7 +1005,7 @@ describe("runCliAgent reliability", () => {
             sourceReply: { text: "sent through source reply" },
           },
         },
-        isError: false,
+        outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       return createManagedRun({
@@ -1008,7 +1079,7 @@ describe("runCliAgent reliability", () => {
             sourceReply: { text: "visible source reply" },
           },
         },
-        isError: false,
+        outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       return createManagedRun({
@@ -1084,7 +1155,7 @@ describe("runCliAgent reliability", () => {
           message: "sent without a terminal reply",
         },
         result: { status: "sent" },
-        isError: false,
+        outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       input.onStdout?.(
@@ -1115,6 +1186,46 @@ describe("runCliAgent reliability", () => {
     expect(result.payloads).toBeUndefined();
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("success");
+  });
+
+  it("does not persist an emitted CLI session id when sessions are disabled", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      input.onStdout?.(
+        `${JSON.stringify({ type: "result", session_id: "stateless-cli-id", result: "ok" })}\n`,
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    setCliRunnerTestDeps({
+      claudeCliSessionTranscriptHasContent: async () => true,
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:stateless",
+      runId: "run-stateless-session-id",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    context.preparedBackend.backend.output = "jsonl";
+    context.preparedBackend.backend.input = "stdin";
+    context.preparedBackend.backend.sessionMode = "none";
+    context.backendResolved.config = context.preparedBackend.backend;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([{ text: "ok" }]);
+    expect(result.meta.agentMeta?.sessionId).toBe("s1");
+    expect(result.meta.agentMeta?.cliSessionBinding).toBeUndefined();
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
   });
 
   it("keeps unresolved internal source replies retryable", async () => {
@@ -1603,7 +1714,10 @@ describe("runCliAgent reliability", () => {
   });
 
   it("keeps non-capture live-session artifacts through fresh recovery retry", async () => {
+    vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
+    const transcriptProbe = vi.fn(async () => false);
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: transcriptProbe });
     const artifactDir = autoCleanupTempDirs.make("openclaw-live-retry-artifacts-");
     const mcpConfigPath = path.join(artifactDir, "mcp.json");
     const skillsDir = path.join(artifactDir, "skills-plugin");
@@ -1751,10 +1865,13 @@ describe("runCliAgent reliability", () => {
       },
     });
     await firstSpawned;
+    await vi.advanceTimersByTimeAsync(1_000);
     const result = await resultPromise;
 
     expect(result.payloads).toEqual([{ text: "fresh ok" }]);
     expect(result.meta.finalPromptText).toContain("User: earlier context");
+    expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBe("fresh-live");
+    expect(transcriptProbe).not.toHaveBeenCalled();
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
     expect(clearBeforeRetry).toHaveBeenCalledWith({
       provider: "claude-cli",
@@ -2636,6 +2753,331 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("records transformed fresh Claude reseed prompts with durable local proof", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from claude",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const historyPrompt = [
+      "Continue this conversation using the OpenClaw transcript below as prior session history.",
+      "Treat it as authoritative context for this fresh CLI session.",
+      "",
+      "<conversation_history>",
+      "User: earlier ask",
+      "</conversation_history>",
+      "",
+      "<next_user_message>",
+      "current ask",
+      "</next_user_message>",
+    ].join("\n");
+
+    try {
+      setCliRunnerTestDeps({
+        claudeCliSessionTranscriptHasContent: async () => true,
+      });
+      const context = buildPreparedContext({
+        provider: "claude-cli",
+        model: "claude-opus-4-6",
+        openClawHistoryPrompt: historyPrompt,
+      });
+      context.preparedBackend.backend.sessionMode = "always";
+      context.backendResolved.textTransforms = {
+        input: [{ from: /[<>]/g, to: "_" }],
+      };
+      context.params = {
+        ...context.params,
+        agentId: "main",
+        sessionFile,
+        workspaceDir: dir,
+        userTurnTranscriptRecorder: createCliUserTurnRecorder({
+          text: "current ask",
+          sessionFile,
+          workspaceDir: dir,
+        }),
+      };
+
+      const result = await runPreparedCliAgent(context);
+      const binding = result.meta.agentMeta?.cliSessionBinding;
+
+      expect(binding?.reseedReceipt).toEqual({
+        version: 1,
+        promptHash: hashCliReseedPrompt(historyPrompt.replace(/[<>]/g, "_")),
+        localSessionId: "s1",
+        userTurnDisposition: "persisted",
+      });
+    } finally {
+      restoreCliRunnerTestDeps();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mint a reseed receipt without caller-owned durable proof", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from claude",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      setCliRunnerTestDeps({
+        claudeCliSessionTranscriptHasContent: async () => true,
+      });
+      const context = buildPreparedContext({
+        provider: "claude-cli",
+        model: "claude-opus-4-6",
+        openClawHistoryPrompt: CLI_RESEED_PROMPT,
+      });
+      context.preparedBackend.backend.sessionMode = "always";
+      context.params = {
+        ...context.params,
+        agentId: "main",
+        sessionFile,
+        workspaceDir: dir,
+        transcriptPrompt: "canonical current ask",
+      };
+
+      const result = await runPreparedCliAgent(context);
+
+      expect(result.meta.agentMeta?.cliSessionBinding?.reseedReceipt).toBeUndefined();
+      expect(readTranscriptMessages(sessionFile)).not.toContainEqual(
+        expect.objectContaining({ role: "user" }),
+      );
+    } finally {
+      restoreCliRunnerTestDeps();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("mints an omission receipt for a trusted suppressed reseed turn", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from claude",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const recorder = createUserTurnTranscriptRecorder({
+      target: {
+        transcriptPath: sessionFile,
+        sessionId: "s1",
+        agentId: "main",
+        cwd: dir,
+      },
+    });
+    recorder.markBlocked();
+
+    try {
+      setCliRunnerTestDeps({
+        claudeCliSessionTranscriptHasContent: async () => true,
+      });
+      const context = buildPreparedContext({
+        provider: "claude-cli",
+        model: "claude-opus-4-6",
+        openClawHistoryPrompt: CLI_RESEED_PROMPT,
+      });
+      context.preparedBackend.backend.sessionMode = "always";
+      context.params = {
+        ...context.params,
+        agentId: "main",
+        sessionFile,
+        workspaceDir: dir,
+        suppressNextUserMessagePersistence: true,
+        userTurnTranscriptRecorder: recorder,
+      };
+
+      const result = await runPreparedCliAgent(context);
+
+      expect(result.meta.agentMeta?.cliSessionBinding?.reseedReceipt).toEqual({
+        version: 1,
+        promptHash: hashCliReseedPrompt(CLI_RESEED_PROMPT),
+        localSessionId: "s1",
+        userTurnDisposition: "omitted",
+      });
+      expect(readTranscriptMessages(sessionFile)).toEqual([]);
+    } finally {
+      restoreCliRunnerTestDeps();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses durable local proof when a fallback suppresses duplicate persistence", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from claude",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const recorder = createCliUserTurnRecorder({
+      text: "current ask",
+      sessionFile,
+      workspaceDir: dir,
+    });
+
+    try {
+      const persisted = await recorder.persistApproved();
+      expect(persisted?.messageId).toEqual(expect.any(String));
+      setCliRunnerTestDeps({
+        claudeCliSessionTranscriptHasContent: async () => true,
+      });
+      const context = buildPreparedContext({
+        provider: "claude-cli",
+        model: "claude-opus-4-6",
+        openClawHistoryPrompt: CLI_RESEED_PROMPT,
+      });
+      context.preparedBackend.backend.sessionMode = "always";
+      const onUserMessagePersisted = vi.fn();
+      context.params = {
+        ...context.params,
+        agentId: "main",
+        sessionFile,
+        workspaceDir: dir,
+        suppressNextUserMessagePersistence: true,
+        userTurnTranscriptRecorder: recorder,
+        onUserMessagePersisted,
+      };
+
+      const result = await runPreparedCliAgent(context);
+
+      expect(result.meta.agentMeta?.cliSessionBinding?.reseedReceipt).toEqual({
+        version: 1,
+        promptHash: hashCliReseedPrompt(CLI_RESEED_PROMPT),
+        localSessionId: "s1",
+        userTurnDisposition: "persisted",
+      });
+      expect(onUserMessagePersisted).not.toHaveBeenCalled();
+    } finally {
+      restoreCliRunnerTestDeps();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses runtime-owned persistence proof", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from claude",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const recorder = createCliUserTurnRecorder({
+      text: "current ask",
+      sessionFile,
+      workspaceDir: dir,
+    });
+    recorder.markRuntimePersisted({
+      role: "user",
+      content: "current ask",
+      timestamp: Date.now(),
+    });
+
+    try {
+      setCliRunnerTestDeps({
+        claudeCliSessionTranscriptHasContent: async () => true,
+      });
+      const context = buildPreparedContext({
+        provider: "claude-cli",
+        model: "claude-opus-4-6",
+        openClawHistoryPrompt: CLI_RESEED_PROMPT,
+      });
+      context.preparedBackend.backend.sessionMode = "always";
+      context.params = {
+        ...context.params,
+        agentId: "main",
+        sessionFile,
+        workspaceDir: dir,
+        suppressNextUserMessagePersistence: true,
+        userTurnTranscriptRecorder: recorder,
+      };
+
+      const result = await runPreparedCliAgent(context);
+
+      expect(result.meta.agentMeta?.cliSessionBinding?.reseedReceipt).toEqual({
+        version: 1,
+        promptHash: hashCliReseedPrompt(CLI_RESEED_PROMPT),
+        localSessionId: "s1",
+        userTurnDisposition: "persisted",
+      });
+    } finally {
+      restoreCliRunnerTestDeps();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a reseed receipt when reusing the same Claude CLI session", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello again",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const reseedReceipt = {
+      version: 1 as const,
+      promptHash: "a".repeat(64),
+      localSessionId: "s1",
+      userTurnDisposition: "persisted" as const,
+    };
+    const context = buildPreparedContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      cliSessionId: "existing-cli-session",
+    });
+    context.params.cliSessionBinding = {
+      sessionId: "existing-cli-session",
+      reseedReceipt,
+    };
+
+    setCliRunnerTestDeps({
+      claudeCliSessionTranscriptHasContent: async () => true,
+    });
+    const result = await runPreparedCliAgent(context).finally(() => {
+      restoreCliRunnerTestDeps();
+    });
+
+    expect(result.meta.agentMeta?.cliSessionBinding?.reseedReceipt).toEqual(reseedReceipt);
+  });
+
   it("lets before_message_write block CLI assistant persistence without delivery fallback", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_message_write"),
@@ -2661,6 +3103,8 @@ describe("runCliAgent reliability", () => {
         sessionKey: "agent:main:main",
         runId: "run-blocked-cli",
       });
+      context.preparedBackend.backend.sessionMode = "none";
+      context.backendResolved.config = context.preparedBackend.backend;
       const result = await runPreparedCliAgent({
         ...context,
         params: {
@@ -2942,6 +3386,63 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("marks a before_message_write-rejected CLI user turn as blocked", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_message_write"),
+      runBeforeMessageWrite: vi.fn(() => ({ block: true })),
+    };
+    setHookRunnerForTest(hookRunner);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "blocked user turn" },
+      target: {
+        transcriptPath: sessionFile,
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        cwd: dir,
+      },
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+    });
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-blocked-cli-user-turn",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: recorder,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(recorder.hasPersisted()).toBe(false);
+      expect(recorder.isBlocked()).toBe(true);
+      expect(readTranscriptMessages(sessionFile)).toEqual([]);
+      expect(hookRunner.runBeforeMessageWrite).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not fail CLI execution when persistence notification fails", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -3056,6 +3557,12 @@ describe("runCliAgent reliability", () => {
     const { dir, sessionFile } = createSessionFile({
       history: [{ role: "user", content: "earlier context" }],
     });
+    const userTurnTranscriptRecorder = createCliUserTurnRecorder({
+      text: "secret prompt",
+      sessionFile,
+      sessionKey: "agent:main:main",
+      workspaceDir: dir,
+    });
 
     try {
       let resolved = false;
@@ -3063,6 +3570,7 @@ describe("runCliAgent reliability", () => {
         sessionKey: "agent:main:main",
         runId: "run-blocked-cli",
       });
+      context.preparedBackend.backend.sessionMode = "none";
       const run = runPreparedCliAgent({
         ...context,
         params: {
@@ -3071,12 +3579,7 @@ describe("runCliAgent reliability", () => {
           sessionFile,
           workspaceDir: dir,
           prompt: "secret prompt",
-          userTurnTranscriptRecorder: createCliUserTurnRecorder({
-            text: "secret prompt",
-            sessionFile,
-            sessionKey: "agent:main:main",
-            workspaceDir: dir,
-          }),
+          userTurnTranscriptRecorder,
           onUserMessagePersisted,
         },
       }).then((result) => {
@@ -3100,9 +3603,11 @@ describe("runCliAgent reliability", () => {
         },
       ]);
       expect(result.meta.livenessState).toBe("blocked");
+      expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
       expect(onUserMessagePersisted).not.toHaveBeenCalled();
+      expect(userTurnTranscriptRecorder.isBlocked()).toBe(true);
       const beforeRunEvent = requireRecord(
         callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
         "before_agent_run event",

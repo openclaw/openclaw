@@ -19,6 +19,17 @@ vi.mock("../../llm-slug-generator.js", () => ({
   generateSlugViaLLM: vi.fn().mockResolvedValue("simple-math"),
 }));
 
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => loggerMocks,
+}));
+
 let handler: typeof import("./handler.js").default;
 let flushSessionMemoryWritesForTest: typeof import("./handler.js").flushSessionMemoryWritesForTest;
 let suiteWorkspaceRoot = "";
@@ -343,6 +354,7 @@ describe("session-memory hook", () => {
                     "session-memory": {
                       enabled: true,
                       llmSlug: true,
+                      model: "sonnet",
                     },
                   },
                 },
@@ -354,6 +366,7 @@ describe("session-memory hook", () => {
     );
 
     expect(generateSlug).toHaveBeenCalledTimes(1);
+    expect(generateSlug).toHaveBeenCalledWith(expect.objectContaining({ model: "sonnet" }));
   });
 
   it("does not block reset command handling on opt-in model slug generation", async () => {
@@ -1011,5 +1024,24 @@ describe("session-memory hook", () => {
     const lines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
     expect(lines).toEqual(["assistant: Done", "assistant: Done"]);
     expect(memoryContent).not.toContain("user: /new");
+  });
+
+  it("keeps sibling home-prefix paths intact in completion logs", async () => {
+    const fakeHome = path.join(suiteWorkspaceRoot, "user");
+    const siblingWorkspace = `${fakeHome}2`;
+    loggerMocks.info.mockClear();
+
+    await withEnvAsync(
+      { HOME: fakeHome, USERPROFILE: fakeHome, OPENCLAW_HOME: undefined },
+      async () => {
+        const { files } = await runNewWithPreviousSessionEntry({
+          tempDir: siblingWorkspace,
+          previousSessionEntry: { sessionId: "test-123" },
+        });
+        expect(loggerMocks.info).toHaveBeenCalledWith(
+          `Session context saved to ${path.join(siblingWorkspace, "memory", files[0]!)}`,
+        );
+      },
+    );
   });
 });

@@ -1,5 +1,6 @@
 // Discord plugin module implements runtime.messaging.send behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createReusableDiscordReplyReference } from "../reply-reference.js";
 import {
   assertMediaNotDataUrl,
   jsonResult,
@@ -250,7 +251,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           {
             ...ctx.withOpts(),
             silent,
-            replyTo: replyTo ?? undefined,
+            reply: createReusableDiscordReplyReference(replyTo),
             sessionKey: sessionKey ?? undefined,
             agentId: agentId ?? undefined,
             mediaUrl: mediaUrl ?? undefined,
@@ -284,7 +285,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         assertMediaNotDataUrl(mediaUrl);
         const result = await discordMessagingActionRuntime.sendVoiceMessageDiscord(to, mediaUrl, {
           ...ctx.withOpts(),
-          replyTo,
+          reply: createReusableDiscordReplyReference(replyTo),
           silent,
         });
         return jsonResult(
@@ -303,7 +304,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         filename: filename ?? undefined,
         mediaLocalRoots: ctx.options?.mediaLocalRoots,
         mediaReadFile: ctx.options?.mediaReadFile,
-        replyTo,
+        reply: createReusableDiscordReplyReference(replyTo),
         components,
         embeds,
         silent,
@@ -413,7 +414,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           mediaUrl,
           mediaLocalRoots: ctx.options?.mediaLocalRoots,
           mediaReadFile: ctx.options?.mediaReadFile,
-          replyTo,
+          reply: createReusableDiscordReplyReference(replyTo),
         },
       );
       return jsonResult({ ok: true, result });

@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
+import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
 export { getCliSessionBinding, getCliSessionId } from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
@@ -36,6 +37,12 @@ export function setCliSessionBinding(
   if (!trimmed) {
     return;
   }
+  const previousBinding = entry.cliSessionBindings?.[normalized];
+  const previousReceipt =
+    normalizeOptionalString(previousBinding?.sessionId) === trimmed
+      ? normalizeCliSessionReseedReceipt(previousBinding?.reseedReceipt)
+      : undefined;
+  const reseedReceipt = normalizeCliSessionReseedReceipt(binding.reseedReceipt) ?? previousReceipt;
   entry.cliSessionBindings = {
     ...entry.cliSessionBindings,
     [normalized]: {
@@ -68,6 +75,7 @@ export function setCliSessionBinding(
       ...(normalizeOptionalString(binding.mcpResumeHash)
         ? { mcpResumeHash: normalizeOptionalString(binding.mcpResumeHash) }
         : {}),
+      ...(reseedReceipt ? { reseedReceipt } : {}),
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
@@ -106,14 +114,9 @@ export function clearAllCliSessions(entry: Partial<MutableCliSessionFields>): vo
   entry.claudeCliSessionId = undefined;
 }
 
-export type CliSessionInvalidatedReason =
-  | "auth-profile"
-  | "auth-epoch"
-  | "message-policy"
-  | "cwd"
-  | "mcp";
+type CliSessionInvalidatedReason = "auth-profile" | "auth-epoch" | "message-policy" | "cwd" | "mcp";
 
-export type CliSessionContentDriftReason = "system-prompt" | "prompt-tools";
+type CliSessionContentDriftReason = "system-prompt" | "prompt-tools";
 
 export type CliSessionReuseResult =
   | { mode: "none" }
