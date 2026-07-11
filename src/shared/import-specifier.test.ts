@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const originalPlatform = process.platform;
 
@@ -36,8 +36,9 @@ describe("toSafeImportPath", () => {
 
     it("converts absolute Windows paths to file:// URLs", () => {
       setPlatform("win32");
-      const result = toSafeImportPath("C:\\Users\\test\\module.js");
-      expect(result).toMatch(/^file:\/\/\/[A-Z]:/i);
+      expect(toSafeImportPath("C:\\Users\\test\\module.js")).toBe(
+        "file:///C:/Users/test/module.js",
+      );
     });
 
     it("returns relative paths unchanged", () => {
