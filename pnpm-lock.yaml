@@ -299,6 +299,9 @@ importers:
       tsx:
         specifier: 4.22.4
         version: 4.22.4
+      undici-types:
+        specifier: 8.3.0
+        version: 8.3.0
       unrun:
         specifier: 0.3.1
         version: 0.3.1
