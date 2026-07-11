@@ -81,23 +81,44 @@ export interface ApnsRegistrations {
 }
 
 export interface AuditEvents {
+  account_ref: string | null;
   action: string;
   actor_id: string;
   actor_type: string;
-  agent_id: string;
+  agent_id: string | null;
+  channel: string | null;
+  conversation_kind: string | null;
+  conversation_ref: string | null;
+  delivery_kind: string | null;
+  direction: string | null;
+  duration_ms: number | null;
   error_code: string | null;
   event_id: string;
+  failure_stage: string | null;
   kind: string;
+  message_outcome: string | null;
+  message_ref: string | null;
   occurred_at: number;
-  run_id: string;
+  reason_code: string | null;
+  result_count: number | null;
+  run_id: string | null;
+  schema_version: Generated<number>;
   sequence: Generated<number>;
   session_id: string | null;
   session_key: string | null;
   source_id: string;
   source_sequence: number;
   status: string;
+  target_ref: string | null;
   tool_call_id: string | null;
   tool_name: string | null;
+}
+
+export interface AuditIdentityKeys {
+  created_at: number;
+  id: Generated<number>;
+  key: Uint8Array;
+  key_id: string;
 }
 
 export interface AuthProfileState {
@@ -1102,6 +1123,7 @@ export interface DB {
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
+  audit_identity_keys: AuditIdentityKeys;
   auth_profile_state: AuthProfileState;
   auth_profile_stores: AuthProfileStores;
   backup_runs: BackupRuns;
