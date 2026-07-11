@@ -3,6 +3,7 @@ import type { AuthProfileStore, OpenClawConfig } from "openclaw/plugin-sdk/provi
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderRequestCapability,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -20,7 +21,7 @@ function resolveFalConfiguredBaseUrl(cfg?: OpenClawConfig): string | undefined {
 }
 
 function resolveFalConfiguredRequest(cfg?: OpenClawConfig) {
-  return cfg?.models?.providers?.fal?.request;
+  return sanitizeConfiguredModelProviderRequest(cfg?.models?.providers?.fal?.request);
 }
 
 export async function resolveFalHttpRequestConfig(params: {
