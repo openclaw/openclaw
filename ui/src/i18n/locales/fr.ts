@@ -173,16 +173,6 @@ export const fr: TranslationMap = {
       node: "Nœud",
     },
   },
-  instances: {
-    title: "Instances connectées",
-    subtitle: "Balises de présence du gateway et des clients.",
-    showHosts: "Afficher les hôtes et les IP",
-    hideHosts: "Masquer les hôtes et les IP",
-    toggleHostVisibility: "Basculer la visibilité des hôtes",
-    noInstances: "Aucune instance signalée pour le moment.",
-    lastInput: "Dernière entrée {time}",
-    reason: "Raison {reason}",
-  },
   worktrees: {
     newWorktree: "Nouveau worktree",
     owner: "Propriétaire",
@@ -396,6 +386,7 @@ export const fr: TranslationMap = {
       skills: "Skills",
       channels: "Canaux",
       cronJobs: "Tâches cron",
+      memory: "Mémoire",
     },
     context: {
       title: "Agent Context",
@@ -629,7 +620,6 @@ export const fr: TranslationMap = {
     workboard: "Tableau de travail",
     worktrees: "Worktrees",
     channels: "Canaux",
-    instances: "Instances",
     sessions: "Sessions",
     usage: "Utilisation",
     cron: "Tâches cron",
@@ -651,7 +641,6 @@ export const fr: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Débogage",
     logs: "Journaux",
-    dreams: "Rêves",
     plugin: "Plugin",
   },
   subtitles: {
@@ -661,7 +650,6 @@ export const fr: TranslationMap = {
     workboard: "File de travail de l’agent et transfert de session.",
     worktrees: "Checkouts de tâches d’agent isolés et instantanés de récupération.",
     channels: "Canaux et paramètres.",
-    instances: "Clients et nœuds connectés.",
     sessions: "Sessions actives et valeurs par défaut.",
     usage: "Utilisation de l’API et coûts.",
     cron: "Réveils et exécutions récurrentes.",
@@ -684,8 +672,10 @@ export const fr: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Captures, événements, RPC.",
     logs: "Journaux Gateway en direct.",
-    dreams: "Consolidation de la mémoire pendant le sommeil.",
     plugin: "Panneau fourni par le plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Gérez les serveurs sur la page Plugins.",
   },
   pluginsPage: {
     searchLabel: "Rechercher des plugins",
@@ -1613,10 +1603,6 @@ export const fr: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scène",
       diary: "Journal",
@@ -2222,9 +2208,9 @@ export const fr: TranslationMap = {
       workSessions: "Travail",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Discussions récentes",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2535,6 +2521,50 @@ export const fr: TranslationMap = {
       howHeading: "Comment doit-elle fonctionner ?",
       howHint: "Choisissez le mode de remise des résultats.",
       title: "Nouvelle automatisation",
+      createAndRun: "Créer et exécuter maintenant",
+    },
+    suggestions: {
+      title: "Idées d'automatisation",
+      hint: "Automatisations de départ — choisissez-en une et ajustez-la avant de créer.",
+      use: "Utiliser l'idée →",
+      ideas: {
+        repoPulse: {
+          name: "Pouls du dépôt",
+          tagline: "Issues, PRs et échecs CI de la nuit, classés par urgence.",
+          prompt:
+            "Passe en revue l'activité nocturne de mes dépôts : nouvelles issues, pull requests et échecs CI. Résume les trois points qui nécessitent le plus mon attention aujourd'hui, chacun avec un lien et une raison en une ligne.",
+        },
+        standupGhostwriter: {
+          name: "Nègre de standup",
+          tagline: "Ton compte-rendu de standup, rédigé à partir du travail d'hier.",
+          prompt:
+            "Rédige mon compte-rendu de standup à partir des commits d'hier, des pull requests fusionnées et des fils de révision ouverts. Trois points maximum : fait, en cours, bloqué.",
+        },
+        hackerNewsScout: {
+          name: "Éclaireur Hacker News",
+          tagline: "Trois liens qui valent ton café, avec des avis tranchés.",
+          prompt:
+            "Parcours la page d'accueil Hacker News du jour pour les articles sur les agents IA, les outils développeur et TypeScript. Envoie-moi les trois liens les plus intéressants, chacun avec un avis tranché en une ligne.",
+        },
+        dependencyRadar: {
+          name: "Radar de dépendances",
+          tagline: "Dépendances obsolètes ou vulnérables, avec notes de mise à jour.",
+          prompt:
+            "Vérifie les dépendances obsolètes ou vulnérables de mon projet principal. Liste les mises à jour notables avec une note de risque en une ligne chacune, et rédige la commande de mise à jour.",
+        },
+        watchdog: {
+          name: "Veille nocturne",
+          tagline: "Vérification horaire avec un verdict en une ligne.",
+          prompt:
+            "Vérifie que mes services et mon Gateway sont en bonne santé : analyse les journaux récents pour détecter de nouvelles erreurs, des redémarrages ou une charge inhabituelle. Réponds par une courte ligne indiquant que tout va bien si c'est le cas ; si quelque chose semble défaillant, indique ce qui a échoué et par où commencer à chercher.",
+        },
+        polyglotMinute: {
+          name: "Minute polyglotte",
+          tagline: "Une expression étrangère utile avec votre café du matin.",
+          prompt:
+            "Apprends-moi une expression utile en japonais : l'expression, sa prononciation, sa signification littérale et quand l'utiliser. En moins de cinq lignes.",
+        },
+      },
     },
     summary: {
       enabled: "Activé",

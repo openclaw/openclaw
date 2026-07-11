@@ -168,16 +168,6 @@ export const en: TranslationMap = {
       node: "Node",
     },
   },
-  instances: {
-    title: "Connected Instances",
-    subtitle: "Presence beacons from the gateway and clients.",
-    showHosts: "Show hosts and IPs",
-    hideHosts: "Hide hosts and IPs",
-    toggleHostVisibility: "Toggle host visibility",
-    noInstances: "No instances reported yet.",
-    lastInput: "Last input {time}",
-    reason: "Reason {reason}",
-  },
   worktrees: {
     newWorktree: "New worktree",
     owner: "Owner",
@@ -387,6 +377,7 @@ export const en: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "Memory",
     },
     context: {
       title: "Agent Context",
@@ -621,7 +612,6 @@ export const en: TranslationMap = {
     workboard: "Workboard",
     worktrees: "Worktrees",
     channels: "Channels",
-    instances: "Instances",
     sessions: "Sessions",
     usage: "Usage",
     cron: "Cron Jobs",
@@ -629,7 +619,7 @@ export const en: TranslationMap = {
     skills: "Skills",
     plugins: "Plugins",
     skillWorkshop: "Skill Workshop",
-    nodes: "Nodes",
+    nodes: "Devices",
     chat: "Chat",
     config: "Config",
     profile: "Profile",
@@ -643,7 +633,6 @@ export const en: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debug",
     logs: "Logs",
-    dreams: "Dreaming",
     plugin: "Plugin",
   },
   subtitles: {
@@ -653,7 +642,6 @@ export const en: TranslationMap = {
     workboard: "Agent work queue and session handoff.",
     worktrees: "Isolated agent task checkouts and recovery snapshots.",
     channels: "Channels and settings.",
-    instances: "Connected clients and nodes.",
     sessions: "Active sessions and defaults.",
     usage: "API usage and costs.",
     cron: "Wakeups and recurring runs.",
@@ -661,7 +649,7 @@ export const en: TranslationMap = {
     skills: "Skills and API keys.",
     plugins: "Install and manage optional capabilities.",
     skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
-    nodes: "Paired devices and commands.",
+    nodes: "Paired devices, live connections, and commands.",
     chat: "Gateway chat for quick interventions.",
     config: "Edit openclaw.json.",
     profile: "Your agent's stats, streaks, and life in the reef.",
@@ -675,8 +663,10 @@ export const en: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
-    dreams: "Memory dreaming, consolidation, and reflection.",
     plugin: "Plugin-provided panel.",
+  },
+  mcpPage: {
+    manageServersLink: "Manage servers on the Plugins page.",
   },
   pluginsPage: {
     searchLabel: "Search plugins",
@@ -1585,10 +1575,6 @@ export const en: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -2176,9 +2162,9 @@ export const en: TranslationMap = {
       workSessions: "Work",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Recent chats",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2483,6 +2469,50 @@ export const en: TranslationMap = {
       howHeading: "How should it work?",
       howHint: "Choose how results are delivered.",
       title: "New Cron Job",
+      createAndRun: "Create & run now",
+    },
+    suggestions: {
+      title: "Automation ideas",
+      hint: "Starter automations — pick one and tweak it before creating.",
+      use: "Use idea →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "Overnight issues, PRs, and CI failures, ranked by urgency.",
+          prompt:
+            "Review overnight activity in my repositories: new issues, pull requests, and CI failures. Summarize the three things that most need my attention today, each with a link and a one-line reason.",
+        },
+        standupGhostwriter: {
+          name: "Standup ghostwriter",
+          tagline: "Your standup update, drafted from yesterday's work.",
+          prompt:
+            "Draft my standup update from yesterday's commits, merged pull requests, and open review threads. Three bullets max: done, doing, blocked.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News scout",
+          tagline: "Three links worth your coffee, with hot takes.",
+          prompt:
+            "Scan today's Hacker News front page for posts about AI agents, developer tooling, and TypeScript. Send me the three most interesting links, each with a one-line hot take.",
+        },
+        dependencyRadar: {
+          name: "Dependency radar",
+          tagline: "Outdated or vulnerable dependencies, with upgrade notes.",
+          prompt:
+            "Check my main project for outdated or vulnerable dependencies. List the notable updates with a one-line risk note each, and draft the upgrade command.",
+        },
+        watchdog: {
+          name: "Night watch",
+          tagline: "Hourly health check with a one-line verdict.",
+          prompt:
+            "Check that my services and gateway are healthy: scan recent logs for new errors, restarts, or unusual load. Reply with a single short all-clear line when everything is fine; if something looks broken, report what failed and where to start looking.",
+        },
+        polyglotMinute: {
+          name: "Polyglot minute",
+          tagline: "One useful foreign phrase with your morning coffee.",
+          prompt:
+            "Teach me one useful phrase in Japanese: the phrase, how to pronounce it, its literal meaning, and when to use it. Keep it under five lines.",
+        },
+      },
     },
     summary: {
       enabled: "Enabled",

@@ -172,16 +172,6 @@ export const nl: TranslationMap = {
       node: "Node",
     },
   },
-  instances: {
-    title: "Verbonden instanties",
-    subtitle: "Aanwezigheidsbakens van de Gateway en clients.",
-    showHosts: "Hosts en IP's weergeven",
-    hideHosts: "Hosts en IP's verbergen",
-    toggleHostVisibility: "Hostzichtbaarheid schakelen",
-    noInstances: "Nog geen instanties gerapporteerd.",
-    lastInput: "Laatste invoer {time}",
-    reason: "Reden {reason}",
-  },
   worktrees: {
     newWorktree: "Nieuwe worktree",
     owner: "Eigenaar",
@@ -393,6 +383,7 @@ export const nl: TranslationMap = {
       skills: "Skills",
       channels: "Kanalen",
       cronJobs: "Cron-taken",
+      memory: "Geheugen",
     },
     context: {
       title: "Agentcontext",
@@ -625,7 +616,6 @@ export const nl: TranslationMap = {
     workboard: "Werkbord",
     worktrees: "Worktrees",
     channels: "Kanalen",
-    instances: "Instanties",
     sessions: "Sessies",
     usage: "Gebruik",
     cron: "Cronjobs",
@@ -647,7 +637,6 @@ export const nl: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debuggen",
     logs: "Logs",
-    dreams: "Dromen",
     plugin: "Plugin",
   },
   subtitles: {
@@ -657,7 +646,6 @@ export const nl: TranslationMap = {
     workboard: "Werkwachtrij voor agents en sessieoverdracht.",
     worktrees: "Geïsoleerde agenttaak-checkouts en herstelsnapshots.",
     channels: "Kanalen en instellingen.",
-    instances: "Verbonden clients en nodes.",
     sessions: "Actieve sessies en standaarden.",
     usage: "API-gebruik en kosten.",
     cron: "Wakeups en terugkerende runs.",
@@ -679,8 +667,10 @@ export const nl: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Momentopnamen, gebeurtenissen, RPC.",
     logs: "Live Gateway-logs.",
-    dreams: "Geheugendromen, consolidatie en reflectie.",
     plugin: "Door een plugin geleverd paneel.",
+  },
+  mcpPage: {
+    manageServersLink: "Beheer servers op de Plugins-pagina.",
   },
   pluginsPage: {
     searchLabel: "Plugins zoeken",
@@ -1601,10 +1591,6 @@ export const nl: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scène",
       diary: "Dagboek",
@@ -2200,9 +2186,9 @@ export const nl: TranslationMap = {
       workSessions: "Werk",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Recente chats",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2510,6 +2496,50 @@ export const nl: TranslationMap = {
       howHeading: "Hoe moet het werken?",
       howHint: "Kies hoe resultaten worden geleverd.",
       title: "Nieuwe automatisering",
+      createAndRun: "Aanmaken & nu uitvoeren",
+    },
+    suggestions: {
+      title: "Automatiseringsideeën",
+      hint: "Startautomatiseringen — kies er een en pas hem aan voordat je hem aanmaakt.",
+      use: "Idee gebruiken →",
+      ideas: {
+        repoPulse: {
+          name: "Repo-puls",
+          tagline: "Nachtelijke issues, PR's en CI-fouten, gerangschikt op urgentie.",
+          prompt:
+            "Bekijk de nachtelijke activiteit in mijn repositories: nieuwe issues, pull requests en CI-fouten. Vat de drie dingen samen die vandaag het meest mijn aandacht nodig hebben, elk met een link en een reden in één zin.",
+        },
+        standupGhostwriter: {
+          name: "Standup ghostwriter",
+          tagline: "Jouw standup-update, opgesteld vanuit het werk van gisteren.",
+          prompt:
+            "Stel mijn standup-update op aan de hand van gisteren's commits, samengevoegde pull requests en open reviewthreads. Maximaal drie punten: gedaan, bezig, geblokkeerd.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News scout",
+          tagline: "Drie links die je koffie waard zijn, met pittige meningen.",
+          prompt:
+            "Scan de Hacker News-voorpagina van vandaag op berichten over AI-agents, ontwikkelaarstools en TypeScript. Stuur me de drie interessantste links, elk met een pittige mening in één zin.",
+        },
+        dependencyRadar: {
+          name: "Dependency radar",
+          tagline: "Verouderde of kwetsbare afhankelijkheden, met upgrade-notities.",
+          prompt:
+            "Controleer mijn hoofdproject op verouderde of kwetsbare afhankelijkheden. Geef een lijst van de belangrijke updates met elk een risiconoot in één zin, en stel het upgrade-commando op.",
+        },
+        watchdog: {
+          name: "Nachtwacht",
+          tagline: "Uurlijkse gezondheidscheck met een eenregelig oordeel.",
+          prompt:
+            "Controleer of mijn services en Gateway gezond zijn: scan recente logs op nieuwe fouten, herstarts of ongewone belasting. Antwoord met één korte alles-in-orde-regel als alles goed is; als er iets kapot lijkt, meld dan wat er is mislukt en waar te beginnen met zoeken.",
+        },
+        polyglotMinute: {
+          name: "Polyglot minuut",
+          tagline: "Één nuttige buitenlandse zin bij je ochtendkoffie.",
+          prompt:
+            "Leer me één nuttige zin in het Japans: de zin, hoe je hem uitspreekt, de letterlijke betekenis en wanneer je hem gebruikt. Houd het onder de vijf regels.",
+        },
+      },
     },
     summary: {
       enabled: "Ingeschakeld",

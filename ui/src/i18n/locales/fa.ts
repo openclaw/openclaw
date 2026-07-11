@@ -171,16 +171,6 @@ export const fa: TranslationMap = {
       node: "گره",
     },
   },
-  instances: {
-    title: "نمونه‌های متصل",
-    subtitle: "چراغ‌های حضور از Gateway و کلاینت‌ها.",
-    showHosts: "نمایش میزبان‌ها و IPها",
-    hideHosts: "پنهان کردن میزبان‌ها و IPها",
-    toggleHostVisibility: "تغییر نمایش میزبان",
-    noInstances: "هنوز هیچ نمونه‌ای گزارش نشده است.",
-    lastInput: "آخرین ورودی {time}",
-    reason: "دلیل {reason}",
-  },
   worktrees: {
     newWorktree: "worktree جدید",
     owner: "مالک",
@@ -390,6 +380,7 @@ export const fa: TranslationMap = {
       skills: "Skills",
       channels: "کانال‌ها",
       cronJobs: "Cron Jobs",
+      memory: "حافظه",
     },
     context: {
       title: "زمینه عامل",
@@ -622,7 +613,6 @@ export const fa: TranslationMap = {
     workboard: "تابلوی کار",
     worktrees: "Worktreeها",
     channels: "کانال‌ها",
-    instances: "نمونه‌ها",
     sessions: "نشست‌ها",
     usage: "مصرف",
     cron: "کارهای Cron",
@@ -644,7 +634,6 @@ export const fa: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "اشکال‌زدایی",
     logs: "گزارش‌ها",
-    dreams: "رؤیاپردازی",
     plugin: "افزونه",
   },
   subtitles: {
@@ -654,7 +643,6 @@ export const fa: TranslationMap = {
     workboard: "صف کار عامل و واگذاری جلسه.",
     worktrees: "checkoutهای ایزولهٔ وظایف عامل و snapshotهای بازیابی.",
     channels: "کانال‌ها و تنظیمات.",
-    instances: "کلاینت‌ها و گره‌های متصل.",
     sessions: "نشست‌های فعال و پیش‌فرض‌ها.",
     usage: "مصرف و هزینه‌های API.",
     cron: "بیدارباش‌ها و اجراهای تکرارشونده.",
@@ -676,8 +664,10 @@ export const fa: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "نماهای لحظه‌ای، رویدادها، RPC.",
     logs: "گزارش‌های زنده Gateway.",
-    dreams: "رؤیاپردازی حافظه، یکپارچه‌سازی و بازتاب.",
     plugin: "پنل ارائه‌شده توسط افزونه.",
+  },
+  mcpPage: {
+    manageServersLink: "مدیریت سرورها در صفحه Plugins.",
   },
   pluginsPage: {
     searchLabel: "جستجوی افزونه‌ها",
@@ -1591,10 +1581,6 @@ export const fa: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "عامل",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "صحنه",
       diary: "دفترچه",
@@ -2188,9 +2174,9 @@ export const fa: TranslationMap = {
       workSessions: "کار",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "گفتگوهای اخیر",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2496,6 +2482,50 @@ export const fa: TranslationMap = {
       howHeading: "چگونه باید کار کند؟",
       howHint: "نحوهٔ تحویل نتایج را انتخاب کنید.",
       title: "اتوماسیون جدید",
+      createAndRun: "ایجاد و اجرای فوری",
+    },
+    suggestions: {
+      title: "ایده‌های خودکارسازی",
+      hint: "خودکارسازی‌های آماده — یکی را انتخاب کنید و پیش از ایجاد، آن را ویرایش کنید.",
+      use: "استفاده از ایده →",
+      ideas: {
+        repoPulse: {
+          name: "نبض مخزن",
+          tagline: "ایشوها، PR ها و خطاهای CI شبانه، رتبه‌بندی‌شده بر اساس اولویت.",
+          prompt:
+            "فعالیت شبانه مخازنم را بررسی کن: ایشوهای جدید، pull request ها و خطاهای CI. سه موردی که امروز بیشترین توجه را می‌طلبند خلاصه کن، هر کدام با یک لینک و یک دلیل یک‌خطی.",
+        },
+        standupGhostwriter: {
+          name: "نویسنده استندآپ",
+          tagline: "گزارش استندآپت، پیش‌نویس‌شده از کارهای دیروز.",
+          prompt:
+            "گزارش استندآپم را بر اساس commit های دیروز، pull request های ادغام‌شده و thread های بازبینی باز پیش‌نویس کن. حداکثر سه بولت: انجام‌شده، در حال انجام، مسدود.",
+        },
+        hackerNewsScout: {
+          name: "کاوشگر Hacker News",
+          tagline: "سه لینک ارزشمند برای وقت قهوه‌ات، با نظرات تند.",
+          prompt:
+            "صفحه اول Hacker News امروز را برای پست‌های مربوط به AI agents، ابزارهای توسعه‌دهنده و TypeScript بررسی کن. سه لینک جالب‌تر را با یک نظر یک‌خطی تند برایم بفرست.",
+        },
+        dependencyRadar: {
+          name: "رادار وابستگی‌ها",
+          tagline: "وابستگی‌های قدیمی یا آسیب‌پذیر، با یادداشت‌های ارتقا.",
+          prompt:
+            "پروژه اصلی‌ام را برای وابستگی‌های قدیمی یا آسیب‌پذیر بررسی کن. به‌روزرسانی‌های مهم را با یک یادداشت یک‌خطی درباره ریسک فهرست کن و دستور ارتقا را پیش‌نویس کن.",
+        },
+        watchdog: {
+          name: "نگهبان شب",
+          tagline: "بررسی سلامت ساعتی با یک خط نتیجه‌گیری.",
+          prompt:
+            "بررسی کن که سرویس‌ها و Gateway من سالم هستند: لاگ‌های اخیر را برای خطاهای جدید، راه‌اندازی مجدد یا بار غیرعادی اسکن کن. وقتی همه چیز خوب است، یک خط کوتاه تأیید بده؛ اگر چیزی خراب به نظر می‌رسد، گزارش بده چه چیزی خراب شده و از کجا باید شروع به بررسی کرد.",
+        },
+        polyglotMinute: {
+          name: "دقیقه چندزبانه",
+          tagline: "یک عبارت مفید به زبان خارجی با قهوه صبحگاهی‌ات.",
+          prompt:
+            "یک عبارت مفید به زبان ژاپنی به من یاد بده: خود عبارت، نحوه تلفظ آن، معنای تحت‌اللفظی‌اش، و زمان استفاده از آن. در کمتر از پنج خط نگه‌دار.",
+        },
+      },
     },
     summary: {
       enabled: "فعال",

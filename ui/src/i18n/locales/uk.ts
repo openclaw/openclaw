@@ -171,16 +171,6 @@ export const uk: TranslationMap = {
       node: "Вузол",
     },
   },
-  instances: {
-    title: "Підключені інстанси",
-    subtitle: "Маячки присутності від Gateway і клієнтів.",
-    showHosts: "Показати хости й IP-адреси",
-    hideHosts: "Сховати хости й IP-адреси",
-    toggleHostVisibility: "Перемкнути видимість хостів",
-    noInstances: "Ще немає повідомлень про інстанси.",
-    lastInput: "Останнє введення {time}",
-    reason: "Причина {reason}",
-  },
   worktrees: {
     newWorktree: "Новий worktree",
     owner: "Власник",
@@ -390,6 +380,7 @@ export const uk: TranslationMap = {
       skills: "Навички",
       channels: "Канали",
       cronJobs: "Завдання Cron",
+      memory: "Пам'ять",
     },
     context: {
       title: "Agent Context",
@@ -622,7 +613,6 @@ export const uk: TranslationMap = {
     workboard: "Робоча дошка",
     worktrees: "Worktrees",
     channels: "Канали",
-    instances: "Екземпляри",
     sessions: "Сеанси",
     usage: "Використання",
     cron: "Завдання Cron",
@@ -644,7 +634,6 @@ export const uk: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Налагодження",
     logs: "Журнали",
-    dreams: "Сни",
     plugin: "Плагін",
   },
   subtitles: {
@@ -654,7 +643,6 @@ export const uk: TranslationMap = {
     workboard: "Черга завдань агента та передавання сеансів.",
     worktrees: "Ізольовані копії для завдань агентів і знімки для відновлення.",
     channels: "Канали та налаштування.",
-    instances: "Підключені клієнти та вузли.",
     sessions: "Активні сеанси та типові значення.",
     usage: "Використання API та витрати.",
     cron: "Пробудження та повторювані запуски.",
@@ -677,8 +665,10 @@ export const uk: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Знімки, події, RPC.",
     logs: "Журнали шлюзу в реальному часі.",
-    dreams: "Консолідація пам’яті під час сну.",
     plugin: "Панель, надана плагіном.",
+  },
+  mcpPage: {
+    manageServersLink: "Керуйте серверами на сторінці Плагінів.",
   },
   pluginsPage: {
     searchLabel: "Пошук плагінів",
@@ -1595,10 +1585,6 @@ export const uk: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Агент",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Сцена",
       diary: "Щоденник",
@@ -2192,9 +2178,9 @@ export const uk: TranslationMap = {
       workSessions: "Робота",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Нещодавні чати",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2500,6 +2486,50 @@ export const uk: TranslationMap = {
       howHeading: "Як це має працювати?",
       howHint: "Виберіть спосіб доставки результатів.",
       title: "Нова автоматизація",
+      createAndRun: "Створити та запустити зараз",
+    },
+    suggestions: {
+      title: "Ідеї для автоматизації",
+      hint: "Готові автоматизації — оберіть одну та налаштуйте перед створенням.",
+      use: "Використати ідею →",
+      ideas: {
+        repoPulse: {
+          name: "Пульс репозиторію",
+          tagline: "Нічні issues, PR та збої CI, відсортовані за терміновістю.",
+          prompt:
+            "Переглянь нічну активність у моїх репозиторіях: нові issues, pull request та збої CI. Підсумуй три речі, які найбільше потребують моєї уваги сьогодні, кожне з посиланням та однорядковим поясненням.",
+        },
+        standupGhostwriter: {
+          name: "Автор стендапу",
+          tagline: "Ваш стендап-звіт, складений на основі вчорашньої роботи.",
+          prompt:
+            "Склади мій стендап-звіт на основі вчорашніх commits, змерджених pull request та відкритих review-тредів. Максимум три пункти: зроблено, роблю, заблоковано.",
+        },
+        hackerNewsScout: {
+          name: "Скаут Hacker News",
+          tagline: "Три посилання, варті вашої кави, з гострими думками.",
+          prompt:
+            "Переглянь сьогоднішню головну сторінку Hacker News у пошуках публікацій про AI-агентів, інструменти для розробників та TypeScript. Надішли мені три найцікавіші посилання, кожне з однорядковою гострою думкою.",
+        },
+        dependencyRadar: {
+          name: "Радар залежностей",
+          tagline: "Застарілі або вразливі залежності з нотатками щодо оновлення.",
+          prompt:
+            "Перевір мій основний проєкт на наявність застарілих або вразливих залежностей. Перелічи важливі оновлення з однорядковою позначкою ризику для кожного та склади команду для оновлення.",
+        },
+        watchdog: {
+          name: "Нічна варта",
+          tagline: "Щогодинна перевірка стану з однорядковим висновком.",
+          prompt:
+            "Перевір стан моїх сервісів і Gateway: проскануй останні журнали на наявність нових помилок, перезапусків або незвичного навантаження. Відповідай одним коротким рядком «все гаразд», якщо все в порядку; якщо щось виглядає зламаним — повідом, що саме не так і з чого почати пошук.",
+        },
+        polyglotMinute: {
+          name: "Хвилина поліглота",
+          tagline: "Одна корисна іноземна фраза до ранкової кави.",
+          prompt:
+            "Навчи мене одній корисній фразі японською: сама фраза, вимова, буквальне значення та коли її вживати. Уклади відповідь у п'ять рядків або менше.",
+        },
+      },
     },
     summary: {
       enabled: "Увімкнено",

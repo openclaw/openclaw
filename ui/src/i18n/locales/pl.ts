@@ -171,16 +171,6 @@ export const pl: TranslationMap = {
       node: "Węzeł",
     },
   },
-  instances: {
-    title: "Połączone instancje",
-    subtitle: "Sygnały obecności z Gateway i klientów.",
-    showHosts: "Pokaż hosty i adresy IP",
-    hideHosts: "Ukryj hosty i adresy IP",
-    toggleHostVisibility: "Przełącz widoczność hostów",
-    noInstances: "Nie zgłoszono jeszcze żadnych instancji.",
-    lastInput: "Ostatnie wejście {time}",
-    reason: "Powód {reason}",
-  },
   worktrees: {
     newWorktree: "Nowy worktree",
     owner: "Właściciel",
@@ -391,6 +381,7 @@ export const pl: TranslationMap = {
       skills: "Skills",
       channels: "Kanały",
       cronJobs: "Zadania Cron",
+      memory: "Pamięć",
     },
     context: {
       title: "Agent Context",
@@ -624,7 +615,6 @@ export const pl: TranslationMap = {
     workboard: "Tablica pracy",
     worktrees: "Worktree",
     channels: "Kanały",
-    instances: "Instancje",
     sessions: "Sesje",
     usage: "Użycie",
     cron: "Zadania Cron",
@@ -646,7 +636,6 @@ export const pl: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debug",
     logs: "Logi",
-    dreams: "Sny",
     plugin: "Wtyczka",
   },
   subtitles: {
@@ -656,7 +645,6 @@ export const pl: TranslationMap = {
     workboard: "Kolejka zadań agenta i przekazywanie sesji.",
     worktrees: "Izolowane kopie robocze zadań agentów i migawki do odzyskiwania.",
     channels: "Kanały i ustawienia.",
-    instances: "Połączone klienty i węzły.",
     sessions: "Aktywne sesje i ustawienia domyślne.",
     usage: "Zużycie API i koszty.",
     cron: "Wybudzenia i cykliczne uruchomienia.",
@@ -678,8 +666,10 @@ export const pl: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Migawki, zdarzenia, RPC.",
     logs: "Logi Gateway na żywo.",
-    dreams: "Konsolidacja pamięci podczas snu.",
     plugin: "Panel udostępniany przez wtyczkę.",
+  },
+  mcpPage: {
+    manageServersLink: "Zarządzaj serwerami na stronie Wtyczek.",
   },
   pluginsPage: {
     searchLabel: "Szukaj wtyczek",
@@ -1601,10 +1591,6 @@ export const pl: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scena",
       diary: "Dziennik",
@@ -2202,9 +2188,9 @@ export const pl: TranslationMap = {
       workSessions: "Praca",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Ostatnie czaty",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2512,6 +2498,50 @@ export const pl: TranslationMap = {
       howHeading: "Jak ma działać?",
       howHint: "Wybierz sposób dostarczania wyników.",
       title: "Nowa automatyzacja",
+      createAndRun: "Utwórz i uruchom teraz",
+    },
+    suggestions: {
+      title: "Pomysły na automatyzację",
+      hint: "Gotowe automatyzacje — wybierz jedną i dostosuj ją przed utworzeniem.",
+      use: "Użyj pomysłu →",
+      ideas: {
+        repoPulse: {
+          name: "Puls repozytorium",
+          tagline: "Nocne zgłoszenia, PR-y i błędy CI, posortowane według pilności.",
+          prompt:
+            "Przejrzyj nocną aktywność w moich repozytoriach: nowe zgłoszenia, pull requesty i błędy CI. Podsumuj trzy rzeczy, które najbardziej wymagają mojej uwagi dzisiaj, każda z linkiem i jednozdaniowym uzasadnieniem.",
+        },
+        standupGhostwriter: {
+          name: "Ghostwriter na standup",
+          tagline: "Twoja aktualizacja na standup, opracowana na podstawie wczorajszej pracy.",
+          prompt:
+            "Przygotuj moją aktualizację na standup na podstawie wczorajszych commitów, scalonych pull requestów i otwartych wątków recenzji. Maksymalnie trzy punkty: zrobione, w toku, zablokowane.",
+        },
+        hackerNewsScout: {
+          name: "Zwiadowca Hacker News",
+          tagline: "Trzy linki warte twojej kawy, z gorącymi komentarzami.",
+          prompt:
+            "Przeskanuj dzisiejszą stronę główną Hacker News w poszukiwaniu postów o agentach AI, narzędziach dla deweloperów i TypeScript. Wyślij mi trzy najciekawsze linki, każdy z jednozdaniowym gorącym komentarzem.",
+        },
+        dependencyRadar: {
+          name: "Radar zależności",
+          tagline: "Przestarzałe lub podatne zależności wraz z uwagami dotyczącymi aktualizacji.",
+          prompt:
+            "Sprawdź mój główny projekt pod kątem przestarzałych lub podatnych zależności. Wymień istotne aktualizacje z jednozdaniową oceną ryzyka każdej z nich i przygotuj polecenie aktualizacji.",
+        },
+        watchdog: {
+          name: "Nocna warta",
+          tagline: "Godzinny test stanu z jednowierszowym podsumowaniem.",
+          prompt:
+            "Sprawdź, czy moje usługi i Gateway działają poprawnie: przeskanuj ostatnie logi pod kątem nowych błędów, restartów lub nietypowego obciążenia. Odpowiedz jedną krótką linią potwierdzającą prawidłowe działanie, gdy wszystko jest w porządku; jeśli coś wygląda na uszkodzone, podaj co zawiodło i od czego zacząć sprawdzanie.",
+        },
+        polyglotMinute: {
+          name: "Minuta poligloty",
+          tagline: "Jedno przydatne obcojęzyczne wyrażenie do porannej kawy.",
+          prompt:
+            "Naucz mnie jednego przydatnego wyrażenia po japońsku: samo wyrażenie, jego wymowę, dosłowne znaczenie i kiedy go używać. Zmieść się w pięciu linijkach.",
+        },
+      },
     },
     summary: {
       enabled: "Włączone",

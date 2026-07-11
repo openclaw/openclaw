@@ -174,16 +174,6 @@ export const ja_JP: TranslationMap = {
       node: "ノード",
     },
   },
-  instances: {
-    title: "接続済みインスタンス",
-    subtitle: "Gateway とクライアントからのプレゼンスビーコン。",
-    showHosts: "ホストと IP を表示",
-    hideHosts: "ホストと IP を非表示",
-    toggleHostVisibility: "ホスト表示を切り替え",
-    noInstances: "まだインスタンスは報告されていません。",
-    lastInput: "最後の入力 {time}",
-    reason: "理由 {reason}",
-  },
   worktrees: {
     newWorktree: "新しいワークツリー",
     owner: "所有者",
@@ -395,6 +385,7 @@ export const ja_JP: TranslationMap = {
       skills: "Skills",
       channels: "チャンネル",
       cronJobs: "Cron ジョブ",
+      memory: "メモリ",
     },
     context: {
       title: "Agent Context",
@@ -628,7 +619,6 @@ export const ja_JP: TranslationMap = {
     workboard: "ワークボード",
     worktrees: "ワークツリー",
     channels: "チャンネル",
-    instances: "インスタンス",
     sessions: "セッション",
     usage: "使用状況",
     cron: "Cron ジョブ",
@@ -650,7 +640,6 @@ export const ja_JP: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "デバッグ",
     logs: "ログ",
-    dreams: "Dreaming",
     plugin: "プラグイン",
   },
   subtitles: {
@@ -660,7 +649,6 @@ export const ja_JP: TranslationMap = {
     workboard: "エージェントの作業キューとセッションの引き継ぎ。",
     worktrees: "分離されたエージェントタスクのチェックアウトと復旧スナップショット。",
     channels: "チャンネルと設定。",
-    instances: "接続されたクライアントとノード。",
     sessions: "アクティブなセッションとデフォルト。",
     usage: "API 使用量とコスト。",
     cron: "ウェイクアップと定期実行。",
@@ -682,8 +670,10 @@ export const ja_JP: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "スナップショット、イベント、RPC。",
     logs: "ライブ Gateway ログ。",
-    dreams: "スリープ中のメモリ統合。",
     plugin: "プラグインが提供するパネル。",
+  },
+  mcpPage: {
+    manageServersLink: "プラグインページでサーバーを管理します。",
   },
   pluginsPage: {
     searchLabel: "プラグインを検索",
@@ -1602,10 +1592,6 @@ export const ja_JP: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "エージェント",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -2199,9 +2185,9 @@ export const ja_JP: TranslationMap = {
       workSessions: "作業",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "最近のチャット",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2508,6 +2494,50 @@ export const ja_JP: TranslationMap = {
       howHeading: "どのように動作しますか？",
       howHint: "結果の配信方法を選択してください。",
       title: "新しい自動化",
+      createAndRun: "作成して今すぐ実行",
+    },
+    suggestions: {
+      title: "自動化のアイデア",
+      hint: "スターター自動化 — 一つ選んで、作成前に調整してください。",
+      use: "このアイデアを使う →",
+      ideas: {
+        repoPulse: {
+          name: "リポジトリパルス",
+          tagline: "夜間のIssue、PR、CIの失敗を緊急度順にランク付け。",
+          prompt:
+            "リポジトリの夜間アクティビティを確認してください：新しいIssue、プルリクエスト、CIの失敗。今日最も注意が必要な3つのことを、それぞれリンクと一行の理由とともにまとめてください。",
+        },
+        standupGhostwriter: {
+          name: "スタンダップ代筆",
+          tagline: "昨日の作業からスタンダップ更新を下書き。",
+          prompt:
+            "昨日のコミット、マージされたプルリクエスト、オープンなレビュースレッドからスタンダップ更新を下書きしてください。最大3つの箇条書きで：完了、対応中、ブロック中。",
+        },
+        hackerNewsScout: {
+          name: "Hacker Newsスカウト",
+          tagline: "コーヒーを片手に読む価値のある3つのリンクと注目意見。",
+          prompt:
+            "今日のHacker Newsフロントページから、AIエージェント、開発者ツール、TypeScriptに関する投稿をスキャンしてください。最も興味深い3つのリンクを、それぞれ一行の注目意見とともに送ってください。",
+        },
+        dependencyRadar: {
+          name: "依存関係レーダー",
+          tagline: "古いまたは脆弱な依存関係をアップグレードメモ付きで表示。",
+          prompt:
+            "メインプロジェクトの古いまたは脆弱な依存関係を確認してください。注目すべきアップデートを一行のリスクメモとともにリストアップし、アップグレードコマンドを下書きしてください。",
+        },
+        watchdog: {
+          name: "夜間監視",
+          tagline: "1行の判定付き、毎時ヘルスチェック。",
+          prompt:
+            "サービスとGatewayが正常かどうかを確認してください：最近のログで新しいエラー、再起動、または異常な負荷をスキャンしてください。すべて問題ない場合は短い1行のオールクリアメッセージで返答してください。問題が見つかった場合は、何が失敗したか、どこから調査を始めるべきかを報告してください。",
+        },
+        polyglotMinute: {
+          name: "ポリグロットミニッツ",
+          tagline: "朝のコーヒーとともに、役立つ外国語フレーズを一つ。",
+          prompt:
+            "日本語で役立つフレーズを一つ教えてください：そのフレーズ、発音の仕方、直訳の意味、そして使う場面を教えてください。5行以内にまとめてください。",
+        },
+      },
     },
     summary: {
       enabled: "有効",

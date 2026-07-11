@@ -170,16 +170,6 @@ export const id: TranslationMap = {
       node: "Node",
     },
   },
-  instances: {
-    title: "Instance Terhubung",
-    subtitle: "Beacon kehadiran dari gateway dan klien.",
-    showHosts: "Tampilkan host dan IP",
-    hideHosts: "Sembunyikan host dan IP",
-    toggleHostVisibility: "Alihkan visibilitas host",
-    noInstances: "Belum ada instance yang dilaporkan.",
-    lastInput: "Input terakhir {time}",
-    reason: "Alasan {reason}",
-  },
   worktrees: {
     newWorktree: "Worktree baru",
     owner: "Pemilik",
@@ -390,6 +380,7 @@ export const id: TranslationMap = {
       skills: "Skills",
       channels: "Saluran",
       cronJobs: "Tugas Cron",
+      memory: "Memori",
     },
     context: {
       title: "Agent Context",
@@ -623,7 +614,6 @@ export const id: TranslationMap = {
     workboard: "Workboard",
     worktrees: "Worktree",
     channels: "Saluran",
-    instances: "Instans",
     sessions: "Sesi",
     usage: "Penggunaan",
     cron: "Tugas Cron",
@@ -645,7 +635,6 @@ export const id: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debug",
     logs: "Log",
-    dreams: "Mimpi",
     plugin: "Plugin",
   },
   subtitles: {
@@ -655,7 +644,6 @@ export const id: TranslationMap = {
     workboard: "Antrean kerja agen dan serah terima sesi.",
     worktrees: "Checkout tugas agen terisolasi dan snapshot pemulihan.",
     channels: "Saluran dan pengaturan.",
-    instances: "Klien dan node yang terhubung.",
     sessions: "Sesi aktif dan default.",
     usage: "Penggunaan API dan biaya.",
     cron: "Bangun dan proses berulang.",
@@ -677,8 +665,10 @@ export const id: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
-    dreams: "Konsolidasi memori saat tidur.",
     plugin: "Panel yang disediakan plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Kelola server di halaman Plugins.",
   },
   pluginsPage: {
     searchLabel: "Cari plugin",
@@ -1594,10 +1584,6 @@ export const id: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agen",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -2192,9 +2178,9 @@ export const id: TranslationMap = {
       workSessions: "Pekerjaan",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Chat terbaru",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2500,6 +2486,50 @@ export const id: TranslationMap = {
       howHeading: "Bagaimana cara kerjanya?",
       howHint: "Pilih bagaimana hasil dikirim.",
       title: "Otomatisasi Baru",
+      createAndRun: "Buat & jalankan sekarang",
+    },
+    suggestions: {
+      title: "Ide otomasi",
+      hint: "Otomasi awal — pilih satu dan sesuaikan sebelum membuat.",
+      use: "Gunakan ide →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "Isu semalam, PR, dan kegagalan CI, diurutkan berdasarkan urgensi.",
+          prompt:
+            "Tinjau aktivitas semalam di repositori saya: isu baru, pull request, dan kegagalan CI. Rangkum tiga hal yang paling membutuhkan perhatian saya hari ini, masing-masing dengan tautan dan alasan satu baris.",
+        },
+        standupGhostwriter: {
+          name: "Ghostwriter standup",
+          tagline: "Update standup Anda, disusun dari pekerjaan kemarin.",
+          prompt:
+            "Buat update standup saya dari commit kemarin, pull request yang telah digabung, dan thread ulasan yang masih terbuka. Maksimal tiga poin: selesai, sedang dikerjakan, terblokir.",
+        },
+        hackerNewsScout: {
+          name: "Penjelajah Hacker News",
+          tagline: "Tiga tautan layak dibaca sambil ngopi, lengkap dengan opini singkat.",
+          prompt:
+            "Pindai halaman depan Hacker News hari ini untuk postingan tentang AI agents, developer tooling, dan TypeScript. Kirimkan tiga tautan paling menarik, masing-masing dengan opini singkat satu baris.",
+        },
+        dependencyRadar: {
+          name: "Radar dependensi",
+          tagline: "Dependensi usang atau rentan, dengan catatan peningkatan.",
+          prompt:
+            "Periksa proyek utama saya untuk dependensi yang usang atau rentan. Daftarkan pembaruan penting dengan catatan risiko satu baris masing-masing, dan buat perintah peningkatannya.",
+        },
+        watchdog: {
+          name: "Penjaga malam",
+          tagline: "Pemeriksaan kesehatan per jam dengan satu baris kesimpulan.",
+          prompt:
+            "Periksa apakah layanan dan gateway saya dalam kondisi baik: pindai log terkini untuk error baru, restart, atau beban tidak biasa. Balas dengan satu baris singkat yang menyatakan semua aman jika semuanya baik-baik saja; jika ada yang tampak bermasalah, laporkan apa yang gagal dan dari mana harus mulai memeriksa.",
+        },
+        polyglotMinute: {
+          name: "Menit poliglot",
+          tagline: "Satu frasa asing yang berguna menemani kopi pagi Anda.",
+          prompt:
+            "Ajarkan saya satu frasa berguna dalam bahasa Jepang: frasanya, cara pengucapannya, arti harfiahnya, dan kapan menggunakannya. Jaga agar tidak lebih dari lima baris.",
+        },
+      },
     },
     summary: {
       enabled: "Diaktifkan",

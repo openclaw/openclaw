@@ -169,16 +169,6 @@ export const ar: TranslationMap = {
       node: "العقدة",
     },
   },
-  instances: {
-    title: "المثيلات المتصلة",
-    subtitle: "إشارات الحضور من Gateway والعملاء.",
-    showHosts: "إظهار المضيفين وعناوين IP",
-    hideHosts: "إخفاء المضيفين وعناوين IP",
-    toggleHostVisibility: "تبديل إظهار المضيف",
-    noInstances: "لم يتم الإبلاغ عن أي مثيلات بعد.",
-    lastInput: "آخر إدخال {time}",
-    reason: "السبب {reason}",
-  },
   worktrees: {
     newWorktree: "شجرة عمل جديدة",
     owner: "المالك",
@@ -388,6 +378,7 @@ export const ar: TranslationMap = {
       skills: "Skills",
       channels: "القنوات",
       cronJobs: "مهام Cron",
+      memory: "الذاكرة",
     },
     context: {
       title: "سياق الوكيل",
@@ -620,7 +611,6 @@ export const ar: TranslationMap = {
     workboard: "لوحة العمل",
     worktrees: "مساحات العمل",
     channels: "القنوات",
-    instances: "المثيلات",
     sessions: "الجلسات",
     usage: "الاستخدام",
     cron: "مهام Cron",
@@ -642,7 +632,6 @@ export const ar: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "تصحيح الأخطاء",
     logs: "السجلات",
-    dreams: "الحلم",
     plugin: "المكوّن الإضافي",
   },
   subtitles: {
@@ -652,7 +641,6 @@ export const ar: TranslationMap = {
     workboard: "قائمة عمل الوكيل وتسليم الجلسات.",
     worktrees: "نسخ معزولة لمهام الوكلاء ولقطات استرداد.",
     channels: "القنوات والإعدادات.",
-    instances: "العملاء والعقد المتصلة.",
     sessions: "الجلسات النشطة والافتراضيات.",
     usage: "استخدام API والتكاليف.",
     cron: "الإيقاظات والتشغيلات المتكررة.",
@@ -674,8 +662,10 @@ export const ar: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "اللقطات، والأحداث، وRPC.",
     logs: "سجلات Gateway المباشرة.",
-    dreams: "حلم الذاكرة، والدمج، والتأمل.",
     plugin: "لوحة مقدمة من المكوّن الإضافي.",
+  },
+  mcpPage: {
+    manageServersLink: "إدارة الخوادم من صفحة الإضافات.",
   },
   pluginsPage: {
     searchLabel: "البحث في المكوّنات الإضافية",
@@ -1579,10 +1569,6 @@ export const ar: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "الوكيل",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "المشهد",
       diary: "اليوميات",
@@ -2166,9 +2152,9 @@ export const ar: TranslationMap = {
       workSessions: "العمل",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "الدردشات الأخيرة",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2473,6 +2459,50 @@ export const ar: TranslationMap = {
       howHeading: "كيف يجب أن يعمل؟",
       howHint: "اختر طريقة تسليم النتائج.",
       title: "أتمتة جديدة",
+      createAndRun: "إنشاء وتشغيل الآن",
+    },
+    suggestions: {
+      title: "أفكار للأتمتة",
+      hint: "أتمتة جاهزة للبدء — اختر واحدة وعدّلها قبل الإنشاء.",
+      use: "استخدم الفكرة →",
+      ideas: {
+        repoPulse: {
+          name: "نبض المستودع",
+          tagline: "المشكلات وطلبات السحب وأعطال CI الليلية، مرتبة حسب الأولوية.",
+          prompt:
+            "راجع النشاط الليلي في مستودعاتي: المشكلات الجديدة، وطلبات السحب، وأعطال CI. لخّص الأمور الثلاثة الأكثر إلحاحاً اليوم، كل منها مع رابط وسبب في سطر واحد.",
+        },
+        standupGhostwriter: {
+          name: "كاتب Standup الخفي",
+          tagline: "تحديث Standup الخاص بك، مصاغ من عمل الأمس.",
+          prompt:
+            "صغ تحديث Standup الخاص بي من commits الأمس، وطلبات السحب المدمجة، وخيوط المراجعة المفتوحة. ثلاث نقاط كحد أقصى: تم، جارٍ، معلّق.",
+        },
+        hackerNewsScout: {
+          name: "كاشف Hacker News",
+          tagline: "ثلاثة روابط تستحق وقت قهوتك، مع آراء جريئة.",
+          prompt:
+            "تصفّح الصفحة الأمامية لـ Hacker News اليوم بحثاً عن منشورات حول وكلاء الذكاء الاصطناعي، وأدوات المطورين، وTypeScript. أرسل لي الروابط الثلاثة الأكثر إثارة، كل منها مع رأي جريء في سطر واحد.",
+        },
+        dependencyRadar: {
+          name: "رادار التبعيات",
+          tagline: "تبعيات قديمة أو ضعيفة، مع ملاحظات الترقية.",
+          prompt:
+            "تحقق من مشروعي الرئيسي بحثاً عن تبعيات قديمة أو ضعيفة. أدرج التحديثات الجديرة بالملاحظة مع ملاحظة مخاطر لكل منها في سطر واحد، وصغ أمر الترقية.",
+        },
+        watchdog: {
+          name: "حارس الليل",
+          tagline: "فحص صحي كل ساعة بحكم موجز في سطر واحد.",
+          prompt:
+            "تحقق من أن خدماتي و Gateway بصحة جيدة: افحص السجلات الأخيرة بحثاً عن أخطاء جديدة، أو إعادة تشغيل، أو حمل غير معتاد. أجب بسطر قصير واحد يفيد بأن كل شيء على ما يرام عندما يكون كذلك؛ وإذا بدا أن شيئاً معطلاً، أفد بما فشل وأين تبدأ البحث.",
+        },
+        polyglotMinute: {
+          name: "دقيقة متعددة اللغات",
+          tagline: "عبارة أجنبية مفيدة مع قهوة صباحك.",
+          prompt:
+            "علّمني عبارة مفيدة باللغة اليابانية: العبارة، وطريقة نطقها، ومعناها الحرفي، ومتى تُستخدم. اجعلها في أقل من خمسة أسطر.",
+        },
+      },
     },
     summary: {
       enabled: "مفعّل",

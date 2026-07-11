@@ -1,5 +1,8 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   type WorkerAdmissionHandshake,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+  WORKER_PROTOCOL_MAX_FEATURES,
   validateWorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
@@ -503,7 +506,9 @@ function normalizeHandshake(artifact: WorkerInstallationArtifact): WorkerAdmissi
     throw new Error("Worker OpenClaw version must be non-empty");
   }
   if (
+    protocolFeatures.length > WORKER_PROTOCOL_MAX_FEATURES ||
     protocolFeatures.some((feature) => !feature) ||
+    protocolFeatures.some((feature) => feature.length > WORKER_PROTOCOL_MAX_FEATURE_LENGTH) ||
     new Set(protocolFeatures).size !== protocolFeatures.length
   ) {
     throw new Error("Worker protocol features must be unique non-empty strings");
@@ -549,11 +554,12 @@ function parseReceiptJson(
 }
 
 function commandFailure(phase: string, result: SpawnResult): Error {
-  const output = redactSensitiveText(result.stderr.trim() || result.stdout.trim(), {
-    mode: "tools",
-  })
-    .replace(/\s+/gu, " ")
-    .slice(0, 512);
+  const output = truncateUtf16Safe(
+    redactSensitiveText(result.stderr.trim() || result.stdout.trim(), {
+      mode: "tools",
+    }).replace(/\s+/gu, " "),
+    512,
+  );
   const status =
     result.termination === "exit" ? `exit ${result.code ?? "unknown"}` : result.termination;
   return new Error(`Worker bootstrap ${phase} failed (${status})${output ? `: ${output}` : ""}`);
