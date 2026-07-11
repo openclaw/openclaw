@@ -277,6 +277,31 @@ describe("worktree run lease", () => {
     expect(await lockState(record)).toEqual({ kind: "none" });
   });
 
+  it("does not let a failed cleanup unlock a newer holder generation", async () => {
+    const created = await createSessionWorktree();
+    const first = await acquireWorktreeRunLease(created.id, { env });
+    const record = getRegistryWorktree(env, created.id)!;
+
+    let failUnlock = true;
+    __testing.setUnlockImplForTest(async (rec) => {
+      if (failUnlock) {
+        throw new Error("simulated git unlock failure");
+      }
+      await unlockWorktree(rec);
+    });
+
+    await first.release();
+    expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+
+    const second = await acquireWorktreeRunLease(created.id, { env });
+    failUnlock = false;
+    await __testing.drainPendingCleanupsForTest();
+    expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+
+    await second.release();
+    expect(await lockState(record)).toEqual({ kind: "none" });
+  });
+
   it("fails closed when a session's authoritative worktree binding is removed", async () => {
     const created = await createSessionWorktree();
     await service.remove({ id: created.id, reason: "manual-delete", force: true });

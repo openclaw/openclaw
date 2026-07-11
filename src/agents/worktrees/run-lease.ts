@@ -32,6 +32,7 @@ type HeldWorktreeLock = { refcount: number; gitLocked: boolean };
 // child that share one worktree refcount it here so a child release does not unlock
 // the parent's still-live checkout.
 const heldGitLocks = new Map<string, HeldWorktreeLock>();
+const gitLockTransitionTails = new Map<string, Promise<void>>();
 let ownerChecks: RunLeaseOwnerChecks = {};
 let resolveSelfStartTime = getFileLockProcessStartTime;
 let releaseRunLeaseRow = releaseWorktreeRunLeaseRow;
@@ -53,6 +54,91 @@ let exitCleanupRegistered = false;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function withGitLockTransition<T>(id: string, operation: () => Promise<T>): Promise<T> {
+  const previous = gitLockTransitionTails.get(id) ?? Promise.resolve();
+  let finish!: () => void;
+  const current = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const tail = previous.then(() => current);
+  gitLockTransitionTails.set(id, tail);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    finish();
+    if (gitLockTransitionTails.get(id) === tail) {
+      gitLockTransitionTails.delete(id);
+    }
+  }
+}
+
+async function retainGitLock(env: NodeJS.ProcessEnv, id: string): Promise<void> {
+  await withGitLockTransition(id, async () => {
+    const held = heldGitLocks.get(id) ?? { refcount: 0, gitLocked: false };
+    const needsLock = held.refcount === 0 && !held.gitLocked;
+    held.refcount += 1;
+    heldGitLocks.set(id, held);
+    if (!needsLock) {
+      return;
+    }
+    const record = getRegistryWorktree(env, id);
+    if (!record) {
+      return;
+    }
+    try {
+      await lockWorktreeForProcess(record);
+      held.gitLocked = true;
+    } catch (error) {
+      log.warn(`worktree git lock unavailable for ${id}: ${errorMessage(error)}`);
+    }
+  });
+}
+
+async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
+  return await withGitLockTransition(cleanup.id, async () => {
+    let held = heldGitLocks.get(cleanup.id);
+    if (!cleanup.refcountReleased) {
+      cleanup.refcountReleased = true;
+      if (held) {
+        held.refcount -= 1;
+      }
+    }
+    held = heldGitLocks.get(cleanup.id);
+    if (!held) {
+      cleanup.gitUnlockPending = false;
+      return true;
+    }
+    if (held.refcount > 0) {
+      // A newer holder adopted a guard whose prior unlock failed. Its own final
+      // release now owns the unlock; stale cleanup must not drop that generation.
+      cleanup.gitUnlockPending = false;
+      return true;
+    }
+    if (!held.gitLocked) {
+      heldGitLocks.delete(cleanup.id);
+      cleanup.gitUnlockPending = false;
+      return true;
+    }
+    const record = getRegistryWorktree(cleanup.env, cleanup.id);
+    if (!record) {
+      heldGitLocks.delete(cleanup.id);
+      cleanup.gitUnlockPending = false;
+      return true;
+    }
+    try {
+      await unlockWorktreeImpl(record);
+    } catch (error) {
+      cleanup.gitUnlockPending = true;
+      log.warn(`failed to unlock worktree ${cleanup.id}: ${errorMessage(error)}`);
+      return false;
+    }
+    heldGitLocks.delete(cleanup.id);
+    cleanup.gitUnlockPending = false;
+    return true;
+  });
 }
 
 async function realpathOrSelf(candidate: string): Promise<string> {
@@ -128,32 +214,7 @@ async function runLeaseCleanup(cleanup: LeaseCleanup): Promise<boolean> {
     }
     cleanup.rowDeleted = true;
   }
-  if (!cleanup.refcountReleased) {
-    cleanup.refcountReleased = true;
-    const current = heldGitLocks.get(cleanup.id);
-    if (current) {
-      current.refcount -= 1;
-      if (current.refcount > 0) {
-        heldGitLocks.set(cleanup.id, current);
-      } else {
-        heldGitLocks.delete(cleanup.id);
-        cleanup.gitUnlockPending = current.gitLocked;
-      }
-    }
-  }
-  if (cleanup.gitUnlockPending) {
-    const record = getRegistryWorktree(cleanup.env, cleanup.id);
-    if (record) {
-      try {
-        await unlockWorktreeImpl(record);
-      } catch (error) {
-        log.warn(`failed to unlock worktree ${cleanup.id}: ${errorMessage(error)}`);
-        return false;
-      }
-    }
-    cleanup.gitUnlockPending = false;
-  }
-  return true;
+  return await releaseGitLock(cleanup);
 }
 
 async function drainPendingLeaseCleanups(): Promise<void> {
@@ -203,24 +264,9 @@ export async function acquireWorktreeRunLease(
     now: Date.now(),
     checks: ownerChecks,
   });
-  // Reserve the refcount slot synchronously before awaiting the git lock so two
-  // overlapping same-process acquisitions cannot both store refcount 1 and let the
-  // first release drop the guard while the other run is still live.
-  const held = heldGitLocks.get(id) ?? { refcount: 0, gitLocked: false };
-  const isFirstHolder = held.refcount === 0;
-  held.refcount += 1;
-  heldGitLocks.set(id, held);
-  if (isFirstHolder) {
-    const record = getRegistryWorktree(env, id);
-    if (record) {
-      try {
-        await lockWorktreeForProcess(record);
-        held.gitLocked = true;
-      } catch (error) {
-        log.warn(`worktree git lock unavailable for ${id}: ${errorMessage(error)}`);
-      }
-    }
-  }
+  // Serialize refcount and Git transitions so a cleanup retry cannot unlock a
+  // newer same-process holder after a prior generation's unlock failed.
+  await retainGitLock(env, id);
   const cleanup: LeaseCleanup = {
     env,
     id,
@@ -294,6 +340,7 @@ const testing = {
   },
   resetForTest(): void {
     heldGitLocks.clear();
+    gitLockTransitionTails.clear();
     pendingLeaseCleanups.clear();
     ownerChecks = {};
     resolveSelfStartTime = getFileLockProcessStartTime;
