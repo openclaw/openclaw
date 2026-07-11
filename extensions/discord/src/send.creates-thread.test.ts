@@ -701,21 +701,25 @@ describe("retry rate limits", () => {
     expect(postMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry ambiguous network errors", async () => {
+  it("retries ambiguous network errors with one stable enforced nonce", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock
       .mockRejectedValueOnce(new TypeError("fetch failed"))
       .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
 
-    await expect(
-      sendMessageDiscord("channel:789", "hello", {
-        cfg: DISCORD_TEST_CFG,
-        rest,
-        token: "t",
-        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-      }),
-    ).rejects.toThrow("fetch failed");
-    expect(postMock).toHaveBeenCalledTimes(1);
+    const result = await sendMessageDiscord("channel:789", "hello", {
+      cfg: DISCORD_TEST_CFG,
+      rest,
+      token: "t",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(result.messageId).toBe("msg1");
+    expect(postMock).toHaveBeenCalledTimes(2);
+    const firstBody = requestBody(postMock as unknown as MockCallSource, 0);
+    const secondBody = requestBody(postMock as unknown as MockCallSource, 1);
+    expect(firstBody.enforce_nonce).toBe(true);
+    expect(secondBody.nonce).toBe(firstBody.nonce);
   });
 
   it("retries reactions on rate limits", async () => {

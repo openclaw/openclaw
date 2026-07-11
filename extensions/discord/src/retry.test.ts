@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./internal/discord.js";
 import {
   createDiscordRetryRunner,
-  isRetryableDiscordNonceProtectedCreateError,
   isRetryableDiscordPreConnectError,
   isRetryableDiscordTransientError,
 } from "./retry.js";
@@ -58,35 +57,6 @@ describe("isRetryableDiscordTransientError", () => {
   });
 });
 
-describe("isRetryableDiscordNonceProtectedCreateError", () => {
-  it.each([
-    ["rate limit", createRateLimitError()],
-    ["429 status", Object.assign(new Error("rate limited"), { status: 429 })],
-    ["502 status", Object.assign(new Error("bad gateway"), { status: 502 })],
-    ["ECONNREFUSED", Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" })],
-    ["ENOTFOUND", Object.assign(new Error("dns failure"), { code: "ENOTFOUND" })],
-    ["EAI_AGAIN cause", new Error("request failed", { cause: { code: "EAI_AGAIN" } })],
-    [
-      "UND_ERR_CONNECT_TIMEOUT",
-      Object.assign(new Error("connect"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
-    ],
-  ])("retries %s", (_name, err) => {
-    expect(isRetryableDiscordNonceProtectedCreateError(err)).toBe(true);
-  });
-
-  it.each([
-    ["ECONNRESET", Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })],
-    ["ETIMEDOUT cause", new Error("request failed", { cause: { code: "ETIMEDOUT" } })],
-    ["abort", Object.assign(new Error("aborted"), { name: "AbortError" })],
-    ["headers timeout", Object.assign(new Error("timeout"), { code: "UND_ERR_HEADERS_TIMEOUT" })],
-    ["body timeout", Object.assign(new Error("timeout"), { code: "UND_ERR_BODY_TIMEOUT" })],
-    ["socket", Object.assign(new Error("socket"), { code: "UND_ERR_SOCKET" })],
-    ["fetch failed", new TypeError("fetch failed")],
-  ])("does not retry %s", (_name, err) => {
-    expect(isRetryableDiscordNonceProtectedCreateError(err)).toBe(false);
-  });
-});
-
 describe("isRetryableDiscordPreConnectError", () => {
   it.each([
     ["rate limit", createRateLimitError()],
@@ -104,20 +74,18 @@ describe("isRetryableDiscordPreConnectError", () => {
 });
 
 describe("createDiscordRetryRunner create safety", () => {
-  it("does not retry post-connect-ambiguous errors for non-idempotent sends", async () => {
+  it("retries post-connect-ambiguous errors for nonce-protected creates", async () => {
     const fn = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }))
       .mockResolvedValue("ok");
     const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
 
-    await expect(runner(fn, "text", { safety: "nonce-protected-create" })).rejects.toThrow(
-      "aborted",
-    );
-    expect(fn).toHaveBeenCalledTimes(1);
+    await expect(runner(fn, "text", { safety: "nonce-protected-create" })).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it("still retries pre-connect errors for non-idempotent sends", async () => {
+  it("retries pre-connect errors for nonce-protected creates", async () => {
     const fn = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }))
@@ -128,7 +96,7 @@ describe("createDiscordRetryRunner create safety", () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it("retries a 502 for non-idempotent sends", async () => {
+  it("retries a 502 for nonce-protected creates", async () => {
     const fn = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))

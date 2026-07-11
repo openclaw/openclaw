@@ -497,11 +497,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
               actionRow,
             });
       return {
-        body: stripUndefinedFields({
-          ...serializePayload(buildExecApprovalPayload(container)),
-          nonce: createDiscordMessageNonce(),
-          enforce_nonce: true,
-        }),
+        body: stripUndefinedFields(serializePayload(buildExecApprovalPayload(container))),
       };
     },
     buildResolvedResult: ({ cfg, accountId, context, view }) => {
@@ -601,13 +597,20 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         token: resolved.context.token,
         accountId: resolved.accountId,
       });
+      // Each destination is a distinct logical create. Reuse its nonce only across
+      // retries so multi-target approvals cannot deduplicate into the wrong channel.
+      const body = {
+        ...pendingPayload.body,
+        nonce: createDiscordMessageNonce(),
+        enforce_nonce: true,
+      };
       const message = (await discordRequest(
         () =>
           createChannelMessage<{ id: string; channel_id: string }>(
             rest,
             preparedTarget.discordChannelId,
             {
-              body: pendingPayload.body,
+              body,
             },
           ),
         plannedTarget.surface === "origin" ? "send-approval-channel" : "send-approval",

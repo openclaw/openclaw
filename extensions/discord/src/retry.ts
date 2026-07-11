@@ -116,28 +116,10 @@ export function isRetryableDiscordPreConnectError(err: unknown): boolean {
   return false;
 }
 
-export function isRetryableDiscordNonceProtectedCreateError(err: unknown): boolean {
-  if (
-    collectErrorGraphCandidates(err, (current) => [current.cause, current.error]).some(
-      (candidate) => readDiscordErrorStatus(candidate) === 502,
-    )
-  ) {
-    return true;
-  }
-  return isRetryableDiscordPreConnectError(err);
-}
-
 function resolveDiscordRetryPredicate(safety: DiscordRetrySafety) {
-  switch (safety) {
-    case "idempotent":
-      return isRetryableDiscordTransientError;
-    case "nonce-protected-create":
-      // Discord can deduplicate an ambiguous 502 only for Create Message requests
-      // carrying a stable enforced nonce. Other post-connect failures stay fail-closed.
-      return isRetryableDiscordNonceProtectedCreateError;
-    case "non-idempotent-create":
-      return isRetryableDiscordPreConnectError;
-  }
+  return safety === "non-idempotent-create"
+    ? isRetryableDiscordPreConnectError
+    : isRetryableDiscordTransientError;
 }
 
 function isRetryableDiscordGatewayTransportError(err: unknown): boolean {
