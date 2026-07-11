@@ -6,6 +6,68 @@ import Testing
 
 @Suite(.serialized)
 struct ExecApprovalsStoreRefactorTests {
+    @Test
+    func `native prepare attaches current Mac policy to canonical CLI plan`() async throws {
+        try await self.withTempStateDir { _ in
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .full
+                entry.ask = .always
+            }.get()
+            let command = ["/usr/bin/printf", "<%s>"]
+            let artifacts = OpenClawSystemRunPreparedArtifacts(
+                plan: OpenClawSystemRunApprovalPlan(
+                    argv: command,
+                    cwd: nil,
+                    commandText: "/usr/bin/printf <%s>",
+                    agentId: "main",
+                    sessionKey: "session-1"),
+                allowAlwaysCoverage: .init(
+                    complete: true,
+                    patterns: [.init(pattern: "/usr/bin/printf")]))
+            let probe = ShellRunProbe()
+            let runtime = MacNodeRuntime(
+                systemRunPreparer: { params in
+                    #expect(params.command == command)
+                    return artifacts
+                },
+                shellRunner: { command, _, _, _ in await probe.run(command) })
+            let params = OpenClawSystemRunPrepareParams(
+                command: command,
+                agentId: "main",
+                sessionKey: "session-1")
+            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+            let response = await runtime.handleInvoke(BridgeInvokeRequest(
+                id: "prepare-native-policy",
+                command: OpenClawSystemCommand.prepareRun.rawValue,
+                paramsJSON: json))
+
+            #expect(response.ok)
+            let payload = try #require(response.payloadJSON?.data(using: .utf8))
+            let prepared = try JSONDecoder().decode(OpenClawSystemRunPrepareResponse.self, from: payload)
+            #expect(prepared.execPolicy.security == .full)
+            #expect(prepared.execPolicy.ask == .always)
+            #expect(prepared.plan.policySnapshot?.security == .full)
+            #expect(prepared.plan.commandText == ExecCommandFormatter.displayString(for: command))
+            #expect(prepared.allowAlwaysCoverage.patterns == [.init(pattern: "/usr/bin/printf")])
+
+            let runParams = OpenClawSystemRunParams(
+                command: command,
+                agentId: "main",
+                sessionKey: "session-1",
+                systemRunPlan: prepared.plan,
+                approved: true)
+            let runJSON = try String(data: JSONEncoder().encode(runParams), encoding: .utf8)
+            let runResponse = await runtime.handleInvoke(BridgeInvokeRequest(
+                id: "run-native-policy",
+                command: OpenClawSystemCommand.run.rawValue,
+                paramsJSON: runJSON))
+
+            #expect(runResponse.ok)
+            #expect(await probe.capturedCommands() == [command])
+        }
+    }
+
     private actor ShellRunProbe {
         private var commands: [[String]] = []
 

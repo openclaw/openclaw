@@ -27,6 +27,8 @@ actor MacNodeRuntime {
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
     private let codexThreadListRequest: @Sendable (String?) async throws -> String
     private let execApprovalStoreMutations: ExecApprovalStoreMutations
+    private let systemRunPreparer: @Sendable (
+        _ params: OpenClawSystemRunPrepareParams) async throws -> OpenClawSystemRunPreparedArtifacts
     private let shellRunner: @Sendable (
         _ command: [String],
         _ cwd: String?,
@@ -67,6 +69,10 @@ actor MacNodeRuntime {
             try await MacNodeCodexThreadCatalog.list(paramsJSON: paramsJSON)
         },
         execApprovalStoreMutations: ExecApprovalStoreMutations = .live,
+        systemRunPreparer: @escaping @Sendable (
+            _ params: OpenClawSystemRunPrepareParams) async throws -> OpenClawSystemRunPreparedArtifacts = { params in
+            try await MacSystemRunPreparer.prepare(params)
+        },
         shellRunner: @escaping @Sendable (
             _ command: [String],
             _ cwd: String?,
@@ -84,6 +90,7 @@ actor MacNodeRuntime {
         self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
         self.codexThreadListRequest = codexThreadListRequest
         self.execApprovalStoreMutations = execApprovalStoreMutations
+        self.systemRunPreparer = systemRunPreparer
         self.shellRunner = shellRunner
     }
 
@@ -135,6 +142,8 @@ actor MacNodeRuntime {
                 return try await self.handleComputerActInvoke(req)
             case OpenClawSystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
+            case OpenClawSystemCommand.prepareRun.rawValue:
+                return try await self.handleSystemRunPrepare(req)
             case OpenClawSystemCommand.which.rawValue:
                 return try await self.handleSystemWhich(req)
             case OpenClawSystemCommand.notify.rawValue:
@@ -742,6 +751,46 @@ extension MacNodeRuntime {
 // MARK: - System commands
 
 extension MacNodeRuntime {
+    private func handleSystemRunPrepare(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(OpenClawSystemRunPrepareParams.self, from: req.paramsJSON)
+        let prepared = try await self.systemRunPreparer(params)
+        let validated: ExecHostValidatedRequest
+        switch ExecHostRequestEvaluator.validateCommand(
+            command: prepared.plan.argv,
+            rawCommand: prepared.plan.commandText)
+        {
+        case let .success(value):
+            validated = value
+        case let .failure(error):
+            return Self.errorResponse(req, code: .invalidRequest, message: error.message)
+        }
+        guard validated.command == prepared.plan.argv else {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: local CLI returned an inconsistent system.run plan")
+        }
+        var plan = prepared.plan
+        // The CLI owns argv planning; native owns the display string used to
+        // bind delayed approval back to the exact command at execution time.
+        plan.commandText = validated.displayCommand
+        let evaluation = await ExecApprovalEvaluator.evaluate(
+            command: plan.argv,
+            rawCommand: plan.commandText,
+            displayCommand: plan.commandText,
+            cwd: plan.cwd,
+            envOverrides: params.env,
+            agentId: plan.agentId)
+        plan.policySnapshot = evaluation.policySnapshot.portable
+        let response = OpenClawSystemRunPrepareResponse(
+            plan: plan,
+            execPolicy: .init(
+                security: .init(rawValue: evaluation.security.rawValue)!,
+                ask: .init(rawValue: evaluation.ask.rawValue)!),
+            allowAlwaysCoverage: prepared.allowAlwaysCoverage)
+        return try BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: Self.encodePayload(response))
+    }
+
     private struct SystemRunPreparation {
         let params: OpenClawSystemRunParams
         let approvalSource: ExecApprovalRequestSource?

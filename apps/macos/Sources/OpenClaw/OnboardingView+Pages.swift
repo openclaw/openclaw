@@ -698,7 +698,9 @@ extension OnboardingView {
             Text("Getting things ready")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "OpenClaw is setting up its background service on this Mac. " +
+                (self.state.connectionMode == .remote
+                    ? "OpenClaw is installing its private command helper on this Mac. "
+                    : "OpenClaw is setting up its background service on this Mac. ") +
                     "This usually takes under a minute — no Terminal, no administrator password.")
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -714,10 +716,12 @@ extension OnboardingView {
                         : "A private copy inside your user folder.",
                     state: self.installStepStateForInstall,
                     monospacedDetail: self.cliInstalled && self.cliInstallLocation != nil)
-                self.installStepRow(
-                    title: "Start the background service",
-                    detail: "Runs quietly and starts again after a restart.",
-                    state: self.installStepStateForService)
+                if self.state.connectionMode == .local {
+                    self.installStepRow(
+                        title: "Start the background service",
+                        detail: "Runs quietly and starts again after a restart.",
+                        state: self.installStepStateForService)
+                }
                 self.installStepRow(
                     title: "Ready for the next step",
                     detail: "Once the service answers, you’ll connect your AI.",

@@ -667,6 +667,7 @@ final class MacNodeModeCoordinator: NSObject {
         var caps: [String] = [
             OpenClawCapability.canvas.rawValue,
             OpenClawCapability.screen.rawValue,
+            OpenClawCapability.system.rawValue,
         ]
         if browserControlEnabled, connectionMode == .local {
             caps.append(OpenClawCapability.browser.rawValue)
@@ -706,7 +707,10 @@ final class MacNodeModeCoordinator: NSObject {
         return Dictionary(uniqueKeysWithValues: statuses.map { ($0.key.rawValue, $0.value) })
     }
 
-    nonisolated static func resolvedCommands(caps: [String]) -> [String] {
+    nonisolated static func resolvedCommands(
+        caps: [String],
+        systemRunPrepareEnabled: Bool = true) -> [String]
+    {
         var commands: [String] = [
             OpenClawCanvasCommand.present.rawValue,
             OpenClawCanvasCommand.hide.rawValue,
@@ -724,6 +728,9 @@ final class MacNodeModeCoordinator: NSObject {
             OpenClawSystemCommand.execApprovalsGet.rawValue,
             OpenClawSystemCommand.execApprovalsSet.rawValue,
         ]
+        if systemRunPrepareEnabled {
+            commands.append(OpenClawSystemCommand.prepareRun.rawValue)
+        }
 
         let capsSet = Set(caps)
         if capsSet.contains(OpenClawCapability.browser.rawValue) {
@@ -748,7 +755,9 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     private func currentCommands(caps: [String]) -> [String] {
-        Self.resolvedCommands(caps: caps)
+        Self.resolvedCommands(
+            caps: caps,
+            systemRunPrepareEnabled: CommandResolver.hasMatchingLocalOpenClawCommand())
     }
 
     nonisolated static func tlsPinStoreKey(for url: URL) -> String {

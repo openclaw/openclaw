@@ -7,44 +7,29 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayClient } from "../gateway/client.js";
 import {
-  analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
   ensureExecApprovalsSnapshot,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
-  resolveAllowAlwaysPatternCoverage,
   updateExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
   type ExecApprovalsResolved,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
-import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import {
   requestExecHostViaSocket,
   type ExecHostRequest,
   type ExecHostResponse,
 } from "../infra/exec-host.js";
-import {
-  extractShellWrapperCommand,
-  isShellWrapperInvocation,
-} from "../infra/exec-wrapper-resolution.js";
-import {
-  inspectHostExecEnvOverrides,
-  sanitizeHostExecEnv,
-  sanitizeSystemRunEnvOverrides,
-} from "../infra/host-env-security.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { logWarn } from "../logger.js";
-import {
-  buildSystemRunApprovalPlan,
-  handleSystemRunInvoke,
-  resolveEffectiveSystemRunExecPolicy,
-} from "./invoke-system-run.js";
+import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
   ExecFinishedEventParams,
@@ -53,6 +38,7 @@ import type {
   SystemRunParams,
 } from "./invoke-types.js";
 import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
+import { prepareSystemRunApproval, type SystemRunPrepareParams } from "./system-run-prepare.js";
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
@@ -73,122 +59,6 @@ type SystemExecApprovalsSetParams = {
   file: ExecApprovalsFile;
   baseHash?: string | null;
 };
-
-type SystemRunPrepareParams = {
-  command?: unknown;
-  rawCommand?: unknown;
-  cwd?: unknown;
-  env?: Record<string, string> | null;
-  agentId?: unknown;
-  sessionKey?: unknown;
-  strictInlineEval?: unknown;
-};
-
-type SystemRunPrepareEnv =
-  | {
-      ok: true;
-      env: Record<string, string>;
-    }
-  | {
-      ok: false;
-      message: string;
-    };
-
-function buildEnvOverrideRejectionMessage(params: {
-  rejectedOverrideBlockedKeys: string[];
-  rejectedOverrideInvalidKeys: string[];
-}): string {
-  const details: string[] = [];
-  if (params.rejectedOverrideBlockedKeys.length > 0) {
-    details.push(`blocked override keys: ${params.rejectedOverrideBlockedKeys.join(", ")}`);
-  }
-  if (params.rejectedOverrideInvalidKeys.length > 0) {
-    details.push(
-      `invalid non-portable override keys: ${params.rejectedOverrideInvalidKeys.join(", ")}`,
-    );
-  }
-  return `SYSTEM_RUN_DENIED: environment override rejected (${details.join("; ")})`;
-}
-
-function buildSystemRunPrepareCoverageEnv(params: {
-  argv: string[];
-  env?: Record<string, string> | null;
-}): SystemRunPrepareEnv {
-  const diagnostics = inspectHostExecEnvOverrides({
-    overrides: params.env ?? undefined,
-    blockPathOverrides: true,
-  });
-  if (
-    diagnostics.rejectedOverrideBlockedKeys.length > 0 ||
-    diagnostics.rejectedOverrideInvalidKeys.length > 0
-  ) {
-    return {
-      ok: false,
-      message: buildEnvOverrideRejectionMessage(diagnostics),
-    };
-  }
-  const envOverrides = sanitizeSystemRunEnvOverrides({
-    overrides: params.env ?? undefined,
-    shellWrapper: isShellWrapperInvocation(params.argv),
-  });
-  return {
-    ok: true,
-    // Prepared coverage is durable approval evidence, so keep this in parity
-    // with the env passed to `system.run` policy and execution.
-    env: sanitizeEnv(envOverrides),
-  };
-}
-
-async function buildSystemRunAllowAlwaysCoverage(params: {
-  argv: string[];
-  rawCommand?: string | null;
-  cwd: string | null | undefined;
-  env: Record<string, string> | undefined;
-  strictInlineEval?: boolean;
-}) {
-  const cwd = params.cwd ?? undefined;
-  const shellWrapper = extractShellWrapperCommand(params.argv, params.rawCommand);
-  if (shellWrapper.isWrapper) {
-    if (!shellWrapper.command) {
-      return { complete: false, patterns: [] };
-    }
-    const authorizationPlan = await planShellAuthorization({
-      command: shellWrapper.command,
-      cwd,
-      env: params.env,
-      platform: process.platform,
-    });
-    if (!authorizationPlan.ok) {
-      return { complete: false, patterns: [] };
-    }
-    const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
-    const reusableSegments = candidates
-      .filter((candidate) => candidate.allowAlways)
-      .map((candidate) => candidate.sourceSegment);
-    const coverage = resolveAllowAlwaysPatternCoverage({
-      segments: reusableSegments,
-      cwd,
-      env: params.env,
-      platform: process.platform,
-      strictInlineEval: params.strictInlineEval,
-    });
-    return {
-      ...coverage,
-      complete: coverage.complete && reusableSegments.length === candidates.length,
-    };
-  }
-  const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
-  if (!analysis.ok) {
-    return { complete: false, patterns: [] };
-  }
-  return resolveAllowAlwaysPatternCoverage({
-    segments: analysis.segments,
-    cwd,
-    env: params.env,
-    platform: process.platform,
-    strictInlineEval: params.strictInlineEval,
-  });
-}
 
 type ExecApprovalsSnapshot = {
   path: string;
@@ -740,17 +610,9 @@ async function dispatchInvoke(
   if (command === "system.run.prepare") {
     try {
       const params = decodeParams<SystemRunPrepareParams>(frame.paramsJSON);
-      const prepared = buildSystemRunApprovalPlan(params);
+      const prepared = await prepareSystemRunApproval(params);
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
-        return;
-      }
-      const prepareEnv = buildSystemRunPrepareCoverageEnv({
-        argv: prepared.plan.argv,
-        env: params.env ?? undefined,
-      });
-      if (!prepareEnv.ok) {
-        await sendErrorResult(client, frame, "INVALID_REQUEST", prepareEnv.message);
         return;
       }
       const { getRuntimeConfig } = await import("../config/config.js");
@@ -774,13 +636,7 @@ async function dispatchInvoke(
           security: execPolicy.security,
           ask: execPolicy.ask,
         },
-        allowAlwaysCoverage: await buildSystemRunAllowAlwaysCoverage({
-          argv: prepared.plan.argv,
-          rawCommand: typeof params.rawCommand === "string" ? params.rawCommand : null,
-          cwd: prepared.plan.cwd,
-          env: prepareEnv.env,
-          strictInlineEval: params.strictInlineEval === true,
-        }),
+        allowAlwaysCoverage: prepared.allowAlwaysCoverage,
       });
     } catch (err) {
       await sendInvalidRequestResult(client, frame, err);

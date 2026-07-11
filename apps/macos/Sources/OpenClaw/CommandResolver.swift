@@ -282,6 +282,21 @@ enum CommandResolver {
             return ssh
         }
 
+        return self.localOpenClawCommand(
+            subcommand: subcommand,
+            extraArgs: extraArgs,
+            searchPaths: searchPaths,
+            projectRoot: projectRoot)
+    }
+
+    /// Resolves only the CLI installed beside this app. Node-side preparation
+    /// must happen on the Mac node even when its Gateway connection uses SSH.
+    static func localOpenClawCommand(
+        subcommand: String,
+        extraArgs: [String] = [],
+        searchPaths: [String]? = nil,
+        projectRoot: URL? = nil) -> [String]
+    {
         let root = projectRoot ?? self.projectRoot()
         if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
             return [openclawPath, subcommand] + extraArgs
@@ -318,6 +333,48 @@ enum CommandResolver {
         case let .failure(error):
             return self.runtimeErrorCommand(error)
         }
+    }
+
+    static func matchingLocalOpenClawCommand(
+        subcommand: String,
+        extraArgs: [String] = [],
+        defaults: UserDefaults = .standard,
+        fileManager: FileManager = .default,
+        requiredVersion: String? = GatewayEnvironment.expectedGatewayVersionString(),
+        searchPaths: [String]? = nil,
+        projectRoot: URL? = nil) -> [String]
+    {
+        if let executable = self.validatedOpenClawExecutable(
+            defaults: defaults,
+            fileManager: fileManager,
+            requiredVersion: requiredVersion)
+        {
+            return [executable, subcommand] + extraArgs
+        }
+        #if DEBUG
+        return self.localOpenClawCommand(
+            subcommand: subcommand,
+            extraArgs: extraArgs,
+            searchPaths: searchPaths,
+            projectRoot: projectRoot)
+        #else
+        return self.errorCommand(with: "matching local openclaw CLI unavailable; reinstall the CLI from Settings")
+        #endif
+    }
+
+    static func hasMatchingLocalOpenClawCommand() -> Bool {
+        if self.validatedOpenClawExecutable(
+            defaults: .standard,
+            fileManager: .default,
+            requiredVersion: GatewayEnvironment.expectedGatewayVersionString()) != nil
+        {
+            return true
+        }
+        #if DEBUG
+        return self.hasAnyOpenClawInvoker()
+        #else
+        return false
+        #endif
     }
 
     static func openclawCommand(

@@ -190,10 +190,8 @@ struct OnboardingView: View {
     {
         switch mode {
         case .remote:
-            // Remote setup doesn't need local gateway/CLI/workspace setup pages,
-            // but the AI check runs against the remote gateway so a broken
-            // remote model surfaces here, not in the first chat.
-            return showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
+            let setupPages = requiresCLIInstall ? [0, 1, 2, 3, 5] : [0, 1, 3, 5]
+            return showOnboardingChat ? setupPages + [8, 9] : setupPages + [9]
         case .unconfigured:
             return showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
@@ -221,7 +219,7 @@ struct OnboardingView: View {
         Self.pageOrder(
             for: self.state.connectionMode,
             showOnboardingChat: self.showOnboardingChat,
-            requiresCLIInstall: self.state.connectionMode == .local && !self.cliInstalled)
+            requiresCLIInstall: self.state.connectionMode != .unconfigured && !self.cliInstalled)
     }
 
     var pageCount: Int {

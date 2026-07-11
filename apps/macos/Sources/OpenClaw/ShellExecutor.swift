@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import OpenClawIPC
 
@@ -29,6 +30,27 @@ enum ShellExecutor {
         }
     }
 
+    private final class InputWriter: @unchecked Sendable {
+        let pipe = Pipe()
+
+        init() {
+            // Timeout can close the child side while a large request is still
+            // draining. Convert EPIPE into a write error instead of SIGPIPE.
+            _ = fcntl(self.pipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+        }
+
+        func write(_ data: Data) {
+            DispatchQueue.global(qos: .userInitiated).async {
+                try? self.pipe.fileHandleForWriting.write(contentsOf: data)
+                try? self.pipe.fileHandleForWriting.close()
+            }
+        }
+
+        func close() {
+            try? self.pipe.fileHandleForWriting.close()
+        }
+    }
+
     private static func completedResult(
         status: Int,
         outTask: Task<Data, Never>,
@@ -49,7 +71,8 @@ enum ShellExecutor {
         command: [String],
         cwd: String?,
         env: [String: String]?,
-        timeout: Double?) async -> ShellResult
+        timeout: Double?,
+        stdin: Data? = nil) async -> ShellResult
     {
         guard !command.isEmpty else {
             return ShellResult(
@@ -73,8 +96,10 @@ enum ShellExecutor {
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
+        let stdinWriter = stdin == nil ? nil : InputWriter()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        process.standardInput = stdinWriter?.pipe
 
         let outTask = Task { stdoutPipe.fileHandleForReading.readToEndSafely() }
         let errTask = Task { stderrPipe.fileHandleForReading.readToEndSafely() }
@@ -97,6 +122,7 @@ enum ShellExecutor {
                 do {
                     try process.run()
                 } catch {
+                    stdinWriter?.close()
                     completion.finish(
                         ShellResult(
                             stdout: "",
@@ -120,12 +146,17 @@ enum ShellExecutor {
                             success: false,
                             errorMessage: "timeout"))
                 }
+                if let stdin {
+                    stdinWriter?.write(stdin)
+                }
             }
         }
 
         do {
             try process.run()
+            if let stdin { stdinWriter?.write(stdin) }
         } catch {
+            stdinWriter?.close()
             return ShellResult(
                 stdout: "",
                 stderr: "",

@@ -52,12 +52,17 @@ extension OnboardingView {
 
     func maybeInstallCLI(for pageIndex: Int) {
         if pageIndex == cliPageIndex, cliExecutableReady {
+            if state.connectionMode == .remote {
+                cliInstalled = true
+                cliStatus = "OpenClaw CLI is ready for Mac node commands."
+                return
+            }
             self.startExistingCLIActivationIfNeeded()
             return
         }
         guard Self.shouldAutoInstallCLI(
             onCLIPage: pageIndex == cliPageIndex,
-            isLocal: state.connectionMode == .local,
+            shouldInstall: state.connectionMode != .unconfigured,
             visible: onboardingVisible,
             statusKnown: cliStatusKnown,
             executableReady: cliExecutableReady,
@@ -69,14 +74,14 @@ extension OnboardingView {
 
     static func shouldAutoInstallCLI(
         onCLIPage: Bool,
-        isLocal: Bool,
+        shouldInstall: Bool,
         visible: Bool,
         statusKnown: Bool,
         executableReady: Bool,
         installed: Bool,
         installing: Bool) -> Bool
     {
-        onCLIPage && isLocal && visible && statusKnown && !executableReady && !installed && !installing
+        onCLIPage && shouldInstall && visible && statusKnown && !executableReady && !installed && !installing
     }
 
     func startExistingCLIActivationIfNeeded() {
@@ -163,6 +168,11 @@ extension OnboardingView {
         guard installed else { return }
         cliExecutableReady = true
         cliInstallLocation = CLIInstaller.managedExecutableLocation()
+        if self.state.connectionMode == .remote {
+            cliStatus = "OpenClaw CLI is ready for Mac node commands."
+            cliInstalled = true
+            return
+        }
         cliStatus = "Starting OpenClaw Gateway…"
         // The step checklist shows one spinner at a time: install first,
         // then the service start.

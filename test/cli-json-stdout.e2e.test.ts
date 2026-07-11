@@ -6,6 +6,50 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 
 describe("cli json stdout contract", () => {
+  it("keeps node run preparation independent from invalid config and doctor output", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const stateDir = path.join(tempHome, ".openclaw");
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(path.join(stateDir, "openclaw.json"), "{ invalid", "utf8");
+
+        const env = {
+          ...process.env,
+          HOME: tempHome,
+          USERPROFILE: tempHome,
+          OPENCLAW_TEST_FAST: "1",
+        };
+        delete env.OPENCLAW_HOME;
+        delete env.OPENCLAW_STATE_DIR;
+        delete env.OPENCLAW_CONFIG_PATH;
+        delete env.VITEST;
+
+        const entry = path.resolve(process.cwd(), "src/entry.ts");
+        const result = spawnSync(
+          process.execPath,
+          ["--import", "tsx", entry, "node", "_prepare-system-run"],
+          {
+            cwd: process.cwd(),
+            env,
+            encoding: "utf8",
+            input: JSON.stringify({ command: ["/usr/bin/printf", "<%s>"] }),
+          },
+        );
+
+        expect(result.status).toBe(0);
+        const parsed = JSON.parse(result.stdout.trim()) as {
+          plan?: { argv?: string[] };
+          allowAlwaysCoverage?: unknown;
+        };
+        expect(parsed.plan?.argv).toEqual(["/usr/bin/printf", "<%s>"]);
+        expect(parsed).toHaveProperty("allowAlwaysCoverage");
+        expect(result.stdout).not.toContain("Doctor warnings");
+        expect(result.stdout).not.toContain("Config invalid");
+      },
+      { prefix: "openclaw-prepare-json-e2e-" },
+    );
+  });
+
   it("keeps `update status --json` stdout parseable even with legacy doctor preflight inputs", async () => {
     await withTempHome(
       async (tempHome) => {

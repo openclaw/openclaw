@@ -235,6 +235,19 @@ import Testing
             requiredVersion: "2026.8.0") == nil)
     }
 
+    @Test @MainActor func `failed CLI validation clears only the matching cached executable`() throws {
+        let defaults = self.makeDefaults()
+        defaults.set("/tmp/openclaw", forKey: cliValidatedExecutableKey)
+        defaults.set("2026.7.10", forKey: cliValidatedVersionKey)
+
+        CLIInstaller.forgetValidatedExecutable(at: "/tmp/other", defaults: defaults)
+        #expect(defaults.string(forKey: cliValidatedExecutableKey) == "/tmp/openclaw")
+
+        CLIInstaller.forgetValidatedExecutable(at: "/tmp/openclaw", defaults: defaults)
+        #expect(defaults.string(forKey: cliValidatedExecutableKey) == nil)
+        #expect(defaults.string(forKey: cliValidatedVersionKey) == nil)
+    }
+
     @Test func `builds SSH command for remote mode`() {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
@@ -268,6 +281,44 @@ import Testing
             #expect(script.contains("--json"))
             #expect(script.contains("CLI="))
         }
+    }
+
+    @Test func `local command never routes through remote gateway SSH`() throws {
+        let tmp = try makeTempDirForTests()
+        let binDir = tmp.appendingPathComponent("bin")
+        let openclawPath = binDir.appendingPathComponent("openclaw")
+        try makeExecutableForTests(at: openclawPath)
+
+        let cmd = CommandResolver.localOpenClawCommand(
+            subcommand: "node",
+            extraArgs: ["_prepare-system-run"],
+            searchPaths: [binDir.path],
+            projectRoot: tmp)
+
+        #expect(cmd == [openclawPath.path, "node", "_prepare-system-run"])
+        #expect(cmd.first != "/usr/bin/ssh")
+    }
+
+    @Test func `matching local command prefers validated CLI over project checkout`() throws {
+        let defaults = self.makeDefaults()
+        let tmp = try makeTempDirForTests()
+        let validated = tmp.appendingPathComponent("validated/openclaw")
+        let project = tmp.appendingPathComponent("project")
+        let projectCLI = project.appendingPathComponent("node_modules/.bin/openclaw")
+        try makeExecutableForTests(at: validated)
+        try makeExecutableForTests(at: projectCLI)
+        defaults.set(validated.path, forKey: cliValidatedExecutableKey)
+        defaults.set("2026.7.10", forKey: cliValidatedVersionKey)
+
+        let cmd = CommandResolver.matchingLocalOpenClawCommand(
+            subcommand: "node",
+            extraArgs: ["_prepare-system-run"],
+            defaults: defaults,
+            requiredVersion: "2026.7.1",
+            searchPaths: [projectCLI.deletingLastPathComponent().path],
+            projectRoot: project)
+
+        #expect(cmd == [validated.path, "node", "_prepare-system-run"])
     }
 
     @Test func `explicit SSH config host key policy omits strict override`() {

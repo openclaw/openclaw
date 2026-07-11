@@ -5,6 +5,7 @@ public enum OpenClawCapability: String, Codable, Sendable {
     case browser
     case camera
     case screen
+    case system
     case computer
     case voiceWake
     case talk

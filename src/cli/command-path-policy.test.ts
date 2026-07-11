@@ -66,6 +66,16 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("isolates node run preparation as a machine protocol", () => {
+    expectResolvedPolicy(["node", "_prepare-system-run"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    });
+  });
+
   it("applies exact overrides after broader channel plugin rules", () => {
     expectResolvedPolicy(["channels", "send"], {
       loadPlugins: "always",

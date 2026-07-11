@@ -2,10 +2,101 @@ import Foundation
 
 public enum OpenClawSystemCommand: String, Codable, Sendable {
     case run = "system.run"
+    case prepareRun = "system.run.prepare"
     case which = "system.which"
     case notify = "system.notify"
     case execApprovalsGet = "system.execApprovals.get"
     case execApprovalsSet = "system.execApprovals.set"
+}
+
+public struct OpenClawSystemRunPrepareParams: Codable, Sendable, Equatable {
+    public var command: [String]
+    public var rawCommand: String?
+    public var cwd: String?
+    public var env: [String: String]?
+    public var agentId: String?
+    public var sessionKey: String?
+    public var strictInlineEval: Bool?
+
+    public init(
+        command: [String],
+        rawCommand: String? = nil,
+        cwd: String? = nil,
+        env: [String: String]? = nil,
+        agentId: String? = nil,
+        sessionKey: String? = nil,
+        strictInlineEval: Bool? = nil)
+    {
+        self.command = command
+        self.rawCommand = rawCommand
+        self.cwd = cwd
+        self.env = env
+        self.agentId = agentId
+        self.sessionKey = sessionKey
+        self.strictInlineEval = strictInlineEval
+    }
+}
+
+public struct OpenClawSystemRunAllowAlwaysCoverage: Codable, Sendable, Equatable {
+    public struct Pattern: Codable, Sendable, Equatable {
+        public var pattern: String
+        public var argPattern: String?
+
+        public init(pattern: String, argPattern: String? = nil) {
+            self.pattern = pattern
+            self.argPattern = argPattern
+        }
+    }
+
+    public var complete: Bool
+    public var patterns: [Pattern]
+
+    public init(complete: Bool, patterns: [Pattern]) {
+        self.complete = complete
+        self.patterns = patterns
+    }
+}
+
+public struct OpenClawSystemRunPreparedArtifacts: Codable, Sendable, Equatable {
+    public var plan: OpenClawSystemRunApprovalPlan
+    public var allowAlwaysCoverage: OpenClawSystemRunAllowAlwaysCoverage
+
+    public init(
+        plan: OpenClawSystemRunApprovalPlan,
+        allowAlwaysCoverage: OpenClawSystemRunAllowAlwaysCoverage)
+    {
+        self.plan = plan
+        self.allowAlwaysCoverage = allowAlwaysCoverage
+    }
+}
+
+public struct OpenClawSystemRunPrepareResponse: Codable, Sendable, Equatable {
+    public struct ExecPolicy: Codable, Sendable, Equatable {
+        public var security: OpenClawSystemRunApprovalPolicySnapshot.Security
+        public var ask: OpenClawSystemRunApprovalPolicySnapshot.Ask
+
+        public init(
+            security: OpenClawSystemRunApprovalPolicySnapshot.Security,
+            ask: OpenClawSystemRunApprovalPolicySnapshot.Ask)
+        {
+            self.security = security
+            self.ask = ask
+        }
+    }
+
+    public var plan: OpenClawSystemRunApprovalPlan
+    public var execPolicy: ExecPolicy
+    public var allowAlwaysCoverage: OpenClawSystemRunAllowAlwaysCoverage
+
+    public init(
+        plan: OpenClawSystemRunApprovalPlan,
+        execPolicy: ExecPolicy,
+        allowAlwaysCoverage: OpenClawSystemRunAllowAlwaysCoverage)
+    {
+        self.plan = plan
+        self.execPolicy = execPolicy
+        self.allowAlwaysCoverage = allowAlwaysCoverage
+    }
 }
 
 public enum OpenClawNotificationPriority: String, Codable, Sendable {

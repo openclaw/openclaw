@@ -93,6 +93,7 @@ enum CLIInstaller {
             searchPaths: CommandResolver.preferredPaths(),
             fileManager: .default)
         guard !locations.isEmpty else {
+            self.forgetValidatedExecutable()
             return .missing(location: self.managedExecutableLocation())
         }
 
@@ -105,18 +106,22 @@ enum CLIInstaller {
             }
             fallbackStatus = fallbackStatus ?? status
         }
+        self.forgetValidatedExecutable()
         return fallbackStatus ?? .missing(location: self.managedExecutableLocation())
     }
 
     static func managedStatus() async -> Status {
         let location = self.managedExecutableLocation()
         guard FileManager.default.isExecutableFile(atPath: location) else {
+            self.forgetValidatedExecutable(at: location)
             return .missing(location: location)
         }
 
         let status = await self.status(location: location)
         if status.isReady {
             self.rememberValidated(status)
+        } else {
+            self.forgetValidatedExecutable(at: location)
         }
         return status
     }
@@ -199,6 +204,19 @@ enum CLIInstaller {
         guard case let .ready(location, version) = status else { return }
         UserDefaults.standard.set(location, forKey: cliValidatedExecutableKey)
         UserDefaults.standard.set(version, forKey: cliValidatedVersionKey)
+    }
+
+    static func forgetValidatedExecutable(
+        at location: String? = nil,
+        defaults: UserDefaults = .standard)
+    {
+        if let location,
+           defaults.string(forKey: cliValidatedExecutableKey) != location
+        {
+            return
+        }
+        defaults.removeObject(forKey: cliValidatedExecutableKey)
+        defaults.removeObject(forKey: cliValidatedVersionKey)
     }
 
     @discardableResult

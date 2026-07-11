@@ -298,6 +298,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { networkProxy: "bypass" },
   },
   {
+    commandPath: ["node", "_prepare-system-run"],
+    exact: true,
+    policy: {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
+  },
+  {
     commandPath: ["node", "run"],
     exact: true,
     policy: { networkProxy: "default" },

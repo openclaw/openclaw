@@ -17,6 +17,7 @@ import {
   runNodeDaemonStop,
   runNodeDaemonUninstall,
 } from "./daemon.js";
+import { runNodePrepareSystemRun } from "./prepare-system-run.js";
 
 function parsePortOption(value: unknown, fallback: number): number | null {
   // Undefined keeps config/default port; invalid explicit input returns null for CLI errors.
@@ -44,6 +45,16 @@ export function registerNodeCli(program: Command) {
           ["openclaw node restart", "Restart the installed node host service."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.openclaw.ai/cli/node")}\n`,
     );
+
+  node.command("_prepare-system-run", { hidden: true }).action(async () => {
+    try {
+      process.stdout.write(`${await runNodePrepareSystemRun()}\n`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`${message}\n`);
+      process.exitCode = 1;
+    }
+  });
 
   node
     .command("run")

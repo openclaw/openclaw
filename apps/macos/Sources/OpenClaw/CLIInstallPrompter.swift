@@ -19,11 +19,12 @@ final class CLIInstallPrompter {
 
     private func checkAndPromptIfNeededAsync(reason: String) async {
         guard AppStateStore.shared.onboardingSeen else { return }
-        guard AppStateStore.shared.connectionMode == .local else { return }
+        guard AppStateStore.shared.connectionMode != .unconfigured else { return }
         guard let version = Self.appVersion() else { return }
         let status = await CLIInstaller.status()
         guard AppStateStore.shared.onboardingSeen else { return }
-        guard AppStateStore.shared.connectionMode == .local else { return }
+        let mode = AppStateStore.shared.connectionMode
+        guard mode != .unconfigured else { return }
         guard !status.isReady else { return }
         let lastPrompt = UserDefaults.standard.string(forKey: cliInstallPromptedVersionKey)
         guard lastPrompt != version else { return }
@@ -31,7 +32,9 @@ final class CLIInstallPrompter {
 
         let alert = NSAlert()
         alert.messageText = "Install OpenClaw CLI?"
-        alert.informativeText = "Local mode needs the CLI so launchd can run the gateway."
+        alert.informativeText = mode == .local
+            ? "Local mode needs the CLI so launchd can run the Gateway."
+            : "Mac node command execution needs the matching local CLI helper."
         alert.addButton(withTitle: "Install CLI")
         alert.addButton(withTitle: "Not now")
         alert.addButton(withTitle: "Open Settings")
@@ -55,17 +58,22 @@ final class CLIInstallPrompter {
             await status.set(message)
         }
         if installed {
-            await status.set("Starting OpenClaw Gateway…")
-            let activation = await CLIInstaller.activateLocalGateway()
-            let message = switch activation {
-            case .ready:
-                "OpenClaw Gateway is ready."
-            case .deferred:
-                "OpenClaw is installed. The Gateway will start when This Mac is active and resumed."
-            case .failed:
-                "OpenClaw was installed, but the Gateway did not start. Open Settings to retry."
+            let currentMode = AppStateStore.shared.connectionMode
+            if currentMode == .local {
+                await status.set("Starting OpenClaw Gateway…")
+                let activation = await CLIInstaller.activateLocalGateway(mode: currentMode)
+                let message = switch activation {
+                case .ready:
+                    "OpenClaw Gateway is ready."
+                case .deferred:
+                    "OpenClaw is installed. The Gateway will start when This Mac is active and resumed."
+                case .failed:
+                    "OpenClaw was installed, but the Gateway did not start. Open Settings to retry."
+                }
+                await status.set(message)
+            } else {
+                await status.set("OpenClaw CLI is ready for Mac node commands.")
             }
-            await status.set(message)
         }
         if let message = await status.get() {
             let alert = NSAlert()

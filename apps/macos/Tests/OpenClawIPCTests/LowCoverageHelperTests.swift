@@ -77,6 +77,30 @@ struct LowCoverageHelperTests {
         #expect(result.stderr.contains("stderr-1999"))
     }
 
+    @Test func `shell executor delivers stdin without blocking timeout setup`() async {
+        let input = Data(repeating: 0x61, count: 256 * 1024)
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sh", "-c", "wc -c"],
+            cwd: nil,
+            env: nil,
+            timeout: 2,
+            stdin: input)
+
+        #expect(result.success)
+        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "262144")
+    }
+
+    @Test func `shell executor times out while child ignores large stdin`() async {
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sleep", "2"],
+            cwd: nil,
+            env: nil,
+            timeout: 0.05,
+            stdin: Data(repeating: 0x61, count: 1024 * 1024))
+
+        #expect(result.timedOut)
+    }
+
     @Test func `node info codable round trip`() throws {
         let info = NodeInfo(
             nodeId: "node-1",

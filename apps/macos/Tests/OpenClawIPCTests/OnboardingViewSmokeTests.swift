@@ -112,7 +112,7 @@ struct OnboardingViewSmokeTests {
     @Test func `automatic CLI setup waits for the initial status probe`() {
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
+            shouldInstall: true,
             visible: true,
             statusKnown: false,
             executableReady: false,
@@ -120,7 +120,7 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
+            shouldInstall: true,
             visible: true,
             statusKnown: true,
             executableReady: false,
@@ -128,7 +128,7 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
+            shouldInstall: true,
             visible: false,
             statusKnown: true,
             executableReady: false,
@@ -136,7 +136,7 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
+            shouldInstall: true,
             visible: true,
             statusKnown: true,
             executableReady: true,
@@ -157,6 +157,25 @@ struct OnboardingViewSmokeTests {
             isLocal: true,
             executableReady: true,
             installing: true))
+    }
+
+    @Test func `fresh remote setup installs CLI helper before inference setup`() {
+        let order = OnboardingView.pageOrder(
+            for: .remote,
+            showOnboardingChat: false,
+            requiresCLIInstall: true)
+
+        #expect(order.firstIndex(of: 2) == 2)
+        #expect(order.firstIndex(of: 3) == 3)
+    }
+
+    @Test func `live remote onboarding includes missing CLI helper page`() {
+        let state = AppState(preview: true)
+        state.connectionMode = .remote
+        let view = OnboardingView(state: state)
+        view.cliInstalled = false
+
+        #expect(view.pageOrder.contains(2))
     }
 
     @Test func `connection mode change restarts full page monitoring`() {
