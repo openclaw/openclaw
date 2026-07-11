@@ -96,7 +96,7 @@ final class ShareViewController: UIViewController {
             "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
         self.logger.info(
             "share attachments hasURL=\(payload.url != nil) images=\(self.pendingAttachments.count)")
-        let message = self.composeDraft(from: payload)
+        let message = ShareDraftComposer.compose(from: payload)
         await MainActor.run {
             self.draftTextView.text = message
             self.sendButton.isEnabled = true
@@ -344,40 +344,6 @@ final class ShareViewController: UIViewController {
             }
             label.text = "  \(text)  "
         }
-    }
-
-    private func composeDraft(from payload: SharedContentPayload) -> String {
-        var lines: [String] = []
-        let title = self.sanitizeDraftFragment(payload.title)
-        let text = self.sanitizeDraftFragment(payload.text)
-        let url = payload.url?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        if let title, !title.isEmpty { lines.append(title) }
-        if let text, !text.isEmpty { lines.append(text) }
-        if !url.isEmpty { lines.append(url) }
-
-        return lines.joined(separator: "\n\n")
-    }
-
-    private func sanitizeDraftFragment(_ raw: String?) -> String? {
-        guard let raw else { return nil }
-        let banned = [
-            "shared from ios.",
-            "text:",
-            "shared attachment(s):",
-            "please help me with this.",
-            "please help me with this.w",
-        ]
-        let cleanedLines = raw
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { line in
-                guard !line.isEmpty else { return false }
-                let lowered = line.lowercased()
-                return !banned.contains { lowered == $0 || lowered.hasPrefix($0) }
-            }
-        let cleaned = cleanedLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty ? nil : cleaned
     }
 
     private func extractSharedContent() async -> ExtractedShareContent {
