@@ -658,15 +658,15 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
   let cron: CronReader | undefined;
   let enabled = false;
   let hasBaseline = false;
-  let revision = 0;
+  let requestedRevision = 0;
   let appliedRevision = 0;
-  let worker: Promise<void> | undefined;
+  let worker = Promise.resolve();
 
   const projectLatest = async () => {
     let retryMs = 1_000;
 
-    while (!lifecycle.signal.aborted) {
-      const targetRevision = revision;
+    while (!lifecycle.signal.aborted && appliedRevision < requestedRevision) {
+      const targetRevision = requestedRevision;
 
       try {
         const jobs = enabled && cron ? await cron.list({ includeDisabled: true }) : [];
@@ -680,10 +680,6 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
         await host.replaceAll(wakes, { signal: lifecycle.signal });
         appliedRevision = targetRevision;
         retryMs = 1_000;
-
-        if (appliedRevision === revision) {
-          return;
-        }
       } catch {
         if (lifecycle.signal.aborted) {
           return;
@@ -700,22 +696,12 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
   };
 
   const requestProjection = () => {
-    revision += 1;
-    if (!worker) {
-      const running = projectLatest();
-      worker = running;
-      void running
-        .finally(() => {
-          if (worker !== running) {
-            return;
-          }
-          worker = undefined;
-          if (!lifecycle.signal.aborted && appliedRevision !== revision) {
-            requestProjection();
-          }
-        })
-        .catch(() => undefined);
-    }
+    const targetRevision = ++requestedRevision;
+    worker = worker.then(async () => {
+      if (!lifecycle.signal.aborted && appliedRevision < targetRevision) {
+        await projectLatest();
+      }
+    });
     return worker;
   };
 
