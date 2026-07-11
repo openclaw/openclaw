@@ -257,6 +257,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     groupName?: string;
     isGroup: boolean;
     bodyText: string;
+    bodyForAgentText?: string;
+    replyContextAlreadyRendered?: boolean;
     nativeReplyBody?: string;
     commandBody: string;
     timestamp?: number;
@@ -301,7 +303,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       storePath,
       sessionKey: route.sessionKey,
     });
-    const bodyForAgent = formatSignalBodyForAgentWithReplyContext(entry);
+    const bodyForAgent =
+      entry.bodyForAgentText ?? formatSignalBodyForAgentWithReplyContext(entry);
     const body = formatInboundEnvelope({
       channel: "Signal",
       from: fromLabel,
@@ -421,6 +424,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       extra: {
         GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
         ReplyThreading: replyThreading,
+        ReplyContextAlreadyRendered:
+          entry.replyContextAlreadyRendered === true ? true : undefined,
       },
     });
 
@@ -722,6 +727,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       .map((entry) => entry.bodyText)
       .filter(Boolean)
       .join("\\n");
+    const combinedBodyForAgent = entries
+      .map(formatSignalBodyForAgentWithReplyContext)
+      .filter(Boolean)
+      .join("\\n");
+    const replyContextAlreadyRendered = entries.some(
+      (entry) => normalizeSignalAgentBodyPart(entry.replyToBody).length > 0,
+    );
     const combinedCommandBody = entries
       .map((entry) => entry.commandBody)
       .filter(Boolean)
@@ -732,6 +744,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     await handleSignalInboundMessage({
       ...last,
       bodyText: combinedText,
+      bodyForAgentText: combinedBodyForAgent,
+      replyContextAlreadyRendered,
       commandBody: combinedCommandBody,
       isBatched: true,
       nativeReplyBody: last.nativeReplyBody ?? last.bodyText,

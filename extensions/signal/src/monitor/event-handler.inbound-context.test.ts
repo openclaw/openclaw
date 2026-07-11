@@ -354,6 +354,117 @@ describe("signal createSignalEventHandler inbound context", () => {
     }
   });
 
+  it("preserves a quoted-first entry when a plain Signal entry ends the debounce batch", async () => {
+    vi.useFakeTimers();
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 10 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    try {
+      await handler(
+        createSignalReceiveEvent({
+          timestamp: 1700000000101,
+          dataMessage: {
+            message: "Question about this?",
+            quote: {
+              text: "First target",
+              author: "+15550003333",
+            },
+            attachments: [],
+          },
+        }),
+      );
+      await handler(
+        createSignalReceiveEvent({
+          timestamp: 1700000000102,
+          dataMessage: {
+            message: "And one more thing",
+            attachments: [],
+          },
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      });
+
+      const context = requireCapturedContext();
+      const bodyForAgent = context.BodyForAgent ?? "";
+      expect(bodyForAgent).toBe(
+        [
+          "Quoted Signal reply context from +15550003333:",
+          "> First target",
+          "",
+          "Question about this?",
+        ].join("\n") + "\\nAnd one more thing",
+      );
+      expect((bodyForAgent.match(/Quoted Signal reply context/g) ?? []).length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves a quoted-last entry after a plain Signal entry in the debounce batch", async () => {
+    vi.useFakeTimers();
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 10 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    try {
+      await handler(
+        createSignalReceiveEvent({
+          timestamp: 1700000000201,
+          dataMessage: {
+            message: "Plain lead-in",
+            attachments: [],
+          },
+        }),
+      );
+      await handler(
+        createSignalReceiveEvent({
+          timestamp: 1700000000202,
+          dataMessage: {
+            message: "Question about that?",
+            quote: {
+              text: "Second target",
+              author: "+15550004444",
+            },
+            attachments: [],
+          },
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      });
+
+      const context = requireCapturedContext();
+      const bodyForAgent = context.BodyForAgent ?? "";
+      expect(bodyForAgent).toBe(
+        "Plain lead-in\\n" +
+          [
+            "Quoted Signal reply context from +15550004444:",
+            "> Second target",
+            "",
+            "Question about that?",
+          ].join("\n"),
+      );
+      expect((bodyForAgent.match(/Quoted Signal reply context/g) ?? []).length).toBe(1);
+      expect(context.ReplyToBody).toBe("Second target");
+      expect(context.ReplyContextAlreadyRendered).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({

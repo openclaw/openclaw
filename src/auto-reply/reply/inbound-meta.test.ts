@@ -743,6 +743,27 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain('"body": "First paragraph');
   });
 
+  it("trusts channel-rendered reply context when a quoted entry is not first in a batch", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      OriginatingChannel: "signal",
+      OriginatingTo: "signal:group:g1",
+      BodyForAgent: [
+        "Plain lead-in\\nQuoted Signal reply context from sender:",
+        "> quoted body",
+        "",
+        "Question about that?",
+      ].join("\n"),
+      ReplyContextAlreadyRendered: true,
+      ReplyToSender: "sender",
+      ReplyToBody: "quoted body",
+    } as TemplateContext);
+
+    expect(parseConversationInfoPayload(text)["has_reply_context"]).toBe(true);
+    expect(text).not.toContain("Reply target of current user message");
+    expect(text).not.toContain('"body": "quoted body"');
+  });
+
   it("keeps reply target blocks for ordinary user-authored blockquotes", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

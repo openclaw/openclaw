@@ -534,6 +534,9 @@ function bodyForAgentContainsReplyQuote(ctx: TemplateContext, replyToBody: strin
   if (!quote || !bodyForAgent || !isSignalInboundContext(ctx)) {
     return false;
   }
+  if (ctx.ReplyContextAlreadyRendered === true) {
+    return true;
+  }
   const quotedBlock = quote
     .split("\n")
     .map((line) => (line ? `> ${line}` : ">"))

@@ -86,6 +86,8 @@ export type MsgContext = {
    * Should use real newlines (`\n`), not escaped `\\n`.
    */
   BodyForAgent?: string;
+  /** Internal channel assertion that every reply quote in BodyForAgent was rendered exactly once. */
+  ReplyContextAlreadyRendered?: boolean;
   /**
    * Recent chat history for context (untrusted user content). Prefer passing this
    * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
