@@ -825,9 +825,19 @@ describe("brave web search provider", () => {
   it("forwards the execution abort signal to the Brave HTTP request", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const controller = new AbortController();
+    let capturedSignal: AbortSignal | undefined;
     const mockFetch = vi.fn(async (_input?: unknown, init?: unknown) => {
-      controller.abort();
-      throw new DOMException("The operation was aborted", "AbortError");
+      capturedSignal = (init as RequestInit)?.signal;
+      // Hold the request open and only resolve on the forwarded signal
+      // abort. If the provider drops the signal, the captured signal is
+      // undefined and the first expectation below fails.
+      return new Promise<Response>((_resolve, reject) => {
+        capturedSignal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("The operation was aborted", "AbortError")),
+          { once: true },
+        );
+      });
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -843,11 +853,18 @@ describe("brave web search provider", () => {
       throw new Error("Expected tool definition");
     }
 
-    await expect(
-      tool.execute({ query: "abort propagation" }, { signal: controller.signal }),
-    ).rejects.toThrow("The operation was aborted");
+    const executePromise = tool.execute(
+      { query: "abort propagation" },
+      { signal: controller.signal },
+    );
+    // Yield so the mock fetch runs and captures the signal.
+    await new Promise((r) => setTimeout(r, 10));
 
-    const init = fetchRequestInit(mockFetch);
-    expect(init).toBeDefined();
+    // Fails if the provider drops the signal.
+    expect(capturedSignal).toBeDefined();
+
+    controller.abort();
+    // Fails if the forwarded signal does not propagate the abort.
+    await expect(executePromise).rejects.toThrow("The operation was aborted");
   });
 });
