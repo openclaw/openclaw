@@ -152,14 +152,7 @@ export function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
     );
   }
   const pathname = url.pathname.replace(/\/+$/, "");
-  if (
-    url.username ||
-    url.password ||
-    url.port ||
-    pathname !== "/v1" ||
-    url.search ||
-    url.hash
-  ) {
+  if (url.username || url.password || url.port || pathname !== "/v1" || url.search || url.hash) {
     throw new Error(`xAI streaming TTS requires the canonical ${XAI_BASE_URL} base URL`);
   }
 }
@@ -424,7 +417,7 @@ export async function xaiTTSStream(params: {
       });
 
       try {
-        for (let offset = 0; offset < text.length; ) {
+        for (let offset = 0; offset < text.length;) {
           let end = Math.min(offset + XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS, text.length);
           // Keep a surrogate pair in the same frame, even if that frame is one unit shorter.
           if (
