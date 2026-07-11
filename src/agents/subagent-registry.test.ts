@@ -5281,6 +5281,64 @@ describe("subagent registry seam flow", () => {
     );
   });
 
+  it("does not let a synthetic sweeper timeout overwrite a real completion won under the same lock", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    const startedAt = now - 60_000;
+    const runId = "run-sweep-timeout-vs-real-completion-race";
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: startedAt,
+        status: "running",
+      },
+    });
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "real completion must win the terminal lock over a synthetic timeout",
+      cleanup: "keep",
+      createdAt: startedAt,
+      startedAt,
+      runTimeoutSeconds: 5,
+      execution: { status: "running" },
+    });
+
+    // Both calls are issued synchronously, back to back, with no await in
+    // between. The real completion claims the terminal completion lock
+    // first (registering it synchronously before its own first await), so
+    // the sweeper's synthetic timeout call — issued a moment later while
+    // entry.endedAt is still unset — synchronously passes its own
+    // precondition check and then queues behind the real completion's lock.
+    // Only once the real completion resumes, writes entry.endedAt/outcome,
+    // and releases the lock does the queued synthetic call resume and find
+    // the run already terminal.
+    const realCompletion = mod.completeSubagentRunForTests({
+      runId,
+      startedAt,
+      endedAt: startedAt + 2_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      sendFarewell: true,
+      triggerCleanup: true,
+    });
+    const sweep = mod.testing.sweepOnceForTests();
+
+    await realCompletion;
+    await sweep;
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === runId);
+    expectRecordFields(
+      run?.outcome,
+      { status: "ok", endedAt: startedAt + 2_000 },
+      "real completion outcome must survive the queued synthetic timeout",
+    );
+    expect(run?.endedAt).toBe(startedAt + 2_000);
+  });
+
   it("suspends retry-budgeted successful keep-mode completion deliveries during resume", async () => {
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;

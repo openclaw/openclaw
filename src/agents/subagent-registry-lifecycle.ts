@@ -1445,6 +1445,12 @@ export function createSubagentRegistryLifecycleController(params: {
     suppressSessionEffects?: boolean;
     completionSnapshot?: { resultText: string | null; capturedAt: number };
     recoverInterrupted?: true;
+    /**
+     * Marks a sweeper-synthesized timeout (no provider/session evidence, only
+     * an expired deadline with no live run context). A real terminal result
+     * that already reached the registry under this same lock always wins.
+     */
+    isSyntheticTimeout?: true;
   };
 
   const completeSubagentRunAttempt = async (completeParams: CompleteSubagentRunParams) => {
@@ -1462,6 +1468,12 @@ export function createSubagentRegistryLifecycleController(params: {
       params.clearPendingLifecycleError(completeParams.runId);
       entry = params.runs.get(completeParams.runId);
       if (!entry) {
+        return;
+      }
+      if (completeParams.isSyntheticTimeout === true && typeof entry.endedAt === "number") {
+        // Whatever finalized this run first under the terminal lock — a real
+        // provider/session completion or an earlier finalize attempt — is
+        // canonical. A synthetic sweeper timeout must never clobber it.
         return;
       }
       const currentEntry = entry;

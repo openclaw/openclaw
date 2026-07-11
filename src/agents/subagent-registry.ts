@@ -504,6 +504,12 @@ type CompleteSubagentRunParams = {
   startedAt?: number;
   suppressSessionEffects?: boolean;
   recoverInterrupted?: true;
+  /**
+   * Marks a sweeper-synthesized timeout (no provider/session evidence, only
+   * an expired deadline with no live run context). A real terminal result
+   * that already reached the registry under this same lock always wins.
+   */
+  isSyntheticTimeout?: true;
 };
 
 async function completeSubagentRunWithRecoveryAttempt(
@@ -1262,6 +1268,7 @@ async function sweepSubagentRuns() {
                 sendFarewell: true,
                 accountId: entry.requesterOrigin?.accountId,
                 triggerCleanup: true,
+                isSyntheticTimeout: true,
               },
           completion ? "sweeper-timeout-session-completion" : "sweeper-finalize-timeout",
         );
@@ -1894,6 +1901,10 @@ export const testing = {
 
 export function addSubagentRunForTests(entry: SubagentRunRecord) {
   subagentRuns.set(entry.runId, entry);
+}
+
+export async function completeSubagentRunForTests(params: CompleteSubagentRunParams) {
+  await completeSubagentRunWithRecovery(params, "test-direct-completion");
 }
 
 export function releaseSubagentRun(runId: string) {
