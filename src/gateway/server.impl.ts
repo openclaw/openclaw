@@ -1443,15 +1443,6 @@ export async function startGatewayServer(
         baseMethods,
         pluginLookUpTable: nextPluginLookUpTable,
       });
-      // Publish the plugin metadata snapshot only after the fallible load
-      // succeeds. If prepareGatewayPluginLoad throws, the current metadata
-      // must stay describing the still-running plugin set so capability
-      // lookups remain consistent with the live runtime.
-      setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
-        config: params.nextConfig,
-        env: process.env,
-        workspaceDir: defaultWorkspaceDir,
-      });
       const previousPluginServices = runtimeState.pluginServices;
       runtimeState.pluginServices = null;
       if (previousPluginServices) {
@@ -1459,6 +1450,17 @@ export async function startGatewayServer(
           log.warn(`plugin services stop failed during reload: ${String(err)}`);
         });
       }
+      // Publish the plugin metadata snapshot after the fallible load succeeds
+      // and previous services have stopped. This avoids a window where
+      // concurrent capability lookups see new metadata while the old runtime
+      // is still active. If prepareGatewayPluginLoad throws, neither this
+      // metadata update nor the runtime replacement runs, preserving the
+      // previous consistent state.
+      setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
+        config: params.nextConfig,
+        env: process.env,
+        workspaceDir: defaultWorkspaceDir,
+      });
       replaceAttachedPluginRuntime(loaded);
       await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
       try {
