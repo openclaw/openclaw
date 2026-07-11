@@ -567,8 +567,9 @@ describe("Feishu Card Action Handler", () => {
 
   it("does not log raw duplicate callback tokens", async () => {
     const log = vi.fn();
+    const callbackToken = "callback-token-value";
     const event = createStructuredQuickActionEvent({
-      token: "secret-card-action-token-should-not-log",
+      token: callbackToken,
       action: "feishu.quick_actions.help",
       command: "/help",
     });
@@ -579,7 +580,7 @@ describe("Feishu Card Action Handler", () => {
     const logs = log.mock.calls.flat().join("\n");
     expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
     expect(logs).toContain("skipping duplicate card action token");
-    expect(logs).not.toContain("secret-card-action-token-should-not-log");
+    expect(logs).not.toContain(callbackToken);
   });
 
   it("does not cache callback tokens when token ttl expiry overflows", async () => {
