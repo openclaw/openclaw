@@ -408,7 +408,7 @@ describe("tool_result_persist hook", () => {
 
   it("redacts summarized oversized toolResult details before persistence", () => {
     const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
-    const boundaryGhToken = "ghp_1234567890abcdefghij1234567890abcdef";
+    const boundaryGhToken = `ghp_${"a".repeat(36)}`;
     const leadingTailToken = "a".repeat(5_000);
     const omittedTailToken = "b".repeat(5_000);
     const sm = guardSessionManager(SessionManager.inMemory(), {
