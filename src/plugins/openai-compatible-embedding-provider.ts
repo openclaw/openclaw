@@ -392,9 +392,8 @@ async function createOpenAICompatibleEmbeddingClient(
 ): Promise<OpenAICompatibleEmbeddingClient> {
   const resolvedProvider = resolveConfiguredProvider(options);
   const configuredProvider = resolvedProvider?.config;
-  const baseUrl = normalizeBaseUrl(
-    normalizeOptionalString(options.remote?.baseUrl) ?? configuredProvider?.baseUrl,
-  );
+  const remoteBaseUrl = normalizeOptionalString(options.remote?.baseUrl);
+  const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? configuredProvider?.baseUrl);
   const model = normalizeModel(options.model, options.provider);
   const apiKey = await resolveRemoteApiKey(
     options.config,
@@ -417,7 +416,7 @@ async function createOpenAICompatibleEmbeddingClient(
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     model,
-    ...(configuredProvider?.localService
+    ...(configuredProvider?.localService && !remoteBaseUrl
       ? {
           localServiceTarget: {
             providerId:

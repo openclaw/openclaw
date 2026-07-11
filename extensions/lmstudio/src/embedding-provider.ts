@@ -187,13 +187,14 @@ export async function createLmstudioEmbeddingProvider(
     providerContextTokens: providerConfig?.contextTokens,
     providerContextWindow: providerConfig?.contextWindow,
   });
-  const localServiceTarget = providerConfig?.localService
-    ? {
-        providerId: resolvedProvider?.providerId ?? LMSTUDIO_PROVIDER_ID,
-        baseUrl,
-        headers,
-      }
-    : undefined;
+  const localServiceTarget =
+    providerConfig?.localService && !baseUrlSource
+      ? {
+          providerId: resolvedProvider?.providerId ?? LMSTUDIO_PROVIDER_ID,
+          baseUrl,
+          headers,
+        }
+      : undefined;
   const acquireLocalService = (options as LocalServiceAwareEmbeddingOptions).acquireLocalService;
   const withLocalServiceLease = async <T>(
     signal: AbortSignal | undefined,

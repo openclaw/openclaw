@@ -340,7 +340,7 @@ function resolveOllamaEmbeddingClient(
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     model,
     outputDimensionality: options.outputDimensionality,
-    ...(localService
+    ...(localService && baseUrlOrigin !== "remote-config"
       ? {
           localServiceTarget: {
             providerId: providerConfig.providerId,

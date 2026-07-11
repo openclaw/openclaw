@@ -347,6 +347,35 @@ describe("openai-compatible generic embedding provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("does not lease a configured local service for a remote endpoint override", async () => {
+    const server = await startEmbeddingServer();
+    const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
+    const options = createOptions({
+      config: {
+        models: {
+          providers: {
+            "gpu-spark": {
+              api: "openai-completions",
+              baseUrl: "http://spark.local:11434/v1",
+              localService: { command: process.execPath },
+              models: [],
+            },
+          },
+        },
+      } as EmbeddingProviderCreateOptions["config"],
+      provider: "gpu-spark",
+      model: "gpu-spark/nomic-embed-text",
+      remote: { baseUrl: server.baseUrl },
+    }) as EmbeddingProviderCreateOptions & {
+      acquireLocalService: typeof acquireLocalService;
+    };
+    options.acquireLocalService = acquireLocalService;
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
+    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(acquireLocalService).not.toHaveBeenCalled();
+  });
+
   it("adds non-secret routing headers to runtime cache identity", async () => {
     const server = await startEmbeddingServer();
     const result = await openAICompatibleEmbeddingProviderAdapter.create(

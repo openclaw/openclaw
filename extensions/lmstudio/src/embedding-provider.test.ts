@@ -183,6 +183,31 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("does not lease a configured local service for a remote endpoint override", async () => {
+    const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
+    const { provider } = await createLmstudioEmbeddingProvider({
+      config: {
+        models: {
+          providers: {
+            "lmstudio-spark": {
+              baseUrl: "http://spark.local:1234/v1",
+              localService: { command: process.execPath },
+              models: [{ id: EMBEDDING_MODEL }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "lmstudio-spark",
+      model: `lmstudio-spark/${EMBEDDING_MODEL}`,
+      fallback: "none",
+      remote: { baseUrl: "http://memory.local:1234/v1" },
+      acquireLocalService,
+    });
+
+    await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+    expect(acquireLocalService).not.toHaveBeenCalled();
+  });
+
   it("preserves configured provider aliases in the memory adapter", async () => {
     const result = await lmstudioMemoryEmbeddingProviderAdapter.create({
       config: {

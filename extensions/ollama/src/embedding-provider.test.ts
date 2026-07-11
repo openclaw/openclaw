@@ -617,6 +617,33 @@ describe("ollama embedding provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("does not lease a configured local service for a remote endpoint override", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+    const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {
+        models: {
+          providers: {
+            "ollama-spark": {
+              baseUrl: "http://spark.local:11434/v1",
+              localService: { command: process.execPath },
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "ollama-spark",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://memory.local:11434" },
+      acquireLocalService,
+    });
+
+    await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(acquireLocalService).not.toHaveBeenCalled();
+  });
+
   it("does not attach pure env OLLAMA_API_KEY to a local host", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
     vi.stubEnv("OLLAMA_API_KEY", "ollama-cloud-key");
