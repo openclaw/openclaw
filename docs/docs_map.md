@@ -4747,7 +4747,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Allowlist the commands
   - H3: Point exec at the node
   - H3: Local model inference
-  - H3: Codex session catalog
+  - H3: Codex sessions and transcripts
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
