@@ -131,6 +131,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.files.set", scope: "operator.admin" },
   { name: "sessions.files.list", scope: "operator.read" },
   { name: "sessions.files.get", scope: "operator.read" },
+  // Workspace file writes require the same admin scope as agents.files.set.
+  { name: "sessions.files.set", scope: "operator.admin" },
   { name: "artifacts.list", scope: "operator.read" },
   { name: "artifacts.get", scope: "operator.read" },
   { name: "artifacts.download", scope: "operator.read" },

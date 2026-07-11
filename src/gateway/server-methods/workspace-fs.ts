@@ -1,6 +1,6 @@
-// Shared read-only workspace filesystem access for gateway file browsers.
+// Shared workspace filesystem access for gateway file browsers and editors.
 // All entry points route through fs-safe roots (realpathed root, symlink and
-// hardlink rejection) so no caller can read or list outside a workspace root.
+// hardlink rejection) so no caller can access files outside a workspace root.
 import path from "node:path";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 
@@ -76,6 +76,19 @@ export async function readWorkspaceFile(
     }
     return undefined;
   }
+}
+
+export async function writeWorkspaceFile(
+  rootDir: string,
+  browserPath: string,
+  content: string,
+): Promise<true | undefined> {
+  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  if (!workspaceRoot) {
+    return undefined;
+  }
+  await workspaceRoot.write(browserPath, content, { encoding: "utf8" });
+  return true;
 }
 
 /** Collapses `.` segments and separators into a canonical root-relative path. */
