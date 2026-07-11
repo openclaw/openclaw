@@ -134,6 +134,12 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     release?: () => void;
   };
   export function parseGatewayLogAudit(output: string, sinceMs: number): Record<string, unknown>;
+  export function verifyGatewayReadiness(
+    runCommand: (command: string, args: string[], checkout: string) => unknown,
+    checkout: string,
+    expectedSha: string,
+    sleep?: (ms: number) => void,
+  ): void;
   export function findExactMacTarget(
     processes: string,
     executable: string,

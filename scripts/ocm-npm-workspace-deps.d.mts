@@ -19,6 +19,15 @@ export function buildInstallManifest(
   };
 };
 export function resolveNpmEnvironment(args: unknown, env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export function resolveRuntimePackPlan(
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): { profile: string; packArgs: string[] } | null;
+export function resolveRuntimePackEnvironment(
+  env?: NodeJS.ProcessEnv,
+  now?: () => Date,
+  readGitCommit?: () => string | null,
+): NodeJS.ProcessEnv & { OPENCLAW_BUILD_TIMESTAMP: string; GIT_COMMIT?: string };
 export function rewriteWorkspaceDependencyVersions(
   packageJson: unknown,
   workspacePackages: unknown,
