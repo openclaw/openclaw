@@ -48,7 +48,7 @@ function setupStore(store: Record<string, SessionEntry>) {
   hoisted.patchSessionEntry.mockImplementation(
     async (params: {
       sessionKey: string;
-      update: (entry: SessionEntry) => SessionEntry | null;
+      update: (entry: SessionEntry) => Partial<SessionEntry> | null;
     }) => {
       const entry = store[params.sessionKey];
       if (!entry) {
@@ -58,7 +58,7 @@ function setupStore(store: Record<string, SessionEntry>) {
       if (!next) {
         return entry;
       }
-      store[params.sessionKey] = next;
+      store[params.sessionKey] = next as SessionEntry;
       return next;
     },
   );
@@ -128,13 +128,38 @@ describe("handleMSTeamsLifecycleRemove", () => {
         pendingFinalDeliveryText: "stale reply",
         restartRecoveryDeliveryRunId: "old-run",
         ambientTranscriptWatermarks: { room: { sessionId: "old-session" } },
+        lifecycleRevision: "old-revision",
+        goal: { status: "active", objective: "old goal" },
+        pluginNextTurnInjections: { plugin: [{ text: "stale prompt" }] },
+        subagentRecovery: { automaticAttempts: 1 },
+        quotaSuspension: { state: "suspended" },
+        pendingSkillSuggestion: { skill: "old" },
+        skillCaptureSignalHashes: ["old-hash"],
+        pluginExtensionSlotKeys: { plugin: { slot: "old" } },
+        futureTransientState: { shouldNotSurvive: true },
         model: "gpt-5",
         modelProvider: "openai",
         reasoningLevel: "high",
         verboseLevel: "debug",
         ttsAuto: "off",
+        archivedAt: 111,
+        pinnedAt: 222,
+        lastReadAt: 333,
+        markedUnreadAt: 444,
         providerOverride: "openai",
         modelOverride: "gpt-5",
+        modelOverrideSource: "user",
+        authProfileOverride: "work",
+        authProfileOverrideSource: "user",
+        groupActivation: "mention",
+        sendPolicy: "allow",
+        queueMode: "collect",
+        queueDebounceMs: 500,
+        queueCap: 12,
+        queueDrop: "old",
+        label: "Dale",
+        category: "bots",
+        displayName: "Dale Botkin",
         responseUsage: "tokens",
       },
       "msteams:direct:other-user": { sessionId: "other-session", updatedAt: 2_000 },
@@ -190,13 +215,38 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:user-aad"].pendingFinalDeliveryText).toBeUndefined();
     expect(store["msteams:direct:user-aad"].restartRecoveryDeliveryRunId).toBeUndefined();
     expect(store["msteams:direct:user-aad"].ambientTranscriptWatermarks).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].lifecycleRevision).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].goal).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].pluginNextTurnInjections).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].subagentRecovery).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].quotaSuspension).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].pendingSkillSuggestion).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].skillCaptureSignalHashes).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].pluginExtensionSlotKeys).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].futureTransientState).toBeUndefined();
     expect(store["msteams:direct:user-aad"].model).toBe("gpt-5");
     expect(store["msteams:direct:user-aad"].modelProvider).toBe("openai");
     expect(store["msteams:direct:user-aad"].reasoningLevel).toBe("high");
     expect(store["msteams:direct:user-aad"].verboseLevel).toBe("debug");
     expect(store["msteams:direct:user-aad"].ttsAuto).toBe("off");
+    expect(store["msteams:direct:user-aad"].archivedAt).toBe(111);
+    expect(store["msteams:direct:user-aad"].pinnedAt).toBe(222);
+    expect(store["msteams:direct:user-aad"].lastReadAt).toBe(333);
+    expect(store["msteams:direct:user-aad"].markedUnreadAt).toBe(444);
     expect(store["msteams:direct:user-aad"].providerOverride).toBe("openai");
     expect(store["msteams:direct:user-aad"].modelOverride).toBe("gpt-5");
+    expect(store["msteams:direct:user-aad"].modelOverrideSource).toBe("user");
+    expect(store["msteams:direct:user-aad"].authProfileOverride).toBe("work");
+    expect(store["msteams:direct:user-aad"].authProfileOverrideSource).toBe("user");
+    expect(store["msteams:direct:user-aad"].groupActivation).toBe("mention");
+    expect(store["msteams:direct:user-aad"].sendPolicy).toBe("allow");
+    expect(store["msteams:direct:user-aad"].queueMode).toBe("collect");
+    expect(store["msteams:direct:user-aad"].queueDebounceMs).toBe(500);
+    expect(store["msteams:direct:user-aad"].queueCap).toBe(12);
+    expect(store["msteams:direct:user-aad"].queueDrop).toBe("old");
+    expect(store["msteams:direct:user-aad"].label).toBe("Dale");
+    expect(store["msteams:direct:user-aad"].category).toBe("bots");
+    expect(store["msteams:direct:user-aad"].displayName).toBe("Dale Botkin");
     expect(store["msteams:direct:user-aad"].responseUsage).toBe("tokens");
     expect(store["msteams:direct:other-user"].updatedAt).toBe(2_000);
   });

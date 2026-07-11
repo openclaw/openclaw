@@ -103,57 +103,47 @@ function matchesSessionKey(params: {
 }
 
 type MSTeamsResetCandidateEntry = {
+  archivedAt?: unknown;
+  pinnedAt?: unknown;
+  lastReadAt?: unknown;
+  markedUnreadAt?: unknown;
   updatedAt?: number;
   sessionId?: string;
-  sessionFile?: unknown;
-  sessionStartedAt?: unknown;
-  status?: unknown;
-  startedAt?: unknown;
-  endedAt?: unknown;
-  runtimeMs?: unknown;
-  lastInteractionAt?: unknown;
-  systemSent?: unknown;
-  abortedLastRun?: unknown;
-  restartRecoveryRuns?: unknown;
-  usageFamilyKey?: unknown;
-  usageFamilySessionIds?: unknown;
-  inputTokens?: unknown;
-  outputTokens?: unknown;
-  totalTokens?: unknown;
-  totalTokensFresh?: unknown;
-  estimatedCostUsd?: unknown;
-  cacheRead?: unknown;
-  cacheWrite?: unknown;
-  contextTokens?: unknown;
-  contextBudgetStatus?: unknown;
-  compactionCount?: unknown;
-  compactionCheckpoints?: unknown;
-  memoryFlushAt?: unknown;
-  memoryFlushCompactionCount?: unknown;
-  memoryFlushContextHash?: unknown;
-  memoryFlushFailureCount?: unknown;
-  memoryFlushLastFailedAt?: unknown;
-  memoryFlushLastFailureError?: unknown;
-  cliSessionIds?: unknown;
-  cliSessionBindings?: unknown;
-  claudeCliSessionId?: unknown;
-  pendingFinalDelivery?: unknown;
-  pendingFinalDeliveryCreatedAt?: unknown;
-  pendingFinalDeliveryLastAttemptAt?: unknown;
-  pendingFinalDeliveryAttemptCount?: unknown;
-  pendingFinalDeliveryLastError?: unknown;
-  pendingFinalDeliveryText?: unknown;
-  pendingFinalDeliveryContext?: unknown;
-  pendingFinalDeliveryIntentId?: unknown;
-  restartRecoveryDeliveryContext?: unknown;
-  restartRecoveryDeliveryRunId?: unknown;
+  fastMode?: unknown;
+  verboseLevel?: unknown;
+  traceLevel?: unknown;
+  reasoningLevel?: unknown;
+  elevatedLevel?: unknown;
+  ttsAuto?: unknown;
+  execHost?: unknown;
+  execSecurity?: unknown;
+  execAsk?: unknown;
+  execNode?: unknown;
+  responseUsage?: unknown;
+  providerOverride?: unknown;
+  modelOverride?: unknown;
+  agentRuntimeOverride?: unknown;
+  modelOverrideSource?: unknown;
+  authProfileOverride?: unknown;
+  authProfileOverrideSource?: unknown;
+  groupActivation?: unknown;
+  sendPolicy?: unknown;
+  queueMode?: unknown;
+  queueDebounceMs?: unknown;
+  queueCap?: unknown;
+  queueDrop?: unknown;
+  modelProvider?: unknown;
+  model?: unknown;
+  modelSelectionLocked?: unknown;
+  agentHarnessId?: unknown;
+  label?: unknown;
+  category?: unknown;
+  displayName?: unknown;
   route?: unknown;
   deliveryContext?: unknown;
-  ambientTranscriptWatermarks?: unknown;
   lastChannel?: unknown;
   lastTo?: unknown;
   lastAccountId?: unknown;
-  lastThreadId?: unknown;
   origin?: unknown;
 };
 
@@ -174,63 +164,58 @@ function needsMSTeamsLifecycleRotation(entry: MSTeamsResetCandidateEntry): boole
   return entry.updatedAt !== 0 || hasMSTeamsProviderBinding(entry);
 }
 
-function createMSTeamsLifecycleResetEntry<T extends MSTeamsResetCandidateEntry>(entry: T): T {
-  const next = {
-    ...entry,
+function copyDefinedResetField<T extends MSTeamsResetCandidateEntry>(
+  target: Partial<T>,
+  source: T,
+  key: keyof MSTeamsResetCandidateEntry,
+): void {
+  if (source[key] !== undefined) {
+    target[key as keyof T] = source[key] as T[keyof T];
+  }
+}
+
+function createMSTeamsLifecycleResetEntry<T extends MSTeamsResetCandidateEntry>(
+  entry: T,
+): Partial<T> {
+  const next: Partial<T> = {
     sessionId: randomUUID(),
     updatedAt: 0,
-  } as T;
+  } as Partial<T>;
 
-  delete next.sessionFile;
-  delete next.sessionStartedAt;
-  delete next.status;
-  delete next.startedAt;
-  delete next.endedAt;
-  delete next.runtimeMs;
-  delete next.lastInteractionAt;
-  delete next.systemSent;
-  delete next.abortedLastRun;
-  delete next.restartRecoveryRuns;
-  delete next.usageFamilyKey;
-  delete next.usageFamilySessionIds;
-  delete next.inputTokens;
-  delete next.outputTokens;
-  delete next.totalTokens;
-  delete next.totalTokensFresh;
-  delete next.estimatedCostUsd;
-  delete next.cacheRead;
-  delete next.cacheWrite;
-  delete next.contextTokens;
-  delete next.contextBudgetStatus;
-  delete next.compactionCount;
-  delete next.compactionCheckpoints;
-  delete next.memoryFlushAt;
-  delete next.memoryFlushCompactionCount;
-  delete next.memoryFlushContextHash;
-  delete next.memoryFlushFailureCount;
-  delete next.memoryFlushLastFailedAt;
-  delete next.memoryFlushLastFailureError;
-  delete next.cliSessionIds;
-  delete next.cliSessionBindings;
-  delete next.claudeCliSessionId;
-  delete next.pendingFinalDelivery;
-  delete next.pendingFinalDeliveryCreatedAt;
-  delete next.pendingFinalDeliveryLastAttemptAt;
-  delete next.pendingFinalDeliveryAttemptCount;
-  delete next.pendingFinalDeliveryLastError;
-  delete next.pendingFinalDeliveryText;
-  delete next.pendingFinalDeliveryContext;
-  delete next.pendingFinalDeliveryIntentId;
-  delete next.restartRecoveryDeliveryContext;
-  delete next.restartRecoveryDeliveryRunId;
-  delete next.route;
-  delete next.deliveryContext;
-  delete next.ambientTranscriptWatermarks;
-  delete next.lastChannel;
-  delete next.lastTo;
-  delete next.lastAccountId;
-  delete next.lastThreadId;
-  delete next.origin;
+  copyDefinedResetField(next, entry, "archivedAt");
+  copyDefinedResetField(next, entry, "pinnedAt");
+  copyDefinedResetField(next, entry, "lastReadAt");
+  copyDefinedResetField(next, entry, "markedUnreadAt");
+  copyDefinedResetField(next, entry, "fastMode");
+  copyDefinedResetField(next, entry, "verboseLevel");
+  copyDefinedResetField(next, entry, "traceLevel");
+  copyDefinedResetField(next, entry, "reasoningLevel");
+  copyDefinedResetField(next, entry, "elevatedLevel");
+  copyDefinedResetField(next, entry, "ttsAuto");
+  copyDefinedResetField(next, entry, "execHost");
+  copyDefinedResetField(next, entry, "execSecurity");
+  copyDefinedResetField(next, entry, "execAsk");
+  copyDefinedResetField(next, entry, "execNode");
+  copyDefinedResetField(next, entry, "responseUsage");
+  copyDefinedResetField(next, entry, "providerOverride");
+  copyDefinedResetField(next, entry, "modelOverride");
+  copyDefinedResetField(next, entry, "agentRuntimeOverride");
+  copyDefinedResetField(next, entry, "modelOverrideSource");
+  copyDefinedResetField(next, entry, "authProfileOverride");
+  copyDefinedResetField(next, entry, "authProfileOverrideSource");
+  copyDefinedResetField(next, entry, "groupActivation");
+  copyDefinedResetField(next, entry, "sendPolicy");
+  copyDefinedResetField(next, entry, "queueMode");
+  copyDefinedResetField(next, entry, "queueDebounceMs");
+  copyDefinedResetField(next, entry, "queueCap");
+  copyDefinedResetField(next, entry, "queueDrop");
+  copyDefinedResetField(next, entry, "modelProvider");
+  copyDefinedResetField(next, entry, "model");
+  copyDefinedResetField(next, entry, "modelSelectionLocked");
+  copyDefinedResetField(next, entry, "agentHarnessId");
+  copyDefinedResetField(next, entry, "label");
+  copyDefinedResetField(next, entry, "category");
+  copyDefinedResetField(next, entry, "displayName");
 
   return next;
 }
