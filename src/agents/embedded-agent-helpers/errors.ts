@@ -1539,7 +1539,7 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
-  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
+  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw, opts?.provider);
   if (transientCopy) {
     return transientCopy;
   }

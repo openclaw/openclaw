@@ -136,7 +136,10 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   return `⚠️ ${trimmed}`;
 }
 
-export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
+export function formatRateLimitOrOverloadedErrorCopy(
+  raw: string,
+  provider?: string,
+): string | undefined {
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
@@ -149,7 +152,11 @@ export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | unde
   }
   // Z.ai code 1305 surfaces as "overloaded" but can be a content-based rejection or overload
   // when the system prompt contains the OpenClaw signature line (#103529).
-  if (ZAI_CODE_1305_RE.test(raw)) {
+  // Only surface the z.ai 1305 diagnostic when the provider is known to be
+  // z.ai (or unknown — the classifyFailoverReason hook is NOT used for this
+  // PR, so code 1305 remains classified as rate_limit for model-scoped
+  // cooldown). Call sites that track provider identity should pass it in.
+  if (ZAI_CODE_1305_RE.test(raw) && (!provider || provider === "zai")) {
     return "⚠️ Provider returned code 1305. This can be a transient overload or a provider-side content restriction — try again later or with a different model.";
   }
   // Retry classification still owns 429 backoff; user copy can preserve the provider's
