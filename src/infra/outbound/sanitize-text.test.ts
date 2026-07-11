@@ -45,6 +45,7 @@ describe("sanitizeForPlainText", () => {
   it("converts attributed inline tags without matching tag-name prefixes", () => {
     const attributed = `<strong title="b>"><em title='i>'><del data-note="s>"><code class='c>'>x</code></del></em></strong>`;
     expect(sanitizeForPlainText(attributed)).toBe("*_~`x`~_*");
+    expect(sanitizeForPlainText(attributed, { style: "markdown" })).toBe("**_~~`x`~~_**");
     expect(
       sanitizeForPlainText(
         '<bold title="b">b</bold><strikeout title="s">s</strikeout><codebase>c</codebase>',
