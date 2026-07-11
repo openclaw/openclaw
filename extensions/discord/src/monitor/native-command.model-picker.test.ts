@@ -293,6 +293,7 @@ describe("Discord model picker interactions", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(null);
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSourceSnapshot").mockReturnValue(null);
   });
 
   afterEach(async () => {
@@ -380,6 +381,9 @@ describe("Discord model picker interactions", () => {
       },
     } as OpenClawConfig;
     vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(runtimeCfg);
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSourceSnapshot").mockReturnValue(
+      runtimeCfg,
+    );
 
     const staleData = createModelsProviderData({ openai: ["gpt-5.5"] });
     staleData.resolvedDefault = { provider: "openai", model: "gpt-5.5" };
