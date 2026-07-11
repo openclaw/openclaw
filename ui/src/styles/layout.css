@@ -1686,8 +1686,7 @@ openclaw-session-menu[popover] {
   color: var(--accent);
 }
 
-/* Single compact icon row: status dot, then utility icons right-aligned.
-   The footer signals connectivity only; gateway version lives in Settings. */
+/* Single compact row: status, build identity, then utility icons right-aligned. */
 .sidebar-footer-bar {
   display: flex;
   align-items: center;
@@ -1698,6 +1697,26 @@ openclaw-session-menu[popover] {
 
 .sidebar-footer-bar__spacer {
   flex: 1 1 auto;
+}
+
+/* Host elements are display:contents, so the anchor itself is the flex item;
+   min-width 0 lets it yield to the footer icons and ellipsize. */
+.sidebar-footer-build {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.sidebar-footer-build:hover,
+.sidebar-footer-build:focus-visible {
+  color: var(--text);
+  text-decoration: none;
 }
 
 /* Dev-checkout branch strip: only rendered when the gateway runs from a git
