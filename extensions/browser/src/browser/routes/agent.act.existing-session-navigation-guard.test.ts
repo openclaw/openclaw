@@ -161,9 +161,9 @@ describe("existing-session interaction navigation guard", () => {
   it.each(GUARDED_TARGET_REFRESH_ACTIONS)(
     "resolves current target after guarded $kind interaction",
     async (body) => {
-      routeState.profileCtx.listTabs.mockResolvedValueOnce([routeState.tab]).mockResolvedValue([
-        { targetId: "new-target", url: routeState.tab.url },
-      ]);
+      routeState.profileCtx.listTabs
+        .mockResolvedValueOnce([routeState.tab])
+        .mockResolvedValue([{ targetId: "new-target", url: routeState.tab.url }]);
 
       const response = await runAction(body);
 
