@@ -555,12 +555,7 @@ describe("package dist inventory", () => {
       const omittedTopLevelMap = path.join(packageRoot, "dist", "runtime.js.map");
       const omittedMap = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js.map");
       const packageExcludedRuntime = path.join(packageRoot, "dist", "local-runtime.js");
-      const packageExcludedAsset = path.join(
-        packageRoot,
-        "dist",
-        "local-assets",
-        "theme.css",
-      );
+      const packageExcludedAsset = path.join(packageRoot, "dist", "local-assets", "theme.css");
       const omittedAppBundle = path.join(packageRoot, "dist", "OpenClaw.app");
 
       await fs.mkdir(path.dirname(packagedRuntime), { recursive: true });

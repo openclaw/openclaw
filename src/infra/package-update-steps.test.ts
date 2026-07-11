@@ -786,12 +786,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           JSON.stringify({
             name: "openclaw",
             version,
-            files: [
-              "dist/",
-              "!dist/**/*.map",
-              "!dist/local-runtime.js",
-              "!dist/local-assets/**",
-            ],
+            files: ["dist/", "!dist/**/*.map", "!dist/local-runtime.js", "!dist/local-assets/**"],
           }),
           "utf8",
         );
