@@ -77,4 +77,33 @@ describe("SessionSchema maintenance extensions", () => {
       }),
     ).toThrow(/maxDiskBytes|size/i);
   });
+
+  it.each(["0h", "0d", "0ms", "0", "0s", "0m"])(
+    "rejects zero-value resetArchiveRetention: %s",
+    (resetArchiveRetention) => {
+      const result = SessionSchema.safeParse({
+        maintenance: { resetArchiveRetention },
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toContain("resetArchiveRetention");
+    },
+  );
+
+  it("accepts positive resetArchiveRetention values", () => {
+    expect(SessionSchema.safeParse({ maintenance: { resetArchiveRetention: "30d" } }).success).toBe(
+      true,
+    );
+    expect(SessionSchema.safeParse({ maintenance: { resetArchiveRetention: "7d" } }).success).toBe(
+      true,
+    );
+    expect(
+      SessionSchema.safeParse({ maintenance: { resetArchiveRetention: "500ms" } }).success,
+    ).toBe(true);
+  });
+
+  it("accepts resetArchiveRetention: false (documented disable)", () => {
+    expect(SessionSchema.safeParse({ maintenance: { resetArchiveRetention: false } }).success).toBe(
+      true,
+    );
+  });
 });

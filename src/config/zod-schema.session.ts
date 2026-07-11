@@ -109,9 +109,17 @@ export const SessionSchema = z
         }
         if (val.resetArchiveRetention !== undefined && val.resetArchiveRetention !== false) {
           try {
-            parseDurationMs(normalizeStringifiedOptionalString(val.resetArchiveRetention) ?? "", {
-              defaultUnit: "d",
-            });
+            const ms = parseDurationMs(
+              normalizeStringifiedOptionalString(val.resetArchiveRetention) ?? "",
+              { defaultUnit: "d" },
+            );
+            if (ms <= 0) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["resetArchiveRetention"],
+                message: "duration must be positive (use ms, s, m, h, d), e.g. 30d",
+              });
+            }
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,

@@ -1,4 +1,5 @@
 // Legacy session runtime config migrations for retired maintenance/fork sizing keys.
+import { parseDurationMs } from "../../../cli/parse-duration.js";
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -16,6 +17,24 @@ function hasLegacyParentForkMaxTokens(value: unknown): boolean {
   return Boolean(session && Object.hasOwn(session, "parentForkMaxTokens"));
 }
 
+/** Returns `true` when `resetArchiveRetention` is a string that `parseDurationMs` evaluates to ≤ 0. */
+function isZeroDurationResetArchiveRetention(raw: unknown): boolean {
+  const maintenance = getRecord(raw);
+  if (!maintenance || !Object.hasOwn(maintenance, "resetArchiveRetention")) {
+    return false;
+  }
+  const val = maintenance.resetArchiveRetention;
+  if (typeof val !== "string") {
+    return false;
+  }
+  try {
+    const ms = parseDurationMs(val, { defaultUnit: "d" });
+    return ms <= 0;
+  } catch {
+    return false;
+  }
+}
+
 const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
   path: ["session", "maintenance"],
   message:
@@ -28,6 +47,13 @@ const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
   message:
     'session.parentForkMaxTokens was removed; parent fork sizing is automatic. Run "openclaw doctor --fix" to remove it.',
   match: hasLegacyParentForkMaxTokens,
+};
+
+const SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE: LegacyConfigRule = {
+  path: ["session", "maintenance"],
+  message:
+    'session.maintenance.resetArchiveRetention is a zero duration — this causes immediate deletion of all reset transcript archives. Run "openclaw doctor --fix" to remove it so the documented pruneAfter default applies.',
+  match: isZeroDurationResetArchiveRetention,
 };
 
 /** Legacy config migration specs for session runtime config compatibility. */
@@ -56,6 +82,30 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
       }
       delete session.parentForkMaxTokens;
       changes.push("Removed session.parentForkMaxTokens; parent fork sizing is automatic.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "session.maintenance.resetArchiveRetention-zero",
+    describe:
+      "Remove zero-duration session.maintenance.resetArchiveRetention so the documented pruneAfter default applies",
+    legacyRules: [SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE],
+    apply: (raw, changes) => {
+      const maintenance = getRecord(getRecord(raw.session)?.maintenance);
+      if (!maintenance || !Object.hasOwn(maintenance, "resetArchiveRetention")) return;
+      const val = maintenance.resetArchiveRetention;
+      if (val === false) return;
+      if (typeof val !== "string") return;
+      let ms: number;
+      try {
+        ms = parseDurationMs(val, { defaultUnit: "d" });
+      } catch {
+        return;
+      }
+      if (ms > 0) return;
+      delete maintenance.resetArchiveRetention;
+      changes.push(
+        `Removed session.maintenance.resetArchiveRetention "${val}" (zero duration); documented pruneAfter default applies.`,
+      );
     },
   }),
 ];
