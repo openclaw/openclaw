@@ -2332,7 +2332,6 @@ describe("image tool implicit imageModel config", () => {
       expect(loadWebMedia).toHaveBeenCalledTimes(1);
       const [, options] = fetchCallAt(loadWebMedia, 0);
       expect((options as { readIdleTimeoutMs?: number }).readIdleTimeoutMs).toBe(120_000);
-      expect((options as { timeoutMs?: number }).timeoutMs).toBe(15 * 60_000);
     });
   });
 

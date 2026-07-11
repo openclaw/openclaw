@@ -91,7 +91,7 @@ import {
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
-  REMOTE_MEDIA_TIMEOUT_MS,
+  REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
   resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
@@ -678,7 +678,7 @@ async function loadReferenceImages(params: {
             ...(isHttpUrl
               ? {
                   readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
-                  timeoutMs: REMOTE_MEDIA_TIMEOUT_MS,
+                  responseHeaderTimeoutMs: REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
                 }
               : {}),
           });
