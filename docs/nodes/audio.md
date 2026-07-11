@@ -48,7 +48,7 @@ openclaw capability audio providers
 openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-min info
 ```
 
-The provider inventory reports the selected command plus separate capable, requested, and observed backend fields. After transcription runs, `/status` reports the requested or observed backend in the media line. Explicit `tools.media.audio.models` CLI entries still bypass auto-selection; use their backend-specific flags such as sherpa `--provider=cuda` or whisper.cpp `--no-gpu`/`--device`.
+The provider inventory reports the local fallback winner separately from global provider selection, plus capable, requested, and observed backend fields. After transcription runs, `/status` reports the requested or observed backend in the media line. Explicit `tools.media.audio.models` CLI entries still bypass auto-selection; use their backend-specific flags such as sherpa `--provider=cuda` or whisper.cpp `--no-gpu`/`--device`.
 
 ## Config examples
 

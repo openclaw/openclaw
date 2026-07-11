@@ -3361,7 +3361,20 @@ describe("capability cli", () => {
     ]);
   });
 
-  it("lists the selected local STT command and acceleration evidence", async () => {
+  it("distinguishes the local STT fallback winner from global provider selection", async () => {
+    vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "deepgram",
+          {
+            id: "deepgram",
+            capabilities: ["audio"],
+            defaultModels: { audio: "nova-3" },
+          },
+        ],
+      ]),
+    );
     const candidate = {
       id: "whisper-cli" as const,
       command: "whisper-cli",
@@ -3392,7 +3405,16 @@ describe("capability cli", () => {
       {
         available: true,
         configured: true,
-        selected: true,
+        selected: false,
+        id: "deepgram",
+        capabilities: ["audio"],
+        defaultModels: { audio: "nova-3" },
+      },
+      {
+        available: true,
+        configured: true,
+        selected: false,
+        localFallbackSelected: true,
         id: "local/whisper-cli",
         transport: "local-cli",
         command: "whisper-cli",

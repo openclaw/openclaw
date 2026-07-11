@@ -428,7 +428,7 @@ When media understanding runs, `/status` includes a per-capability summary line:
 📎 Media: image ok (openai/gpt-5.5) · audio ok (whisper-cli observed=metal)
 ```
 
-For preflight inventory, run `openclaw capability audio providers`. Local rows show the selected command, readiness, and separate capable/requested/observed backend fields. The same selection is available as an informational doctor finding:
+For preflight inventory, run `openclaw capability audio providers`. Local rows show the local fallback winner separately from global provider selection, readiness, and separate capable/requested/observed backend fields. The same local selection is available as an informational doctor finding:
 
 ```bash
 openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-min info

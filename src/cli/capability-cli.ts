@@ -2555,7 +2555,8 @@ export function registerCapabilityCli(program: Command) {
               {
                 available: candidate.available,
                 configured: candidate.ready,
-                selected: candidate.selected,
+                selected: false,
+                localFallbackSelected: candidate.selected,
                 id: `local/${candidate.id}`,
                 transport: "local-cli",
                 command: candidate.command,
