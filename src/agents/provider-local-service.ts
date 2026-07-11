@@ -3,6 +3,7 @@
  * keep shared services alive while requests run and stop them after idle.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   clampPositiveTimerTimeoutMs,
@@ -235,18 +236,16 @@ function localServiceKey(
     command: service.command,
     args: service.args ?? [],
     cwd: service.cwd ?? "",
-    env: sortedStringRecord(service.env),
+    envHash: hashStringRecord(service.env),
     healthUrl,
   });
 }
 
-function sortedStringRecord(record: Record<string, string> | undefined): Record<string, string> {
-  if (!record) {
-    return {};
-  }
-  return Object.fromEntries(
-    Object.entries(record).toSorted(([left], [right]) => left.localeCompare(right)),
+function hashStringRecord(record: Record<string, string> | undefined): string {
+  const sorted = Object.entries(record ?? {}).toSorted(([left], [right]) =>
+    left.localeCompare(right),
   );
+  return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
 }
 
 function buildHealthProbeHeaders(
