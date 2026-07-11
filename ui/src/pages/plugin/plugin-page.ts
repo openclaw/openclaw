@@ -55,6 +55,13 @@ const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
     ]);
     return { render: view.renderCodexSessions, stop: controller.stopCodexSessionsPolling };
   },
+  "anthropic/sessions": async () => {
+    const [view, controller] = await Promise.all([
+      import("./claude-sessions-view.ts"),
+      import("./claude-sessions-controller.ts"),
+    ]);
+    return { render: view.renderClaudeSessions, stop: controller.stopClaudeSessionsPolling };
+  },
   "logbook/logbook": async () => {
     const [view, controller] = await Promise.all([
       import("./logbook-view.ts"),

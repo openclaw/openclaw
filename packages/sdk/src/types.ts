@@ -61,6 +61,8 @@ export type WorkerEnvironmentState =
   | "failed"
   | "orphaned";
 
+export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
+
 export type WorkerEnvironmentMetadata = {
   providerId: string;
   leaseId?: string;
@@ -68,6 +70,7 @@ export type WorkerEnvironmentMetadata = {
   ageMs: number;
   idleMs?: number;
   attachedSessionIds: string[];
+  tunnelStatus: WorkerTunnelStatus;
 };
 
 export type EnvironmentSummary = {

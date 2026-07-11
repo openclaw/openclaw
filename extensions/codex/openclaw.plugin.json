@@ -161,7 +161,7 @@
                 },
                 "marketplaceName": {
                   "type": "string",
-                  "enum": ["openai-curated"]
+                  "enum": ["openai-curated", "workspace-directory"]
                 },
                 "pluginName": {
                   "type": "string"
@@ -464,7 +464,7 @@
     },
     "codexPlugins.enabled": {
       "label": "Enable Native Plugins",
-      "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
+      "help": "Expose explicit Codex plugin entries to Codex harness turns.",
       "advanced": true
     },
     "codexPlugins.allow_all_plugins": {
@@ -478,8 +478,8 @@
       "advanced": true
     },
     "codexPlugins.plugins": {
-      "label": "Migrated Plugin Entries",
-      "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
+      "label": "Plugin Entries",
+      "help": "Explicit plugin entries. The wildcard key * is not supported.",
       "advanced": true
     },
     "supervision": {

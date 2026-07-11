@@ -71,6 +71,9 @@ export type NodePairRejectParams = SchemaType<"NodePairRejectParams">;
 export type NodePairRemoveParams = SchemaType<"NodePairRemoveParams">;
 export type NodeRenameParams = SchemaType<"NodeRenameParams">;
 export type NodeListParams = SchemaType<"NodeListParams">;
+// NodePluginToolDescriptor / NodeSkillDescriptor and their update params are
+// plugin-SDK-reachable, so nodes.ts exports them directly; routing them through
+// ProtocolSchemas would retain the whole registry in the public plugin-sdk dts.
 export type NodePendingAckParams = SchemaType<"NodePendingAckParams">;
 export type NodeDescribeParams = SchemaType<"NodeDescribeParams">;
 export type NodeInvokeParams = SchemaType<"NodeInvokeParams">;
@@ -155,6 +158,8 @@ export type CrestodianChatParams = SchemaType<"CrestodianChatParams">;
 export type CrestodianChatResult = SchemaType<"CrestodianChatResult">;
 export type CrestodianSetupDetectParams = SchemaType<"CrestodianSetupDetectParams">;
 export type CrestodianSetupDetectResult = SchemaType<"CrestodianSetupDetectResult">;
+export type CrestodianSetupVerifyParams = SchemaType<"CrestodianSetupVerifyParams">;
+export type CrestodianSetupVerifyResult = SchemaType<"CrestodianSetupVerifyResult">;
 export type CrestodianSetupActivateParams = SchemaType<"CrestodianSetupActivateParams">;
 export type CrestodianSetupActivateResult = SchemaType<"CrestodianSetupActivateResult">;
 export type CrestodianSetupAuthStartParams = SchemaType<"CrestodianSetupAuthStartParams">;

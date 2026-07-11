@@ -51,6 +51,13 @@ public enum WorkerEnvironmentState: String, Codable, Sendable {
     case orphaned = "orphaned"
 }
 
+public enum WorkerTunnelStatus: String, Codable, Sendable {
+    case stopped = "stopped"
+    case connecting = "connecting"
+    case connected = "connected"
+    case reconnecting = "reconnecting"
+}
+
 public enum NodePresenceAliveReason: String, Codable, Sendable {
     case background = "background"
     case silentPush = "silent_push"
@@ -143,6 +150,28 @@ public struct ConnectParams: Codable, Sendable {
         case auth
         case locale
         case useragent = "userAgent"
+    }
+}
+
+public struct WorkerAdmissionHandshake: Codable, Sendable {
+    public let bundlehash: String
+    public let openclawversion: String
+    public let protocolfeatures: [String]
+
+    public init(
+        bundlehash: String,
+        openclawversion: String,
+        protocolfeatures: [String])
+    {
+        self.bundlehash = bundlehash
+        self.openclawversion = openclawversion
+        self.protocolfeatures = protocolfeatures
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case bundlehash = "bundleHash"
+        case openclawversion = "openclawVersion"
+        case protocolfeatures = "protocolFeatures"
     }
 }
 
@@ -669,6 +698,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let agems: Int
     public let idlems: Int?
     public let attachedsessionids: [String]
+    public let tunnelstatus: WorkerTunnelStatus
 
     public init(
         providerid: String,
@@ -676,7 +706,8 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         state: WorkerEnvironmentState,
         agems: Int,
         idlems: Int? = nil,
-        attachedsessionids: [String])
+        attachedsessionids: [String],
+        tunnelstatus: WorkerTunnelStatus)
     {
         self.providerid = providerid
         self.leaseid = leaseid
@@ -684,6 +715,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         self.agems = agems
         self.idlems = idlems
         self.attachedsessionids = attachedsessionids
+        self.tunnelstatus = tunnelstatus
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -693,6 +725,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         case agems = "ageMs"
         case idlems = "idleMs"
         case attachedsessionids = "attachedSessionIds"
+        case tunnelstatus = "tunnelStatus"
     }
 }
 
@@ -1861,6 +1894,90 @@ public struct NodeRenameParams: Codable, Sendable {
 }
 
 public struct NodeListParams: Codable, Sendable {}
+
+public struct NodePluginToolDescriptor: Codable, Sendable {
+    public let pluginid: String
+    public let name: String
+    public let description: String
+    public let parameters: [String: AnyCodable]?
+    public let command: String?
+    public let mcp: [String: AnyCodable]?
+
+    public init(
+        pluginid: String,
+        name: String,
+        description: String,
+        parameters: [String: AnyCodable]? = nil,
+        command: String? = nil,
+        mcp: [String: AnyCodable]? = nil)
+    {
+        self.pluginid = pluginid
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+        self.command = command
+        self.mcp = mcp
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case name
+        case description
+        case parameters
+        case command
+        case mcp
+    }
+}
+
+public struct NodePluginToolsUpdateParams: Codable, Sendable {
+    public let tools: [NodePluginToolDescriptor]
+
+    public init(
+        tools: [NodePluginToolDescriptor])
+    {
+        self.tools = tools
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tools
+    }
+}
+
+public struct NodeSkillDescriptor: Codable, Sendable {
+    public let name: String
+    public let description: String
+    public let content: String
+
+    public init(
+        name: String,
+        description: String,
+        content: String)
+    {
+        self.name = name
+        self.description = description
+        self.content = content
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case content
+    }
+}
+
+public struct NodeSkillsUpdateParams: Codable, Sendable {
+    public let skills: [NodeSkillDescriptor]
+
+    public init(
+        skills: [NodeSkillDescriptor])
+    {
+        self.skills = skills
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skills
+    }
+}
 
 public struct NodePendingAckParams: Codable, Sendable {
     public let ids: [String]
@@ -4575,6 +4692,8 @@ public struct CrestodianSetupDetectResult: Codable, Sendable {
         case setupcomplete = "setupComplete"
     }
 }
+
+public struct CrestodianSetupVerifyParams: Codable, Sendable {}
 
 public struct CrestodianSetupActivateParams: Codable, Sendable {
     public let kind: AnyCodable

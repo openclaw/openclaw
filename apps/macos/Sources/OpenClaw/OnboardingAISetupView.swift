@@ -9,10 +9,11 @@ enum OnboardingProviderIcon {
 
     static func resourceURL(for kind: String) -> URL? {
         guard let name = resourceName(for: kind) else { return nil }
-        return self.resourceBundle?.url(
+        return resourceBundle?.url(
             forResource: name,
             withExtension: "svg",
-            subdirectory: "ProviderIcons")
+            subdirectory: "ProviderIcons"
+        )
     }
 
     static func image(for kind: String) -> NSImage? {
@@ -32,14 +33,14 @@ enum OnboardingProviderIcon {
     }
 
     private static func locateResourceBundle() -> Bundle? {
-        if self.bundleContainsProviderIcons(Bundle.main) {
+        if bundleContainsProviderIcons(Bundle.main) {
             return Bundle.main
         }
         // Packaged apps copy these vectors into Bundle.main. SwiftPM's generated
         // Bundle.module accessor can fatalError when that sidecar is absent, so
         // consult it only for development/test executables, never an .app.
         if Bundle.main.bundleURL.pathExtension != "app",
-           self.bundleContainsProviderIcons(Bundle.module)
+           bundleContainsProviderIcons(Bundle.module)
         {
             return Bundle.module
         }
@@ -50,7 +51,8 @@ enum OnboardingProviderIcon {
         bundle.url(
             forResource: "ProviderIcon-claude",
             withExtension: "svg",
-            subdirectory: "ProviderIcons") != nil
+            subdirectory: "ProviderIcons"
+        ) != nil
     }
 }
 
@@ -71,6 +73,7 @@ struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
     var crestodianChat: CrestodianOnboardingChatModel
     @Binding var showCrestodianChat: Bool
+    var retryConfiguredGatewayProbe: () -> Void
     @State private var openedProviderAuthURL: URL?
 
     var body: some View {
@@ -83,7 +86,7 @@ struct OnboardingAISetupView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(isPresented: self.$showCrestodianChat) {
+        .sheet(isPresented: $showCrestodianChat) {
             self.crestodianSheet
         }
         .sheet(isPresented: Binding(
@@ -92,8 +95,9 @@ struct OnboardingAISetupView: View {
                 if !$0 {
                     self.model.cancelProviderAuth()
                 }
-            })) {
-                self.providerAuthSheet
+            }
+        )) {
+            self.providerAuthSheet
         }
     }
 
@@ -102,9 +106,13 @@ struct OnboardingAISetupView: View {
             ProgressView()
                 .controlSize(.small)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Looking for AI you already use…")
+                Text(self.model.waitingForPendingActivationDeadline
+                    ? "Waiting for the previous AI test to finish…"
+                    : "Looking for AI you already use…")
                     .font(.callout.weight(.semibold))
-                Text("Checking for Claude Code, Codex, Gemini, and saved API keys.")
+                Text(self.model.waitingForPendingActivationDeadline
+                    ? "OpenClaw will check again before changing any inference settings."
+                    : "Checking for Claude Code, Codex, Gemini, and saved API keys.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -116,31 +124,37 @@ struct OnboardingAISetupView: View {
 
     @ViewBuilder
     private var resultsView: some View {
-        if self.model.connected {
-            self.connectedBanner
+        if model.connected {
+            connectedBanner
         }
 
-        if !self.model.candidates.isEmpty {
+        if !model.candidates.isEmpty {
             VStack(spacing: 8) {
                 ForEach(self.model.candidates) { candidate in
                     self.candidateRow(candidate)
                 }
             }
-        } else if self.model.phase != .connected, self.model.detectError == nil {
+        } else if model.phase != .connected, model.detectError == nil {
             // A failed detect must not claim "nothing found" — the error card
             // below owns that state and the claim would be unproven.
-            self.noCandidatesIntro
+            noCandidatesIntro
         }
 
         if let detectError = model.detectError {
             OnboardingErrorCard(
-                title: "Couldn’t check this Mac for AI accounts",
+                title: model.configuredGatewayProbeUnavailable
+                    ? "Couldn’t check this Gateway for AI accounts"
+                    : "Couldn’t check this Mac for AI accounts",
                 message: detectError.summary,
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
-                retryTitle: "Try again")
-            {
-                self.model.retryFromScratch()
+                retryTitle: "Try again"
+            ) {
+                if self.model.configuredGatewayProbeUnavailable {
+                    self.retryConfiguredGatewayProbe()
+                } else {
+                    self.model.retryFromScratch()
+                }
             }
         }
 
@@ -149,13 +163,13 @@ struct OnboardingAISetupView: View {
                 title: "Couldn’t load the full provider list",
                 message: providerCatalogError,
                 docsSlug: "start/onboarding",
-                retryTitle: "Try again")
-            {
+                retryTitle: "Try again"
+            ) {
                 self.model.retryFromScratch()
             }
         }
 
-        if self.model.exhaustedAutoCandidates, !self.model.connected {
+        if model.exhaustedAutoCandidates, !model.connected {
             OnboardingErrorCard(
                 title: "None of the found options worked",
                 message: """
@@ -163,18 +177,18 @@ struct OnboardingAISetupView: View {
                 You can fix the login and retry, or connect with an API key or token below.
                 """,
                 docsSlug: "concepts/model-providers",
-                retryTitle: "Check again")
-            {
+                retryTitle: "Check again"
+            ) {
                 self.model.retryFromScratch()
             }
         }
 
-        if !self.model.connected, self.model.providerCatalogLoaded {
-            self.providerAuthSection
-            self.manualSection
+        if !model.connected, model.providerCatalogLoaded {
+            providerAuthSection
+            manualSection
         }
 
-        if CrestodianAvailability.shouldShow(configuredModel: self.model.connectedModelRef) {
+        if CrestodianAvailability.shouldShow(configuredModel: model.connectedModelRef) {
             HStack {
                 Spacer(minLength: 0)
                 Button {
@@ -230,7 +244,8 @@ struct OnboardingAISetupView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.green.opacity(0.12)))
+                .fill(Color.green.opacity(0.12))
+        )
     }
 
     private var noCandidatesIntro: some View {
@@ -240,10 +255,11 @@ struct OnboardingAISetupView: View {
             Text(
                 "That’s fine — you can connect one with an API key or token. " +
                     "If you use Claude Code, Codex, or the Gemini CLI on this Mac, " +
-                    "sign in there first and hit “Check again”.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                    "sign in there first and hit “Check again”."
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
             Button("Check again") {
                 self.model.retryFromScratch()
             }
@@ -254,8 +270,8 @@ struct OnboardingAISetupView: View {
     }
 
     private func candidateRow(_ candidate: OnboardingAISetupModel.Candidate) -> some View {
-        let status = self.model.statuses[candidate.kind] ?? .untried
-        let selected = self.model.selectedKind == candidate.kind
+        let status = model.statuses[candidate.kind] ?? .untried
+        let selected = model.selectedKind == candidate.kind
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 self.model.userSelect(kind: candidate.kind)
@@ -308,23 +324,23 @@ struct OnboardingAISetupView: View {
 
     private func subtitle(
         for candidate: OnboardingAISetupModel.Candidate,
-        status: OnboardingAISetupModel.CandidateStatus) -> String
-    {
+        status: OnboardingAISetupModel.CandidateStatus
+    ) -> String {
         switch status {
         case .testing:
             "Testing — asking \(candidate.modelRef) for a quick reply…"
         case let .failed(failure):
             failure.summary
         case .connected:
-            self.model.connectedSummary
+            model.connectedSummary
         case .untried:
             "\(candidate.modelRef) · \(candidate.detail)"
         }
     }
 
     private func subtitleStyle(
-        for status: OnboardingAISetupModel.CandidateStatus) -> Color
-    {
+        for status: OnboardingAISetupModel.CandidateStatus
+    ) -> Color {
         if case .failed = status {
             return .orange
         }
@@ -334,8 +350,8 @@ struct OnboardingAISetupView: View {
     @ViewBuilder
     private func trailingIndicator(
         status: OnboardingAISetupModel.CandidateStatus,
-        selected: Bool) -> some View
-    {
+        selected: Bool
+    ) -> some View {
         switch status {
         case .testing:
             ProgressView()
@@ -370,14 +386,14 @@ struct OnboardingAISetupView: View {
 
     @ViewBuilder
     private var manualSection: some View {
-        if self.model.manualProviders.isEmpty {
-            if self.model.authOptions.isEmpty {
+        if model.manualProviders.isEmpty {
+            if model.authOptions.isEmpty {
                 OnboardingErrorCard(
                     title: "No key-based providers are available",
                     message: "Enable or install a text-inference provider plugin on this Gateway, then check again.",
                     docsSlug: "concepts/model-providers",
-                    retryTitle: "Check again")
-                {
+                    retryTitle: "Check again"
+                ) {
                     self.model.retryFromScratch()
                 }
             }
@@ -403,16 +419,17 @@ struct OnboardingAISetupView: View {
 
     @ViewBuilder
     private var providerAuthSection: some View {
-        if !self.model.authOptions.isEmpty {
+        if !model.authOptions.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Sign in with a provider")
                     .font(.headline)
                 Text(
                     "Use an existing subscription or provider account. " +
-                        "OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                        "OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
                 let featured = self.model.authOptions.filter(\.featured)
                 let more = self.model.authOptions.filter { !$0.featured }
                 ForEach(featured) { option in
@@ -434,7 +451,8 @@ struct OnboardingAISetupView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(NSColor.controlBackgroundColor)))
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
         }
     }
 
@@ -465,7 +483,7 @@ struct OnboardingAISetupView: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(self.model.isBusy)
+        .disabled(model.isBusy)
         .openClawSelectableRowChrome(selected: false)
     }
 
@@ -513,7 +531,8 @@ struct OnboardingAISetupView: View {
                     details: error.detail,
                     docsSlug: "concepts/model-providers",
                     retryTitle: nil,
-                    retry: nil)
+                    retry: nil
+                )
             }
 
             Spacer(minLength: 0)
@@ -533,16 +552,16 @@ struct OnboardingAISetupView: View {
         .onAppear {
             self.openProviderAuthURLIfNeeded(self.model.authStep?.externalurl)
         }
-        .onChange(of: self.model.authStep?.externalurl) { _, rawURL in
+        .onChange(of: model.authStep?.externalurl) { _, rawURL in
             self.openProviderAuthURLIfNeeded(rawURL)
         }
     }
 
     private func openProviderAuthURLIfNeeded(_ rawURL: String?) {
         guard let url = OnboardingProviderAuthLink.safeURL(rawURL),
-              url != self.openedProviderAuthURL
+              url != openedProviderAuthURL
         else { return }
-        self.openedProviderAuthURL = url
+        openedProviderAuthURL = url
         NSWorkspace.shared.open(url)
     }
 
@@ -551,20 +570,20 @@ struct OnboardingAISetupView: View {
         switch wizardStepType(step) {
         case "text":
             if step.sensitive == true {
-                SecureField(step.placeholder ?? "Value", text: self.$model.authText)
+                SecureField(step.placeholder ?? "Value", text: $model.authText)
                     .textFieldStyle(.roundedBorder)
             } else {
-                TextField(step.placeholder ?? "Value", text: self.$model.authText)
+                TextField(step.placeholder ?? "Value", text: $model.authText)
                     .textFieldStyle(.roundedBorder)
             }
         case "select":
-            Picker("Option", selection: self.$model.authSelection) {
+            Picker("Option", selection: $model.authSelection) {
                 ForEach(Array(self.model.authWizardOptions.enumerated()), id: \.offset) { index, option in
                     Text(option.label).tag(index)
                 }
             }
         case "confirm":
-            Toggle("Confirm", isOn: self.$model.authConfirmation)
+            Toggle("Confirm", isOn: $model.authConfirmation)
         default:
             EmptyView()
         }
@@ -611,25 +630,27 @@ struct OnboardingAISetupView: View {
             Text(self.manualProviderHelp)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if let manualError = self.model.manualError {
+            if let manualError = model.manualError {
                 OnboardingErrorCard(
                     title: "That key didn’t work",
                     message: manualError.summary,
                     details: manualError.detail,
                     docsSlug: "concepts/model-providers",
                     retryTitle: nil,
-                    retry: nil)
+                    retry: nil
+                )
             }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor)))
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
     }
 
     private var manualProviderHelp: String {
-        let hint = self.model.selectedManualProvider?.hint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hint = model.selectedManualProvider?.hint?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let hint, !hint.isEmpty else {
             return "Paste the key or token here, and OpenClaw checks it with a real test question."
         }
@@ -671,8 +692,8 @@ struct OnboardingErrorCard: View {
         details: String? = nil,
         docsSlug: String,
         retryTitle: String? = nil,
-        retry: (() -> Void)? = nil)
-    {
+        retry: (() -> Void)? = nil
+    ) {
         self.title = title
         self.message = message
         self.details = details
@@ -694,23 +715,23 @@ struct OnboardingErrorCard: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                if let details = self.details {
+                if let details {
                     OnboardingErrorDetails(text: details)
                 }
                 HStack(spacing: 14) {
-                    if let retryTitle = self.retryTitle, let retry = self.retry {
+                    if let retryTitle, let retry {
                         Button(retryTitle, action: retry)
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                     }
                     Button("Open help…") {
-                        if let url = URL(string: "https://docs.openclaw.ai/\(self.docsSlug)") {
+                        if let url = URL(string: "https://docs.openclaw.ai/\(docsSlug)") {
                             NSWorkspace.shared.open(url)
                         }
                     }
                     .buttonStyle(.link)
                     .font(.caption)
-                    if self.details == nil {
+                    if details == nil {
                         Button("Copy error") {
                             OnboardingErrorDetails.copy(self.message)
                         }
@@ -726,7 +747,8 @@ struct OnboardingErrorCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.orange.opacity(0.10)))
+                .fill(Color.orange.opacity(0.10))
+        )
     }
 }
 
@@ -743,7 +765,8 @@ private struct OnboardingErrorDetails: View {
             } label: {
                 Label(
                     self.expanded ? "Hide details" : "Show details",
-                    systemImage: self.expanded ? "chevron.down" : "chevron.right")
+                    systemImage: self.expanded ? "chevron.down" : "chevron.right"
+                )
             }
             .buttonStyle(.link)
             .font(.caption)
@@ -761,7 +784,8 @@ private struct OnboardingErrorDetails: View {
                 .frame(maxHeight: 180)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.05)))
+                        .fill(Color.primary.opacity(0.05))
+                )
                 Button {
                     Self.copy(self.text)
                 } label: {

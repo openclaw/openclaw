@@ -330,6 +330,10 @@ import {
   WorkerEnvironmentMetadataSchema,
   type WorkerEnvironmentState,
   WorkerEnvironmentStateSchema,
+  type WorkerTunnelStatus,
+  WorkerTunnelStatusSchema,
+  type WorkerAdmissionHandshake,
+  WorkerAdmissionHandshakeSchema,
   type SystemInfoParams,
   SystemInfoParamsSchema,
   type SystemInfoResult,
@@ -414,6 +418,14 @@ import {
   NodePairRejectParamsSchema,
   type NodePairRemoveParams,
   NodePairRemoveParamsSchema,
+  type NodePluginToolDescriptor,
+  NodePluginToolDescriptorSchema,
+  type NodePluginToolsUpdateParams,
+  NodePluginToolsUpdateParamsSchema,
+  type NodeSkillDescriptor,
+  NodeSkillDescriptorSchema,
+  type NodeSkillsUpdateParams,
+  NodeSkillsUpdateParamsSchema,
   type NodeRenameParams,
   NodeRenameParamsSchema,
   type PollParams,
@@ -664,6 +676,10 @@ import {
   CrestodianSetupDetectParamsSchema,
   type CrestodianSetupDetectResult,
   CrestodianSetupDetectResultSchema,
+  type CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyParamsSchema,
+  type CrestodianSetupVerifyResult,
+  CrestodianSetupVerifyResultSchema,
   type CrestodianSetupActivateParams,
   CrestodianSetupActivateParamsSchema,
   type CrestodianSetupActivateResult,
@@ -770,6 +786,9 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
 // constants so call sites can pair validation with the wire contract directly.
 export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile<ConnectParams>(ConnectParamsSchema);
+export const validateWorkerAdmissionHandshake = lazyCompile<WorkerAdmissionHandshake>(
+  WorkerAdmissionHandshakeSchema,
+);
 export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
   GatewaySuspendPrepareParamsSchema,
 );
@@ -854,6 +873,12 @@ export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
 );
 export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
+export const validateNodePluginToolsUpdateParams = lazyCompile<NodePluginToolsUpdateParams>(
+  NodePluginToolsUpdateParamsSchema,
+);
+export const validateNodeSkillsUpdateParams = lazyCompile<NodeSkillsUpdateParams>(
+  NodeSkillsUpdateParamsSchema,
+);
 export const validateEnvironmentsCreateParams = lazyCompile<EnvironmentsCreateParams>(
   EnvironmentsCreateParamsSchema,
 );
@@ -1005,6 +1030,9 @@ export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
 );
 export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
   CrestodianSetupDetectParamsSchema,
+);
+export const validateCrestodianSetupVerifyParams = lazyCompile<CrestodianSetupVerifyParams>(
+  CrestodianSetupVerifyParamsSchema,
 );
 export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
   CrestodianSetupActivateParamsSchema,
@@ -1298,8 +1326,10 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  WorkerAdmissionHandshakeSchema,
   EnvironmentStatusSchema,
   WorkerEnvironmentStateSchema,
+  WorkerTunnelStatusSchema,
   WorkerEnvironmentMetadataSchema,
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
@@ -1333,6 +1363,10 @@ export {
   NodePairRejectParamsSchema,
   NodePairRemoveParamsSchema,
   NodeListParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
   NodeEventResultSchema,
@@ -1420,6 +1454,8 @@ export {
   CrestodianChatResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResultSchema,
   CrestodianSetupAuthStartParamsSchema,
@@ -1613,6 +1649,7 @@ export {
 export type {
   GatewayFrame,
   ConnectParams,
+  WorkerAdmissionHandshake,
   GatewaySuspendTaskBlocker,
   GatewaySuspendBlocker,
   GatewaySuspendPrepareParams,
@@ -1655,6 +1692,8 @@ export type {
   CrestodianChatResult,
   CrestodianSetupDetectParams,
   CrestodianSetupDetectResult,
+  CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyResult,
   CrestodianSetupActivateParams,
   CrestodianSetupActivateResult,
   CrestodianSetupAuthStartParams,
@@ -1803,6 +1842,7 @@ export type {
   SkillsUpdateParams,
   EnvironmentStatus,
   WorkerEnvironmentState,
+  WorkerTunnelStatus,
   WorkerEnvironmentMetadata,
   EnvironmentSummary,
   EnvironmentsCreateParams,
@@ -1818,6 +1858,10 @@ export type {
   NodePairRejectParams,
   NodePairRemoveParams,
   NodeListParams,
+  NodePluginToolDescriptor,
+  NodePluginToolsUpdateParams,
+  NodeSkillDescriptor,
+  NodeSkillsUpdateParams,
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,

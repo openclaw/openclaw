@@ -525,6 +525,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     methods: [
       "crestodian.chat",
       "crestodian.setup.detect",
+      "crestodian.setup.verify",
       "crestodian.setup.activate",
       "crestodian.setup.auth.start",
     ],
@@ -681,6 +682,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.list",
       "node.describe",
       "node.pluginSurface.refresh",
+      "node.pluginTools.update",
+      "node.skills.update",
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",
