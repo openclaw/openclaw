@@ -50,6 +50,38 @@ describe("local audio selection", () => {
     });
   });
 
+  it("does not resolve auto-detected commands from empty PATH entries", async () => {
+    const tempDir = await createTempDir();
+    const previousCwd = process.cwd();
+    const modelPath = path.join(tempDir, "whisper.bin");
+    const commandPath = path.join(tempDir, "whisper-cli");
+    await fs.writeFile(modelPath, "model");
+    await fs.writeFile(commandPath, "#!/bin/sh\n");
+    await fs.chmod(commandPath, 0o755);
+
+    try {
+      process.chdir(tempDir);
+      const selection = await inspectLocalAudioSelection({
+        env: {
+          PATH: path.delimiter,
+          WHISPER_CPP_MODEL: modelPath,
+        },
+        platform: process.platform,
+        arch: process.arch,
+        inspectLinkedLibraries: async () => null,
+      });
+
+      expect(
+        selection.candidates.find((candidate) => candidate.id === "whisper-cli"),
+      ).toMatchObject({
+        available: false,
+        ready: false,
+      });
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
   it("does not rank Metal-capable whisper ahead of sherpa until a run observes Metal", async () => {
     const tempDir = await createTempDir();
     const modelPath = path.join(tempDir, "whisper.bin");

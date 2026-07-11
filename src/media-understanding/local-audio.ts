@@ -172,8 +172,12 @@ async function findBinary(
       return null;
     }
     for (const directory of (env.PATH ?? "").split(path.delimiter)) {
+      const expandedDirectory = expandHomeDir(directory, env);
+      if (!expandedDirectory) {
+        continue;
+      }
       for (const candidate of candidates) {
-        const fullPath = path.join(expandHomeDir(directory, env), candidate);
+        const fullPath = path.join(expandedDirectory, candidate);
         if (await isExecutable(fullPath, platform)) {
           return fullPath;
         }
