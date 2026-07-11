@@ -423,6 +423,7 @@ async function withOpenAIStatusFixture<T>(
     agentRuntime?: string;
     catalog?: unknown[];
     routeVariants?: unknown[];
+    utilityModel?: string;
   },
   run: () => Promise<T>,
 ): Promise<T> {
@@ -443,6 +444,9 @@ async function withOpenAIStatusFixture<T>(
     agents: {
       defaults: {
         model: { primary: params.primary, fallbacks: params.fallbacks ?? [] },
+        // Route tests target the configured primary/fallback models; keep the
+        // derived utility model out unless a test opts in explicitly.
+        utilityModel: params.utilityModel ?? "",
         models: Object.fromEntries(
           Object.keys(configuredModels).map((model) => [
             model,
@@ -792,6 +796,39 @@ describe("modelsStatusCommand auth overview", () => {
       },
     ]);
     expect(localRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("flags a utility model whose route needs api-key auth despite an OAuth-healthy primary", async () => {
+    const localRuntime = createRuntime();
+    await withOpenAIStatusFixture(
+      {
+        primary: "openai/gpt-5.5",
+        utilityModel: "openai/gpt-5.6",
+        profiles: {
+          "openai:default": {
+            type: "oauth",
+            provider: "openai",
+            access: "oauth-access",
+            refresh: "oauth-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      async () => {
+        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      },
+    );
+    const payload = parseFirstJsonLog(localRuntime);
+    expect(payload.utilityModel).toEqual({ ref: "openai/gpt-5.6", source: "config" });
+    expect(payload.auth.modelRouteIssues).toEqual([
+      {
+        kind: "missing-auth",
+        provider: "openai",
+        model: "gpt-5.6",
+        authRequirement: "api-key",
+        message: "No usable api-key authentication is available for openai/gpt-5.6.",
+      },
+    ]);
   });
 
   it("reports incompatible model routes separately in JSON and text", async () => {
