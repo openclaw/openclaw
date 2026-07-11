@@ -22,7 +22,7 @@ final class ShareViewController: UIViewController {
     private struct ExtractedShareContent {
         var payload: SharedContentPayload
         var attachments: [LoadedAttachment]
-        var attachmentError: String?
+        var attachmentError: ShareImageProcessor.ProcessError?
     }
 
     private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ShareExtension")
@@ -30,7 +30,7 @@ final class ShareViewController: UIViewController {
     private var didPrepareDraft = false
     private var isSending = false
     private var pendingAttachments: [ShareAttachment] = []
-    private var attachmentError: String?
+    private var attachmentError: ShareImageProcessor.ProcessError?
 
     override func loadView() {
         self.view = self.composeView
@@ -71,8 +71,8 @@ final class ShareViewController: UIViewController {
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
         self.composeView.focusDraft()
         if let attachmentError = extracted.attachmentError {
-            ShareGatewayRelaySettings.saveLastEvent("Share blocked: \(attachmentError)")
-            self.composeView.apply(.failed(attachmentError))
+            ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
+            self.composeView.apply(.blocked(self.imageProcessingErrorMessage(attachmentError)))
         } else if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.composeView.apply(.ready)
             ShareGatewayRelaySettings.saveLastEvent("Share ready: waiting for message input.")
@@ -89,7 +89,7 @@ final class ShareViewController: UIViewController {
 
     private func sendCurrentDraft() async {
         if let attachmentError = self.attachmentError {
-            self.composeView.apply(.failed(attachmentError))
+            self.composeView.apply(.blocked(self.imageProcessingErrorMessage(attachmentError)))
             return
         }
         let trimmed = self.composeView.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -317,8 +317,10 @@ final class ShareViewController: UIViewController {
                                 from: provider,
                                 index: attachments.count)
                             attachments.append(attachment)
+                        } catch let error as ShareImageProcessor.ProcessError {
+                            attachmentError = error
                         } catch {
-                            attachmentError = error.localizedDescription
+                            attachmentError = .encodeFailed
                         }
                     }
                 }
@@ -357,6 +359,12 @@ final class ShareViewController: UIViewController {
                 fileName: "shared-image-\(index + 1).jpg",
                 content: data.base64EncodedString()),
             preview: self.boundedPreview(from: image))
+    }
+
+    private func imageProcessingErrorMessage(_: ShareImageProcessor.ProcessError) -> String {
+        NSLocalizedString(
+            "The shared image could not be prepared.",
+            comment: "Share extension image processing failure")
     }
 
     /// Previews are retained for the sheet's lifetime; keep them bounded so

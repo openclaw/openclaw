@@ -5,8 +5,8 @@ import OpenClawKit
 import Testing
 import UniformTypeIdentifiers
 
-@Suite struct ShareImageProcessorTests {
-    @Test func downscalesImageLargerThanFiveMegabytesAndNormalizesOrientation() throws {
+struct ShareImageProcessorTests {
+    @Test func `downscales image larger than five megabytes and normalizes orientation`() throws {
         let input = try self.makeNoiseJPEG(width: 3000, height: 2500, orientation: 6)
         #expect(input.count > ShareImageProcessor.maxPayloadBytes)
 
@@ -25,9 +25,14 @@ import UniformTypeIdentifiers
         #expect(orientation == 1)
     }
 
-    @Test func reportsInvalidImage() {
-        #expect(throws: ShareImageProcessor.ProcessError.self) {
+    @Test func `reports invalid image`() {
+        do {
             _ = try ShareImageProcessor.processForUpload(data: Data("not an image".utf8))
+            Issue.record("Expected invalid-image error")
+        } catch let error as ShareImageProcessor.ProcessError {
+            #expect(error == .invalidImage)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
         }
     }
 
