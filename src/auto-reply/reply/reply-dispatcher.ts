@@ -13,6 +13,7 @@ import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type {
   ReplyDispatchBeforeDeliver,
+  ReplyDispatchBeforeDeliverOptions,
   ReplyDispatchKind,
   ReplyDispatchRuntimeInfo,
   ReplyDispatcher,
@@ -69,6 +70,14 @@ type ReplyDispatchBeforeDeliverStage = {
   timeoutMs?: number;
 };
 
+type ReplyDispatchBeforeDeliverStageInput =
+  | ReplyDispatchBeforeDeliver
+  | {
+      hook: ReplyDispatchBeforeDeliver;
+      options?: ReplyDispatchBeforeDeliverOptions;
+    }
+  | undefined;
+
 const beforeDeliverStagesByHook = new WeakMap<
   ReplyDispatchBeforeDeliver,
   readonly ReplyDispatchBeforeDeliverStage[]
@@ -79,6 +88,16 @@ class ReplyDispatchBeforeDeliverTimeoutError extends Error {
     super(`beforeDeliver timed out after ${timeoutMs}ms`);
     this.name = "ReplyDispatchBeforeDeliverTimeoutError";
   }
+}
+
+function resolveReplyDispatchBeforeDeliverTimeoutMs(
+  options: ReplyDispatchBeforeDeliverOptions | undefined,
+): number {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_BEFORE_DELIVER_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError("beforeDeliver timeoutMs must be a positive finite number");
+  }
+  return timeoutMs;
 }
 
 async function runReplyDispatchBeforeDeliverStage(
@@ -110,16 +129,33 @@ async function runReplyDispatchBeforeDeliverStage(
 }
 
 function resolveReplyDispatchBeforeDeliverStages(
-  hook: ReplyDispatchBeforeDeliver,
+  input: ReplyDispatchBeforeDeliverStageInput,
 ): readonly ReplyDispatchBeforeDeliverStage[] {
-  return (
-    beforeDeliverStagesByHook.get(hook) ?? [{ hook, timeoutMs: DEFAULT_BEFORE_DELIVER_TIMEOUT_MS }]
-  );
+  if (!input) {
+    return [];
+  }
+  if (typeof input === "function") {
+    return (
+      beforeDeliverStagesByHook.get(input) ?? [
+        { hook: input, timeoutMs: DEFAULT_BEFORE_DELIVER_TIMEOUT_MS },
+      ]
+    );
+  }
+  const existingStages = beforeDeliverStagesByHook.get(input.hook);
+  if (input.options === undefined && existingStages) {
+    return existingStages;
+  }
+  return [
+    {
+      hook: input.hook,
+      timeoutMs: resolveReplyDispatchBeforeDeliverTimeoutMs(input.options),
+    },
+  ];
 }
 
 /** Compose core delivery stages while retaining a separate deadline for each actual hook. */
 export function composeReplyDispatchBeforeDeliver(
-  ...hooks: Array<ReplyDispatchBeforeDeliver | undefined>
+  ...hooks: ReplyDispatchBeforeDeliverStageInput[]
 ): ReplyDispatchBeforeDeliver | undefined {
   const stages: ReplyDispatchBeforeDeliverStage[] = [];
   for (const hook of hooks) {
@@ -245,6 +281,8 @@ export type ReplyDispatcherOptions = {
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
+  /** Owner-declared deadline for the constructor before-delivery callback. */
+  beforeDeliverOptions?: ReplyDispatchBeforeDeliverOptions;
   onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
   /** Observe each queued payload settling, including cancellation and delivery failure. */
   onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;
@@ -301,7 +339,11 @@ function normalizeReplyPayloadInternal(
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
-  let beforeDeliver = composeReplyDispatchBeforeDeliver(options.beforeDeliver);
+  let beforeDeliver = composeReplyDispatchBeforeDeliver(
+    options.beforeDeliver
+      ? { hook: options.beforeDeliver, options: options.beforeDeliverOptions }
+      : undefined,
+  );
   const appendedBeforeDeliverCancelledHooks: ReplyDispatchCancelHandler[] = [];
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
@@ -489,8 +531,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
-    appendBeforeDeliver: (hook) => {
-      beforeDeliver = composeReplyDispatchBeforeDeliver(beforeDeliver, hook);
+    appendBeforeDeliver: (hook, stageOptions) => {
+      beforeDeliver = composeReplyDispatchBeforeDeliver(beforeDeliver, {
+        hook,
+        options: stageOptions,
+      });
     },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),

@@ -594,7 +594,10 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   );
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
     ? composeReplyDispatchBeforeDeliver(
-        params.dispatcherOptions.beforeDeliver,
+        {
+          hook: params.dispatcherOptions.beforeDeliver,
+          options: params.dispatcherOptions.beforeDeliverOptions,
+        },
         replyPayloadBeforeDeliver,
       )
     : globalBeforeDeliver;
@@ -709,7 +712,10 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   );
   const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
     ? composeReplyDispatchBeforeDeliver(
-        params.dispatcherOptions.beforeDeliver,
+        {
+          hook: params.dispatcherOptions.beforeDeliver,
+          options: params.dispatcherOptions.beforeDeliverOptions,
+        },
         replyPayloadBeforeDeliver,
       )
     : globalBeforeDeliver;
