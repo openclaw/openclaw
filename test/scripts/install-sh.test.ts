@@ -1972,7 +1972,10 @@ describe("install.sh macOS Homebrew Node behavior", () => {
   it("falls back when gum reports raw-mode ioctl failures", () => {
     expect(script).toContain("setrawmode|inappropriate ioctl");
     expect(script).toContain(
-      'run_with_safe_stdin "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
+      '"$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?',
+    );
+    expect(script).toContain(
+      '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
     );
     expect(script).toContain(
       'if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then',
@@ -1980,7 +1983,9 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     expect(script).toContain(
       'ui_warn "Spinner unavailable in this terminal; continuing without spinner"',
     );
-    expect(script).toContain('run_with_safe_stdin "$@"\n                return $?');
+    expect(script).toContain(
+      'if needs_stdin_isolation; then\n                    "$@" < /dev/null\n                else\n                    "$@"\n                fi\n                return $?',
+    );
   });
 
   it("reruns spinner-wrapped commands when gum reports ioctl failure", () => {
@@ -2060,8 +2065,9 @@ exit 0
       // Assert the child command's stdin was NOT /dev/null
       const observed = readFileSync(stdinLog, "utf8").trim();
       expect(observed).toBe("other");
+      expect(script).toContain("needs_stdin_isolation; then");
       expect(script).toContain(
-        'run_with_safe_stdin "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
+        '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -2069,8 +2075,10 @@ exit 0
   });
 
   it("gum spin redirects stdin from /dev/null for piped installs", () => {
-    expect(script).toContain('echo "/dev/null"');
-    expect(script).toContain("run_with_safe_stdin");
+    expect(script).toContain("needs_stdin_isolation; then");
+    expect(script).toContain(
+      '"$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?',
+    );
   });
 });
 
@@ -2177,30 +2185,35 @@ describe("install.sh duplicate OpenClaw install detection", () => {
   });
 
   it("run_quiet_step redirects stdin to /dev/null in piped context", () => {
-    const marker = join(mkdtempSync(join(tmpdir(), "openclaw-stdin-test-")), "stdin-state");
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `source "${SCRIPT_PATH}" && GUM="" && run_quiet_step "test-step" bash -c 'if read -t 1 line 2>/dev/null && [ -n "$line" ]; then echo "LEAKED:$line" > ${JSON.stringify(marker)}; else echo ISOLATED > ${JSON.stringify(marker)}; fi'`,
-      ],
-      {
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          HOME: tmpdir(),
-          OPENCLAW_INSTALL_SH_NO_RUN: "1",
-          BASH_ENV: "",
-          ENV: "",
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-stdin-test-"));
+    const marker = join(dir, "stdin-state");
+    try {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `source "${SCRIPT_PATH}" && GUM="" && run_quiet_step "test-step" bash -c 'if read -t 1 line 2>/dev/null && [ -n "$line" ]; then echo "LEAKED:$line" > ${JSON.stringify(marker)}; else echo ISOLATED > ${JSON.stringify(marker)}; fi'`,
+        ],
+        {
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            HOME: tmpdir(),
+            NO_PROMPT: "1",
+            OPENCLAW_INSTALL_SH_NO_RUN: "1",
+            BASH_ENV: "",
+            ENV: "",
+          },
+          input: "SENTINEL_DATA_SHOULD_NOT_LEAK\n",
         },
-        input: "SENTINEL_DATA_SHOULD_NOT_LEAK\n",
-      },
-    );
-    expect(result.status).toBe(0);
-    const stdinState = readFileSync(marker, "utf8").trim();
-    expect(stdinState).toBe("ISOLATED");
-    rmSync(marker, { force: true });
+      );
+      expect(result.status).toBe(0);
+      const stdinState = readFileSync(marker, "utf8").trim();
+      expect(stdinState).toBe("ISOLATED");
+    } finally {
+      rmSync(dir, { force: true, recursive: true });
+    }
   });
 
   it("pipe data leaks to child when stdin is not isolated (counterproof)", () => {
@@ -2208,61 +2221,70 @@ describe("install.sh duplicate OpenClaw install detection", () => {
     // pipe data from the installer invocation reaches the child process.
     // If this test ever fails, the isolation in run_quiet_step is no longer
     // the only barrier protecting child processes from pipe consumption.
-    const marker = join(mkdtempSync(join(tmpdir(), "openclaw-stdin-leak-")), "stdin-state");
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        // Bypass run_quiet_step: call the child directly with inherited stdin
-        `source "${SCRIPT_PATH}" && bash -c 'output=$(cat); if [ -n "$output" ]; then echo "LEAKED" > ${JSON.stringify(marker)}; else echo "EMPTY" > ${JSON.stringify(marker)}; fi'`,
-      ],
-      {
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          HOME: tmpdir(),
-          OPENCLAW_INSTALL_SH_NO_RUN: "1",
-          BASH_ENV: "",
-          ENV: "",
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-stdin-leak-"));
+    const marker = join(dir, "stdin-state");
+    try {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          // Bypass run_quiet_step: call the child directly with inherited stdin
+          `source "${SCRIPT_PATH}" && bash -c 'output=$(cat); if [ -n "$output" ]; then echo "LEAKED" > ${JSON.stringify(marker)}; else echo "EMPTY" > ${JSON.stringify(marker)}; fi'`,
+        ],
+        {
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            HOME: tmpdir(),
+            OPENCLAW_INSTALL_SH_NO_RUN: "1",
+            BASH_ENV: "",
+            ENV: "",
+          },
+          input: "SENTINEL_DATA_SHOULD_LEAK\n",
         },
-        input: "SENTINEL_DATA_SHOULD_LEAK\n",
-      },
-    );
-    expect(result.status).toBe(0);
-    const stdinState = readFileSync(marker, "utf8").trim();
-    // Without /dev/null redirect, cat reads the sentinel from the pipe.
-    expect(stdinState).toBe("LEAKED");
-    rmSync(marker, { force: true });
+      );
+      expect(result.status).toBe(0);
+      const stdinState = readFileSync(marker, "utf8").trim();
+      // Without /dev/null redirect, cat reads the sentinel from the pipe.
+      expect(stdinState).toBe("LEAKED");
+    } finally {
+      rmSync(dir, { force: true, recursive: true });
+    }
   });
 
   it("run_quiet_step blocks cat from reading pipe data", () => {
     // Stronger version of the isolation test: uses cat to consume all of
     // stdin and verifies it reads nothing (empty output from /dev/null).
-    const marker = join(mkdtempSync(join(tmpdir(), "openclaw-stdin-cat-")), "stdin-state");
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `source "${SCRIPT_PATH}" && GUM="" && run_quiet_step "test-step" bash -c 'output=$(cat); if [ -n "$output" ]; then echo "LEAKED" > ${JSON.stringify(marker)}; else echo "ISOLATED" > ${JSON.stringify(marker)}; fi'`,
-      ],
-      {
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          HOME: tmpdir(),
-          OPENCLAW_INSTALL_SH_NO_RUN: "1",
-          BASH_ENV: "",
-          ENV: "",
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-stdin-cat-"));
+    const marker = join(dir, "stdin-state");
+    try {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `source "${SCRIPT_PATH}" && GUM="" && run_quiet_step "test-step" bash -c 'output=$(cat); if [ -n "$output" ]; then echo "LEAKED" > ${JSON.stringify(marker)}; else echo "ISOLATED" > ${JSON.stringify(marker)}; fi'`,
+        ],
+        {
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            HOME: tmpdir(),
+            NO_PROMPT: "1",
+            OPENCLAW_INSTALL_SH_NO_RUN: "1",
+            BASH_ENV: "",
+            ENV: "",
+          },
+          input: "SENTINEL_DATA_SHOULD_NOT_LEAK\n",
         },
-        input: "SENTINEL_DATA_SHOULD_NOT_LEAK\n",
-      },
-    );
-    expect(result.status).toBe(0);
-    const stdinState = readFileSync(marker, "utf8").trim();
-    expect(stdinState).toBe("ISOLATED");
-    rmSync(marker, { force: true });
+      );
+      expect(result.status).toBe(0);
+      const stdinState = readFileSync(marker, "utf8").trim();
+      expect(stdinState).toBe("ISOLATED");
+    } finally {
+      rmSync(dir, { force: true, recursive: true });
+    }
   });
 });
 

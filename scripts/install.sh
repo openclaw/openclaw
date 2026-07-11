@@ -516,14 +516,22 @@ run_with_spinner() {
         mktempfile gum_err
         mktempfile gum_out
         local gum_status=0
-        run_with_safe_stdin "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?
+        if needs_stdin_isolation; then
+            "$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?
+        else
+            "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?
+        fi
         if [[ "$gum_status" -eq 0 ]]; then
             if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then
                 GUM=""
                 GUM_STATUS="skipped"
                 GUM_REASON="gum raw mode unavailable"
                 ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-                run_with_safe_stdin "$@"
+                if needs_stdin_isolation; then
+                    "$@" < /dev/null
+                else
+                    "$@"
+                fi
                 return $?
             fi
             if [[ -s "$gum_out" ]]; then
@@ -536,7 +544,11 @@ run_with_spinner() {
             GUM_STATUS="skipped"
             GUM_REASON="gum raw mode unavailable"
             ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-            run_with_safe_stdin "$@"
+            if needs_stdin_isolation; then
+                "$@" < /dev/null
+            else
+                "$@"
+            fi
             return $?
         fi
         if [[ -s "$gum_err" ]]; then
@@ -545,7 +557,11 @@ run_with_spinner() {
         return "$gum_status"
     fi
 
-    run_with_safe_stdin "$@"
+    if needs_stdin_isolation; then
+        "$@" < /dev/null
+    else
+        "$@"
+    fi
 }
 
 run_quiet_step() {
@@ -577,7 +593,11 @@ run_quiet_step() {
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
         showed_progress=true
-        run_with_safe_stdin "$@" >"$log" 2>&1 || cmd_exit=$?
+        if needs_stdin_isolation; then
+            "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
+        else
+            "$@" >"$log" 2>&1 || cmd_exit=$?
+        fi
         if (( cmd_exit == 0 )); then
             return 0
         fi
