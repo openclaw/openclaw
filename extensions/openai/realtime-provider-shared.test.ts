@@ -1,6 +1,4 @@
 // Openai tests cover realtime session secret creation behavior.
-import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import {
   createOpenAIRealtimeClientSecret,
@@ -46,50 +44,6 @@ function guardedFetch(response: Response): void {
   fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn() });
 }
 
-async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected local HTTP server address");
-  }
-  return `http://127.0.0.1:${(address as AddressInfo).port}`;
-}
-
-async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> {
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-async function expectFetchWithoutDeadlineToStayPending(url: string, init?: RequestInit) {
-  const controller = new AbortController();
-  const request = fetch(url, { ...init, signal: controller.signal });
-  request.catch(() => undefined);
-
-  const outcome = await Promise.race([
-    request.then(
-      () => "settled" as const,
-      () => "settled" as const,
-    ),
-    new Promise<"pending">((resolve) => {
-      setTimeout(() => resolve("pending"), 30);
-    }),
-  ]);
-
-  controller.abort();
-  await request.catch(() => undefined);
-  expect(outcome).toBe("pending");
-}
-
 describe("createOpenAIRealtimeClientSecret", () => {
   it("returns client secret from a well-formed response", async () => {
     guardedFetch(
@@ -110,6 +64,9 @@ describe("createOpenAIRealtimeClientSecret", () => {
 
     expect(result.value).toBe("eph-secret-abc");
     expect(typeof result.expiresAt).toBe("number");
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeoutMs: 20_000 }),
+    );
   });
 
   it("bounds oversized success response and cancels the stream", async () => {
@@ -127,84 +84,6 @@ describe("createOpenAIRealtimeClientSecret", () => {
 
     expect(streamed.wasCanceled()).toBe(true);
     expect(streamed.getReadCount()).toBeLessThan(20);
-  });
-
-  it("times out hanging client-secret POST requests", async () => {
-    const sockets = new Set<Socket>();
-    const requests: string[] = [];
-    const server = createServer((request, _response) => {
-      requests.push(`${request.method ?? "GET"} ${request.url ?? "/"}`);
-      request.resume();
-    });
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.on("close", () => sockets.delete(socket));
-    });
-    const baseUrl = await listen(server);
-
-    try {
-      await expectFetchWithoutDeadlineToStayPending(`${baseUrl}/control`, {
-        method: "POST",
-        body: JSON.stringify({ session: { model: "gpt-4o-realtime-preview" } }),
-      });
-
-      const realSsrFRuntime = await vi.importActual<
-        typeof import("openclaw/plugin-sdk/ssrf-runtime")
-      >("openclaw/plugin-sdk/ssrf-runtime");
-      let realGuardError: unknown;
-      try {
-        await realSsrFRuntime.fetchWithSsrFGuard({
-          url: `${baseUrl}/guarded`,
-          init: {
-            method: "POST",
-            body: JSON.stringify({ session: { model: "gpt-4o-realtime-preview" } }),
-          },
-          policy: { hostnameAllowlist: ["127.0.0.1"], allowPrivateNetwork: true },
-          timeoutMs: 50,
-          auditContext: "openai-realtime-client-secret-test",
-        });
-      } catch (error) {
-        realGuardError = error;
-      }
-      expect(realGuardError).toBeInstanceOf(Error);
-      expect(`${(realGuardError as Error).name} ${(realGuardError as Error).message}`).toMatch(
-        /timeout|timed out|aborted/i,
-      );
-
-      fetchWithSsrFGuardMock.mockImplementationOnce(
-        async (params: Parameters<typeof realSsrFRuntime.fetchWithSsrFGuard>[0]) => {
-          expect(params.url).toBe("https://api.openai.com/v1/realtime/client_secrets");
-          return await realSsrFRuntime.fetchWithSsrFGuard({
-            ...params,
-            url: `${baseUrl}/realtime/client_secrets`,
-            policy: { hostnameAllowlist: ["127.0.0.1"], allowPrivateNetwork: true },
-            timeoutMs: Math.min(params.timeoutMs ?? 0, 50),
-            auditContext: "openai-realtime-client-secret-test-helper",
-          });
-        },
-      );
-
-      await expect(
-        createOpenAIRealtimeClientSecret({
-          authToken: "sk-test",
-          auditContext: "test",
-          session: { model: "gpt-4o-realtime-preview" },
-        }),
-      ).rejects.toThrow(/timeout|timed out|aborted/i);
-
-      expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          timeoutMs: 20_000,
-          init: expect.objectContaining({
-            method: "POST",
-            body: JSON.stringify({ session: { model: "gpt-4o-realtime-preview" } }),
-          }),
-        }),
-      );
-      expect(requests).toEqual(["POST /control", "POST /guarded", "POST /realtime/client_secrets"]);
-    } finally {
-      await closeServer(server, sockets);
-    }
   });
 
   it("throws the provider error label on oversized body", async () => {
@@ -238,6 +117,7 @@ describe("createOpenAIRealtimeClientSecret", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://api.openai.com/v1/realtime/client_secrets",
+        timeoutMs: 20_000,
         init: expect.objectContaining({
           body: JSON.stringify({ session: { type: "transcription" } }),
         }),

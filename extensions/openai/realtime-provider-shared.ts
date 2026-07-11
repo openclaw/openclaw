@@ -19,6 +19,7 @@ const OPENAI_REALTIME_SSRF_POLICY = {
   allowIpv6UniqueLocalRange: true,
   hostnameAllowlist: [new URL(OPENAI_REALTIME_API_BASE_URL).hostname],
 } satisfies SsrFPolicy;
+// Interactive session setup must not inherit the transport's multi-minute timeout.
 const OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS = 20_000;
 
 export const trimToUndefined = normalizeOptionalString;
