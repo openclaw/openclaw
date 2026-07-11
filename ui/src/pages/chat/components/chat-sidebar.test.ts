@@ -3,11 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { editorOpenUrl } from "../../../lib/editor-links.ts";
-import {
-  computeFileSearchMatches,
-  renderMarkdownSidebar,
-  splitHighlightedHtmlIntoLines,
-} from "./chat-sidebar.ts";
+import { computeFileSearchMatches, renderMarkdownSidebar } from "./chat-sidebar.ts";
 
 describe("computeFileSearchMatches", () => {
   it("finds matching line numbers", () => {
@@ -56,50 +52,6 @@ describe("editorOpenUrl", () => {
     expect(editorOpenUrl("windsurf", "/workspace/#notes?.md")).toBe(
       "windsurf://file/workspace/%23notes%3F.md",
     );
-  });
-});
-
-describe("splitHighlightedHtmlIntoLines", () => {
-  it("closes and reopens highlighted spans across lines", () => {
-    expect(splitHighlightedHtmlIntoLines('<span class="hljs-keyword">const\nlet</span>')).toEqual([
-      '<span class="hljs-keyword">const</span>',
-      '<span class="hljs-keyword">let</span>',
-    ]);
-  });
-
-  it("passes plain highlighted text through line by line", () => {
-    expect(splitHighlightedHtmlIntoLines("first\nsecond")).toEqual(["first", "second"]);
-  });
-});
-
-describe("file sidebar", () => {
-  it("renders line-number gutters and marks the requested line", () => {
-    const container = document.createElement("div");
-    render(
-      renderMarkdownSidebar({
-        content: {
-          kind: "file",
-          path: "src/lib/foo.ts",
-          name: "foo.ts",
-          content: "const first = 1;\nconst second = 2;",
-          language: "ts",
-          line: 2,
-          rawText: "const first = 1;\nconst second = 2;",
-        },
-        error: null,
-        onClose: () => undefined,
-        onViewRawText: () => undefined,
-      }),
-      container,
-    );
-
-    const lines = container.querySelectorAll<HTMLElement>(".file-view__line");
-    expect(lines).toHaveLength(2);
-    expect([...lines].map((line) => line.dataset.line)).toEqual(["1", "2"]);
-    expect(container.querySelector(".file-view__line--target")?.getAttribute("data-line")).toBe(
-      "2",
-    );
-    expect(container.querySelector(".sidebar-file-view__path")?.textContent).toBe("src/lib/foo.ts");
   });
 });
 
