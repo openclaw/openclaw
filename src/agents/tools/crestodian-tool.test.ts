@@ -458,18 +458,28 @@ describe("crestodian tool", () => {
       action: "create_agent",
       agentId: "work",
       workspace: "/tmp/work",
+      model: "openai/gpt-5.5",
       approved: true,
     });
+    expect(proposalRef.current?.plan).toContain(
+      "create agent work with workspace /tmp/work using model openai/gpt-5.5",
+    );
     markProposalRenderedByHost(proposalRef);
     const tool = createCrestodianTool({ surface: "cli", approvalArmed: true, proposalRef });
     await tool.execute("t6", {
       action: "create_agent",
       agentId: "work",
       workspace: "/tmp/work",
+      model: "openai/gpt-5.5",
       approved: true,
     });
     expect(mocks.executeCrestodianOperation).toHaveBeenCalledWith(
-      { kind: "create-agent", agentId: "work", workspace: "/tmp/work" },
+      {
+        kind: "create-agent",
+        agentId: "work",
+        workspace: "/tmp/work",
+        model: "openai/gpt-5.5",
+      },
       expect.anything(),
       expect.objectContaining({ approved: true }),
     );

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { CliPrivateToolEvent } from "../agents/cli-runner/types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { CliSessionBinding } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
@@ -247,50 +248,31 @@ async function planCrestodianAgentTurn(
  * mutation consumes it, and directive actions replay the interactive handoff —
  * same lifecycle as crestodian-tool.ts enforces.
  */
-async function mirrorCrestodianToolStateFromEvents(params: {
-  runId: string;
+async function createCrestodianToolStateMirror(params: {
   proposalRef: import("../agents/tools/crestodian-tool.js").CrestodianToolProposalRef;
   directiveRef: { current?: CrestodianAgentTurnDirective };
-}): Promise<() => void> {
+}): Promise<(event: CliPrivateToolEvent) => void> {
   const [
-    { onAgentEvent },
     { extractToolResultText },
     { resolveCrestodianProposalTransition, resolveCrestodianDirectiveTransition },
   ] = await Promise.all([
-    import("../infra/agent-events.js"),
     import("../agents/embedded-agent-subscribe.tools.js"),
     import("../agents/tools/crestodian-tool.js"),
   ]);
   const argsByToolCallId = new Map<string, Record<string, unknown>>();
-  return onAgentEvent((evt) => {
-    if (evt.runId !== params.runId || evt.stream !== "tool") {
-      return;
-    }
-    const name = typeof evt.data.name === "string" ? evt.data.name : "";
+  return (event) => {
+    const name = event.name;
     // CLI harnesses report MCP tools with transport prefixes (mcp__openclaw__crestodian).
     if (name !== "crestodian" && !name.endsWith("__crestodian")) {
       return;
     }
-    const toolCallId = typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
-    const eventArgs =
-      typeof evt.data.args === "object" && evt.data.args !== null
-        ? (evt.data.args as Record<string, unknown>)
-        : undefined;
-    if (evt.data.phase === "start") {
-      if (toolCallId && eventArgs) {
-        // Result events omit args, so retain them only until the matching result.
-        argsByToolCallId.set(toolCallId, eventArgs);
-      }
+    if (event.phase === "start") {
+      argsByToolCallId.set(event.toolCallId, event.args);
       return;
     }
-    if (evt.data.phase !== "result") {
-      return;
-    }
-    const args = eventArgs ?? argsByToolCallId.get(toolCallId) ?? {};
-    if (toolCallId) {
-      argsByToolCallId.delete(toolCallId);
-    }
-    const resultText = extractToolResultText(evt.data.result) ?? "";
+    const args = argsByToolCallId.get(event.toolCallId) ?? {};
+    argsByToolCallId.delete(event.toolCallId);
+    const resultText = extractToolResultText(event.result) ?? "";
     const transition = resolveCrestodianProposalTransition({ args, resultText });
     if (transition) {
       params.proposalRef.current = transition.proposal;
@@ -299,7 +281,7 @@ async function mirrorCrestodianToolStateFromEvents(params: {
     if (directive) {
       params.directiveRef.current = directive;
     }
-  });
+  };
 }
 
 /**
@@ -351,30 +333,26 @@ export async function runCrestodianAgentTurnWithDeps(
         delete params.session.cliSessionBackendId;
       }
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
-      const stopToolStateMirror = await mirrorCrestodianToolStateFromEvents({
-        runId,
+      const onPrivateToolEvent = await createCrestodianToolStateMirror({
         proposalRef: params.session.proposalRef,
         directiveRef,
       });
-      try {
-        result = (await runCli({
-          ...shared,
-          provider: plan.provider,
-          model: plan.model,
-          extraSystemPrompt: CRESTODIAN_AGENT_SYSTEM_PROMPT,
-          extraSystemPromptStatic: CRESTODIAN_AGENT_SYSTEM_PROMPT,
-          crestodianTool,
-          ...(params.session.cliSessionBinding
-            ? {
-                cliSessionId: params.session.cliSessionBinding.sessionId,
-                cliSessionBinding: params.session.cliSessionBinding,
-              }
-            : {}),
-          cleanupCliLiveSessionOnRunEnd: true,
-        })) as EmbeddedRunResult;
-      } finally {
-        stopToolStateMirror();
-      }
+      result = (await runCli({
+        ...shared,
+        provider: plan.provider,
+        model: plan.model,
+        extraSystemPrompt: CRESTODIAN_AGENT_SYSTEM_PROMPT,
+        extraSystemPromptStatic: CRESTODIAN_AGENT_SYSTEM_PROMPT,
+        crestodianTool,
+        onPrivateToolEvent,
+        ...(params.session.cliSessionBinding
+          ? {
+              cliSessionId: params.session.cliSessionBinding.sessionId,
+              cliSessionBinding: params.session.cliSessionBinding,
+            }
+          : {}),
+        cleanupCliLiveSessionOnRunEnd: true,
+      })) as EmbeddedRunResult;
       // Thread the harness's own session forward so the next turn resumes the
       // native CLI transcript instead of reseeding from scratch.
       const agentMeta = result.meta?.agentMeta;

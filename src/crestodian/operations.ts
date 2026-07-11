@@ -609,8 +609,10 @@ function describeCrestodianPersistentOperationUnsafe(operation: CrestodianOperat
       return `install plugin ${operation.spec}`;
     case "plugin-uninstall":
       return `uninstall plugin ${operation.pluginId}`;
-    case "create-agent":
-      return `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`;
+    case "create-agent": {
+      const model = operation.model ? ` using model ${operation.model}` : "";
+      return `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}${model}`;
+    }
     case "gateway-start":
       return "start the Gateway";
     case "gateway-stop":

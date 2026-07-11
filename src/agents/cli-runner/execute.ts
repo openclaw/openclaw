@@ -1157,6 +1157,12 @@ export async function executePreparedCliRun(
         >();
         const emitCliToolUseStart = (event: CliToolUseStartDelta) => {
           observedCliActivity = true;
+          params.onPrivateToolEvent?.({
+            phase: "start",
+            toolCallId: event.toolCallId,
+            name: event.name,
+            args: event.args,
+          });
           // Server-native calls have their own result stream and must never inherit MCP outcomes.
           if (event.kind !== "server_tool_use") {
             const activeTool = {
@@ -1232,6 +1238,13 @@ export async function executePreparedCliRun(
           result?: unknown;
         }) => {
           observedCliActivity = true;
+          params.onPrivateToolEvent?.({
+            phase: "result",
+            toolCallId: event.toolCallId,
+            name: event.name,
+            isError: event.isError,
+            ...(event.result !== undefined ? { result: event.result } : {}),
+          });
           const activeTool = activeCliTools.get(event.toolCallId);
           activeCliTools.delete(event.toolCallId);
           retireCliLoopbackCorrelation(event.toolCallId, activeTool);
