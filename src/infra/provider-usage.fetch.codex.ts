@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import { parseStrictFiniteNumber } from "./parse-finite-number.js";
@@ -143,7 +144,7 @@ export async function fetchCodexUsage(
 
   return {
     provider: "openai",
-    displayName: PROVIDER_LABELS.openai,
+    displayName: expectDefined(PROVIDER_LABELS.openai, "provider label"),
     windows,
     plan,
     ...(billing ? { billing } : {}),

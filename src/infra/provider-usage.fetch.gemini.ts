@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Fetches Gemini provider usage windows.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -95,5 +96,9 @@ export async function fetchGeminiUsage(
     });
   }
 
-  return { provider, displayName: PROVIDER_LABELS[provider], windows };
+  return {
+    provider,
+    displayName: expectDefined(PROVIDER_LABELS[provider], "provider labels entry at provider"),
+    windows,
+  };
 }

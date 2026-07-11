@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Fetches and normalizes MiniMax provider usage records.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -420,7 +421,7 @@ export async function fetchMinimaxUsage(
   if (!isRecord(data)) {
     return {
       provider: "minimax",
-      displayName: PROVIDER_LABELS.minimax,
+      displayName: expectDefined(PROVIDER_LABELS.minimax, "provider label"),
       windows: [],
       error: "Invalid JSON",
     };
@@ -430,7 +431,7 @@ export async function fetchMinimaxUsage(
   if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
     return {
       provider: "minimax",
-      displayName: PROVIDER_LABELS.minimax,
+      displayName: expectDefined(PROVIDER_LABELS.minimax, "provider label"),
       windows: [],
       error: baseResp.status_msg?.trim() || "API error",
     };
@@ -462,7 +463,7 @@ export async function fetchMinimaxUsage(
   if (usedPercent === null) {
     return {
       provider: "minimax",
-      displayName: PROVIDER_LABELS.minimax,
+      displayName: expectDefined(PROVIDER_LABELS.minimax, "provider label"),
       windows: [],
       error: "Unsupported response shape",
     };
@@ -491,7 +492,7 @@ export async function fetchMinimaxUsage(
 
   return {
     provider: "minimax",
-    displayName: PROVIDER_LABELS.minimax,
+    displayName: expectDefined(PROVIDER_LABELS.minimax, "provider label"),
     windows,
     plan,
   };

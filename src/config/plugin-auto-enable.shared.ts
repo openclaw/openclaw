@@ -1,6 +1,7 @@
 // Shares plugin auto-enable detection across config and runtime code.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import {
@@ -692,7 +693,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     });
     if (owningPluginIds?.length === 1) {
       changes.push({
-        pluginId: owningPluginIds[0],
+        pluginId: expectDefined(owningPluginIds[0], "owning plugin ids entry at 0"),
         kind: "provider-model-configured",
         modelRef,
       });
