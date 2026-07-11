@@ -84,22 +84,45 @@ function parseRetryAfterSeconds(message: string): number | null {
 
 function resolveShortWindowRateLimitRetry(
   message: string | undefined,
+  structuredRetryAfterSeconds?: number,
+  maxRetryDelayMs?: number,
 ): ShortWindowRateLimitRetry | null {
   const raw = message?.trim();
-  if (!raw) {
+  if (!raw && structuredRetryAfterSeconds === undefined) {
     return null;
   }
-  const retryAfterSeconds = parseRetryAfterSeconds(raw);
+
+  let retryAfterSeconds: number | null = null;
+  if (structuredRetryAfterSeconds !== undefined) {
+    retryAfterSeconds = structuredRetryAfterSeconds;
+  } else if (raw) {
+    retryAfterSeconds = parseRetryAfterSeconds(raw);
+  }
+
+  if (retryAfterSeconds !== null && maxRetryDelayMs !== undefined && maxRetryDelayMs > 0) {
+    if (!Number.isFinite(retryAfterSeconds)) {
+      retryAfterSeconds = maxRetryDelayMs / 1000;
+    } else {
+      retryAfterSeconds = Math.min(retryAfterSeconds, maxRetryDelayMs / 1000);
+    }
+  }
+
   if (retryAfterSeconds !== null && retryAfterSeconds > MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS) {
     return null;
   }
+
   const shortRetryAfter =
     retryAfterSeconds !== null && retryAfterSeconds <= MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS;
-  const hasShortWindowSignal = SHORT_RATE_LIMIT_WINDOW_RE.test(raw);
-  if (RETRY_AFTER_VALUE_RE.test(raw) && retryAfterSeconds === null && !hasShortWindowSignal) {
+  const hasShortWindowSignal = raw ? SHORT_RATE_LIMIT_WINDOW_RE.test(raw) : false;
+  if (
+    raw &&
+    RETRY_AFTER_VALUE_RE.test(raw) &&
+    retryAfterSeconds === null &&
+    !hasShortWindowSignal
+  ) {
     return null;
   }
-  if (LONG_WINDOW_RATE_LIMIT_RE.test(raw) && !hasShortWindowSignal && !shortRetryAfter) {
+  if (raw && LONG_WINDOW_RATE_LIMIT_RE.test(raw) && !hasShortWindowSignal && !shortRetryAfter) {
     return null;
   }
   // Providers such as Gemini use quota wording for per-minute RPM/TPM
@@ -107,8 +130,8 @@ function resolveShortWindowRateLimitRetry(
   // present; hard daily/usage/subscription limits are filtered above.
   // Some gateways strip throttle details and Retry-After. Preserve the
   // long-window exclusions above before treating a bare 429 as transient.
-  const statusPrefixed429 = extractLeadingHttpStatus(raw)?.code === 429;
-  if (!SHORT_WINDOW_RATE_LIMIT_RE.test(raw) && !shortRetryAfter && !statusPrefixed429) {
+  const statusPrefixed429 = raw ? extractLeadingHttpStatus(raw)?.code === 429 : false;
+  if (raw && !SHORT_WINDOW_RATE_LIMIT_RE.test(raw) && !shortRetryAfter && !statusPrefixed429) {
     return null;
   }
   return retryAfterSeconds !== null ? { retryAfterSeconds } : {};
@@ -255,7 +278,11 @@ export async function handleAssistantFailover(params: {
       // Minute-scale RPM windows can clear without spending a profile rotation
       // or model fallback. Keep the retry bounded; once exhausted, continue
       // through the existing rate-limit escalation path.
-      const shortWindowRetry = resolveShortWindowRateLimitRetry(params.lastAssistant?.errorMessage);
+      const shortWindowRetry = resolveShortWindowRateLimitRetry(
+        params.lastAssistant?.errorMessage,
+        params.lastAssistant?.retryAfterSeconds,
+        params.config?.retry?.provider?.maxRetryDelayMs,
+      );
       if (
         params.allowSameModelRateLimitRetry &&
         shortWindowRetry &&

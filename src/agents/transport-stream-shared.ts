@@ -175,12 +175,12 @@ function readNumberLikeProperty(value: unknown, key: string): number | undefined
     return undefined;
   }
   const raw = (value as Record<string, unknown>)[key];
-  if (typeof raw === "number" && Number.isFinite(raw)) {
+  if (typeof raw === "number" && !Number.isNaN(raw)) {
     return raw;
   }
   if (typeof raw === "string") {
     const parsed = Number(raw);
-    return Number.isFinite(parsed) ? parsed : undefined;
+    return !Number.isNaN(parsed) ? parsed : undefined;
   }
   return undefined;
 }

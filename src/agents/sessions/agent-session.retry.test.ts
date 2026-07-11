@@ -17,6 +17,7 @@ describe("AgentSession auto-retry", () => {
       retryCount: 0,
       settingsManager: {
         getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 }),
+        getProviderRetrySettings: () => ({ maxRetryDelayMs: 60000 }),
       },
       agent: { state: { messages: [] } },
       emit: vi.fn((event) => {
@@ -54,6 +55,7 @@ describe("AgentSession auto-retry", () => {
       retryCount: 0,
       settingsManager: {
         getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 }),
+        getProviderRetrySettings: () => ({ maxRetryDelayMs: 60000 }),
       },
       agent: { state: { messages: [] } },
       emit: vi.fn((event) => {
@@ -82,12 +84,13 @@ describe("AgentSession auto-retry", () => {
     });
   });
 
-  it("caps excessive Retry-After values to the 5-minute session maximum", async () => {
+  it("caps excessive Retry-After values to the configured maxRetryDelayMs", async () => {
     let emittedEvent: any;
     const session = {
       retryCount: 0,
       settingsManager: {
         getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 }),
+        getProviderRetrySettings: () => ({ maxRetryDelayMs: 150000 }), // 2.5 minutes max
       },
       agent: { state: { messages: [] } },
       emit: vi.fn((event) => {
@@ -110,16 +113,17 @@ describe("AgentSession auto-retry", () => {
 
     expect(emittedEvent).toMatchObject({
       type: "auto_retry_start",
-      delayMs: 300_000, // 5 minutes max
+      delayMs: 150_000,
     });
   });
 
-  it("caps non-finite Retry-After values to the 5-minute session maximum", async () => {
+  it("caps non-finite Retry-After values to the configured maxRetryDelayMs", async () => {
     let emittedEvent: any;
     const session = {
       retryCount: 0,
       settingsManager: {
         getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 }),
+        getProviderRetrySettings: () => ({ maxRetryDelayMs: 150000 }),
       },
       agent: { state: { messages: [] } },
       emit: vi.fn((event) => {
@@ -142,7 +146,40 @@ describe("AgentSession auto-retry", () => {
 
     expect(emittedEvent).toMatchObject({
       type: "auto_retry_start",
-      delayMs: 300_000, // 5 minutes max
+      delayMs: 150_000,
+    });
+  });
+
+  it("disables capping when maxRetryDelayMs is 0", async () => {
+    let emittedEvent: any;
+    const session = {
+      retryCount: 0,
+      settingsManager: {
+        getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 1_000 }),
+        getProviderRetrySettings: () => ({ maxRetryDelayMs: 0 }), // 0 means disabled
+      },
+      agent: { state: { messages: [] } },
+      emit: vi.fn((event) => {
+        emittedEvent = event;
+      }),
+    };
+
+    const prepareRetry = AgentSession.prototype["prepareRetry"].bind(
+      session as unknown as AgentSession,
+    );
+
+    await prepareRetry({
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "Too Many Requests",
+      status: 429,
+      retryAfterSeconds: 3600, // 1 hour
+    } as any);
+
+    expect(emittedEvent).toMatchObject({
+      type: "auto_retry_start",
+      delayMs: 3_600_000, // Full 1 hour delay honored
     });
   });
 
@@ -153,6 +190,7 @@ describe("AgentSession auto-retry", () => {
       retryCount: 3,
       settingsManager: {
         getRetrySettings: () => ({ enabled: true, maxRetries: 5, baseDelayMs: 100_000 }),
+        getProviderRetrySettings: () => ({ maxRetryDelayMs: 300_000 }),
       },
       agent: { state: { messages: [] } },
       emit: vi.fn((event) => {

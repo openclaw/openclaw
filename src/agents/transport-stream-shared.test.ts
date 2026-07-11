@@ -114,4 +114,14 @@ describe("transport stream shared helpers", () => {
       expect(output.errorMessage).toBeTruthy();
     }
   });
+
+  it("preserves oversized (Infinity) Retry-After values from providers", () => {
+    const output: any = { stopReason: "error" };
+    assignTransportErrorDetails(output, { retryAfterSeconds: Infinity });
+    expect(output.retryAfterSeconds).toBe(Infinity);
+
+    const outputString: any = { stopReason: "error" };
+    assignTransportErrorDetails(outputString, { retryAfterSeconds: "Infinity" });
+    expect(outputString.retryAfterSeconds).toBe(Infinity);
+  });
 });
