@@ -31,6 +31,7 @@ type InspectionOptions = {
   platform?: NodeJS.Platform;
   arch?: string;
   resolveBinary?: (name: string, env: NodeJS.ProcessEnv) => Promise<string | null>;
+  checkExecutable?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
   resolveRealpath?: (filePath: string) => Promise<string>;
   inspectLinkedLibraries?: (filePath: string, platform: NodeJS.Platform) => Promise<string | null>;
 };
@@ -150,6 +151,7 @@ async function findBinary(
   name: string,
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
+  checkExecutable: (filePath: string, platform: NodeJS.Platform) => Promise<boolean> = isExecutable,
 ): Promise<string | null> {
   const key = `${platform}\0${env.PATH ?? ""}\0${env.PATHEXT ?? ""}\0${name}`;
   const cached = binaryCache.get(key);
@@ -165,7 +167,7 @@ async function findBinary(
           candidate === "~" || candidate.startsWith("~/") || candidate.startsWith("~\\")
             ? path.join(env.HOME ?? "~", candidate.slice(candidate === "~" ? 1 : 2))
             : candidate;
-        if (await isExecutable(expanded, platform)) {
+        if (await checkExecutable(expanded, platform)) {
           return expanded;
         }
       }
@@ -178,7 +180,7 @@ async function findBinary(
       }
       for (const candidate of candidates) {
         const fullPath = path.join(expandedDirectory, candidate);
-        if (await isExecutable(fullPath, platform)) {
+        if (await checkExecutable(fullPath, platform)) {
           return fullPath;
         }
       }
@@ -271,7 +273,7 @@ export async function inspectLocalAudioSelection(
   const resolveBinary = async (name: string) =>
     options.resolveBinary
       ? await options.resolveBinary(name, env)
-      : await findBinary(name, env, platform);
+      : await findBinary(name, env, platform, options.checkExecutable);
   const [parakeetCommand, whisperCommand, sherpaCommand, pythonCommand] = await Promise.all(
     ["parakeet-mlx", "whisper-cli", "sherpa-onnx-offline", "whisper"].map(resolveBinary),
   );
