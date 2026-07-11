@@ -664,8 +664,9 @@ async function prepareSsh(params: {
     ...endpoint,
     identityPath,
     knownHostsPath,
-    // eslint-disable-next-line no-warning-comments -- PR 4 replaces this temporary TOFU fallback.
-    // TODO(cloud-workers-pr4-host-key): require provider-supplied host-key material.
+    // accept-new is a temporary trust-on-first-use fallback; the tunnel milestone
+    // (docs/plan/cloud-workers.md, PR 4) requires provider-supplied host-key material
+    // and makes pinned "yes" the only mode.
     strictHostKeyChecking: hasPinnedHostKey ? "yes" : "accept-new",
   };
 }
