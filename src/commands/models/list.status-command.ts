@@ -389,6 +389,10 @@ export async function modelsStatusCommand(
     // resolved ref so a broken utility credential is inspectable here.
     const utilitySetting = readUtilityModelSetting(cfg, workspaceAgentId);
     const utilityModelRef = resolveUtilityModelRefForAgent({ cfg, agentId: workspaceAgentId });
+    // resolveUtilityModelRefForAgent never falls back to the primary model: an
+    // unset setting yields the provider-declared default or undefined, so a
+    // non-null auto result really is a provider default (unlike the runtime's
+    // simple-completion selection, which does fall back to the primary).
     const utilityModelSource =
       utilitySetting.kind === "explicit"
         ? "config"
@@ -1016,6 +1020,9 @@ export async function modelsStatusCommand(
       ...fallbacks,
       imageModel,
       ...imageFallbacks,
+      // Probe the configured utility model itself; an arbitrary catalog model
+      // from the same provider can sit on a different auth route.
+      utilityModelRef ?? "",
       ...allowed,
     ].filter(Boolean);
     const resolvedCandidates = rawCandidates
