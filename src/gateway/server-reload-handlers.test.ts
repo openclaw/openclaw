@@ -2406,6 +2406,7 @@ describe("gateway Gmail hot reload handlers", () => {
       writtenAtMs: Date.now(),
     });
     await vi.runAllTimersAsync();
+    await reloader.stop();
 
     expect(activateRuntimeSecrets).toHaveBeenCalledTimes(2);
     expect(activatePreparedSnapshotIfCurrent).toHaveBeenCalledOnce();
@@ -2416,7 +2417,6 @@ describe("gateway Gmail hot reload handlers", () => {
     expect(commitTerminalConfig).toHaveBeenCalledOnce();
     expect(promoteSnapshot).toHaveBeenCalledOnce();
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(nextConfig);
-    await reloader.stop();
   });
 
   it("aborts an in-flight managed Gmail restart when the reloader stops", async () => {
