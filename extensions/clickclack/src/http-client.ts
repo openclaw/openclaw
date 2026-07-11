@@ -3,7 +3,6 @@
  * delivery code.
  */
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -57,7 +56,6 @@ type ClientOptions = {
   token: string;
   correlationId?: string;
   fetch?: typeof fetch;
-  requestTimeoutMs?: number;
 };
 
 const CLICKCLACK_REST_REQUEST_TIMEOUT_MS = 30_000;
@@ -137,10 +135,6 @@ export function createClickClackClient(options: ClientOptions) {
   const baseUrl = options.baseUrl.replace(/\/$/, "");
   const fetcher = options.fetch ?? fetch;
   const correlationId = normalizeClickClackCorrelationId(options.correlationId);
-  const requestTimeoutMs = resolveTimerTimeoutMs(
-    options.requestTimeoutMs,
-    CLICKCLACK_REST_REQUEST_TIMEOUT_MS,
-  );
   const headers = {
     Authorization: `Bearer ${options.token}`,
     Accept: "application/json",
@@ -159,7 +153,7 @@ export function createClickClackClient(options: ClientOptions) {
       requestHeaders.set("Content-Type", "application/json");
     }
     const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
-      timeoutMs: requestTimeoutMs,
+      timeoutMs: CLICKCLACK_REST_REQUEST_TIMEOUT_MS,
       operation: "clickclack-rest",
       url,
     });

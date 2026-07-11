@@ -7,42 +7,6 @@ const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 const CLICKCLACK_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
 const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 
-type OperationOutcome =
-  | { status: "resolved" }
-  | { status: "rejected"; error: unknown }
-  | { status: "pending" };
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function settleWithin(
-  promise: Promise<unknown>,
-  timeoutMs: number,
-): Promise<OperationOutcome> {
-  return await Promise.race([
-    promise.then(
-      () => ({ status: "resolved" as const }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    ),
-    delay(timeoutMs).then(() => ({ status: "pending" as const })),
-  ]);
-}
-
-async function expectRejectionWithin(
-  promise: Promise<unknown>,
-  timeoutMs: number,
-): Promise<unknown> {
-  const outcome = await settleWithin(promise, timeoutMs);
-  expect(outcome.status).toBe("rejected");
-  if (outcome.status !== "rejected") {
-    throw new Error(`expected rejection within ${timeoutMs}ms, got ${outcome.status}`);
-  }
-  return outcome.error;
-}
-
 function requestBodyJson(init: RequestInit | undefined): unknown {
   const body = init?.body;
   if (typeof body !== "string") {
@@ -590,6 +554,7 @@ describe("ClickClack HTTP client", () => {
   });
 
   it("keeps the REST request deadline active while reading a hanging response body", async () => {
+    vi.useFakeTimers();
     let body: ReturnType<typeof createSignalAbortedJsonResponse> | undefined;
     const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       const signal = init?.signal;
@@ -604,14 +569,19 @@ describe("ClickClack HTTP client", () => {
       baseUrl: "https://clickclack.example",
       token: "test-token",
       fetch: fetchMock as unknown as typeof fetch,
-      requestTimeoutMs: 25,
     });
 
-    const error = await expectRejectionWithin(client.me(), 750);
+    try {
+      const pending = client.me().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(30_000);
+      const error = await pending;
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("request timed out");
-    expect(body?.wasAborted()).toBe(true);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("request timed out");
+      expect(body?.wasAborted()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("POSTs durable activity rows with kind and turn_id", async () => {
