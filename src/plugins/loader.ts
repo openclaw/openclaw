@@ -352,6 +352,13 @@ function recordPluginModuleImportForRestart(modulePath: string, rootDir?: string
   const existing = importedPluginModulePathsForRestart.get(modulePath);
   importedPluginModulePathsForRestart.set(modulePath, rootDir ?? existing);
 }
+
+export function getTrackedPluginModuleImportsForRestartForTests(): ReadonlyMap<
+  string,
+  string | undefined
+> {
+  return new Map(importedPluginModulePathsForRestart);
+}
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "gateway",
@@ -520,10 +527,12 @@ function createPluginModuleLoader(options: {
       pluginSdkResolution: options.pluginSdkResolution,
     });
   };
-  return (modulePath: string): unknown => {
-    recordPluginModuleImportForRestart(modulePath);
-    return createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
-  };
+  // Restart tracking happens at the plugin-owned call sites (main, setup/runtime,
+  // CLI entrypoints) with each plugin's discovered root — never here: this loader
+  // also imports the shared plugin runtime module, and evicting that on restart
+  // would tear down a module graph core still holds.
+  return (modulePath: string): unknown =>
+    createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
 }
 
 function formatPluginRuntimeModuleResolutionError(params: {
@@ -2253,7 +2262,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               runtimeMod = withProfile(
                 { pluginId: record.id, source: safeRuntimeSource },
                 "load-setup-runtime-entry",
-                () => loadPluginModule(safeRuntimeSource) as OpenClawPluginModule,
+                () => {
+                  recordPluginModuleImportForRestart(safeRuntimeSource, runtimeModuleRoot);
+                  return loadPluginModule(safeRuntimeSource) as OpenClawPluginModule;
+                },
               );
             } catch (err) {
               recordPluginError({
@@ -2900,11 +2912,10 @@ export async function loadOpenClawPluginCliRegistry(
 
     let mod: OpenClawPluginModule | null;
     try {
-      mod = withProfile(
-        { pluginId: record.id, source: safeSource },
-        "cli-metadata",
-        () => loadPluginModule(safeSource) as OpenClawPluginModule,
-      );
+      mod = withProfile({ pluginId: record.id, source: safeSource }, "cli-metadata", () => {
+        recordPluginModuleImportForRestart(safeSource, pluginRoot);
+        return loadPluginModule(safeSource) as OpenClawPluginModule;
+      });
     } catch (err) {
       recordPluginError({
         logger,

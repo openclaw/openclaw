@@ -3,7 +3,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { clearPluginCachesForInProcessRestart, loadOpenClawPlugins } from "./loader.js";
+import {
+  clearPluginCachesForInProcessRestart,
+  getTrackedPluginModuleImportsForRestartForTests,
+  loadOpenClawPluginCliRegistry,
+  loadOpenClawPlugins,
+} from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makeTempDir,
@@ -20,9 +25,9 @@ afterAll(() => {
   cleanupPluginLoaderFixturesForTest();
 });
 
-function pluginBody(toolName: string): string {
+function pluginBody(toolName: string, id = "restart-reload-probe"): string {
   return `module.exports = {
-  id: "restart-reload-probe",
+  id: ${JSON.stringify(id)},
   register(api) {
     api.registerTool({
       name: ${JSON.stringify(toolName)},
@@ -191,5 +196,64 @@ describe("plugin loader in-process restart reload", () => {
     const reloaded = loadOpenClawPlugins({ config });
     expect(loadedToolNames(reloaded)).toContain("nested_tool_v2");
     expect(loadedToolNames(reloaded)).not.toContain("nested_tool_v1");
+  });
+
+  it("tracks only plugin-owned modules for restart eviction, never shared runtime (#103688 review)", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "restart-owner-probe",
+      filename: "restart-owner-probe.cjs",
+      body: pluginBody("owner_probe_tool", "restart-owner-probe"),
+    });
+    writeManifest(plugin.dir, "owner_probe_tool", "restart-owner-probe");
+    const config = {
+      plugins: { load: { paths: [plugin.dir] }, allow: ["restart-owner-probe"] },
+    };
+
+    const registry = loadOpenClawPlugins({ config });
+    expect(loadedToolNames(registry)).toContain("owner_probe_tool");
+
+    const tracked = getTrackedPluginModuleImportsForRestartForTests();
+    const pluginRoot = fs.realpathSync(plugin.dir);
+    const repoRoot = fs.realpathSync(process.cwd());
+    const ownEntries = [...tracked].filter(([modulePath]) =>
+      fs.realpathSync(modulePath).startsWith(pluginRoot),
+    );
+    // The plugin's own entry is tracked with its package root…
+    expect(ownEntries.length).toBeGreaterThan(0);
+    for (const [, rootDir] of ownEntries) {
+      expect(rootDir && fs.realpathSync(rootDir)).toBe(pluginRoot);
+    }
+    // …and the shared plugin runtime module (an OpenClaw core module graph that
+    // resolves inside the repo) never enters the restart-eviction set.
+    for (const [modulePath] of tracked) {
+      expect(fs.realpathSync(modulePath).startsWith(repoRoot)).toBe(false);
+    }
+  });
+
+  it("tracks CLI metadata entrypoints with their plugin package root (#103688 review)", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "restart-cli-probe",
+      filename: "restart-cli-probe.cjs",
+      body: pluginBody("cli_probe_tool", "restart-cli-probe"),
+    });
+    writeManifest(plugin.dir, "cli_probe_tool", "restart-cli-probe");
+    const config = {
+      plugins: { load: { paths: [plugin.dir] }, allow: ["restart-cli-probe"] },
+    };
+
+    await loadOpenClawPluginCliRegistry({ config });
+
+    const pluginRoot = fs.realpathSync(plugin.dir);
+    const tracked = [...getTrackedPluginModuleImportsForRestartForTests()].filter(([modulePath]) =>
+      fs.realpathSync(modulePath).startsWith(pluginRoot),
+    );
+    // The CLI metadata load registers the entry under the plugin package root so
+    // restart eviction covers plugin-owned dependencies outside the entry dir.
+    expect(tracked.length).toBeGreaterThan(0);
+    for (const [, rootDir] of tracked) {
+      expect(rootDir && fs.realpathSync(rootDir)).toBe(pluginRoot);
+    }
   });
 });
