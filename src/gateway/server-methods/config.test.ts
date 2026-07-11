@@ -145,6 +145,27 @@ describe("config.openFile", () => {
     });
   });
 
+  it("replaces C1 control characters in the logged failed config path", async () => {
+    // U+009B is the C1 CSI introducer, an alternative ANSI escape prefix (ESC [).
+    // Assert only on the sanitized filename portion so the check is independent
+    // of the OS-specific path prefix (e.g. /tmp vs D:\tmp).
+    const CSI = String.fromCharCode(0x9b);
+    await withEnvAsync({ OPENCLAW_CONFIG_PATH: `/tmp/cfg${CSI}.json` }, async () => {
+      mockExecFileError(new Error("open failed"));
+
+      const { logGateway } = await invokeConfigOpenFile();
+
+      const logged = String(
+        (logGateway.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(-1)?.[0] ??
+          "",
+      );
+      expect(logged.startsWith("config.openFile failed path=")).toBe(true);
+      // The raw C1 byte is replaced with "?" before it reaches the warning log.
+      expect(logged).toContain("cfg?.json");
+      expect(logged).not.toContain(CSI);
+    });
+  });
+
   it("returns actionable headless environment error when xdg-open reports no method available", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
       mockExecFileError(new Error("xdg-open: no method available for opening '/tmp/config.json'"));
