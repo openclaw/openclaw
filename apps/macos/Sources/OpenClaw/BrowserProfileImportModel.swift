@@ -86,6 +86,11 @@ final class BrowserProfileImportModel {
     private(set) var phase: Phase = .hidden
     /// Bumped by setPhase; see refresh(force:) for the staleness contract.
     @ObservationIgnored private var phaseGeneration = 0
+    /// A dismissal must stick for this app session even while its
+    /// fire-and-forget persistence write is pending or lost — otherwise the
+    /// next automatic poll reads the still-null server state and re-offers.
+    /// Only Settings force-refresh overrides.
+    @ObservationIgnored private var dismissedThisSession = false
 
     private let transport: Transport
     private let isOnboarded: @MainActor () -> Bool
@@ -119,7 +124,7 @@ final class BrowserProfileImportModel {
     /// background status poll.
     @discardableResult
     func refreshIfIdle() async -> Bool {
-        guard case .hidden = self.phase else { return false }
+        guard !self.dismissedThisSession, case .hidden = self.phase else { return false }
         await self.refresh(force: false)
         return true
     }
@@ -131,8 +136,9 @@ final class BrowserProfileImportModel {
         guard self.isOnboarded(), self.isLocalMode() else {
             self.setPhase(.hidden)
             return .unavailable(
-                title: "Browser import requires Local mode",
-                message: "Switch this Mac app to a local Gateway before importing browser cookies.")
+                title: String(localized: "Browser import requires Local mode"),
+                message: String(
+                    localized: "Switch this Mac app to a local Gateway before importing browser cookies."))
         }
         let generation = self.phaseGeneration
         do {
@@ -151,9 +157,11 @@ final class BrowserProfileImportModel {
             guard Self.shouldOffer(status: status, force: force) else {
                 self.setPhase(.hidden)
                 let message = status.enabled
-                    ? "No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac."
-                    : "System browser profile import is disabled in the local Gateway configuration."
-                return .unavailable(title: "No browser login available", message: message)
+                    ? String(
+                        localized: "No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.")
+                    : String(
+                        localized: "System browser profile import is disabled in the local Gateway configuration.")
+                return .unavailable(title: String(localized: "No browser login available"), message: message)
             }
             self.setPhase(.offering(status))
             return .offering
@@ -162,7 +170,9 @@ final class BrowserProfileImportModel {
             if force, self.phaseGeneration == generation {
                 if case .importing = self.phase {} else { self.setPhase(.hidden) }
             }
-            return .unavailable(title: "Browser import unavailable", message: error.localizedDescription)
+            return .unavailable(
+                title: String(localized: "Browser import unavailable"),
+                message: error.localizedDescription)
         }
     }
 
@@ -202,6 +212,7 @@ final class BrowserProfileImportModel {
         // Only an unanswered offer persists the dismissal; closing a result
         // banner must not overwrite the recorded "imported" state.
         guard wasOffering else { return }
+        self.dismissedThisSession = true
         Task {
             let _: [String: Bool]? = try? await self.request(
                 method: "POST",

@@ -30,27 +30,33 @@ struct BrowserProfileImportBannerContent: Equatable {
             let profiles = status.importableProfiles
             let browsers = Self.browserList(for: profiles)
             return BrowserProfileImportBannerContent(
-                title: "Use your browser logins",
-                subtitle: "Copy cookies from \(browsers) into an isolated agent profile. " +
-                    "Passwords are never touched.",
+                title: String(localized: "Use your browser logins"),
+                subtitle: String(localized: """
+                Copy cookies from \(browsers) into an isolated agent profile. \
+                Passwords are never touched.
+                """),
                 badge: .globe,
                 action: .importProfiles(profiles))
         case let .importing(profile, target):
             return BrowserProfileImportBannerContent(
-                title: "Importing browser cookies…",
-                subtitle: "Copying \(profile.displayName) into “\(target)”. Touch ID may be required.",
+                title: String(localized: "Importing browser cookies…"),
+                subtitle: String(localized: """
+                Copying \(profile.displayName) into “\(target)”. Touch ID may be required.
+                """),
                 badge: .progress,
                 action: .none)
         case let .imported(result):
             return BrowserProfileImportBannerContent(
-                title: "Browser logins imported",
-                subtitle: "\(result.cookies.imported) of \(result.cookies.total) cookies copied into " +
-                    "“\(result.into)” — now the default profile for agent browsing.",
+                title: String(localized: "Browser logins imported"),
+                subtitle: String(localized: """
+                \(result.cookies.imported) of \(result.cookies.total) cookies copied into \
+                “\(result.into)” — now the default profile for agent browsing.
+                """),
                 badge: .success,
                 action: .none)
         case let .failed(message, _):
             return BrowserProfileImportBannerContent(
-                title: "Browser import failed",
+                title: String(localized: "Browser import failed"),
                 subtitle: message,
                 badge: .failure,
                 action: .retry)
@@ -67,11 +73,11 @@ struct BrowserProfileImportBannerContent: Equatable {
         }
         switch names.count {
         case 0:
-            return "your browser"
+            return String(localized: "your browser")
         case 1:
             return names[0]
         default:
-            return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+            return ListFormatter.localizedString(byJoining: names)
         }
     }
 }

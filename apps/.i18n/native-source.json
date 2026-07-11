@@ -15122,8 +15122,72 @@
       "id": "native.apple.69b64bb81b900cc4"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 33,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
+      "source": "Use your browser logins",
+      "surface": "apple",
+      "id": "native.apple.d1faee12838b677f"
+    },
+    {
+      "kind": "ui-localized-call-multiline",
+      "line": 34,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
+      "source": "Copy cookies from \\(browsers) into an isolated agent profile. Passwords are never touched.",
+      "surface": "apple",
+      "id": "native.apple.c5ff31546d6a679d"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 42,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
+      "source": "Importing browser cookies…",
+      "surface": "apple",
+      "id": "native.apple.8dc63b7646cb0bdb"
+    },
+    {
+      "kind": "ui-localized-call-multiline",
+      "line": 43,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
+      "source": "Copying \\(profile.displayName) into “\\(target)”. Touch ID may be required.",
+      "surface": "apple",
+      "id": "native.apple.726d99301dedf301"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 50,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
+      "source": "Browser logins imported",
+      "surface": "apple",
+      "id": "native.apple.afe729bf54ad5a20"
+    },
+    {
+      "kind": "ui-localized-call-multiline",
+      "line": 51,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
+      "source": "\\(result.cookies.imported) of \\(result.cookies.total) cookies copied into “\\(result.into)” — now the default profile for agent browsing.",
+      "surface": "apple",
+      "id": "native.apple.f2537efb54feeba4"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 59,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
+      "source": "Browser import failed",
+      "surface": "apple",
+      "id": "native.apple.aaa27f92ea6143c3"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 76,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
+      "source": "your browser",
+      "surface": "apple",
+      "id": "native.apple.0a0426e216fde2a3"
+    },
+    {
       "kind": "ui-modifier",
-      "line": 116,
+      "line": 122,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
       "source": "\\(content.title). \\(content.subtitle)",
       "surface": "apple",
@@ -15131,7 +15195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 130,
+      "line": 136,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
       "source": "Import",
       "surface": "apple",
@@ -15139,7 +15203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 143,
+      "line": 149,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
       "source": "Retry",
       "surface": "apple",
@@ -15147,27 +15211,59 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 170,
+      "line": 176,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift",
       "source": "Dismiss",
       "surface": "apple",
       "id": "native.apple.792cfb2474ad0533"
     },
     {
-      "kind": "conditional-branch",
-      "line": 154,
+      "kind": "ui-localized-call",
+      "line": 139,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
+      "source": "Browser import requires Local mode",
+      "surface": "apple",
+      "id": "native.apple.ed83068f5cbb2b04"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 140,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
+      "source": "Switch this Mac app to a local Gateway before importing browser cookies.",
+      "surface": "apple",
+      "id": "native.apple.eb2383ae167c90fd"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 160,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.",
       "surface": "apple",
       "id": "native.apple.fdf0ffe662bd620f"
     },
     {
-      "kind": "conditional-branch",
-      "line": 154,
+      "kind": "ui-localized-call",
+      "line": 162,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "System browser profile import is disabled in the local Gateway configuration.",
       "surface": "apple",
       "id": "native.apple.eedf0eec72f6d287"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 164,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
+      "source": "No browser login available",
+      "surface": "apple",
+      "id": "native.apple.a8164afad8e43408"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 174,
+      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
+      "source": "Browser import unavailable",
+      "surface": "apple",
+      "id": "native.apple.52bd5967f06d4ea2"
     },
     {
       "kind": "conditional-branch",

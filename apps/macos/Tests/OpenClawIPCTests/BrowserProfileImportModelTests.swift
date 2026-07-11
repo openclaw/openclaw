@@ -216,6 +216,26 @@ struct BrowserProfileImportModelTests {
         #expect(model.phase == .offering(forced))
     }
 
+    @Test func `dismissal suppresses automatic re-offers for the session`() async {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+        await model.refresh(force: false)
+        model.dismiss()
+        #expect(model.phase == .hidden)
+
+        // The persistence write may still be pending or lost; the server keeps
+        // reporting an importable profile, but automatic polls must not re-offer.
+        let statusPolls = stub.requests(for: "/system-profile-import/status").count
+        let refreshed = await model.refreshIfIdle()
+        #expect(!refreshed)
+        #expect(stub.requests(for: "/system-profile-import/status").count == statusPolls)
+        #expect(model.phase == .hidden)
+
+        // Settings force-refresh still overrides the session suppression.
+        let outcome = await model.refresh(force: true)
+        #expect(outcome == .offering)
+    }
+
     @Test func `stale idle poll does not resurrect a dismissed offer`() async {
         let stub = BrowserImportTransportStub()
         let model = stub.makeModel()
