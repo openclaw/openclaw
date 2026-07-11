@@ -160,6 +160,98 @@ function resolveAssistantMessageChangedInbound(params: {
   };
 }
 
+function slackFileKeyList(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .map((file) => {
+      const record = asRecord(file);
+      return asString(record?.id) ?? asString(record?.name) ?? "";
+    })
+    .filter(Boolean)
+    .join(",");
+}
+
+/**
+ * Slack finalizes file uploads asynchronously: a message posted with (multiple)
+ * attachments can reach the app with an incomplete file set — or none at all —
+ * and the complete upload only lands later as a `message_changed` event whose
+ * inner message carries subtype `file_share`. Treating those purely as edit
+ * notifications silently drops the user's documents.
+ *
+ * Promote a user-authored `message_changed` back into the regular message
+ * pipeline only when it actually delivers new content: the file set differs
+ * from `previous_message`, or text appeared where there was none, or the text
+ * changed alongside attached files. Plain edits keep flowing to the
+ * system-event path so replies are not re-triggered (see #28834), and the
+ * downstream seen-message dedupe still applies to the promoted event's
+ * original `ts`.
+ */
+function resolveFileShareMessageChangedInbound(params: {
+  event: SlackMessageEvent;
+  ctx: SlackMonitorContext;
+}): SlackMessageEvent | undefined {
+  if (params.event.subtype !== "message_changed") {
+    return undefined;
+  }
+  const changed = params.event as SlackMessageChangedEvent;
+  const next = asRecord(changed.message) as SlackAssistantMessageRecord | undefined;
+  if (!next) {
+    return undefined;
+  }
+  if (isSelfAttributedMessageChange({ event: changed, message: next, ctx: params.ctx })) {
+    return undefined;
+  }
+  const nextType = asString((next as { type?: unknown }).type);
+  if (nextType && nextType !== "message") {
+    return undefined;
+  }
+  const nextSubtype = asString((next as { subtype?: unknown }).subtype);
+  if (nextSubtype && nextSubtype !== "file_share") {
+    return undefined;
+  }
+  const senderId = asString(next.user);
+  if (!senderId || !isSlackUserId(senderId)) {
+    return undefined;
+  }
+  const nextText = asString(next.text)?.trim() ?? "";
+  const nextFiles = Array.isArray(next.files) ? next.files : [];
+  const nextAttachments = Array.isArray(next.attachments) ? next.attachments : [];
+  if (!nextText && nextFiles.length === 0 && nextAttachments.length === 0) {
+    return undefined;
+  }
+  const previous = asRecord(changed.previous_message) as SlackAssistantMessageRecord | undefined;
+  const prevText = asString(previous?.text)?.trim() ?? "";
+  const deliversNewContent =
+    slackFileKeyList(next.files) !== slackFileKeyList(previous?.files) ||
+    (!prevText && Boolean(nextText)) ||
+    (prevText !== nextText && nextFiles.length > 0);
+  if (!deliversNewContent) {
+    return undefined;
+  }
+  const channelType = normalizeSlackChannelType(
+    asString((changed as SlackMessageChangedEvent & { channel_type?: unknown }).channel_type),
+    changed.channel,
+  );
+  return {
+    type: "message",
+    ...(nextSubtype ? { subtype: nextSubtype } : {}),
+    channel: changed.channel ?? params.event.channel,
+    ...(channelType ? { channel_type: channelType } : {}),
+    user: senderId,
+    text: asString(next.text),
+    ts: asString(next.ts) ?? asString(changed.event_ts),
+    thread_ts: asString(next.thread_ts),
+    event_ts: changed.event_ts,
+    files: Array.isArray(next.files) ? (next.files as SlackMessageEvent["files"]) : undefined,
+    attachments: Array.isArray(next.attachments)
+      ? (next.attachments as SlackMessageEvent["attachments"])
+      : undefined,
+    blocks: Array.isArray(next.blocks) ? (next.blocks as SlackMessageEvent["blocks"]) : undefined,
+  };
+}
+
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;
   handleSlackMessage: SlackMessageHandler;
@@ -239,6 +331,21 @@ export function registerSlackMessageEvents(params: {
           ctx,
         })
       ) {
+        return;
+      }
+
+      // A message_changed carrying a user's file_share payload is Slack
+      // delivering the (multi-)file upload, not an edit — route it through the
+      // regular message pipeline so the attachments reach the agent.
+      const fileShareChangedInbound = resolveFileShareMessageChangedInbound({
+        event: message,
+        ctx,
+      });
+      if (fileShareChangedInbound) {
+        await handleSlackMessage(fileShareChangedInbound, {
+          source: "message",
+          ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
+        });
         return;
       }
 

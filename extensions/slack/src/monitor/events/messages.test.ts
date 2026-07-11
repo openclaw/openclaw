@@ -410,6 +410,104 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).toHaveBeenCalledTimes(calls);
   });
 
+  function makeFileShareChangedEvent(overrides?: {
+    user?: string;
+    files?: Array<{ id: string; name?: string }>;
+    previousFiles?: Array<{ id: string; name?: string }>;
+    text?: string;
+    previousText?: string;
+  }) {
+    const user = overrides?.user ?? "U1";
+    return {
+      type: "message",
+      subtype: "message_changed",
+      channel: "C123",
+      channel_type: "channel",
+      message: {
+        type: "message",
+        subtype: "file_share",
+        ts: "123.456",
+        user,
+        text: overrides?.text ?? "please review these",
+        files: overrides?.files ?? [
+          { id: "F1", name: "packing-slip-1.pdf" },
+          { id: "F2", name: "packing-slip-2.pdf" },
+        ],
+      },
+      previous_message: {
+        ts: "123.456",
+        user,
+        text: overrides?.previousText ?? "please review these",
+        files: overrides?.previousFiles ?? [{ id: "F1", name: "packing-slip-1.pdf" }],
+      },
+      event_ts: "123.999",
+    };
+  }
+
+  it("promotes a user file_share message_changed with new files into the message pipeline", async () => {
+    const { handler, handleSlackMessage } = createHandlers("message", { dmPolicy: "open" });
+    await requireMessageHandler(handler)({
+      event: makeFileShareChangedEvent(),
+      body: {},
+    });
+
+    expect(messageQueueMock).not.toHaveBeenCalled();
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    const [promoted] = handleSlackMessage.mock.calls[0] as unknown as [
+      { ts?: string; channel?: string; user?: string; files?: Array<{ id: string }> },
+    ];
+    expect(promoted).toMatchObject({
+      type: "message",
+      subtype: "file_share",
+      channel: "C123",
+      user: "U1",
+      ts: "123.456",
+    });
+    expect(promoted.files?.map((file) => file.id)).toEqual(["F1", "F2"]);
+  });
+
+  it("keeps plain message_changed edits on the system-event path (no re-triggered replies)", async () => {
+    const { handler, handleSlackMessage } = createHandlers("message", { dmPolicy: "open" });
+    await requireMessageHandler(handler)({
+      event: {
+        type: "message",
+        subtype: "message_changed",
+        channel: "D1",
+        message: { ts: "123.456", user: "U1", text: "edited words" },
+        previous_message: { ts: "123.456", user: "U1", text: "original words" },
+        event_ts: "123.999",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not promote a file_share message_changed when the file set is unchanged", async () => {
+    const { handler, handleSlackMessage } = createHandlers("message", { dmPolicy: "open" });
+    await requireMessageHandler(handler)({
+      event: makeFileShareChangedEvent({
+        files: [{ id: "F1", name: "packing-slip-1.pdf" }],
+        previousFiles: [{ id: "F1", name: "packing-slip-1.pdf" }],
+      }),
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not promote self-attributed file_share message_changed events", async () => {
+    const { handler, handleSlackMessage } = createHandlers("message", { dmPolicy: "open" });
+    await requireMessageHandler(handler)({
+      event: makeFileShareChangedEvent({ user: "U_BOT" }),
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+  });
+
   it("passes regular message events to the message handler", async () => {
     const { handleSlackMessage } = await invokeRegisteredHandler({
       eventName: "message",
