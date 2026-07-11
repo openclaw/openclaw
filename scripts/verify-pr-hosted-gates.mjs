@@ -416,10 +416,13 @@ function loadWorkflowRuns(repo, sha, recentSha, headBranch) {
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
-  const headBranch = execPlainGh(["api", `repos/${args.repo}/pulls/${args.pr}`, "--jq", ".head.ref"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  const headBranch = execPlainGh(
+    ["api", `repos/${args.repo}/pulls/${args.pr}`, "--jq", ".head.ref"],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ).trim();
   const evidence = collectHostedGateEvidence({
     sha: args.sha,
     pr: args.pr,
