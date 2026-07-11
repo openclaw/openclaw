@@ -56,6 +56,7 @@ import {
 } from "./session-accessor.js";
 import * as sessionStore from "./store.js";
 import { loadSessionStore, saveSessionStore, updateSessionStoreEntry } from "./store.js";
+import * as transcriptReplay from "./transcript-replay.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -2106,6 +2107,103 @@ describe("session accessor file-backed seam", () => {
       expect(lateLease.filePath).not.toBe(runtimeFile);
       expect(fs.existsSync(runtimeFile)).toBe(false);
     } finally {
+      clearTrajectoryWriterLifecycleRegistryForTest();
+    }
+  });
+
+  it("tombstones the previous session's trajectory pair even when a concurrent writer races the store swap with its own row for the same previous session id", async () => {
+    // Reproduces a live production failure observed on v2026.6.10: typed
+    // /reset tombstoned the transcript but left the trajectory pair bare,
+    // with no error in the gateway log, while a hook cascade (self-
+    // improvement, memory-reflection) ran normally in the same window. Root
+    // cause: persistSessionResetLifecycle computed its referenced-sessions
+    // guard via a SEPARATE, unlocked loadSessionStore call made well after
+    // the store swap's own exclusive lock had already released — a
+    // concurrent writer (e.g. a post-turn hook still persisting its own
+    // metadata under the pre-reset session identity) could land a store
+    // write in that window and make the previous session look "still
+    // referenced" when it was not at the moment of the swap, silently
+    // vetoing the tombstone. This simulates exactly that: a write lands
+    // during replayRecentUserAssistantMessages, the first await after the
+    // store swap.
+    const now = Date.now();
+    const sessionKey = "agent:main:main";
+    const previousTranscript = path.join(tempDir, "previous-race2-session.jsonl");
+    const nextTranscript = path.join(tempDir, "next-race2-session.jsonl");
+    const previousEntry: SessionEntry = {
+      sessionFile: previousTranscript,
+      sessionId: "previous-race2-session",
+      updatedAt: now,
+    };
+    const nextEntry: SessionEntry = {
+      sessionFile: nextTranscript,
+      sessionId: "next-race2-session",
+      updatedAt: now + 1,
+    };
+    fs.writeFileSync(
+      previousTranscript,
+      `${JSON.stringify({ type: "session", id: "previous-race2-session" })}\n`,
+      "utf-8",
+    );
+    await upsertSessionEntry({ sessionKey, storePath }, previousEntry);
+
+    const runtimeFile = resolveTrajectoryFilePath({
+      sessionFile: previousTranscript,
+      sessionId: previousEntry.sessionId,
+    });
+    const pointerPath = resolveTrajectoryPointerFilePath(previousTranscript);
+    const recorder = await createTrajectoryRuntimeRecorder({
+      sessionId: previousEntry.sessionId,
+      sessionFile: previousTranscript,
+    });
+    if (!recorder) {
+      throw new Error("expected trajectory runtime recorder");
+    }
+    recorder.recordEvent("prompt.submitted", { marker: "before-reset" });
+    await recorder.flush();
+    expect(fs.existsSync(runtimeFile)).toBe(true);
+
+    const realReplay = transcriptReplay.replayRecentUserAssistantMessages;
+    const replaySpy = vi
+      .spyOn(transcriptReplay, "replayRecentUserAssistantMessages")
+      .mockImplementationOnce(async (replayParams) => {
+        // Simulates a racing hook: it captured the pre-reset session
+        // identity before the swap landed, and only persists its own store
+        // row (under a DIFFERENT sessionKey, same old sessionId) after —
+        // right in the window this function's own store swap already
+        // released its lock but before this function decides whether the
+        // trajectory pair is still referenced.
+        await upsertSessionEntry(
+          { sessionKey: "agent:main:hook-race", storePath },
+          { sessionId: previousEntry.sessionId, updatedAt: Date.now() },
+        );
+        return await realReplay(replayParams);
+      });
+
+    try {
+      await persistSessionResetLifecycle({
+        agentId: "main",
+        cleanupPreviousTranscript: true,
+        nextEntry,
+        nextSessionFile: nextTranscript,
+        previousEntry,
+        previousSessionId: previousEntry.sessionId,
+        sessionKey,
+        storePath,
+      });
+
+      // The trajectory pair must still tombstone: at the instant of the
+      // store swap, previousSessionId was not referenced by anything else —
+      // the racing hook's write landing afterward must not retroactively
+      // veto that decision.
+      expect(fs.existsSync(runtimeFile)).toBe(false);
+      expect(fs.existsSync(pointerPath)).toBe(false);
+      const runtimeTombstones = fs
+        .readdirSync(tempDir)
+        .filter((file) => file.startsWith(`${path.basename(runtimeFile)}.reset.`));
+      expect(runtimeTombstones).toHaveLength(1);
+    } finally {
+      replaySpy.mockRestore();
       clearTrajectoryWriterLifecycleRegistryForTest();
     }
   });
