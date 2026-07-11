@@ -169,6 +169,26 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
+    it("CLI-S02b --dry-run human output reports the rendered UTF-8 byte count", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = '{ "version": "1.0" }';
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "中文",
+        { cwd: workspaceDir, human: true, dryRun: true },
+        rt,
+      );
+
+      const [header, ...bodyLines] = stdoutText(rt).split("\n");
+      const body = bodyLines.join("\n");
+      expect(header).toBe(
+        `--dry-run: would write ${Buffer.byteLength(body, "utf8")} bytes to ${filePath}`,
+      );
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
+
     it("CLI-S05 --dry-run --diff prints a unified diff", async () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       const before = '{\n  "version": "1.0",\n  "enabled": true\n}\n';
