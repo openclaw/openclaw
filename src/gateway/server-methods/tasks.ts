@@ -23,6 +23,12 @@ const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
 
 type TaskLedgerStatus = TaskSummary["status"];
+type TaskSubagentHealthSummary = {
+  total: number;
+  retryable: number;
+  byStatus: Record<string, number>;
+  byNextAction: Record<string, number>;
+};
 
 const LEDGER_STATUS_TO_TASK_STATUSES: Record<TaskLedgerStatus, TaskStatus[]> = {
   queued: ["queued"],
@@ -84,6 +90,35 @@ function parseCursor(cursor: string | undefined): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+function incrementCount(target: Record<string, number>, key: string) {
+  target[key] = (target[key] ?? 0) + 1;
+}
+
+function buildSubagentHealthSummary(
+  tasks: TaskRecord[],
+  resolveSubagentHealth: ReturnType<typeof createSubagentHealthResolver>,
+): TaskSubagentHealthSummary | undefined {
+  const summary: TaskSubagentHealthSummary = {
+    total: 0,
+    retryable: 0,
+    byStatus: {},
+    byNextAction: {},
+  };
+  for (const task of tasks) {
+    const health = resolveSubagentHealth(task);
+    if (!health) {
+      continue;
+    }
+    summary.total += 1;
+    if (health.retryable) {
+      summary.retryable += 1;
+    }
+    incrementCount(summary.byStatus, health.status);
+    incrementCount(summary.byNextAction, health.nextAction);
+  }
+  return summary.total > 0 ? summary : undefined;
+}
+
 // Control UI task methods expose the stable gateway protocol shape; helpers
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
@@ -133,8 +168,11 @@ export const tasksHandlers: GatewayRequestHandlers = {
     const page = filtered.slice(cursor, cursor + limit);
     const nextOffset = cursor + page.length;
     const resolveSubagentHealth = createSubagentHealthResolver();
+    const subagentHealthSummary = buildSubagentHealthSummary(filtered, resolveSubagentHealth);
+    const tasks = page.map((task) => mapTaskSummary(task, { resolveSubagentHealth }));
     respond(true, {
-      tasks: page.map((task) => mapTaskSummary(task, { resolveSubagentHealth })),
+      tasks,
+      ...(subagentHealthSummary ? { subagentHealthSummary } : {}),
       ...(nextOffset < filtered.length ? { nextCursor: String(nextOffset) } : {}),
     });
   },

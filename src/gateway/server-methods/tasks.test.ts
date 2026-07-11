@@ -31,6 +31,7 @@ const killSubagentRunAdminMock = vi.fn();
 type TaskResponsePayload = {
   tasks?: Array<Record<string, unknown>>;
   task?: Record<string, unknown>;
+  subagentHealthSummary?: Record<string, unknown>;
   found?: boolean;
   cancelled?: boolean;
   nextCursor?: string;
@@ -309,6 +310,78 @@ describe("tasks gateway handlers", () => {
       status: "stale",
       retryable: true,
       nextAction: "recover_orphan",
+    });
+  });
+
+  it("summarizes subagent health across the filtered task list", async () => {
+    const now = Date.now();
+    createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:stale",
+      runId: "run-health-stale",
+      task: "Stale subagent",
+      status: "running",
+      deliveryStatus: "pending",
+      lastEventAt: now - 120_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-health-stale",
+      childSessionKey: "agent:main:subagent:stale",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Stale subagent",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 119_000,
+      execution: { status: "running" },
+    });
+    createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:delivery",
+      runId: "run-health-delivery",
+      task: "Delivery failed subagent",
+      status: "succeeded",
+      deliveryStatus: "failed",
+      lastEventAt: now - 10_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-health-delivery",
+      childSessionKey: "agent:main:subagent:delivery",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Delivery failed subagent",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 9_000,
+      endedAt: now - 1_000,
+      outcome: { status: "ok" },
+      delivery: { status: "failed", lastError: "send failed" },
+      execution: { status: "terminal", endedAt: now - 1_000, outcome: { status: "ok" } },
+    });
+    createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-cli",
+      task: "CLI task",
+      status: "running",
+      deliveryStatus: "not_applicable",
+    });
+
+    const { payload } = await runTaskHandler("tasks.list", { agentId: "main", limit: 1 });
+
+    expect(payload?.subagentHealthSummary).toMatchObject({
+      total: 2,
+      retryable: 2,
+      byStatus: { stale: 1, delivery_failed: 1 },
+      byNextAction: { recover_orphan: 1, retry_delivery: 1 },
     });
   });
 

@@ -51,6 +51,16 @@ export const SubagentHealthSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TaskSubagentHealthSummarySchema = Type.Object(
+  {
+    total: Type.Integer({ minimum: 0 }),
+    retryable: Type.Integer({ minimum: 0 }),
+    byStatus: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
+    byNextAction: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
 /** Public task summary returned by task list/get/cancel responses. */
 export const TaskSummarySchema = Type.Object(
   {
@@ -96,6 +106,7 @@ export const TasksListParamsSchema = Type.Object(
 export const TasksListResultSchema = Type.Object(
   {
     tasks: Type.Array(TaskSummarySchema),
+    subagentHealthSummary: Type.Optional(TaskSubagentHealthSummarySchema),
     nextCursor: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
