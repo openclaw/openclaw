@@ -23,10 +23,12 @@ import {
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { isViteDevPage } from "../app/settings.ts";
+import type { ThemeMode } from "../app/theme.ts";
 import "./session-menu.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import type { ThemeMode } from "../app/theme.ts";
+import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { editorOpenUrl } from "../lib/editor-links.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
@@ -87,6 +89,7 @@ type SidebarRecentSession = {
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
   category?: string;
@@ -123,6 +126,24 @@ const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
+
+// Dev-server pages get the artifact identity in the status tooltip so devs can
+// tell which checkout built the UI they are looking at; release builds keep the
+// plain status line (About/Settings already expose build details there).
+const DEV_BUILD_TOOLTIP_LINE = isViteDevPage()
+  ? [
+      [
+        CONTROL_UI_BUILD_INFO.version ? `v${CONTROL_UI_BUILD_INFO.version}` : null,
+        CONTROL_UI_BUILD_INFO.commit?.slice(0, 12) ?? null,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" · "),
+      // Trim to minutes so the timestamp stays one tooltip line.
+      CONTROL_UI_BUILD_INFO.builtAt ? `${CONTROL_UI_BUILD_INFO.builtAt.slice(0, 16)}Z` : "",
+    ]
+      .filter(Boolean)
+      .join("\n")
+  : "";
 
 function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   return normalizeSidebarSessionsGrouping(
@@ -186,6 +207,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) lobsterPetVisits = true;
   @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
+  @property({ attribute: false }) devGitBranch: string | null = null;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
@@ -458,6 +480,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         active: row.key === navigation.activeRowKey,
         visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
         hasActiveRun: Boolean(row.hasActiveRun),
+        modelSelectionLocked: row.modelSelectionLocked === true,
         kind: row.kind,
         pinned: row.pinned === true,
         category: normalizeOptionalString(row.category),
@@ -1164,7 +1187,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         .y=${menu.y}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${!this.connected}
-        .forkDisabled=${this.sessionsLoading}
+        .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
         .archiveAllowed=${archiveAllowed}
         .groups=${this.knownSessionGroups()}
         .canOpenChat=${true}
@@ -1881,6 +1904,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
+    const gatewayStatusTooltip = DEV_BUILD_TOOLTIP_LINE
+      ? `${gatewayStatus}\n${DEV_BUILD_TOOLTIP_LINE}`
+      : gatewayStatus;
     const settingsActive =
       this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
     const settingsTooltip = `${titleForRoute("config")} (⇧⌘,)`;
@@ -1907,7 +1933,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               .gatewayVersion=${this.gatewayVersion}
             ></openclaw-lobster-pet>
             <div class="sidebar-footer-bar">
-              <openclaw-tooltip .content=${gatewayStatus}>
+              <openclaw-tooltip .content=${gatewayStatusTooltip}>
                 <span
                   class="sidebar-status__dot ${this.connected
                     ? "sidebar-connection-status--online"
@@ -1917,6 +1943,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                   aria-label=${gatewayStatus}
                 ></span>
               </openclaw-tooltip>
+              ${this.devGitBranch
+                ? html`<span class="sidebar-footer-branch" title=${this.devGitBranch}
+                    >${this.devGitBranch}</span
+                  >`
+                : nothing}
               <span class="sidebar-footer-bar__spacer"></span>
               <openclaw-tooltip .content=${settingsTooltip}>
                 <a
