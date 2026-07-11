@@ -331,7 +331,6 @@ function coercePayload(payload: UnknownRecord) {
     delete next.timeoutSeconds;
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
-    delete next.toolsAllow;
     delete next.argv;
     delete next.cwd;
     delete next.env;
@@ -354,7 +353,6 @@ function coercePayload(payload: UnknownRecord) {
     delete next.thinking;
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
-    delete next.toolsAllow;
   }
   return next;
 }

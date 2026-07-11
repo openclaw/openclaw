@@ -36,7 +36,7 @@ function cronAgentTurnPayloadSchema(params: {
 }
 
 /** Builds command payload variants while preserving create/patch argv optionality. */
-function cronCommandPayloadSchema(params: { argv: TSchema }) {
+function cronCommandPayloadSchema(params: { argv: TSchema; toolsAllow: TSchema }) {
   return closedObject({
     kind: Type.Literal("command"),
     argv: params.argv,
@@ -46,6 +46,7 @@ function cronCommandPayloadSchema(params: { argv: TSchema }) {
     timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
     noOutputTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
     outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
+    toolsAllow: Type.Optional(params.toolsAllow),
   });
 }
 
@@ -228,6 +229,7 @@ export const CronPayloadSchema = Type.Union([
   closedObject({
     kind: Type.Literal("systemEvent"),
     text: NonEmptyString,
+    toolsAllow: Type.Optional(Type.Array(Type.String())),
   }),
   cronAgentTurnPayloadSchema({
     message: NonEmptyString,
@@ -238,6 +240,7 @@ export const CronPayloadSchema = Type.Union([
   }),
   cronCommandPayloadSchema({
     argv: Type.Array(NonEmptyString, { minItems: 1 }),
+    toolsAllow: Type.Array(Type.String()),
   }),
 ]);
 
@@ -246,6 +249,7 @@ export const CronPayloadPatchSchema = Type.Union([
   closedObject({
     kind: Type.Literal("systemEvent"),
     text: Type.Optional(NonEmptyString),
+    toolsAllow: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
   }),
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
@@ -256,6 +260,7 @@ export const CronPayloadPatchSchema = Type.Union([
   }),
   cronCommandPayloadSchema({
     argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+    toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
 ]);
 

@@ -235,15 +235,23 @@ export type CronFailureAlert = {
 
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
-  | { kind: "systemEvent"; text: string }
-  | CronAgentTurnPayload
-  | CronCommandPayload;
+  | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
+  | (CronAgentTurnPayload & CronPayloadToolAllow)
+  | (CronCommandPayload & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
-  | { kind: "systemEvent"; text?: string }
-  | CronAgentTurnPayloadPatch
-  | CronCommandPayloadPatch;
+  | ({ kind: "systemEvent"; text?: string } & CronPayloadToolAllowPatch)
+  | (CronAgentTurnPayloadPatch & CronPayloadToolAllowPatch)
+  | (CronCommandPayloadPatch & CronPayloadToolAllowPatch);
+
+type CronPayloadToolAllow = {
+  toolsAllow?: string[];
+};
+
+type CronPayloadToolAllowPatch = {
+  toolsAllow?: string[] | null;
+};
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -258,8 +266,6 @@ type CronAgentTurnPayloadFields = {
   externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
-  /** Optional tool allow-list; when set, only these tools are sent to the model. */
-  toolsAllow?: string[];
   /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
   toolsAllowIsDefault?: boolean;
 };

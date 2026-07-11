@@ -466,7 +466,7 @@ export function buildGatewayCronService(params: {
               agentId: job.agentId,
               script,
               state,
-              toolsAllow: job.payload.kind === "agentTurn" ? job.payload.toolsAllow : undefined,
+              toolsAllow: job.payload.toolsAllow,
               abortSignal,
             }),
         }

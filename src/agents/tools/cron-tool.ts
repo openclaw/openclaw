@@ -506,14 +506,20 @@ function cronCreatorToolNames(tools: readonly NormalizedCronCreatorTool[]): stri
   return tools.map((tool) => tool.name);
 }
 
-function capCronAgentTurnToolsAllow(params: {
+function hasCronTriggerScript(value: unknown): boolean {
+  return isRecord(value) && typeof value.script === "string" && value.script.trim().length > 0;
+}
+
+function capCronJobToolsAllow(params: {
   payload: Record<string, unknown>;
+  trigger?: unknown;
   creatorToolAllowlist: CronCreatorToolAllowlistEntry[];
   defaultToolsAllow?: unknown;
 }): void {
-  if (params.payload.kind !== "agentTurn") {
+  if (params.payload.kind !== "agentTurn" && !hasCronTriggerScript(params.trigger)) {
     return;
   }
+  const isAgentTurn = params.payload.kind === "agentTurn";
   const creatorToolsAllow = normalizeCronCreatorToolsAllow(params.creatorToolAllowlist);
   const creatorToolNames = cronCreatorToolNames(creatorToolsAllow);
   const requestedRaw = Object.hasOwn(params.payload, "toolsAllow")
@@ -521,7 +527,11 @@ function capCronAgentTurnToolsAllow(params: {
     : params.defaultToolsAllow;
   if (!Array.isArray(requestedRaw)) {
     params.payload.toolsAllow = creatorToolNames;
-    params.payload.toolsAllowIsDefault = true;
+    if (isAgentTurn) {
+      params.payload.toolsAllowIsDefault = true;
+    } else {
+      delete params.payload.toolsAllowIsDefault;
+    }
     return;
   }
   const requestedToolsAllow = normalizeCronToolsAllow(
@@ -534,7 +544,11 @@ function capCronAgentTurnToolsAllow(params: {
   }
   if (requestedToolsAllow.includes("*")) {
     params.payload.toolsAllow = creatorToolNames;
-    params.payload.toolsAllowIsDefault = true;
+    if (isAgentTurn) {
+      params.payload.toolsAllowIsDefault = true;
+    } else {
+      delete params.payload.toolsAllowIsDefault;
+    }
     return;
   }
   const pluginGroups = buildPluginToolGroups({
@@ -551,14 +565,18 @@ function capCronAgentTurnToolsAllow(params: {
   delete params.payload.toolsAllowIsDefault;
 }
 
-function capCronAgentTurnJobToolsAllow(
+function capCronJobToolsAllowOnCreate(
   value: unknown,
   creatorToolAllowlist: CronCreatorToolAllowlistEntry[] | undefined,
 ): void {
   if (!creatorToolAllowlist || !isRecord(value) || !isRecord(value.payload)) {
     return;
   }
-  capCronAgentTurnToolsAllow({ payload: value.payload, creatorToolAllowlist });
+  capCronJobToolsAllow({
+    payload: value.payload,
+    trigger: value.trigger,
+    creatorToolAllowlist,
+  });
 }
 
 function readCronPayloadKind(value: unknown): string | undefined {
@@ -568,7 +586,7 @@ function readCronPayloadKind(value: unknown): string | undefined {
   return typeof value.kind === "string" ? value.kind : undefined;
 }
 
-async function capCronAgentTurnUpdatePatchToolsAllow(params: {
+async function capCronJobUpdatePatchToolsAllow(params: {
   id: string;
   patch: Record<string, unknown>;
   creatorToolAllowlist: CronCreatorToolAllowlistEntry[] | undefined;
@@ -579,43 +597,34 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
     return;
   }
   const payload = isRecord(params.patch.payload) ? params.patch.payload : undefined;
-  const patchPayloadKind = readCronPayloadKind(payload);
-  const patchRequestsAgentTurn = patchPayloadKind === "agentTurn";
-  if (patchPayloadKind === "agentTurn" && payload && Object.hasOwn(payload, "toolsAllow")) {
-    capCronAgentTurnToolsAllow({
+  if (payload?.kind === "agentTurn" && Object.hasOwn(payload, "toolsAllow")) {
+    capCronJobToolsAllow({
       payload,
+      trigger: params.patch.trigger,
       creatorToolAllowlist: params.creatorToolAllowlist,
     });
     return;
   }
-  if (
-    patchPayloadKind === "systemEvent" ||
-    patchPayloadKind === "command" ||
-    (patchPayloadKind && patchPayloadKind !== "agentTurn")
-  ) {
-    return;
-  }
-
   const existing = await params.callGateway("cron.get", params.gatewayOpts, {
     id: params.id,
   });
   const existingPayload = isRecord(existing) ? existing.payload : undefined;
   const existingPayloadKind = readCronPayloadKind(existingPayload);
-  if (!patchRequestsAgentTurn && existingPayloadKind !== "agentTurn") {
+  const patchIncludesTrigger = Object.hasOwn(params.patch, "trigger");
+  const trigger = patchIncludesTrigger ? params.patch.trigger : existing?.trigger;
+  const payloadKind = readCronPayloadKind(payload) ?? existingPayloadKind;
+  if (payloadKind !== "agentTurn" && !hasCronTriggerScript(trigger)) {
     return;
   }
   const nextPayload: Record<string, unknown> = payload ?? {};
-  nextPayload.kind = "agentTurn";
+  nextPayload.kind = payloadKind;
   params.patch.payload = nextPayload;
-  capCronAgentTurnToolsAllow({
+  capCronJobToolsAllow({
     payload: nextPayload,
+    trigger,
     creatorToolAllowlist: params.creatorToolAllowlist,
-    // Flagged defaults are re-derived so normal updates do not turn them into
-    // explicit restrictions or lose the marker needed after restart.
     defaultToolsAllow:
-      existingPayloadKind === "agentTurn" &&
-      isRecord(existingPayload) &&
-      existingPayload.toolsAllowIsDefault !== true
+      isRecord(existingPayload) && existingPayload.toolsAllowIsDefault !== true
         ? existingPayload.toolsAllow
         : undefined,
   });
@@ -1058,7 +1067,7 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
             ) {
               delete job.enabled;
             }
-            capCronAgentTurnJobToolsAllow(job, opts?.creatorToolAllowlist);
+            capCronJobToolsAllowOnCreate(job, opts?.creatorToolAllowlist);
             if (job && typeof job === "object") {
               const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
               const resolvedSessionKey = opts?.agentSessionKey
@@ -1194,7 +1203,7 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
             if (callerScope) {
               assertCronToolSessionRefsMatchScope(patch, callerScope);
             }
-            await capCronAgentTurnUpdatePatchToolsAllow({
+            await capCronJobUpdatePatchToolsAllow({
               id,
               patch,
               creatorToolAllowlist: opts?.creatorToolAllowlist,

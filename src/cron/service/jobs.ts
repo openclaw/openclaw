@@ -1179,7 +1179,13 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
       return buildPayloadFromPatch(patch);
     }
     const text = typeof patch.text === "string" ? patch.text : existing.text;
-    return { kind: "systemEvent", text };
+    const next: Extract<CronPayload, { kind: "systemEvent" }> = { ...existing, text };
+    if (Array.isArray(patch.toolsAllow)) {
+      next.toolsAllow = patch.toolsAllow;
+    } else if (patch.toolsAllow === null) {
+      delete next.toolsAllow;
+    }
+    return next;
   }
 
   if (patch.kind === "command") {
@@ -1207,6 +1213,11 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     }
     if (typeof patch.outputMaxBytes === "number") {
       next.outputMaxBytes = patch.outputMaxBytes;
+    }
+    if (Array.isArray(patch.toolsAllow)) {
+      next.toolsAllow = patch.toolsAllow;
+    } else if (patch.toolsAllow === null) {
+      delete next.toolsAllow;
     }
     return next;
   }
@@ -1252,7 +1263,11 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     if (typeof patch.text !== "string" || patch.text.length === 0) {
       throw new Error('cron.update payload.kind="systemEvent" requires text');
     }
-    return { kind: "systemEvent", text: patch.text };
+    return {
+      kind: "systemEvent",
+      text: patch.text,
+      ...(Array.isArray(patch.toolsAllow) ? { toolsAllow: patch.toolsAllow } : {}),
+    };
   }
 
   if (patch.kind === "command") {
@@ -1268,6 +1283,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       timeoutSeconds: patch.timeoutSeconds,
       noOutputTimeoutSeconds: patch.noOutputTimeoutSeconds,
       outputMaxBytes: patch.outputMaxBytes,
+      ...(Array.isArray(patch.toolsAllow) ? { toolsAllow: patch.toolsAllow } : {}),
     };
   }
 

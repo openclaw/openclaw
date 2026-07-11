@@ -1194,6 +1194,60 @@ describe("cron tool", () => {
     expect(params?.payload?.toolsAllow).toEqual(["read", "cron"]);
   });
 
+  it("caps trigger-script systemEvent adds to the creator tool surface", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "cron"],
+    });
+
+    await tool.execute("call-capped-trigger-system-event", {
+      action: "add",
+      job: {
+        name: "watcher",
+        schedule: { kind: "every", everyMs: 60_000 },
+        trigger: { script: "return { fire: false }" },
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "changed" },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as
+      | { payload?: { toolsAllow?: string[] } }
+      | undefined;
+    expect(params?.payload?.toolsAllow).toEqual(["read", "cron"]);
+  });
+
+  it("caps trigger-script systemEvent updates to the creator tool surface", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-trigger",
+        payload: { kind: "systemEvent", text: "changed" },
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "cron"],
+    });
+
+    await tool.execute("call-capped-trigger-system-event-update", {
+      action: "update",
+      id: "job-trigger",
+      patch: { trigger: { script: "return { fire: false }" } },
+    });
+
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-trigger",
+        patch: {
+          trigger: { script: "return { fire: false }" },
+          payload: { kind: "systemEvent", toolsAllow: ["read", "cron"] },
+        },
+      },
+    });
+  });
+
   it("preserves explicit empty agentTurn add toolsAllow under a creator tool surface", async () => {
     const tool = createTestCronTool({
       agentSessionKey: "agent:main:telegram:group:restricted-room",
