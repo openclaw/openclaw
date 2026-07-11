@@ -146,16 +146,34 @@ describe("OpenClaw performance workflow", () => {
     );
   });
 
-  it("fetches the public clawgrit baseline without publisher credentials", () => {
+  it("sparse-fetches only the public source baseline without publisher credentials", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
     const baseline = findStep("Fetch previous source performance baseline", "source_performance");
+    const run = baseline.run ?? "";
 
     expect(baseline.if).toBeUndefined();
     expect(baseline.env?.CLAWGRIT_REPORTS_TOKEN).toBeUndefined();
-    expect(baseline.run).toContain(
-      'remote add origin "https://github.com/openclaw/clawgrit-reports.git"',
-    );
+    expect(run).toContain('remote add origin "https://github.com/openclaw/clawgrit-reports.git"');
+    expect(run).toContain("fetch --filter=blob:none --depth=1 origin main");
+    expect(run).toContain('cat-file -e "FETCH_HEAD:${pointer}"');
+    expect(run).toContain('show "FETCH_HEAD:${pointer}"');
+    expect(run).toContain("sparse-checkout init --no-cone");
+    expect(run).toContain("printf '/%s/source/\\n'");
+    expect(run).toContain("sparse-checkout set --stdin");
+    expect(run).toContain("checkout --detach FETCH_HEAD");
+    expect(run).not.toContain("checkout -B main FETCH_HEAD");
     expect(workflowText).not.toContain("https://x-access-token:");
+  });
+
+  it("builds only the QA and startup artifacts required by source probes", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+    const build = "OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance";
+
+    expect(run).toContain("module.BUILD_ALL_PROFILES?.sourcePerformance");
+    expect(run).toContain(build);
+    expect(run).toContain("pnpm build");
+    expect(run.indexOf(build)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+    expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {
@@ -758,8 +776,12 @@ esac
   });
 
   it("installs local workspace packages beside the OCM root tarball", () => {
+    const workflow = readWorkflow();
     const configure = findStep("Configure OCM local workspace dependencies");
 
+    expect(workflow.jobs?.kova?.env?.OPENCLAW_OCM_RUNTIME_BUILD_PROFILE).toBe(
+      "${{ (inputs.profile || 'diagnostic') == 'diagnostic' && 'sourcePerformance' || '' }}",
+    );
     expect(configure.run).toContain(
       'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"',
     );

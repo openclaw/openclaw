@@ -91,6 +91,7 @@ methods:
 | Method                                           | What it registers                                                                 |
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
+| `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
 | `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                  |
 | `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot) |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend                                                       |
@@ -107,6 +108,12 @@ methods:
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                       |
 | `api.registerWebSearchProvider(...)`             | Web search                                                                        |
 | `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
+
+Worker providers must also declare their id in `contracts.workerProviders`.
+Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. `destroy(leaseId)` must be idempotent;
+`inspect(leaseId)` returns `active`, `destroyed`, or `unknown`. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material.
+Providers with renewable leases can also implement `renew(leaseId)`.
+`inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core marks an active local record orphaned, or treats the absence as teardown completion after a persisted destroy request.
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This
