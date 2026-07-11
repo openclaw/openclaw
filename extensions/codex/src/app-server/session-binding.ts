@@ -1030,6 +1030,7 @@ function matchesPendingSupervisionBranch(
   }
   if (
     pending.sourceThreadId !== expected.sourceThreadId ||
+    pending.connectionFingerprint !== expected.connectionFingerprint ||
     pending.lastTurnId !== expected.lastTurnId
   ) {
     return false;

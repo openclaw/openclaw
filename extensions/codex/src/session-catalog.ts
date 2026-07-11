@@ -138,6 +138,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
       // App Server search also matches transcript previews. Scan native pages
       // without that filter so this catalog remains a title-only surface.
       const search = pageParams.searchTerm?.trim().toLocaleLowerCase() || undefined;
+      const cwd = pageParams.cwd?.trim() || undefined;
       const maxPages = search ? MAX_TITLE_SEARCH_CATALOG_PAGES : 1;
       const sessions: CodexSessionCatalogSession[] = [];
       let cursor = readControlCursor(pageParams.cursor, "request");
@@ -162,6 +163,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
             sortKey: "recency_at",
             sortDirection: "desc",
             sourceKinds: [...CODEX_INTERACTIVE_THREAD_SOURCE_KINDS],
+            ...(cwd ? { cwd } : {}),
             ...(cursor ? { cursor } : {}),
           },
           remainingTimeoutMs,

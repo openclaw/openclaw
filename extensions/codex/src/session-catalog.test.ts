@@ -380,7 +380,9 @@ describe("Codex supervision catalog", () => {
       getRuntimeConfig: () => config,
     });
 
-    await expect(control.listPage({ limit: 25, searchTerm: "mAtCh" })).resolves.toEqual({
+    await expect(
+      control.listPage({ limit: 25, searchTerm: "mAtCh", cwd: " /workspace/one " }),
+    ).resolves.toEqual({
       sessions: [
         {
           threadId: "thread-title",
@@ -403,6 +405,7 @@ describe("Codex supervision catalog", () => {
         sortKey: "recency_at",
         sortDirection: "desc",
         sourceKinds: ["cli", "vscode"],
+        cwd: "/workspace/one",
       },
       {
         config,

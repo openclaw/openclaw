@@ -277,7 +277,11 @@ describe("Codex app-server binding store", () => {
       agentId: "main",
       sessionId: "session-supervision-cas",
     };
-    const initial = { sourceThreadId: "thread-source", lastTurnId: "turn-terminal" };
+    const initial = {
+      sourceThreadId: "thread-source",
+      connectionFingerprint: "connection-one",
+      lastTurnId: "turn-terminal",
+    };
     await expect(
       store.mutate(identity, {
         kind: "set",
@@ -294,6 +298,13 @@ describe("Codex app-server binding store", () => {
       }),
     ).resolves.toBe(true);
     const tracked = { ...initial, cleanupThreadIds: ["thread-probe"] };
+    await expect(
+      store.mutate(identity, {
+        kind: "patch-pending-supervision-branch",
+        expected: { ...initial, connectionFingerprint: "connection-two" },
+        pending: tracked,
+      }),
+    ).resolves.toBe(false);
     await expect(
       store.mutate(identity, {
         kind: "patch-pending-supervision-branch",
