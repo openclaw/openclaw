@@ -194,7 +194,7 @@ export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
     paths.push("tools.web.search.apiKey");
   }
   for (const providerId of getLegacyWebSearchProviderIds(owners)) {
-    const scoped = search[providerId];
+    const scoped = Object.hasOwn(search, providerId) ? search[providerId] : undefined;
     if (isRecord(scoped)) {
       for (const key of Object.keys(scoped)) {
         paths.push(`tools.web.search.${providerId}.${key}`);
