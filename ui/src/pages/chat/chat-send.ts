@@ -197,6 +197,9 @@ type ChatSendOptions = {
   confirmReset?: boolean;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
+  /** Side-chat follow-ups embed prior-turn context in the /btw command; the
+   * pending turn must display the user's typed question instead. */
+  sideQuestionDisplayText?: string;
 };
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
@@ -2196,7 +2199,7 @@ export async function handleSendChat(
         // returns.
         const btwPending = isBtwCommand(message)
           ? {
-              question: extractSideQuestionDisplayText(message),
+              question: opts?.sideQuestionDisplayText ?? extractSideQuestionDisplayText(message),
               ts: Date.now(),
               runId: generateUUID(),
             }

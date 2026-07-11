@@ -141,8 +141,10 @@ export type ChatProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
-  /** Sends a detached /btw side question (selection popup or side-chat follow-up). */
-  onSideQuestion?: (command: string) => void;
+  /** Sends a detached /btw side question (selection popup or side-chat
+   * follow-up). `displayQuestion` overrides the pending-turn display when the
+   * command embeds carried follow-up context. */
+  onSideQuestion?: (command: string, displayQuestion?: string) => void;
   /** Hides the side-chat panel; the conversation (and a pending run) survives. */
   onSideChatClose?: () => void;
   /** Discards the side-chat conversation and retires any pending run. */

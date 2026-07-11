@@ -18,7 +18,9 @@ export type SideChatPanelProps = {
   hidden: boolean;
   /** Archived/non-composable sessions render the transcript without the follow-up input. */
   canFollowUp: boolean;
-  onFollowUp?: (command: string) => void;
+  /** `question` is the user's typed follow-up for the pending-turn display;
+   * `command` embeds prior-turn context and is never parsed back apart. */
+  onFollowUp?: (command: string, question: string) => void;
   onClose?: () => void;
   onClear?: () => void;
 };
@@ -56,9 +58,9 @@ export function renderSideChatPanel(props: SideChatPanelProps): TemplateResult |
     return nothing;
   }
   const { turns, pending } = props;
-  // Error turns carry failure text, not an answer; the newest real answer is
+  // Error turns carry failure text, not an answer; the newest real turn is
   // the context a follow-up rides on.
-  const lastAnswer = turns.findLast((turn) => !turn.isError)?.text ?? null;
+  const lastTurn = turns.findLast((turn) => !turn.isError) ?? null;
   // New turns (or a new pending question) pin the scroll position to the
   // bottom; the key guard keeps unrelated re-renders from fighting the user's
   // manual scroll.
@@ -71,11 +73,16 @@ export function renderSideChatPanel(props: SideChatPanelProps): TemplateResult |
     element.scrollTop = element.scrollHeight;
   };
   const submitFollowUp = (input: HTMLInputElement) => {
-    const command = buildSideChatFollowUpCommand(lastAnswer, input.value);
-    if (!command || !props.onFollowUp) {
+    const followUp = buildSideChatFollowUpCommand(
+      lastTurn
+        ? { question: extractSideQuestionDisplayText(lastTurn.question), answer: lastTurn.text }
+        : null,
+      input.value,
+    );
+    if (!followUp || !props.onFollowUp) {
       return;
     }
-    props.onFollowUp(command);
+    props.onFollowUp(followUp.command, followUp.question);
     input.value = "";
   };
   return html`

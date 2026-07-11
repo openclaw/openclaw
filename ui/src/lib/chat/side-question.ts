@@ -55,46 +55,37 @@ export function combineSideChatComposerDraft(
 }
 
 /**
- * Separates carried side-chat context from the user's follow-up question in a
- * follow-up /btw command. Builder and display extractor must agree on it.
- */
-const SIDE_CHAT_FOLLOW_UP_MARKER = " Follow-up: ";
-
-/**
  * Detached side answers never enter session history, so a follow-up /btw must
- * carry its own context: the previous side answer rides along (capped) ahead
- * of the new question.
+ * carry its own context: the previous side question and answer ride along
+ * (capped) ahead of the new question. The command text is prompt-only — the
+ * panel displays the returned `question` from structured state and never
+ * parses the command string back apart.
  */
 export function buildSideChatFollowUpCommand(
-  previousAnswer: string | null,
+  previous: { question: string; answer: string } | null,
   question: string,
-): string | null {
+): { command: string; question: string } | null {
   // /btw sends only the first line; collapse so multiline questions are not
   // silently truncated at send time.
   const trimmed = question.replace(/\s+/g, " ").trim();
   if (!trimmed) {
     return null;
   }
-  const answer = previousAnswer ? collapseChatSelectionSnippet(previousAnswer) : "";
-  if (!answer) {
-    return `/btw ${trimmed}`;
+  const previousQuestion = previous ? collapseChatSelectionSnippet(previous.question) : "";
+  const previousAnswer = previous ? collapseChatSelectionSnippet(previous.answer) : "";
+  if (!previousQuestion && !previousAnswer) {
+    return { command: `/btw ${trimmed}`, question: trimmed };
   }
-  return `/btw Context, your previous side answer: "${answer}"${SIDE_CHAT_FOLLOW_UP_MARKER}${trimmed}`;
+  return {
+    command: `/btw Context — the previous side question "${previousQuestion}" was answered: "${previousAnswer}". Follow-up question: ${trimmed}`,
+    question: trimmed,
+  };
 }
 
-/**
- * Human-readable question for the side-chat panel: drops the /btw prefix and
- * any carried follow-up context. lastIndexOf tolerates answers that themselves
- * contain the marker text (a question containing it truncates cosmetically).
- */
+/** Human-readable question for the pending side-chat turn (drops the /btw prefix). */
 export function extractSideQuestionDisplayText(message: string): string {
-  const question = message
+  return message
     .trim()
     .replace(/^\/(?:btw|side)(?::\s*|\s+|$)/i, "")
     .trim();
-  const markerIndex = question.lastIndexOf(SIDE_CHAT_FOLLOW_UP_MARKER);
-  if (markerIndex === -1) {
-    return question;
-  }
-  return question.slice(markerIndex + SIDE_CHAT_FOLLOW_UP_MARKER.length).trim();
 }

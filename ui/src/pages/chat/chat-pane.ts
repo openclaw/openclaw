@@ -1484,7 +1484,11 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
-      onSideQuestion: (command) => void state.handleSendChat(command),
+      onSideQuestion: (command, displayQuestion) =>
+        void state.handleSendChat(
+          command,
+          displayQuestion ? { sideQuestionDisplayText: displayQuestion } : undefined,
+        ),
       onSideChatClose: () => {
         // Hide only: a pending run keeps going and its arriving answer (or a
         // new question) reopens the panel with the conversation intact.

@@ -342,12 +342,16 @@ export function handleChatSideResultGatewayEvent(state: ChatState, payload: unkn
   // replace this pane's live pending card — displaying it would also let the
   // dismiss button retire the hidden pending run. Record it so its trailing
   // terminal chat event is still swallowed here.
-  const pendingRunId = state.chatSideResultPending?.runId;
-  if (pendingRunId && pendingRunId !== sideResult.runId) {
+  const pending = state.chatSideResultPending;
+  if (pending?.runId && pending.runId !== sideResult.runId) {
     state.chatSideResultTerminalRuns?.add(sideResult.runId);
     return true;
   }
-  appendChatSideChatTurn(state, sideResult);
+  // Follow-up commands embed prior-turn context; the server echoes that whole
+  // blob as the question. The correlated pending record holds the user's
+  // typed question, so prefer it for display.
+  const question = pending?.runId === sideResult.runId ? pending.question : sideResult.question;
+  appendChatSideChatTurn(state, { ...sideResult, question });
   state.chatSideResultPending = null;
   state.chatSideResultTerminalRuns?.add(sideResult.runId);
   return true;

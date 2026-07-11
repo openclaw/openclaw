@@ -253,14 +253,19 @@ describe("chat side result gateway events", () => {
       kind: "btw",
       runId: "btw-run-2",
       sessionKey: "main",
-      question: "and why?",
+      // Follow-up commands embed prior-turn context; the server echoes the
+      // whole blob back as the question.
+      question:
+        'Context — the previous side question "what changed?" was answered: "First answer." Follow-up question: and why?',
       text: "Second answer.",
       ts: 124,
     });
 
     expect(state.chatSideChatTurns).toHaveLength(2);
+    // The correlated pending record supplies the user's typed question.
     expect(state.chatSideChatTurns?.[1]).toMatchObject({
       runId: "btw-run-2",
+      question: "and why?",
       text: "Second answer.",
     });
     expect(state.chatSideResultPending).toBeNull();

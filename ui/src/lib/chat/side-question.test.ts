@@ -69,27 +69,38 @@ describe("combineSideChatComposerDraft", () => {
 });
 
 describe("buildSideChatFollowUpCommand", () => {
-  it("sends a plain /btw when there is no previous answer", () => {
-    expect(buildSideChatFollowUpCommand(null, "what about tests?")).toBe("/btw what about tests?");
+  it("sends a plain /btw when there is no previous turn", () => {
+    expect(buildSideChatFollowUpCommand(null, "what about tests?")).toEqual({
+      command: "/btw what about tests?",
+      question: "what about tests?",
+    });
   });
 
-  it("quotes the previous side answer as carried context", () => {
-    expect(buildSideChatFollowUpCommand("The cert\nis valid.", "until when?")).toBe(
-      '/btw Context, your previous side answer: "The cert is valid." Follow-up: until when?',
-    );
+  it("carries the previous side question and answer as context", () => {
+    expect(
+      buildSideChatFollowUpCommand(
+        { question: "Is cert A valid?", answer: "No,\nit expired." },
+        "when did it expire?",
+      ),
+    ).toEqual({
+      command:
+        '/btw Context — the previous side question "Is cert A valid?" was answered: "No, it expired.". Follow-up question: when did it expire?',
+      question: "when did it expire?",
+    });
   });
 
   it("collapses multiline questions and rejects empty ones", () => {
-    expect(buildSideChatFollowUpCommand("answer", "first\nsecond")).toBe(
-      '/btw Context, your previous side answer: "answer" Follow-up: first second',
-    );
-    expect(buildSideChatFollowUpCommand("answer", "  \n ")).toBeNull();
+    expect(buildSideChatFollowUpCommand(null, "first\nsecond")?.question).toBe("first second");
+    expect(buildSideChatFollowUpCommand(null, "  \n ")).toBeNull();
   });
 
-  it("caps overlong previous answers", () => {
-    const command = buildSideChatFollowUpCommand("x".repeat(5000), "why?");
-    expect(command).not.toBeNull();
-    expect(command!.length).toBeLessThan(CHAT_SELECTION_SNIPPET_MAX_CHARS + 100);
+  it("caps overlong previous turns", () => {
+    const followUp = buildSideChatFollowUpCommand(
+      { question: "q".repeat(5000), answer: "x".repeat(5000) },
+      "why?",
+    );
+    expect(followUp).not.toBeNull();
+    expect(followUp!.command.length).toBeLessThan(2 * CHAT_SELECTION_SNIPPET_MAX_CHARS + 200);
   });
 });
 
@@ -100,11 +111,9 @@ describe("extractSideQuestionDisplayText", () => {
     expect(extractSideQuestionDisplayText("/btw")).toBe("");
   });
 
-  it("drops carried follow-up context from follow-up commands", () => {
-    const command = buildSideChatFollowUpCommand("An answer with Follow-up: inside.", "and now?");
-    expect(command).not.toBeNull();
-    expect(extractSideQuestionDisplayText(command!)).toBe("and now?");
-    // Round-trips server-echoed questions that no longer carry the prefix.
-    expect(extractSideQuestionDisplayText(command!.replace(/^\/btw\s+/, ""))).toBe("and now?");
+  it("never truncates questions that merely resemble follow-up context", () => {
+    expect(
+      extractSideQuestionDisplayText("/btw Why does this say Follow-up question: pending?"),
+    ).toBe("Why does this say Follow-up question: pending?");
   });
 });

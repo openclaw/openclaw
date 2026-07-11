@@ -108,7 +108,7 @@ describe("side chat panel render", () => {
     expect(container.querySelector(".chat-side-chat")).toBeNull();
   });
 
-  it("sends follow-ups carrying the last non-error answer as context", () => {
+  it("sends follow-ups carrying the last non-error turn as context", () => {
     const container = document.createElement("div");
     const onFollowUp = vi.fn();
 
@@ -132,7 +132,8 @@ describe("side chat panel render", () => {
     input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
     expect(onFollowUp).toHaveBeenCalledWith(
-      '/btw Context, your previous side answer: "First answer." Follow-up: tell me more',
+      '/btw Context — the previous side question "what changed?" was answered: "First answer.". Follow-up question: tell me more',
+      "tell me more",
     );
     expect(input!.value).toBe("");
 
