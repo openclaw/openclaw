@@ -132,6 +132,12 @@ export type GatewayControlUiConfig = {
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
   /**
+   * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
+   * When enabled, chat.toolTitles generates short titles through standard
+   * utility-model routing and caches them per agent.
+   */
+  toolTitles?: boolean;
+  /**
    * Embed sandbox mode for hosted Control UI previews.
    * - strict: no script execution inside embeds
    * - scripts: allow scripts while keeping embeds origin-isolated (default)
