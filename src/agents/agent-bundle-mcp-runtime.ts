@@ -187,24 +187,24 @@ function setBundleMcpDisposeTimeoutMsForTest(timeoutMs?: number): void {
       ? Math.floor(timeoutMs)
       : undefined;
 }
-async function listAllResources(client: Client, timeoutMs: number) {
+async function listAllResources(client: Client, timeoutMs: number, signal?: AbortSignal) {
   const resources: unknown[] = [];
   let cursor: string | undefined;
   do {
     const params = cursor ? { cursor } : undefined;
-    const page = await client.listResources(params, { timeout: timeoutMs });
+    const page = await client.listResources(params, { timeout: timeoutMs, signal });
     resources.push(...page.resources);
     cursor = page.nextCursor;
   } while (cursor);
   return resources;
 }
 
-async function listAllPrompts(client: Client, timeoutMs: number) {
+async function listAllPrompts(client: Client, timeoutMs: number, signal?: AbortSignal) {
   const prompts: unknown[] = [];
   let cursor: string | undefined;
   do {
     const params = cursor ? { cursor } : undefined;
-    const page = await client.listPrompts(params, { timeout: timeoutMs });
+    const page = await client.listPrompts(params, { timeout: timeoutMs, signal });
     prompts.push(...page.prompts);
     cursor = page.nextCursor;
   } while (cursor);
@@ -804,7 +804,7 @@ export function createSessionMcpRuntime(params: {
     markUsed() {
       lastUsedAt = Date.now();
     },
-    async callTool(serverName, toolName, input) {
+    async callTool(serverName, toolName, input, signal?) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
@@ -817,37 +817,37 @@ export function createSessionMcpRuntime(params: {
               arguments: isMcpConfigRecord(input) ? input : {},
             },
             undefined,
-            { timeout: session.requestTimeoutMs },
+            { timeout: session.requestTimeoutMs, signal },
           )) as CallToolResult,
       );
     },
-    async listResources(serverName) {
+    async listResources(serverName, signal?) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
-        listAllResources(session.client, session.requestTimeoutMs),
+        listAllResources(session.client, session.requestTimeoutMs, signal),
       );
     },
-    async readResource(serverName, uri) {
+    async readResource(serverName, uri, signal?) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
-          await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs }),
+          await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs, signal }),
       );
     },
-    async listPrompts(serverName) {
+    async listPrompts(serverName, signal?) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
-        listAllPrompts(session.client, session.requestTimeoutMs),
+        listAllPrompts(session.client, session.requestTimeoutMs, signal),
       );
     },
-    async getPrompt(serverName, name, args) {
+    async getPrompt(serverName, name, args, signal?) {
       failIfDisposed();
       await getCatalog();
       const session = requireConnectedSession(serverName);
@@ -856,7 +856,7 @@ export function createSessionMcpRuntime(params: {
         async () =>
           await session.client.getPrompt(
             { name, ...(args ? { arguments: args } : {}) },
-            { timeout: session.requestTimeoutMs },
+            { timeout: session.requestTimeoutMs, signal },
           ),
       );
     },
