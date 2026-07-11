@@ -30,6 +30,7 @@ let handleMSTeamsDmConversationBoundary: typeof import("./lifecycle-handler.js")
 let handleMSTeamsLifecycleRemove: typeof import("./lifecycle-handler.js").handleMSTeamsLifecycleRemove;
 
 type SessionEntry = {
+  [key: string]: unknown;
   sessionId?: string;
   updatedAt: number;
   route?: unknown;
@@ -108,6 +109,28 @@ describe("handleMSTeamsLifecycleRemove", () => {
         lastTo: "user:user-aad",
         lastAccountId: "default",
         origin: { provider: "msteams" },
+        sessionFile: "/tmp/openclaw/agents/dale/sessions/old-session.jsonl",
+        sessionStartedAt: 1_000,
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        totalTokensFresh: true,
+        contextTokens: 15,
+        compactionCount: 2,
+        compactionCheckpoints: [{ checkpointId: "old-checkpoint" }],
+        cliSessionIds: { codex: "old-session" },
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "stale reply",
+        restartRecoveryDeliveryRunId: "old-run",
+        ambientTranscriptWatermarks: { room: { sessionId: "old-session" } },
+        model: "gpt-5",
+        modelProvider: "openai",
+        reasoningLevel: "high",
+        verboseLevel: "debug",
+        ttsAuto: "off",
+        providerOverride: "openai",
+        modelOverride: "gpt-5",
+        responseUsage: "tokens",
       },
       "msteams:direct:other-user": { sessionId: "other-session", updatedAt: 2_000 },
     };
@@ -143,6 +166,28 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:user-aad"].lastTo).toBeUndefined();
     expect(store["msteams:direct:user-aad"].lastAccountId).toBeUndefined();
     expect(store["msteams:direct:user-aad"].origin).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].sessionFile).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].sessionStartedAt).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].inputTokens).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].outputTokens).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].totalTokens).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].totalTokensFresh).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].contextTokens).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].compactionCount).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].compactionCheckpoints).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].cliSessionIds).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].pendingFinalDelivery).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].pendingFinalDeliveryText).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].ambientTranscriptWatermarks).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].model).toBe("gpt-5");
+    expect(store["msteams:direct:user-aad"].modelProvider).toBe("openai");
+    expect(store["msteams:direct:user-aad"].reasoningLevel).toBe("high");
+    expect(store["msteams:direct:user-aad"].verboseLevel).toBe("debug");
+    expect(store["msteams:direct:user-aad"].ttsAuto).toBe("off");
+    expect(store["msteams:direct:user-aad"].providerOverride).toBe("openai");
+    expect(store["msteams:direct:user-aad"].modelOverride).toBe("gpt-5");
+    expect(store["msteams:direct:user-aad"].responseUsage).toBe("tokens");
     expect(store["msteams:direct:other-user"].updatedAt).toBe(2_000);
   });
 

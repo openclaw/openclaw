@@ -103,12 +103,53 @@ function matchesSessionKey(params: {
 }
 
 type MSTeamsResetCandidateEntry = {
+  [key: string]: unknown;
   updatedAt?: number;
+  sessionId?: string;
+  sessionFile?: unknown;
+  sessionStartedAt?: unknown;
+  systemSent?: unknown;
+  abortedLastRun?: unknown;
+  restartRecoveryRuns?: unknown;
+  usageFamilyKey?: unknown;
+  usageFamilySessionIds?: unknown;
+  inputTokens?: unknown;
+  outputTokens?: unknown;
+  totalTokens?: unknown;
+  totalTokensFresh?: unknown;
+  estimatedCostUsd?: unknown;
+  cacheRead?: unknown;
+  cacheWrite?: unknown;
+  contextTokens?: unknown;
+  contextBudgetStatus?: unknown;
+  compactionCount?: unknown;
+  compactionCheckpoints?: unknown;
+  memoryFlushAt?: unknown;
+  memoryFlushCompactionCount?: unknown;
+  memoryFlushContextHash?: unknown;
+  memoryFlushFailureCount?: unknown;
+  memoryFlushLastFailedAt?: unknown;
+  memoryFlushLastFailureError?: unknown;
+  cliSessionIds?: unknown;
+  cliSessionBindings?: unknown;
+  claudeCliSessionId?: unknown;
+  pendingFinalDelivery?: unknown;
+  pendingFinalDeliveryCreatedAt?: unknown;
+  pendingFinalDeliveryLastAttemptAt?: unknown;
+  pendingFinalDeliveryAttemptCount?: unknown;
+  pendingFinalDeliveryLastError?: unknown;
+  pendingFinalDeliveryText?: unknown;
+  pendingFinalDeliveryContext?: unknown;
+  pendingFinalDeliveryIntentId?: unknown;
+  restartRecoveryDeliveryContext?: unknown;
+  restartRecoveryDeliveryRunId?: unknown;
   route?: unknown;
   deliveryContext?: unknown;
+  ambientTranscriptWatermarks?: unknown;
   lastChannel?: unknown;
   lastTo?: unknown;
   lastAccountId?: unknown;
+  lastThreadId?: unknown;
   origin?: unknown;
 };
 
@@ -127,6 +168,64 @@ function needsMSTeamsLifecycleRotation(entry: MSTeamsResetCandidateEntry): boole
   // Discord-style stale markers only set updatedAt to 0. Teams lifecycle resets
   // also need to clear provider binding metadata that can survive older resets.
   return entry.updatedAt !== 0 || hasMSTeamsProviderBinding(entry);
+}
+
+function createMSTeamsLifecycleResetEntry(
+  entry: MSTeamsResetCandidateEntry,
+): MSTeamsResetCandidateEntry {
+  const next = {
+    ...entry,
+    sessionId: randomUUID(),
+    updatedAt: 0,
+  };
+
+  delete next.sessionFile;
+  delete next.sessionStartedAt;
+  delete next.systemSent;
+  delete next.abortedLastRun;
+  delete next.restartRecoveryRuns;
+  delete next.usageFamilyKey;
+  delete next.usageFamilySessionIds;
+  delete next.inputTokens;
+  delete next.outputTokens;
+  delete next.totalTokens;
+  delete next.totalTokensFresh;
+  delete next.estimatedCostUsd;
+  delete next.cacheRead;
+  delete next.cacheWrite;
+  delete next.contextTokens;
+  delete next.contextBudgetStatus;
+  delete next.compactionCount;
+  delete next.compactionCheckpoints;
+  delete next.memoryFlushAt;
+  delete next.memoryFlushCompactionCount;
+  delete next.memoryFlushContextHash;
+  delete next.memoryFlushFailureCount;
+  delete next.memoryFlushLastFailedAt;
+  delete next.memoryFlushLastFailureError;
+  delete next.cliSessionIds;
+  delete next.cliSessionBindings;
+  delete next.claudeCliSessionId;
+  delete next.pendingFinalDelivery;
+  delete next.pendingFinalDeliveryCreatedAt;
+  delete next.pendingFinalDeliveryLastAttemptAt;
+  delete next.pendingFinalDeliveryAttemptCount;
+  delete next.pendingFinalDeliveryLastError;
+  delete next.pendingFinalDeliveryText;
+  delete next.pendingFinalDeliveryContext;
+  delete next.pendingFinalDeliveryIntentId;
+  delete next.restartRecoveryDeliveryContext;
+  delete next.restartRecoveryDeliveryRunId;
+  delete next.route;
+  delete next.deliveryContext;
+  delete next.ambientTranscriptWatermarks;
+  delete next.lastChannel;
+  delete next.lastTo;
+  delete next.lastAccountId;
+  delete next.lastThreadId;
+  delete next.origin;
+
+  return next;
 }
 
 export async function rotateMSTeamsSessions(params: {
@@ -166,10 +265,7 @@ export async function rotateMSTeamsSessions(params: {
           return null;
         }
         resetEntry = true;
-        return {
-          sessionId: randomUUID(),
-          updatedAt: 0,
-        };
+        return createMSTeamsLifecycleResetEntry(current);
       },
     });
     if (resetEntry) {
