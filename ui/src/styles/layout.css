@@ -941,59 +941,6 @@ html.openclaw-native-macos .shell-nav-expand {
   margin-top: 10px;
 }
 
-.sidebar-new-session {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  width: 100%;
-  min-height: 34px;
-  box-sizing: border-box;
-  padding: 0 9px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.2;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-new-session:hover:not(:disabled) {
-  background: var(--accent-subtle);
-  color: var(--accent-hover);
-}
-
-.sidebar-new-session:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
-}
-
-.sidebar-new-session__icon,
-.sidebar-new-session__icon svg {
-  width: 15px;
-  height: 15px;
-}
-
-.sidebar-new-session__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: currentColor;
-}
-
-.sidebar-new-session__icon svg {
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 /* min-height: 0 down this chain lets the recent list shrink and scroll instead
    of pushing the sidebar footer out of view. */
 .sidebar-recent-sessions {
@@ -2356,4 +2303,3 @@ openclaw-session-menu[popover] {
   color: var(--text-strong);
   font-style: italic;
 }
-
