@@ -99,6 +99,7 @@ import {
   codexDynamicToolsFingerprint,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+import { CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON } from "./trajectory.js";
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -1648,6 +1649,197 @@ describe("runCodexAppServerAttempt", () => {
     expect(snapshotJson).toContain('"toolCallId":"cmd-orphan"');
     expect(snapshotJson).toContain('"isError":true');
     expect(snapshotJson).toContain("without a matching tool.result");
+  });
+
+  it("returns only a tool error for a declined native command without assistant text", async () => {
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
+    vi.stubEnv("OPENCLAW_TRAJECTORY_DIR", path.join(tempDir, "trajectory"));
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-declined-native-command.jsonl"),
+      path.join(tempDir, "workspace-declined-native-command"),
+    );
+
+    const declinedCommand = {
+      type: "commandExecution" as const,
+      id: "cmd-declined",
+      command: "pnpm test extensions/codex",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "declined" as const,
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    };
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { ...declinedCommand, status: "inProgress" },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: declinedCommand,
+      },
+    });
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [declinedCommand],
+          error: null,
+          startedAt: null,
+          completedAt: null,
+          durationMs: null,
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.promptError).toBeNull();
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: "codex native tool blocked",
+      mutatingAction: true,
+    });
+    expect(result.lastToolError?.actionFingerprint).toContain("pnpm test extensions/codex");
+
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempDir, "trajectory", "session-1.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            data?: {
+              status?: string;
+              terminalError?: string;
+            };
+            type?: string;
+          },
+      );
+    const modelCompleted = trajectoryEvents.find((event) => event.type === "model.completed");
+    const sessionEnded = trajectoryEvents.find((event) => event.type === "session.ended");
+    expect(modelCompleted?.data?.terminalError).toBe(CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON);
+    expect(sessionEnded?.data).toMatchObject({
+      status: "error",
+      terminalError: CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
+  it("records aborted declined native command trajectories as non-deliverable", async () => {
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
+    vi.stubEnv("OPENCLAW_TRAJECTORY_DIR", path.join(tempDir, "trajectory-aborted"));
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-aborted-declined-native-command.jsonl"),
+      path.join(tempDir, "workspace-aborted-declined-native-command"),
+    );
+
+    const declinedCommand = {
+      type: "commandExecution" as const,
+      id: "cmd-aborted-declined",
+      command: "pnpm test extensions/codex",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "declined" as const,
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    };
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { ...declinedCommand, status: "inProgress" },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: declinedCommand,
+      },
+    });
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "abort-marker",
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "<turn_aborted>The previous turn was interrupted on purpose. " +
+                "Any running unified exec processes may still be running in the background. " +
+                "If any tools/commands were aborted, they may have partially executed.</turn_aborted>",
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.aborted).toBe(true);
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: "codex native tool blocked",
+      mutatingAction: true,
+    });
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempDir, "trajectory-aborted", "session-1.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            data?: {
+              aborted?: boolean;
+              status?: string;
+              terminalError?: string;
+            };
+            type?: string;
+          },
+      );
+    const modelCompleted = trajectoryEvents.find((event) => event.type === "model.completed");
+    const sessionEnded = trajectoryEvents.find((event) => event.type === "session.ended");
+    expect(modelCompleted?.data).toMatchObject({
+      aborted: true,
+      terminalError: CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+    expect(sessionEnded?.data).toMatchObject({
+      status: "error",
+      terminalError: CODEX_NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
   });
 
   it("keeps forced message dynamic tool when toolsAllow omits it", () => {

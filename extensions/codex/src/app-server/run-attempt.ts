@@ -266,6 +266,7 @@ import {
   normalizeCodexTrajectoryError,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
+  resolveCodexTrajectoryTerminal,
 } from "./trajectory.js";
 import {
   buildCodexUserPromptMessage,
@@ -3732,6 +3733,13 @@ export async function runCodexAppServerAttempt(
         );
       }
     }
+    const codexTrajectoryTerminal = resolveCodexTrajectoryTerminal({
+      result,
+      aborted: finalAborted,
+      externalAbort: explicitCancellationObserved,
+      timedOut: effectiveTimedOut,
+      promptError: finalPromptError,
+    });
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
       result,
@@ -3739,18 +3747,18 @@ export async function runCodexAppServerAttempt(
       turnId: activeTurnId,
       timedOut: effectiveTimedOut,
       yieldDetected,
+      aborted: finalAborted,
+      externalAbort: explicitCancellationObserved,
+      promptError: finalPromptError,
     });
     trajectoryRecorder?.recordEvent("session.ended", {
-      status: finalPromptError
-        ? "error"
-        : finalAborted || effectiveTimedOut
-          ? "interrupted"
-          : "success",
+      status: codexTrajectoryTerminal.status,
       threadId: thread.threadId,
       turnId: activeTurnId,
       timedOut: effectiveTimedOut,
       yieldDetected,
       promptError: normalizeCodexTrajectoryError(finalPromptError),
+      terminalError: codexTrajectoryTerminal.terminalError,
     });
     markTrajectoryEndRecorded();
     const terminalAssistantText = collectTerminalAssistantText(result);

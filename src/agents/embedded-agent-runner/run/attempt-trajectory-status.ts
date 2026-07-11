@@ -122,7 +122,6 @@ export function resolveAttemptTrajectoryTerminal(
     params.heartbeatToolResponse !== undefined ||
     (params.clientToolCalls?.length ?? 0) > 0 ||
     params.yieldDetected === true ||
-    params.lastToolError !== undefined ||
     hasAsyncStartedToolActivity(params.toolMetas);
 
   if (params.lastAssistantStopReason === "toolUse" && !hasExplicitTerminalDelivery) {

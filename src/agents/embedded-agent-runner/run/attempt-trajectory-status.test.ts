@@ -55,6 +55,20 @@ describe("attempt trajectory status", () => {
       status: "error",
       terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
     });
+
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          lastToolError: {
+            toolName: "bash",
+            error: "codex native tool blocked",
+          },
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
   });
 
   it("does not treat streamed partial payloads as completed length-limited output", () => {
@@ -146,6 +160,39 @@ describe("attempt trajectory status", () => {
       status: "error",
       terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
     });
+  });
+
+  it("does not treat a tool error alone as user-visible terminal progress", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          lastToolError: {
+            toolName: "bash",
+            error: "codex native tool blocked",
+          },
+          lastAssistantStopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
+  it("keeps committed delivery as progress when a tool error is also present", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          didSendViaMessagingTool: true,
+          messagingToolSentTexts: ["Delivered through the message tool."],
+          lastToolError: {
+            toolName: "message",
+            error: "delivery failed for a second target",
+          },
+          lastAssistantStopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({ status: "success" });
   });
 
   it("keeps synthesized terminal payloads as success", () => {
