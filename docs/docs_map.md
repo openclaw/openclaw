@@ -8767,6 +8767,39 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Acceptance Tests
   - H2: Open Questions
 
+## specs/durable-core-beta3-architecture.md
+
+- Route: /specs/durable-core-beta3-architecture
+- Headings:
+  - H1: Durable Core Beta 3 Architecture
+  - H2: What Problem This Solves
+  - H2: Stack Position
+  - H2: Durable Core Boundary
+  - H2: Beta 3 User Promise
+  - H2: Core Invariants
+  - H2: Durable Wake And Attention Obligations
+  - H2: Non Goals
+  - H2: PR Body Requirements
+  - H2: Related
+
+## specs/durable-core-beta3-test-plan.md
+
+- Route: /specs/durable-core-beta3-test-plan
+- Headings:
+  - H1: Durable Core Beta 3 Test Plan
+  - H2: Scope
+  - H2: Exact Head Rules
+  - H2: PR1 Gate
+  - H2: Cumulative Proof Matrix
+  - H2: Required Scenarios
+  - H3: Disabled Paths Never Mutate
+  - H3: Runtime Opt-In Without Worker Mutation
+  - H3: Wake And Owner Attention
+  - H3: Restart And Side-Effect Uncertainty
+  - H3: Privacy, Retention, And Compaction
+  - H2: Live Proof Policy
+  - H2: Related
+
 ## start/bootstrapping.md
 
 - Route: /start/bootstrapping
