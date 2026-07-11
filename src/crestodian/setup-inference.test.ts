@@ -4373,7 +4373,7 @@ describe("activateSetupInference Codex configuration", () => {
     // The Codex probe loads staged policy, then restores the persisted denied
     // policy after the pre-commit rejection.
     expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
-    expect(transformConfig).toHaveBeenCalledOnce();
+    expect(transformConfig).not.toHaveBeenCalled();
   });
 });
 
