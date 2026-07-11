@@ -290,7 +290,7 @@ final class ShareViewController: UIViewController {
         var sharedText: String?
         var attributedContentText: String?
         var attachments: [LoadedAttachment] = []
-        var attachmentError: String?
+        var attachmentError: ShareImageProcessor.ProcessError?
         let maxImageAttachments = 3
 
         for item in items {
