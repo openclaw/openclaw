@@ -97,7 +97,9 @@ export function decodeUtf8Strict(buffer: Buffer): string | undefined {
     return undefined;
   }
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+    // ignoreBOM keeps a leading BOM in the decoded string so editor saves
+    // round-trip the original bytes instead of silently dropping it.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
   } catch {
     return undefined;
   }

@@ -725,6 +725,33 @@ describe("sessions.files RPC handlers", () => {
     });
   });
 
+  it("round-trips a UTF-8 BOM through get and set", async () => {
+    const original = "\uFEFFexport default {};\n";
+    writeWorkspaceFile(workspaceRoot, "bom.ts", original);
+
+    const preview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "bom.ts",
+      }),
+    );
+    expect(preview.file.content).toBe(original);
+    expect(preview.file.hash).toBe(hashContent(original));
+
+    const next = "\uFEFFexport default { bom: true };\n";
+    expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "bom.ts",
+        content: next,
+        expectedHash: preview.file.hash,
+      }),
+    );
+    const bytes = fs.readFileSync(path.join(workspaceRoot, "bom.ts"));
+    expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(bytes.toString("utf8")).toBe(next);
+  });
+
   it("previews binary files without issuing a CAS hash", async () => {
     const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
     fs.writeFileSync(path.join(workspaceRoot, "logo.png"), binary);

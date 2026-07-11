@@ -55,6 +55,13 @@ async function loadLanguage(name: string) {
   }
 }
 
+// Saves must round-trip the file's original bytes, so CRLF/CR files configure
+// CodeMirror's line separator instead of silently normalizing to LF on save.
+function detectLineSeparator(content: string): string | undefined {
+  const match = content.match(/\r\n|\r|\n/);
+  return match && match[0] !== "\n" ? match[0] : undefined;
+}
+
 export async function createFileEditorView(params: {
   parent: HTMLElement;
   content: string;
@@ -66,18 +73,16 @@ export async function createFileEditorView(params: {
   const language = await loadLanguage(params.name);
   let docChanged: ((content: string) => void) | null = null;
   let destroyed = false;
+  let isEditable = params.editable === true;
+  let separator = detectLineSeparator(params.content);
 
-  params.parent.replaceChildren();
-  const view = new EditorView({
-    parent: params.parent,
-    // The app shell is slotted through the tooltip provider's shadow root, so
-    // CodeMirror's default root detection lands there and mounts its base
-    // theme where slotted light-DOM content can't see it. The panel lives in
-    // the document's light DOM, so the document is the correct style root.
-    root: document,
-    state: EditorState.create({
-      doc: params.content,
+  const buildState = (content: string) =>
+    EditorState.create({
+      doc: content,
       extensions: [
+        // The lineSeparator facet is static, so separator changes require a
+        // full state rebuild (see setContent below).
+        ...(separator ? [EditorState.lineSeparator.of(separator)] : []),
         lineNumbers(),
         highlightSpecialChars(),
         history(),
@@ -95,18 +100,25 @@ export async function createFileEditorView(params: {
         ]),
         syntaxHighlighting(classHighlighter),
         ...(language ? [language] : []),
-        editable.of([
-          EditorState.readOnly.of(params.editable !== true),
-          EditorView.editable.of(params.editable === true),
-        ]),
+        editable.of([EditorState.readOnly.of(!isEditable), EditorView.editable.of(isEditable)]),
         lineDecorations,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
-            docChanged?.(update.state.doc.toString());
+            docChanged?.(update.state.sliceDoc());
           }
         }),
       ],
-    }),
+    });
+
+  params.parent.replaceChildren();
+  const view = new EditorView({
+    parent: params.parent,
+    // The app shell is slotted through the tooltip provider's shadow root, so
+    // CodeMirror's default root detection lands there and mounts its base
+    // theme where slotted light-DOM content can't see it. The panel lives in
+    // the document's light DOM, so the document is the correct style root.
+    root: document,
+    state: buildState(params.content),
   });
 
   const clampLine = (line: number) => Math.max(1, Math.min(Math.floor(line), view.state.doc.lines));
@@ -119,19 +131,30 @@ export async function createFileEditorView(params: {
       }
     },
     setContent: (content) => {
-      if (destroyed || content === view.state.doc.toString()) {
+      if (destroyed) {
+        return;
+      }
+      const nextSeparator = detectLineSeparator(content);
+      if (nextSeparator !== separator) {
+        separator = nextSeparator;
+        view.setState(buildState(content));
+        return;
+      }
+      if (content === view.state.sliceDoc()) {
         return;
       }
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
     },
-    setEditable: (isEditable) => {
+    setEditable: (nextEditable) => {
       if (destroyed) {
         return;
       }
+      // Tracked so a setContent state rebuild keeps the current edit mode.
+      isEditable = nextEditable;
       view.dispatch({
         effects: editable.reconfigure([
-          EditorState.readOnly.of(!isEditable),
-          EditorView.editable.of(isEditable),
+          EditorState.readOnly.of(!nextEditable),
+          EditorView.editable.of(nextEditable),
         ]),
       });
     },
@@ -178,7 +201,9 @@ export async function createFileEditorView(params: {
         }),
       });
     },
-    getContent: () => view.state.doc.toString(),
+    // sliceDoc serializes with the configured line separator; doc.toString()
+    // would normalize CRLF/CR files to LF and corrupt saves.
+    getContent: () => view.state.sliceDoc(),
     onDocChanged: (callback) => {
       docChanged = callback;
     },

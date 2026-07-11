@@ -88,6 +88,28 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(panel.querySelector(".cm-content")?.textContent).toContain("after");
   });
 
+  it("round-trips CRLF line endings through an edit and save", async () => {
+    const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
+    const panel = await mountFile({
+      kind: "file",
+      path: "notes.txt",
+      name: "notes.txt",
+      content: "alpha\r\nbeta",
+      edit: { hash: "hash-1", save, fetchLatest: vi.fn() },
+    });
+
+    await userEvent.click(button(panel, "Edit file"));
+    const editor = panel.querySelector<HTMLElement>(".cm-content");
+    expect(editor).not.toBeNull();
+    await userEvent.type(editor!, "x");
+    await userEvent.click(button(panel, "Save"));
+
+    await expect.poll(() => save.mock.calls.length).toBe(1);
+    const saved = save.mock.calls[0][0] as { content: string };
+    expect(saved.content).toContain("\r\n");
+    expect(saved.content).toContain("x");
+  });
+
   it("keeps edits made while a save is in flight dirty", async () => {
     let finishSave: ((outcome: { ok: true; hash: string }) => void) | undefined;
     const save = vi.fn().mockImplementation(
