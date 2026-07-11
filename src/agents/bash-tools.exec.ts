@@ -1994,6 +1994,7 @@ export function createExecTool(
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,
+          signal,
           onUpdate,
         });
         discardPreparedSandboxWorkdir = null;

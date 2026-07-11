@@ -4,6 +4,7 @@
  * Creates/reuses Docker containers and exposes backend-neutral exec and shell-command handles.
  */
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
+import { acquireSandboxActivity, type SandboxActivityLease } from "./activity.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
@@ -67,21 +68,28 @@ function createDockerSandboxBackendHandle(params: {
     capabilities: {
       browser: true,
     },
-    async buildExecSpec({ command, workdir, env, usePty }) {
+    async buildExecSpec({ command, workdir, env, usePty, signal }) {
+      const argv = [
+        "docker",
+        ...buildDockerExecArgs({
+          containerName: params.containerName,
+          command,
+          workdir: workdir ?? params.workdir,
+          env,
+          tty: usePty,
+        }),
+      ];
+      const activity = await acquireSandboxActivity(params.containerName, signal);
       return {
-        argv: [
-          "docker",
-          ...buildDockerExecArgs({
-            containerName: params.containerName,
-            command,
-            workdir: workdir ?? params.workdir,
-            env,
-            tty: usePty,
-          }),
-        ],
+        argv,
         env: process.env,
         stdinMode: usePty ? "pipe-open" : "pipe-closed",
+        finalizeToken: activity,
       };
+    },
+    finalizeExec({ token }) {
+      (token as SandboxActivityLease | undefined)?.release();
+      return Promise.resolve();
     },
     runShellCommand(command) {
       return runDockerSandboxShellCommand({
@@ -92,28 +100,33 @@ function createDockerSandboxBackendHandle(params: {
   };
 }
 
-export function runDockerSandboxShellCommand(
+export async function runDockerSandboxShellCommand(
   params: {
     containerName: string;
   } & SandboxBackendCommandParams,
 ) {
-  const dockerArgs = [
-    "exec",
-    "-i",
-    params.containerName,
-    "sh",
-    "-c",
-    params.script,
-    "openclaw-sandbox-fs",
-  ];
-  if (params.args?.length) {
-    dockerArgs.push(...params.args);
+  const activity = await acquireSandboxActivity(params.containerName, params.signal);
+  try {
+    const dockerArgs = [
+      "exec",
+      "-i",
+      params.containerName,
+      "sh",
+      "-c",
+      params.script,
+      "openclaw-sandbox-fs",
+    ];
+    if (params.args?.length) {
+      dockerArgs.push(...params.args);
+    }
+    return await execDockerRaw(dockerArgs, {
+      input: params.stdin,
+      allowFailure: params.allowFailure,
+      signal: params.signal,
+    });
+  } finally {
+    activity.release();
   }
-  return execDockerRaw(dockerArgs, {
-    input: params.stdin,
-    allowFailure: params.allowFailure,
-    signal: params.signal,
-  });
 }
 
 export const dockerSandboxBackendManager: SandboxBackendManager = {

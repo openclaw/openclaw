@@ -447,6 +447,153 @@ describe("exec foreground failures", () => {
     }
   });
 
+  it("cancels backend exec preparation before a sandbox process is spawned", async () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
+    let markBuildStarted!: () => void;
+    const buildStarted = new Promise<void>((resolve) => {
+      markBuildStarted = resolve;
+    });
+    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
+      async ({ signal }) => {
+        markBuildStarted();
+        if (!signal) {
+          throw new Error("missing exec abort signal");
+        }
+        return await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      },
+    );
+    const controller = new AbortController();
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+      sandbox: {
+        containerName: "queued-sandbox-exec-test",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+        buildExecSpec,
+      },
+    });
+
+    const execution = tool.execute(
+      "call-queued-sandbox-abort",
+      { command: "echo should-not-run" },
+      controller.signal,
+    );
+    await buildStarted;
+    controller.abort();
+
+    await expect(execution).rejects.toMatchObject({ name: "AbortError" });
+    expect(buildExecSpec).toHaveBeenCalledOnce();
+    expect(buildExecSpec.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+  });
+
+  it("finalizes a sandbox token when cancellation races with exec preparation", async () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
+    const finalizeToken = { activity: "sandbox-lease" };
+    const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
+    const controller = new AbortController();
+    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
+      async ({ command, signal }) => {
+        expect(signal).toBe(controller.signal);
+        controller.abort();
+        return {
+          argv: ["remote-shell", command],
+          env: {},
+          stdinMode: "pipe-open",
+          finalizeToken,
+        };
+      },
+    );
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+      sandbox: {
+        containerName: "racing-sandbox-exec-test",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+        buildExecSpec,
+        finalizeExec,
+      },
+    });
+
+    await expect(
+      tool.execute(
+        "call-racing-sandbox-abort",
+        { command: "echo should-not-run" },
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+    expect(finalizeExec).toHaveBeenCalledOnce();
+    expect(finalizeExec).toHaveBeenCalledWith({
+      status: "failed",
+      exitCode: null,
+      timedOut: false,
+      token: finalizeToken,
+    });
+  });
+
+  it("finalizes backend sandbox exec tokens when process waiting fails", async () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
+    const finalizeToken = { session: "remote-session" };
+    const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
+    supervisorMock.spawn.mockResolvedValueOnce({
+      runId: "call-wait-failure",
+      pid: 1234,
+      startedAtMs: Date.now(),
+      stdin: {
+        write: vi.fn(),
+        end: vi.fn(),
+        destroy: vi.fn(),
+      },
+      wait: vi.fn().mockRejectedValue(new Error("wait failed")),
+      cancel: vi.fn(),
+    });
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir,
+        containerWorkdir: "/remote/workspace",
+        buildExecSpec: async (params) => ({
+          argv: ["remote-shell", params.command],
+          env: {},
+          stdinMode: "pipe-open",
+          finalizeToken,
+        }),
+        finalizeExec,
+      },
+    });
+
+    const result = await tool.execute("call-remote-sandbox-wait-failure", {
+      command: "echo ok",
+    });
+
+    expect(result.details.status).toBe("failed");
+    expect(finalizeExec).toHaveBeenCalledOnce();
+    expect(finalizeExec).toHaveBeenCalledWith({
+      status: "failed",
+      exitCode: null,
+      timedOut: false,
+      token: finalizeToken,
+    });
+  });
+
   it("rejects unsafe commands before backend workdir validation", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(

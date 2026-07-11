@@ -3,12 +3,20 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  SANDBOX_BROWSER_REFRESH_HEADER,
+  SANDBOX_BROWSER_REFRESH_VALUE,
+} from "./bridge-auth-registry.js";
 import type { BrowserControlAuth } from "./control-auth.js";
 import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
 
 type BridgeAuth = NonNullable<
   ReturnType<typeof import("./bridge-auth-registry.js").getBridgeAuthForPort>
 >;
+
+const ssrfMocks = vi.hoisted(() => ({
+  release: vi.fn(async () => undefined),
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
@@ -26,7 +34,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
         signal: params.signal,
       }),
       finalUrl: params.url,
-      release: async () => {},
+      release: ssrfMocks.release,
     }),
   };
 });
@@ -69,9 +77,15 @@ vi.mock("./control-auth.js", () => ({
   resolveBrowserControlAuth: mocks.resolveBrowserControlAuth,
 }));
 
-vi.mock("./bridge-auth-registry.js", () => ({
-  getBridgeAuthForPort: mocks.getBridgeAuthForPort,
-}));
+vi.mock("./bridge-auth-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("./bridge-auth-registry.js")>(
+    "./bridge-auth-registry.js",
+  );
+  return {
+    ...actual,
+    getBridgeAuthForPort: mocks.getBridgeAuthForPort,
+  };
+});
 
 vi.mock("./routes/dispatcher.js", () => ({
   createBrowserRouteDispatcher: vi.fn(() => ({
@@ -151,6 +165,7 @@ describe("fetchBrowserJson loopback auth", () => {
       token: "loopback-token",
     });
     mocks.getBridgeAuthForPort.mockReset().mockReturnValue(undefined);
+    ssrfMocks.release.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -543,6 +558,229 @@ describe("fetchBrowserJson loopback auth", () => {
         omits: ["rate limit"],
       },
     );
+  });
+
+  it("retries a marked registered-bridge POST after releasing the first guard", async () => {
+    mocks.getBridgeAuthForPort.mockReturnValue({ token: "bridge-token" });
+    const blocked = new Response("refreshing", {
+      status: 503,
+      headers: {
+        [SANDBOX_BROWSER_REFRESH_HEADER]: SANDBOX_BROWSER_REFRESH_VALUE,
+        "Retry-After": "0",
+      },
+    });
+    const cancel = vi.spyOn(blocked.body!, "cancel").mockResolvedValue(undefined);
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      if (fetchMock.mock.calls.length === 1) {
+        return blocked;
+      }
+      expect(ssrfMocks.release).toHaveBeenCalledTimes(1);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/act", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "click" }),
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["POST", "POST"]);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.body)).toEqual([
+      JSON.stringify({ kind: "click" }),
+      JSON.stringify({ kind: "click" }),
+    ]);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(ssrfMocks.release).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries an ambiguous reconnect for a read only after a valid refresh marker", async () => {
+    mocks.getBridgeAuthForPort.mockReturnValue({ token: "bridge-token" });
+    const reconnect = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("socket reset after response"), { code: "UND_ERR_SOCKET" }),
+    });
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response("refreshing", {
+          status: 503,
+          headers: {
+            [SANDBOX_BROWSER_REFRESH_HEADER]: SANDBOX_BROWSER_REFRESH_VALUE,
+            "Retry-After": "0",
+          },
+        }),
+      )
+      .mockRejectedValueOnce(reconnect)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/tabs")).resolves.toEqual(
+      { ok: true },
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries a pre-connect failure for a POST after a valid refresh marker", async () => {
+    mocks.getBridgeAuthForPort.mockReturnValue({ token: "bridge-token" });
+    const refused = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    });
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response("refreshing", {
+          status: 503,
+          headers: {
+            [SANDBOX_BROWSER_REFRESH_HEADER]: SANDBOX_BROWSER_REFRESH_VALUE,
+            "Retry-After": "0",
+          },
+        }),
+      )
+      .mockRejectedValueOnce(refused)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/act", {
+        method: "POST",
+        body: JSON.stringify({ kind: "click" }),
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not replay a POST after an ambiguous reconnect failure", async () => {
+    mocks.getBridgeAuthForPort.mockReturnValue({ token: "bridge-token" });
+    const resetAfterDispatch = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("socket reset after request dispatch"), {
+        code: "UND_ERR_SOCKET",
+      }),
+    });
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response("refreshing", {
+          status: 503,
+          headers: {
+            [SANDBOX_BROWSER_REFRESH_HEADER]: SANDBOX_BROWSER_REFRESH_VALUE,
+            "Retry-After": "0",
+          },
+        }),
+      )
+      .mockRejectedValueOnce(resetAfterDispatch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ duplicated: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchBrowserJson("http://127.0.0.1:18888/act", {
+        method: "POST",
+        body: JSON.stringify({ kind: "click" }),
+      }),
+    ).rejects.toThrow("Can't reach the OpenClaw browser control service");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      label: "unmarked registered-bridge response",
+      url: "http://127.0.0.1:18888/",
+      bridgeAuth: { token: "bridge-token" },
+      headers: new Headers(),
+    },
+    {
+      label: "marked non-loopback response",
+      url: "https://example.com/",
+      bridgeAuth: undefined,
+      headers: new Headers({
+        [SANDBOX_BROWSER_REFRESH_HEADER]: SANDBOX_BROWSER_REFRESH_VALUE,
+      }),
+    },
+  ])("keeps $label terminal", async ({ url, bridgeAuth, headers }) => {
+    mocks.getBridgeAuthForPort.mockReturnValue(bridgeAuth);
+    const fetchMock = vi.fn(async () => new Response("unavailable", { status: 503, headers }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await fetchBrowserJson(url).catch((err: unknown) => err);
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      status: 503,
+      message: "unavailable",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("uses one abort budget while waiting to retry a marked response", async () => {
+    mocks.getBridgeAuthForPort.mockReturnValue({ token: "bridge-token" });
+    let notifyReleased!: () => void;
+    const firstGuardReleased = new Promise<void>((resolve) => {
+      notifyReleased = resolve;
+    });
+    ssrfMocks.release.mockImplementationOnce(async () => {
+      notifyReleased();
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("refreshing", {
+          status: 503,
+          headers: {
+            [SANDBOX_BROWSER_REFRESH_HEADER]: SANDBOX_BROWSER_REFRESH_VALUE,
+            "Retry-After": "1",
+          },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const request = fetchBrowserJson("http://127.0.0.1:18888/tabs", {
+      signal: controller.signal,
+      timeoutMs: 5_000,
+    });
+
+    await firstGuardReleased;
+    controller.abort(new DOMException("operation aborted", "AbortError"));
+    await expect(request).rejects.toThrow("Browser control request was cancelled");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(ssrfMocks.release).toHaveBeenCalledOnce();
+  });
+
+  it("keeps refresh retries inside the original timeout budget", async () => {
+    mocks.getBridgeAuthForPort.mockReturnValue({ token: "bridge-token" });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("refreshing", {
+          status: 503,
+          headers: {
+            [SANDBOX_BROWSER_REFRESH_HEADER]: SANDBOX_BROWSER_REFRESH_VALUE,
+            "Retry-After": "1",
+          },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson("http://127.0.0.1:18888/tabs", { timeoutMs: 50 }),
+      { contains: ["timed out after 50ms"], omits: ["Do NOT retry the browser tool"] },
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("surfaces 429 from dispatcher path as rate-limit error", async () => {

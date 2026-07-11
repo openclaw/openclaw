@@ -311,6 +311,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
         return exit;
       })().catch((err: unknown) => {
         if (!settled) {
+          // A rejected wait leaves exit unconfirmed; hard-stop before releasing lifecycle owners.
+          adapter.kill("SIGKILL");
           settled = true;
           clearTimers();
           active.delete(runId);

@@ -182,16 +182,15 @@ export function execDockerRaw(
   });
 }
 
-import { formatCliCommand } from "../../cli/command-format.js";
 import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
-import { defaultRuntime } from "../../runtime.js";
+import { withSandboxIdleMutation } from "./activity.js";
 import {
   computeSandboxConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
 } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
-import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import { resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 import {
@@ -204,8 +203,6 @@ import {
 } from "./workspace-mounts.js";
 
 const log = createSubsystemLogger("docker");
-
-const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
 type ExecDockerOptions = ExecDockerRawOptions;
 
@@ -595,17 +592,6 @@ async function readContainerConfigHash(containerName: string): Promise<string | 
   return await readDockerContainerLabel(containerName, "openclaw.configHash");
 }
 
-function formatSandboxRecreateHint(params: { scope: SandboxConfig["scope"]; sessionKey: string }) {
-  if (params.scope === "session") {
-    return formatCliCommand(`openclaw sandbox recreate --session ${params.sessionKey}`);
-  }
-  if (params.scope === "agent") {
-    const agentId = resolveSandboxAgentId(params.sessionKey) ?? "main";
-    return formatCliCommand(`openclaw sandbox recreate --agent ${agentId}`);
-  }
-  return formatCliCommand("openclaw sandbox recreate --all");
-}
-
 export async function ensureSandboxContainer(params: {
   sessionKey: string;
   workspaceDir: string;
@@ -636,67 +622,53 @@ export async function ensureSandboxContainer(params: {
       readOnlyWorkspaceSkillMounts,
     ),
   });
-  const now = Date.now();
-  const state = await dockerContainerState(containerName);
-  let hasContainer = state.exists;
-  let running = state.running;
-  let currentHash: string | null = null;
-  let hashMismatch = false;
-  let registryEntry:
-    | {
-        lastUsedAtMs: number;
-        configHash?: string;
-      }
-    | undefined;
-  if (hasContainer) {
-    registryEntry = (await readRegistryEntry(containerName)) ?? undefined;
-    currentHash = await readContainerConfigHash(containerName);
-    if (!currentHash) {
-      currentHash = registryEntry?.configHash ?? null;
-    }
-    hashMismatch = !currentHash || currentHash !== expectedHash;
-    if (hashMismatch) {
-      const lastUsedAtMs = registryEntry?.lastUsedAtMs;
-      const isHot =
-        running &&
-        (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS);
-      if (isHot) {
-        const hint = formatSandboxRecreateHint({ scope: params.cfg.scope, sessionKey: scopeKey });
-        defaultRuntime.log(
-          `Sandbox config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
-        );
-      } else {
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
-        hasContainer = false;
-        running = false;
-      }
-    }
-  }
-  if (!hasContainer) {
-    await createSandboxContainer({
-      name: containerName,
-      cfg: params.cfg.docker,
-      workspaceDir: params.workspaceDir,
-      workspaceAccess: params.cfg.workspaceAccess,
-      agentWorkspaceDir: params.agentWorkspaceDir,
-      skillsWorkspaceDir: params.skillsWorkspaceDir,
-      scopeKey,
+  const inspect = async () => {
+    const state = await dockerContainerState(containerName);
+    const registryHash = state.exists ? (await readRegistryEntry(containerName))?.configHash : null;
+    const labelHash = state.exists ? await readContainerConfigHash(containerName) : null;
+    return { ...state, configHash: labelHash || registryHash || null };
+  };
+  const update = async () => {
+    const now = Date.now();
+    await updateRegistry({
+      containerName,
+      backendId: "docker",
+      runtimeLabel: containerName,
+      sessionKey: scopeKey,
+      createdAtMs: now,
+      lastUsedAtMs: now,
+      image: params.cfg.docker.image,
+      configLabelKind: "Image",
       configHash: expectedHash,
-      readOnlyWorkspaceSkillMounts,
     });
-  } else if (!running) {
-    await execDocker(["start", containerName]);
+  };
+  const initial = await inspect();
+  if (initial.exists && initial.running && initial.configHash === expectedHash) {
+    await update();
+    return containerName;
   }
-  await updateRegistry({
-    containerName,
-    backendId: "docker",
-    runtimeLabel: containerName,
-    sessionKey: scopeKey,
-    createdAtMs: now,
-    lastUsedAtMs: now,
-    image: params.cfg.docker.image,
-    configLabelKind: "Image",
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+  await withSandboxIdleMutation(containerName, async () => {
+    // Another ensure may have repaired the container while active work drained.
+    const current = await inspect();
+    if (!current.exists || current.configHash !== expectedHash) {
+      if (current.exists) {
+        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+      }
+      await createSandboxContainer({
+        name: containerName,
+        cfg: params.cfg.docker,
+        workspaceDir: params.workspaceDir,
+        workspaceAccess: params.cfg.workspaceAccess,
+        agentWorkspaceDir: params.agentWorkspaceDir,
+        skillsWorkspaceDir: params.skillsWorkspaceDir,
+        scopeKey,
+        configHash: expectedHash,
+        readOnlyWorkspaceSkillMounts,
+      });
+    } else if (!current.running) {
+      await execDocker(["start", containerName]);
+    }
+    await update();
   });
   return containerName;
 }

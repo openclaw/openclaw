@@ -1,6 +1,11 @@
 // Browser tests cover bridge server.auth plugin behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  SANDBOX_BROWSER_REFRESH_HEADER,
+  SANDBOX_BROWSER_REFRESH_VALUE,
+} from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
+import { fetchBrowserJson } from "./client-fetch.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
@@ -84,6 +89,76 @@ describe("startBrowserBridgeServer auth", () => {
         resolved: buildResolvedConfig(),
       }),
     ).rejects.toThrow(/requires auth/i);
+  });
+
+  it("returns 503 while the sandbox runtime is being replaced", async () => {
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      authToken: "secret-token",
+      skipRouteRegistrationForTest: true,
+      tryAcquireActivityLease: () => null,
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+
+    const unauth = await fetch(`${bridge.baseUrl}/`);
+    expect(unauth.status).toBe(401);
+    const blocked = await fetch(`${bridge.baseUrl}/`, {
+      headers: { Authorization: "Bearer secret-token" },
+    });
+    expect(blocked.status).toBe(503);
+    expect(blocked.headers.get(SANDBOX_BROWSER_REFRESH_HEADER)).toBe(SANDBOX_BROWSER_REFRESH_VALUE);
+    expect(blocked.headers.get("retry-after")).toBe("1");
+  });
+
+  it("retries an authenticated POST only after the refresh gate rejects it", async () => {
+    const release = vi.fn();
+    let refreshing = true;
+    const tryAcquireActivityLease = vi.fn(() => {
+      if (refreshing) {
+        refreshing = false;
+        return null;
+      }
+      return { release };
+    });
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      authToken: "secret-token",
+      skipRouteRegistrationForTest: true,
+      tryAcquireActivityLease,
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+
+    await expect(
+      fetchBrowserJson<{ ok: boolean }>(`${bridge.baseUrl}/`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "probe" }),
+        timeoutMs: 2_500,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(tryAcquireActivityLease).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("releases sandbox activity after an authenticated response", async () => {
+    const release = vi.fn();
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      authToken: "secret-token",
+      skipRouteRegistrationForTest: true,
+      tryAcquireActivityLease: () => ({ release }),
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+
+    const response = await fetch(`${bridge.baseUrl}/`, {
+      headers: { Authorization: "Bearer secret-token" },
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("serves noVNC bootstrap html without leaking password in Location header", async () => {

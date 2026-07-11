@@ -59,6 +59,7 @@ import {
   readEnvInt,
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+import type { SandboxBackendExecSpec } from "./sandbox/backend-handle.types.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
@@ -609,8 +610,10 @@ export async function runExecProcess(opts: {
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
+  signal?: AbortSignal;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
+  opts.signal?.throwIfAborted();
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
@@ -737,6 +740,22 @@ export async function runExecProcess(opts: {
     });
   };
 
+  const failSandboxPreparation = async (error: unknown): Promise<never> => {
+    updatesDisabled = true;
+    markExited(session, null, null, "failed");
+    maybeNotifyOnExit(session, "failed");
+    await finalizeSandboxExec({
+      status: "failed",
+      exitCode: null,
+      timedOut: false,
+    }).catch((finalizeError: unknown) => {
+      logWarn(
+        `exec: sandbox finalize after preparation failure failed (${String(finalizeError)}).`,
+      );
+    });
+    throw error;
+  };
+
   const spawnSpec:
     | {
         mode: "child";
@@ -752,13 +771,22 @@ export async function runExecProcess(opts: {
         stdinMode: "pipe-open";
       } = await (async () => {
     if (opts.sandbox) {
-      const backendExecSpec = await opts.sandbox.buildExecSpec?.({
-        command: execCommand,
-        workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
-        env: shellRuntimeEnv,
-        usePty: opts.usePty,
-      });
-      sandboxFinalizeToken = backendExecSpec?.finalizeToken;
+      let backendExecSpec: SandboxBackendExecSpec | undefined;
+      try {
+        backendExecSpec = await opts.sandbox.buildExecSpec?.({
+          command: execCommand,
+          workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+          env: shellRuntimeEnv,
+          usePty: opts.usePty,
+          signal: opts.signal,
+        });
+        sandboxFinalizeToken = backendExecSpec?.finalizeToken;
+        // Acquisition can settle in the same turn as cancellation. Do not
+        // launch after that race; failSandboxPreparation releases its token.
+        opts.signal?.throwIfAborted();
+      } catch (error) {
+        return await failSandboxPreparation(error);
+      }
       return {
         mode: "child" as const,
         argv: backendExecSpec?.argv ?? [
@@ -971,10 +999,17 @@ export async function runExecProcess(opts: {
       });
       return outcome;
     })
-    .catch((err: unknown): ExecProcessOutcome => {
+    .catch(async (err: unknown): Promise<ExecProcessOutcome> => {
       updatesDisabled = true;
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
+      await finalizeSandboxExec({
+        status: "failed",
+        exitCode: null,
+        timedOut: false,
+      }).catch((finalizeErr: unknown) => {
+        logWarn(`exec: sandbox finalize after wait failure failed (${String(finalizeErr)}).`);
+      });
       const outcome = buildExecRuntimeErrorOutcome({
         error: err,
         aggregated: session.aggregated.trim(),

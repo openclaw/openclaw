@@ -11,6 +11,12 @@ type BridgeAuth = {
   password?: string;
 };
 
+// This marker is emitted only by the authenticated bridge middleware before
+// route dispatch, so replaying a marked request cannot duplicate route effects.
+export const SANDBOX_BROWSER_REFRESH_HEADER = "x-openclaw-sandbox-refresh";
+export const SANDBOX_BROWSER_REFRESH_VALUE = "1";
+export const SANDBOX_BROWSER_REFRESH_RETRY_AFTER_SECONDS = 1;
+
 const authByPort = new Map<number, BridgeAuth>();
 
 /** Store auth material for a loopback bridge port in the current process. */

@@ -42,6 +42,10 @@ const runtimeMocks = vi.hoisted(() => ({
   log: vi.fn(),
 }));
 
+const activityMocks = vi.hoisted(() => ({
+  onMutationQueued: undefined as (() => void) | undefined,
+}));
+
 const tmpDirs: string[] = [];
 
 function makeTempDir(): string {
@@ -132,6 +136,17 @@ async function loadFreshDockerModuleForTest() {
     updateRegistry: registryMocks.updateRegistry,
   }));
   vi.doMock("node:child_process", async () => createChildProcessMock());
+  vi.doMock("./activity.js", async () => {
+    const actual = await vi.importActual<typeof import("./activity.js")>("./activity.js");
+    return {
+      ...actual,
+      withSandboxIdleMutation<T>(runtimeId: string, mutate: () => Promise<T>) {
+        const result = actual.withSandboxIdleMutation(runtimeId, mutate);
+        activityMocks.onMutationQueued?.();
+        return result;
+      },
+    };
+  });
   ({ ensureSandboxContainer, resolveDockerEnvPolicyEpoch } = await import("./docker.js"));
 }
 
@@ -223,6 +238,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
     runtimeMocks.log.mockClear();
+    activityMocks.onMutationQueued = undefined;
     await loadFreshDockerModuleForTest();
   });
 
@@ -329,7 +345,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(createCall.args).toContain(`openclaw.configHash=${newHash}`);
   });
 
-  it("keeps a hot pre-init container running and emits the recreate hint", async () => {
+  it("waits for active work before recreating a stale pre-init container", async () => {
     const workspaceDir = makeTempDir();
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`], "rw", {});
     const oldHash = computeSandboxConfigHash({
@@ -342,6 +358,16 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       createArgsEpoch: "pre-init",
       readOnlyWorkspaceSkillMounts: [],
     });
+    const newHash = computeSandboxConfigHash({
+      docker: cfg.docker,
+      dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(cfg.docker.env),
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+      readOnlyWorkspaceSkillMounts: [],
+    });
     spawnState.labelHash = oldHash;
     registryMocks.readRegistryEntry.mockResolvedValue({
       containerName: "oc-test-shared",
@@ -352,19 +378,28 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       configHash: oldHash,
     });
 
-    await ensureSandboxContainer({
+    const { acquireSandboxActivity } = await import("./activity.js");
+    const active = await acquireSandboxActivity("oc-test-shared");
+    let notifyMutationQueued!: () => void;
+    const mutationQueued = new Promise<void>((resolve) => {
+      notifyMutationQueued = resolve;
+    });
+    activityMocks.onMutationQueued = notifyMutationQueued;
+    const ensuring = ensureSandboxContainer({
       sessionKey: "agent:main:session-1",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       cfg,
     });
 
+    await mutationQueued;
     expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(false);
     expect(spawnState.calls.some((call) => call.args[0] === "create")).toBe(false);
-    expect(runtimeMocks.log).toHaveBeenCalledWith(
-      expect.stringContaining("Recreate to apply: openclaw sandbox recreate --all"),
-    );
-    expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]?.configHash).toBe(oldHash);
+    active.release();
+    await ensuring;
+    expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(true);
+    expect(spawnState.calls.some((call) => call.args[0] === "create")).toBe(true);
+    expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]?.configHash).toBe(newHash);
   });
 
   it("recreates shared container when previously filtered explicit env becomes allowed", async () => {

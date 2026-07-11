@@ -4,6 +4,7 @@
  * Sends requests to either an absolute HTTP browser-control URL or the local
  * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -13,7 +14,12 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
+import {
+  getBridgeAuthForPort,
+  SANDBOX_BROWSER_REFRESH_HEADER,
+  SANDBOX_BROWSER_REFRESH_RETRY_AFTER_SECONDS,
+  SANDBOX_BROWSER_REFRESH_VALUE,
+} from "./bridge-auth-registry.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
@@ -133,9 +139,86 @@ const BROWSER_TOOL_MODEL_HINT =
 const BROWSER_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 // `response/body` supports 5M characters; 32 MiB covers worst-case JSON escaping while staying bounded.
 const BROWSER_SUCCESS_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
+const SANDBOX_BROWSER_RECONNECT_RETRY_MS = 50;
 
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
+}
+
+function isRegisteredLoopbackBridgeUrl(url: string): boolean {
+  if (!isLoopbackHttpUrl(url)) {
+    return false;
+  }
+  try {
+    const explicitPort = new URL(url).port;
+    const port = explicitPort ? Number(explicitPort) : 0;
+    return Number.isSafeInteger(port) && port > 0 && getBridgeAuthForPort(port) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+function resolveSandboxBrowserRefreshDelayMs(res: Response): number | undefined {
+  if (
+    res.status !== 503 ||
+    res.headers.get(SANDBOX_BROWSER_REFRESH_HEADER) !== SANDBOX_BROWSER_REFRESH_VALUE
+  ) {
+    return undefined;
+  }
+  const raw = res.headers.get("retry-after")?.trim();
+  if (raw && /^\d+(?:\.\d+)?$/.test(raw)) {
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(seconds * 1000, SANDBOX_BROWSER_REFRESH_RETRY_AFTER_SECONDS * 1000);
+    }
+  }
+  return SANDBOX_BROWSER_REFRESH_RETRY_AFTER_SECONDS * 1000;
+}
+
+type SandboxBrowserReconnectFailure = "preconnect" | "ambiguous";
+
+function classifySandboxBrowserReconnectFailure(
+  err: unknown,
+): SandboxBrowserReconnectFailure | null {
+  const error =
+    (typeof err === "object" || typeof err === "function") && err !== null
+      ? (err as { cause?: unknown; code?: unknown })
+      : undefined;
+  const cause =
+    typeof error?.cause === "object" && error.cause !== null
+      ? (error.cause as { code?: unknown })
+      : undefined;
+  const codes = [error?.code, cause?.code]
+    .filter((code): code is string => typeof code === "string")
+    .map((code) => code.toUpperCase());
+  if (codes.includes("ECONNREFUSED")) {
+    return "preconnect";
+  }
+  if (codes.some((code) => ["ECONNRESET", "EPIPE", "UND_ERR_SOCKET"].includes(code))) {
+    return "ambiguous";
+  }
+  const message = normalizeLowercaseStringOrEmpty(
+    `${normalizeErrorMessage(err)} ${cause === undefined ? "" : normalizeErrorMessage(cause)}`,
+  );
+  if (/\b(?:connection refused|econnrefused)\b/.test(message)) {
+    return "preconnect";
+  }
+  return /connection reset|socket hang up|fetch failed/.test(message) ? "ambiguous" : null;
+}
+
+function allowsAmbiguousBrowserReconnectRetry(method: string | undefined): boolean {
+  // A reset can happen after a mutation was dispatched. Only reads are safe
+  // to replay when the transport cannot prove the request stayed pre-connect.
+  const normalized = normalizeLowercaseStringOrEmpty(method) || "get";
+  return normalized === "get" || normalized === "head";
+}
+
+async function waitForSandboxBrowserRetry(ms: number, signal: AbortSignal): Promise<void> {
+  try {
+    await sleep(ms, undefined, { signal });
+  } catch {
+    throw toLintErrorObject(signal.reason, "Browser control request aborted");
+  }
 }
 
 type BrowserControlOwnership = "local-managed" | "external-browser" | "unknown";
@@ -225,6 +308,37 @@ async function discardResponseBody(res: Response): Promise<void> {
   }
 }
 
+async function parseBrowserHttpResponse<T>(url: string, res: Response): Promise<T> {
+  if (!res.ok) {
+    if (isRateLimitStatus(res.status)) {
+      // Do not reflect upstream response text into the error surface (log/agent injection risk)
+      await discardResponseBody(res);
+      throw new BrowserServiceError(
+        `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+      );
+    }
+    // Overflow cancels the stream and releases its reader lock before the guarded fetch below.
+    const body = await readResponseWithLimit(res, BROWSER_ERROR_BODY_LIMIT_BYTES).catch(
+      () => undefined,
+    );
+    const text = body ? new TextDecoder().decode(body) : "";
+    let parsed: unknown;
+    if (text) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        // Plain-text errors remain part of the existing browser-control contract.
+      }
+    }
+    throw browserServiceErrorFromPayload(parsed, text || `HTTP ${res.status}`, res.status);
+  }
+  const body = await readResponseWithLimit(res, BROWSER_SUCCESS_BODY_LIMIT_BYTES, {
+    onOverflow: ({ maxBytes }) =>
+      new BrowserServiceError(`Browser control response exceeded ${maxBytes} bytes`),
+  });
+  return JSON.parse(new TextDecoder().decode(body)) as T;
+}
+
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
   const kind = classifyBrowserFetchFailure(err);
@@ -265,6 +379,9 @@ async function fetchHttpJson<T>(
   init: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
   const timeoutMs = resolveBrowserFetchTimeoutMs(init.timeoutMs);
+  // Resolve bridge ownership before the first attempt. The registry is briefly
+  // absent while a replacement bridge rebinds its stable loopback port.
+  const registeredLoopbackBridge = isRegisteredLoopbackBridgeUrl(url);
   const ctrl = new AbortController();
   const upstreamSignal = init.signal;
   let upstreamAbortListener: (() => void) | undefined;
@@ -278,48 +395,54 @@ async function fetchHttpJson<T>(
   }
 
   const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
-  let release: (() => Promise<void>) | undefined;
+  const allowAmbiguousReconnectRetry = allowsAmbiguousBrowserReconnectRetry(init.method);
+  let refreshRetryArmed = false;
   try {
-    const guarded = await fetchWithSsrFGuard({
-      url,
-      init,
-      signal: ctrl.signal,
-      policy: { allowPrivateNetwork: true },
-      auditContext: "browser-control-client",
-    });
-    release = guarded.release;
-    const res = guarded.response;
-    if (!res.ok) {
-      if (isRateLimitStatus(res.status)) {
-        // Do not reflect upstream response text into the error surface (log/agent injection risk)
-        await discardResponseBody(res);
-        throw new BrowserServiceError(
-          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
-        );
-      }
-      // Overflow cancels the stream and releases its reader lock before the guarded fetch below.
-      const body = await readResponseWithLimit(res, BROWSER_ERROR_BODY_LIMIT_BYTES).catch(
-        () => undefined,
-      );
-      const text = body ? new TextDecoder().decode(body) : "";
-      let parsed: unknown;
-      if (text) {
+    while (true) {
+      let release: (() => Promise<void>) | undefined;
+      try {
+        let res: Response;
         try {
-          parsed = JSON.parse(text);
-        } catch {
-          // Plain-text errors remain part of the existing browser-control contract.
+          const guarded = await fetchWithSsrFGuard({
+            url,
+            init,
+            signal: ctrl.signal,
+            policy: { allowPrivateNetwork: true },
+            auditContext: "browser-control-client",
+          });
+          release = guarded.release;
+          res = guarded.response;
+        } catch (err) {
+          const reconnectFailure = classifySandboxBrowserReconnectFailure(err);
+          const reconnectRetryAllowed =
+            reconnectFailure === "preconnect" ||
+            (reconnectFailure === "ambiguous" && allowAmbiguousReconnectRetry);
+          if (!refreshRetryArmed || ctrl.signal.aborted || !reconnectRetryAllowed) {
+            throw err;
+          }
+          await waitForSandboxBrowserRetry(SANDBOX_BROWSER_RECONNECT_RETRY_MS, ctrl.signal);
+          continue;
         }
+
+        const retryDelayMs = registeredLoopbackBridge
+          ? resolveSandboxBrowserRefreshDelayMs(res)
+          : undefined;
+        if (retryDelayMs !== undefined) {
+          refreshRetryArmed = true;
+          await discardResponseBody(res);
+          // Release the SSRF guard before sleeping or opening the next connection.
+          await release();
+          release = undefined;
+          await waitForSandboxBrowserRetry(retryDelayMs, ctrl.signal);
+          continue;
+        }
+        return await parseBrowserHttpResponse<T>(url, res);
+      } finally {
+        await release?.();
       }
-      throw browserServiceErrorFromPayload(parsed, text || `HTTP ${res.status}`, res.status);
     }
-    const body = await readResponseWithLimit(res, BROWSER_SUCCESS_BODY_LIMIT_BYTES, {
-      onOverflow: ({ maxBytes }) =>
-        new BrowserServiceError(`Browser control response exceeded ${maxBytes} bytes`),
-    });
-    return JSON.parse(new TextDecoder().decode(body)) as T;
   } finally {
     clearTimeout(t);
-    await release?.();
     if (upstreamSignal && upstreamAbortListener) {
       upstreamSignal.removeEventListener("abort", upstreamAbortListener);
     }

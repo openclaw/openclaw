@@ -139,6 +139,24 @@ describe("process supervisor", () => {
     expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
   });
 
+  it("hard-stops a child before releasing state when process waiting fails", async () => {
+    const adapter = createStubChildAdapter();
+    adapter.wait = vi.fn().mockRejectedValue(new Error("wait failed"));
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s1",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+    });
+
+    await expect(run.wait()).rejects.toThrow("wait failed");
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(adapter.disposeMock).toHaveBeenCalledOnce();
+  });
+
   it("enforces no-output timeout for silent processes", async () => {
     vi.useFakeTimers();
     const adapter = createStubChildAdapter({
