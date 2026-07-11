@@ -1,17 +1,17 @@
 ---
 title: Durable Core Beta 3 Test Plan
-summary: "Maintainer-grade proof matrix for the cumulative beta 3 durable runtime stack."
+summary: "Maintainer-grade proof matrix for beta 3 durable runtime invariants."
 read_when:
-  - Planning exact-head durable runtime proof
+  - Planning durable runtime proof
   - Auditing durable runtime merge readiness
   - Converting reviewer concerns into tests
 ---
 
 # Durable Core Beta 3 Test Plan
 
-This plan turns the durable-core architecture into exact-head proof expectations
-for the cumulative beta 3 stack. PR1 adds this plan as a review anchor only; it
-does not require runtime proof because it does not change runtime behavior.
+This plan turns the durable-core architecture into proof expectations for beta 3
+durable runtime work. It is a review anchor only; it does not require runtime
+proof from docs-only changes that do not alter runtime behavior.
 
 ## Scope
 
@@ -23,35 +23,34 @@ replay, or external channel delivery.
 
 ## Root-Cause Coverage
 
-The beta 3 durable-core stack must prove the general runtime root causes are
-handled as durable facts, not as product-specific conventions. PR1 documents the
-required coverage only; later PRs own executable proof.
+Beta 3 durable-core work must prove the general runtime root causes are handled
+as durable facts, not as product-specific conventions. Architecture docs define
+the required coverage; implementation changes own executable proof.
 
-| Root cause                      | Required durable-core response                                                                                                                                    | First proof owner |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| Coordinator silence             | Accepted deferred work creates an inspectable wake, report-route, progress, timeout, or owner-decision obligation instead of relying only on transcript intent    | PR3               |
-| Restart and interruption loss   | Runtime facts distinguish complete, failed, cancelled, interrupted, stale, and decision-needed work after process exit, gateway restart, tool failure, or handoff | PR2/PR3           |
-| Stale running work              | Claims and leases have owners, expiry, stale diagnostics, and fail-closed mutation rules so lost owners cannot keep rewriting or hiding abandoned work            | PR2/PR5           |
-| Parent/child handoff gaps       | Child spawn, terminal outcome, fan-in, result-mailbox, and parent wake facts are durably linked and deduped before any parent/human completion claim              | PR3/PR5           |
-| Delivery and attention unknowns | Internal handoff and any claimed external delivery record target, attempt, acknowledgement, failure, no-handler, and unresolved states with bounded inspection    | PR3/PR5           |
-| Side-effect uncertainty         | Automatic replay is denied unless operation authority, input material, side-effect class, idempotency, dedupe/CAS or reconciliation, and retention gates all pass | PR3               |
+| Root cause                      | Required durable-core response                                                                                                                                    | Primary proof area              |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| Coordinator silence             | Accepted deferred work creates an inspectable wake, report-route, progress, timeout, or owner-decision obligation instead of relying only on transcript intent    | Wake and owner attention        |
+| Restart and interruption loss   | Runtime facts distinguish complete, failed, cancelled, interrupted, stale, and decision-needed work after process exit, gateway restart, tool failure, or handoff | Storage and recovery            |
+| Stale running work              | Claims and leases have owners, expiry, stale diagnostics, and fail-closed mutation rules so lost owners cannot keep rewriting or hiding abandoned work            | Leases and worker recovery      |
+| Parent/child handoff gaps       | Child spawn, terminal outcome, fan-in, result-mailbox, and parent wake facts are durably linked and deduped before any parent/human completion claim              | Subagent and result handoff     |
+| Delivery and attention unknowns | Internal handoff and any claimed external delivery record target, attempt, acknowledgement, failure, no-handler, and unresolved states with bounded inspection    | Delivery and inspection         |
+| Side-effect uncertainty         | Automatic replay is denied unless operation authority, input material, side-effect class, idempotency, dedupe/CAS or reconciliation, and retention gates all pass | Replay authority and safeguards |
 
-Reviewers should treat these as cross-stack acceptance criteria. A later PR may
+Reviewers should treat these as durable-runtime acceptance criteria. A change may
 implement a narrow slice, but it should still name which root-cause rows it
 covers and which rows remain deferred.
 
-## Exact Head Rules
+## Proof Hygiene
 
-- Run proof on the PR head being reviewed, not only on a downstream cumulative
-  branch.
-- Record branch, base SHA, parent PR head when applicable, current head SHA,
-  diff range, and command output or log path.
-- Re-run affected proof after every rebase or descendant fix.
-- PR5 proof cannot substitute for PR2, PR3, or PR4 proof.
-- Docs map and generated artifacts must be regenerated in the beta 3 tree with
-  repo scripts, not copied from another worktree.
+- Run proof on the change being reviewed, with the same configuration that
+  enables the claimed durable behavior.
+- Record the command, relevant configuration, data directory setup, and output or
+  log path.
+- Re-run affected proof after rebases or changes to touched runtime surfaces.
+- Docs map and generated artifacts must be regenerated with repo scripts, not
+  copied from another worktree.
 
-## PR1 Gate
+## Docs-Only Gate
 
 | Check         | Required proof                                                            |
 | ------------- | ------------------------------------------------------------------------- |
@@ -61,30 +60,30 @@ covers and which rows remain deferred.
 | Diff hygiene  | `git diff --check <base>..<head>`                                         |
 | Ancestry      | `git merge-base --is-ancestor <base> <head>`                              |
 
-PR1 body language must state that live proof is not applicable because the PR is
-docs-only and claims no runtime delivery behavior.
+Docs-only changes should state when live proof is not applicable because they
+claim no runtime delivery behavior.
 
-## Cumulative Proof Matrix
+## Proof Matrix
 
-| Area                          | Required proof                                                                                                                                                          | Owner PR                                |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| Disabled-path no mutation     | CLI and Gateway durable inspection reject before creating SQLite, WAL, SHM, migration, or durable tables                                                                | PR2                                     |
-| Runtime opt-in                | Durable recording and inspection are inert by default and enabled only by explicit durable runtime config                                                               | PR2                                     |
-| Worker separate gate          | Runtime-enabled startup records only allowed facts; worker recovery requires separate worker opt-in                                                                     | PR2                                     |
-| Future schema fail-closed     | Newer durable schema versions fail before DDL, ALTER, backfill, worker mutation, or projection mutation                                                                 | PR2                                     |
-| Terminal immutability         | Terminal runs, steps, and wake states reject claim, heartbeat, checkpoint, output, error, delivery, ack, retry, and facts rewrites except retention/compaction metadata | PR2 and descendants                     |
-| Identity propagation          | Chat, `agent.run`, user turns, embedded-agent yield, task completion, and status notices carry stable durable refs                                                      | PR2/PR3                                 |
-| ACP/manual-spawn preservation | ACP manual-spawn child turn task suppression remains intact; plugin-subagent precedence and CLI fallback still work                                                     | PR2/PR3                                 |
-| Pairing QR regression         | Webchat pairing QR display remains visible without persisting sensitive QR content                                                                                      | PR2/PR3 when adjacent paths are touched |
-| Wake target resolution        | Owner, parent, peer, scheduled, Task Flow, external route, missing, unauthorized, and ambiguous targets resolve or fail closed with inspectable evidence                | PR3                                     |
-| Wake queue contract           | Wake records include stable ids, target refs, reason, facts refs, dedupe key, attempt fields, ack/failure fields, and lifecycle state                                   | PR3                                     |
-| Replay authority              | Automatic replay is denied unless operation registry, input material, idempotency, side-effect class, dedupe/CAS or reconciliation, and retention gates pass            | PR3                                     |
-| CLI/Gateway inspection        | Read APIs expose runs, facts, wake queue, unresolved obligations, and uncertainty without worker mutation                                                               | PR4                                     |
-| Owner controls                | Acknowledge, supersede, owner decision, retry request, abandon request, and resume request are caller-invoked audited facts                                             | PR4                                     |
-| Worker no-handler behavior    | Empty registry and no-handler rows fail closed and do not mark unknown side effects as handled                                                                          | PR5                                     |
-| Claim/lease recovery          | Expired claimed run/step rows are inspectable and reclaim only when eligible, with SQLite row evidence                                                                  | PR5                                     |
-| Internal session handoff      | Resolved session targets move through internal delivery handoff with durable evidence and no external transport claim                                                   | PR5                                     |
-| External delivery             | Only claimed if the implementation includes external transport delivery and direct proof                                                                                | PR5 or follow-up                        |
+| Area                          | Required proof                                                                                                                                                          | Proof surface                     |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| Disabled-path no mutation     | CLI and Gateway durable inspection reject before creating SQLite, WAL, SHM, migration, or durable tables                                                                | Durable config and inspection     |
+| Runtime opt-in                | Durable recording and inspection are inert by default and enabled only by explicit durable runtime config                                                               | Runtime config                    |
+| Worker separate gate          | Runtime-enabled startup records only allowed facts; worker recovery requires separate worker opt-in                                                                     | Worker recovery                   |
+| Future schema fail-closed     | Newer durable schema versions fail before DDL, ALTER, backfill, worker mutation, or projection mutation                                                                 | Schema migration                  |
+| Terminal immutability         | Terminal runs, steps, and wake states reject claim, heartbeat, checkpoint, output, error, delivery, ack, retry, and facts rewrites except retention/compaction metadata | Storage mutation guards           |
+| Identity propagation          | Chat, `agent.run`, user turns, embedded-agent yield, task completion, and status notices carry stable durable refs                                                      | Runtime identity                  |
+| ACP/manual-spawn preservation | ACP manual-spawn child turn task suppression remains intact; plugin-subagent precedence and CLI fallback still work                                                     | Agent and subagent compatibility  |
+| Pairing QR regression         | Webchat pairing QR display remains visible without persisting sensitive QR content                                                                                      | Adjacent channel compatibility    |
+| Wake target resolution        | Owner, parent, peer, scheduled, Task Flow, external route, missing, unauthorized, and ambiguous targets resolve or fail closed with inspectable evidence                | Wake routing                      |
+| Wake queue contract           | Wake records include stable ids, target refs, reason, facts refs, dedupe key, attempt fields, ack/failure fields, and lifecycle state                                   | Wake storage                      |
+| Replay authority              | Automatic replay is denied unless operation registry, input material, idempotency, side-effect class, dedupe/CAS or reconciliation, and retention gates pass            | Replay safeguards                 |
+| CLI/Gateway inspection        | Read APIs expose runs, facts, wake queue, unresolved obligations, and uncertainty without worker mutation                                                               | Read APIs                         |
+| Owner controls                | Acknowledge, supersede, owner decision, retry request, abandon request, and resume request are caller-invoked audited facts                                             | Control APIs                      |
+| Worker no-handler behavior    | Empty registry and no-handler rows fail closed and do not mark unknown side effects as handled                                                                          | Worker recovery                   |
+| Claim/lease recovery          | Expired claimed run/step rows are inspectable and reclaim only when eligible, with SQLite row evidence                                                                  | Lease recovery                    |
+| Internal session handoff      | Resolved session targets move through internal delivery handoff with durable evidence and no external transport claim                                                   | Internal delivery                 |
+| External delivery             | Only claimed if the implementation includes external transport delivery and direct proof                                                                                | External transport implementation |
 
 ## Required Scenarios
 
@@ -137,11 +136,11 @@ docs-only and claims no runtime delivery behavior.
 
 ## Live Proof Policy
 
-Runtime PRs must include exact-head local or remote tests for their touched
-surface. Live OpenClaw E proof is required only when the PR claims runtime,
-session, wake, worker, or delivery behavior that local tests cannot prove with
-maintainer-grade confidence. PR1 intentionally has no live proof section beyond
-stating that live proof is not applicable for docs-only scope.
+Runtime changes must include local or remote tests for their touched surface.
+Live OpenClaw E proof is required only when the change claims runtime, session,
+wake, worker, or delivery behavior that local tests cannot prove with
+maintainer-grade confidence. Docs-only changes can state that live proof is not
+applicable when they claim no runtime behavior.
 
 ## Related
 

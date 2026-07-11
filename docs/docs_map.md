@@ -8775,13 +8775,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: General Durable Runtime RFC
   - H2: What Problem This Solves
   - H2: Why Beta 3 Needs This Foundation
-  - H2: Stack Position
+  - H2: Implementation Position
   - H2: Durable Core Boundary
   - H2: Beta 3 User Promise
   - H2: Core Invariants
   - H2: Durable Wake And Attention Obligations
   - H2: Non Goals
-  - H2: PR Body Requirements
   - H2: Related
 
 ## specs/durable-core-beta3-test-plan.md
@@ -8791,9 +8790,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: Durable Core Beta 3 Test Plan
   - H2: Scope
   - H2: Root-Cause Coverage
-  - H2: Exact Head Rules
-  - H2: PR1 Gate
-  - H2: Cumulative Proof Matrix
+  - H2: Proof Hygiene
+  - H2: Docs-Only Gate
+  - H2: Proof Matrix
   - H2: Required Scenarios
   - H3: Disabled Paths Never Mutate
   - H3: Runtime Opt-In Without Worker Mutation
