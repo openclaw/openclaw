@@ -145,11 +145,14 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       const action = readStringParam(params, "action", { required: true });
 
       if (action === "list") {
+        const status = readProposalStatusParam(params);
+        const query = readStringParam(params, "query");
+        const limit = readListLimitParam(params);
         const proposals = listProposalEntries({
           proposals: (await listSkillProposals({ workspaceDir: options.workspaceDir })).proposals,
-          status: readProposalStatusParam(params),
-          query: readStringParam(params, "query"),
-          limit: readListLimitParam(params),
+          status,
+          query,
+          limit,
         });
         return {
           content: [{ type: "text", text: formatProposalList(proposals) }],
