@@ -695,6 +695,9 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 }
 
 .sidebar {
+  /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
+     never shine through with a mismatched tone. */
+  --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -702,11 +705,11 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  background: var(--sidebar-bg);
 }
 
 :root[data-theme-mode="light"] .sidebar {
-  background: color-mix(in srgb, var(--panel) 98%, white 2%);
+  --sidebar-bg: color-mix(in srgb, var(--panel) 98%, white 2%);
 }
 
 .sidebar-shell {
@@ -990,6 +993,13 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   cursor: default;
 }
 
+/* The scroller's children must not flex-shrink: shrink squeezes each section
+   to its min-height while the fixed-height rows inside overflow and paint
+   over the following section. Fixed sizing makes the list scroll instead. */
+.sidebar-recent-sessions > * {
+  flex: 0 0 auto;
+}
+
 .sidebar-recent-sessions__group {
   display: flex;
   flex-direction: column;
@@ -1039,7 +1049,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--bg);
+  background: var(--sidebar-bg);
 }
 
 .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
