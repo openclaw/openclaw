@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it } from "vitest";
 import {
@@ -46,11 +47,8 @@ function inspectJson(overrides: Record<string, unknown> = {}): string {
   });
 }
 
-function contextualLeaseId(id = LEASE_ID): string {
-  const context = Buffer.from(JSON.stringify(["aws", SIBLING_BINARY]), "utf8").toString(
-    "base64url",
-  );
-  return `${id}~oc1~${context}`;
+function lifecycleLease(leaseId = LEASE_ID, profile: WorkerProfile = PROFILE) {
+  return { leaseId, profile };
 }
 
 function providerWithRunner(runCommand: CrabboxCommandRunner) {
@@ -84,7 +82,7 @@ describe("Crabbox worker provider", () => {
     const lease = await provider.provision(PROFILE, "provision:operation-123");
 
     expect(lease).toStrictEqual({
-      leaseId: expect.stringMatching(new RegExp(`^${LEASE_ID}~oc1~`)),
+      leaseId: LEASE_ID,
       ssh: {
         host: "worker.example.test",
         port: 2222,
@@ -136,7 +134,9 @@ describe("Crabbox worker provider", () => {
       "--json",
     ]);
 
-    await expect(provider.inspect(lease.leaseId)).resolves.toStrictEqual({ status: "active" });
+    await expect(provider.inspect(lifecycleLease(lease.leaseId))).resolves.toStrictEqual({
+      status: "active",
+    });
     expect(calls.at(-1)?.argv).toEqual([
       SIBLING_BINARY,
       "inspect",
@@ -157,10 +157,18 @@ describe("Crabbox worker provider", () => {
     const provider = providerWithRunner(runCommand);
 
     await expect(provider.provision(PROFILE, "provision:operation-replay")).resolves.toMatchObject({
-      leaseId: expect.stringMatching(new RegExp(`^${LEASE_ID}~oc1~`)),
+      leaseId: LEASE_ID,
     });
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toContain(expect.stringMatching(/^openclaw-[a-f0-9]{32}$/u));
+    expect(calls[0]).toEqual([
+      SIBLING_BINARY,
+      "inspect",
+      "--provider",
+      "aws",
+      "--id",
+      expect.stringMatching(/^openclaw-[a-f0-9]{32}$/u),
+      "--json",
+    ]);
   });
 
   it("accepts Crabbox's timestamp fallback lease id", async () => {
@@ -178,7 +186,7 @@ describe("Crabbox worker provider", () => {
     });
 
     await expect(provider.provision(PROFILE, "provision:fallback-id")).resolves.toMatchObject({
-      leaseId: expect.stringMatching(new RegExp(`^${FALLBACK_LEASE_ID}~oc1~`)),
+      leaseId: FALLBACK_LEASE_ID,
     });
   });
 
@@ -243,7 +251,7 @@ describe("Crabbox worker provider", () => {
       await expect(
         crabboxProvider.provision({ ...PROFILE, provider }, `provision:${provider}`),
       ).resolves.toMatchObject({
-        leaseId: expect.stringMatching(new RegExp(`^${LEASE_ID}~oc1~`)),
+        leaseId: LEASE_ID,
       });
       expect(warmed).toBe(true);
     },
@@ -268,7 +276,7 @@ describe("Crabbox worker provider", () => {
     const provider = providerWithRunner(runCommand);
 
     await expect(provider.provision(PROFILE, "provision:replace-terminal")).resolves.toMatchObject({
-      leaseId: expect.stringMatching(new RegExp(`^${LEASE_ID}~oc1~`)),
+      leaseId: LEASE_ID,
     });
     expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop", "warmup", "inspect"]);
   });
@@ -448,6 +456,41 @@ describe("Crabbox worker provider", () => {
     });
   });
 
+  it("routes lifecycle calls from the passed profile context", async () => {
+    const binary = path.resolve(path.sep, "custom", "crabbox");
+    const calls: string[][] = [];
+    const provider = createCrabboxWorkerProvider({
+      runCommand: async (argv) => {
+        calls.push(argv);
+        return argv[1] === "inspect" ? commandResult({ stdout: inspectJson() }) : commandResult();
+      },
+      openclawRoot: OPENCLAW_ROOT,
+      pathEnv: "",
+      isExecutable: () => false,
+    });
+    const lease = lifecycleLease(LEASE_ID, { ...PROFILE, binary, provider: "coder" });
+
+    await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+    await expect(provider.destroy(lease)).resolves.toBeUndefined();
+    expect(calls).toEqual([
+      [binary, "inspect", "--provider", "coder", "--id", LEASE_ID, "--json"],
+      [binary, "stop", "--provider", "coder", "--id", LEASE_ID],
+    ]);
+  });
+
+  it("rejects non-Crabbox lifecycle lease ids before invoking the CLI", async () => {
+    let invoked = false;
+    const provider = providerWithRunner(async () => {
+      invoked = true;
+      return commandResult();
+    });
+    const lease = lifecycleLease("lease:not-crabbox");
+
+    await expect(provider.inspect(lease)).rejects.toThrow("lease id is invalid");
+    await expect(provider.destroy(lease)).rejects.toThrow("lease id is invalid");
+    expect(invoked).toBe(false);
+  });
+
   it.each([
     { state: "running", ready: true, expected: "active" },
     { state: "provisioning", ready: false, expected: "active" },
@@ -462,7 +505,7 @@ describe("Crabbox worker provider", () => {
       commandResult({ stdout: inspectJson({ state, ready }) }),
     );
 
-    await expect(provider.inspect(contextualLeaseId())).resolves.toStrictEqual({
+    await expect(provider.inspect(lifecycleLease())).resolves.toStrictEqual({
       status: expected,
     });
   });
@@ -490,14 +533,14 @@ describe("Crabbox worker provider", () => {
       throw new Error("spawn ENOENT");
     });
 
-    const leaseId = contextualLeaseId();
-    await expect(missing.inspect(leaseId)).resolves.toStrictEqual({ status: "unknown" });
-    await expect(noLongerExists.inspect(leaseId)).resolves.toStrictEqual({ status: "unknown" });
-    await expect(authFailure.inspect(leaseId)).rejects.toThrow("inspect failed with exit code 4");
-    await expect(ambiguousVisibility.inspect(leaseId)).rejects.toThrow(
+    const lease = lifecycleLease();
+    await expect(missing.inspect(lease)).resolves.toStrictEqual({ status: "unknown" });
+    await expect(noLongerExists.inspect(lease)).resolves.toStrictEqual({ status: "unknown" });
+    await expect(authFailure.inspect(lease)).rejects.toThrow("inspect failed with exit code 4");
+    await expect(ambiguousVisibility.inspect(lease)).rejects.toThrow(
       "inspect failed with exit code 4",
     );
-    await expect(cliMissing.inspect(leaseId)).rejects.toThrow("inspect could not start");
+    await expect(cliMissing.inspect(lease)).rejects.toThrow("inspect could not start");
   });
 
   it("rejects malformed inspect endpoint fields as transient CLI errors", async () => {
@@ -505,7 +548,7 @@ describe("Crabbox worker provider", () => {
       commandResult({ stdout: inspectJson({ sshPort: true }) }),
     );
 
-    await expect(provider.inspect(contextualLeaseId())).rejects.toThrow("invalid sshPort");
+    await expect(provider.inspect(lifecycleLease())).rejects.toThrow("invalid sshPort");
   });
 
   it("encodes a Windows SSH key path as a canonical file SecretRef id", async () => {
@@ -530,7 +573,7 @@ describe("Crabbox worker provider", () => {
       commandResult({ code: 2, stderr: `${secret} ${"failure ".repeat(200)}` }),
     );
 
-    const error = await provider.inspect(contextualLeaseId()).catch((cause: unknown) => cause);
+    const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     const message = error instanceof Error ? error.message : "";
     expect(message).not.toContain(secret);
@@ -547,9 +590,9 @@ describe("Crabbox worker provider", () => {
     };
     const provider = providerWithRunner(runCommand);
 
-    const leaseId = contextualLeaseId();
-    await expect(provider.destroy(leaseId)).resolves.toBeUndefined();
-    await expect(provider.destroy(leaseId)).resolves.toBeUndefined();
+    const lease = lifecycleLease();
+    await expect(provider.destroy(lease)).resolves.toBeUndefined();
+    await expect(provider.destroy(lease)).resolves.toBeUndefined();
     expect(calls).toEqual([
       [SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID],
       [SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID],

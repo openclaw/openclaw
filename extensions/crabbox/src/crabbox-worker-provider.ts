@@ -18,8 +18,6 @@ const LIFECYCLE_TIMEOUT_MS = 60_000;
 const PROVISION_TIMEOUT_MS = 290_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_ERROR_DETAIL_CHARS = 512;
-const LEASE_CONTEXT_MARKER = "~oc1~";
-const MAX_LEASE_CONTEXT_CHARS = 8 * 1024;
 // Only states that prove the resource is gone or stopped map to `destroyed`. Crabbox also
 // treats `deleting` and `failed` as unable to become ready, but those can retain resources
 // that still need an explicit stop during teardown.
@@ -86,7 +84,7 @@ type ParsedInspect = {
 type LeaseCommandContext = {
   binary: string;
   id: string;
-  provider?: string;
+  provider: string;
 };
 
 type InspectCommandResult = { status: "found"; inspect: ParsedInspect } | { status: "unknown" };
@@ -250,44 +248,6 @@ function operationSlug(operationId: string): string {
   return `openclaw-${createHash("sha256").update(operationId).digest("hex").slice(0, 32)}`;
 }
 
-function encodeLeaseId(
-  context: Required<Pick<LeaseCommandContext, "binary" | "id" | "provider">>,
-): string {
-  // Inspect and destroy can run after the profile is removed or the gateway restarts.
-  // Persist the provider and resolved binary here or the exact Crabbox lease cannot be routed.
-  const encoded = Buffer.from(JSON.stringify([context.provider, context.binary]), "utf8").toString(
-    "base64url",
-  );
-  return `${context.id}${LEASE_CONTEXT_MARKER}${encoded}`;
-}
-
-function decodeLeaseId(leaseId: string): LeaseCommandContext | undefined {
-  const markerIndex = leaseId.indexOf(LEASE_CONTEXT_MARKER);
-  if (markerIndex === -1) {
-    return undefined;
-  }
-
-  const id = leaseId.slice(0, markerIndex);
-  const encoded = leaseId.slice(markerIndex + LEASE_CONTEXT_MARKER.length);
-  if (!LEASE_ID_PATTERN.test(id) || !encoded || encoded.length > MAX_LEASE_CONTEXT_CHARS) {
-    throw new Error("Crabbox lease id contains invalid replay context");
-  }
-  try {
-    const decoded: unknown = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
-    if (!Array.isArray(decoded) || decoded.length !== 2) {
-      throw new Error("invalid context shape");
-    }
-    const provider = nonEmptyString(decoded[0]);
-    const binary = nonEmptyString(decoded[1]);
-    if (!provider || !binary) {
-      throw new Error("invalid context values");
-    }
-    return { binary, id, provider };
-  } catch {
-    throw new Error("Crabbox lease id contains invalid replay context");
-  }
-}
-
 function commandDetail(result: SpawnResult): string {
   const raw = (result.stderr || result.stdout).trim();
   if (!raw) {
@@ -330,7 +290,7 @@ function provisionProfileError(result: SpawnResult): WorkerProviderError | undef
   if (/\bprovider=\S+\s+requires module source; use crabbox run --script\b/u.test(output)) {
     return new WorkerProviderError("Crabbox profile provider requires a run script");
   }
-  if (/\b--class is not supported for provider=\S+/u.test(output)) {
+  if (/--class is not supported for provider=\S+/u.test(output)) {
     return new WorkerProviderError("Crabbox profile class is not supported by its provider");
   }
   return undefined;
@@ -460,10 +420,9 @@ async function inspectWithContext(params: {
   runCommand: CrabboxCommandRunner;
   timeoutMs?: number;
 }): Promise<InspectCommandResult> {
-  const providerArgs = params.context.provider ? ["--provider", params.context.provider] : [];
   const result = await runCrabboxCommand({
     action: "inspect",
-    args: ["inspect", ...providerArgs, "--id", params.id, "--json"],
+    args: ["inspect", "--provider", params.context.provider, "--id", params.id, "--json"],
     binary: params.context.binary,
     runCommand: params.runCommand,
     timeoutMs: params.timeoutMs ?? LIFECYCLE_TIMEOUT_MS,
@@ -500,10 +459,9 @@ async function stopWithContext(params: {
   runCommand: CrabboxCommandRunner;
   timeoutMs?: number;
 }): Promise<void> {
-  const providerArgs = params.context.provider ? ["--provider", params.context.provider] : [];
   const result = await runCrabboxCommand({
     action: "stop",
-    args: ["stop", ...providerArgs, "--id", params.context.id],
+    args: ["stop", "--provider", params.context.provider, "--id", params.context.id],
     binary: params.context.binary,
     runCommand: params.runCommand,
     timeoutMs: params.timeoutMs ?? LIFECYCLE_TIMEOUT_MS,
@@ -545,12 +503,7 @@ function toSecretRefId(filePath: string): string {
   return `/${filePath.replace(/~/gu, "~0").replace(/\//gu, "~1")}`;
 }
 
-function leaseFromInspect(params: {
-  binary: string;
-  inspect: ParsedInspect;
-  provider: string;
-}): WorkerLease {
-  const { inspect } = params;
+function leaseFromInspect(inspect: ParsedInspect): WorkerLease {
   if (isTerminalState(inspect.state)) {
     throw new Error("Crabbox operation lease is no longer active");
   }
@@ -564,7 +517,7 @@ function leaseFromInspect(params: {
   }
 
   return {
-    leaseId: encodeLeaseId({ binary: params.binary, id: inspect.id, provider: params.provider }),
+    leaseId: inspect.id,
     ssh: {
       host: inspect.host,
       port: inspect.sshPort,
@@ -591,7 +544,7 @@ async function leaseFromProvisionInspect(params: {
   runCommand: CrabboxCommandRunner;
 }): Promise<WorkerLease> {
   try {
-    return leaseFromInspect(params);
+    return leaseFromInspect(params.inspect);
   } catch (error) {
     if (!(error instanceof WorkerProviderError)) {
       throw error;
@@ -633,6 +586,19 @@ export function createCrabboxWorkerProvider(
       platform: dependencies.platform,
     });
     return defaultBinary;
+  };
+  const resolveLeaseContext = (
+    lease: Parameters<WorkerProvider["inspect"]>[0],
+  ): LeaseCommandContext => {
+    const parsed = parseProfile(lease.profile);
+    if (!LEASE_ID_PATTERN.test(lease.leaseId)) {
+      throw new Error("Crabbox lease id is invalid");
+    }
+    return {
+      binary: resolveBinary(parsed.binary),
+      id: lease.leaseId,
+      provider: parsed.provider,
+    };
   };
 
   return {
@@ -741,11 +707,8 @@ export function createCrabboxWorkerProvider(
       }
       return await leaseFromProvisionInspect(inspectedParams);
     },
-    async inspect(leaseId: string): Promise<WorkerLeaseStatus> {
-      const context = decodeLeaseId(leaseId);
-      if (!context) {
-        return { status: "unknown" };
-      }
+    async inspect(lease): Promise<WorkerLeaseStatus> {
+      const context = resolveLeaseContext(lease);
       const inspected = await inspectWithContext({
         context,
         expectedLeaseId: context.id,
@@ -757,11 +720,8 @@ export function createCrabboxWorkerProvider(
       }
       return statusFromInspect(inspected.inspect);
     },
-    async destroy(leaseId: string): Promise<void> {
-      const context = decodeLeaseId(leaseId);
-      if (!context) {
-        return;
-      }
+    async destroy(lease): Promise<void> {
+      const context = resolveLeaseContext(lease);
       await stopWithContext({ context, runCommand });
     },
   };

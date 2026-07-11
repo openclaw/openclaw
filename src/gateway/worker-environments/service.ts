@@ -133,6 +133,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       "Worker provider operation",
     );
 
+  // Durable profile settings keep lifecycle routing stable across config edits and restarts.
+  const lifecycleLease = (record: WorkerEnvironmentRecord, leaseId: string) => ({
+    leaseId,
+    profile: requireWorkerProfile(record.profileSnapshot.settings),
+  });
+
   const providerFor = (providerId: string): WorkerProvider => {
     const provider = options.resolveProvider(providerId);
     if (provider) {
@@ -192,7 +198,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const leaseId = r.leaseId;
     const destroying = beginDestroy(r);
     try {
-      await callProvider(() => provider.destroy(leaseId));
+      await callProvider(() => provider.destroy(lifecycleLease(r, leaseId)));
     } catch (error) {
       saveError(destroying, error);
       throw serviceError("provider_failure", "Worker provider operation failed");
@@ -219,7 +225,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       return;
     }
-    const status = await callProvider(() => provider.inspect(leaseId))
+    const status = await callProvider(() => provider.inspect(lifecycleLease(record, leaseId)))
       .then(inspectionStatus)
       .catch((error: unknown) => {
         saveError(record, error);
