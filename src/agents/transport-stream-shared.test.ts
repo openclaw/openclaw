@@ -6,11 +6,53 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  parseTransportRetryAfterSeconds,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
 describe("transport stream shared helpers", () => {
+  it("propagates httpStatus and retryAfterSeconds from an augmented transport error", () => {
+    const output: {
+      stopReason: string;
+      errorMessage?: string;
+      httpStatus?: number;
+      retryAfterSeconds?: number;
+    } = { stopReason: "stop" };
+    const error = Object.assign(new Error("rate limited"), {
+      status: 429,
+      retryAfterSeconds: 30,
+    });
+
+    assignTransportErrorDetails(output as never, error);
+
+    expect(output.stopReason).toBe("error");
+    expect(output.httpStatus).toBe(429);
+    expect(output.retryAfterSeconds).toBe(30);
+  });
+
+  it("omits status/retry-after fields when the error carries none", () => {
+    const output: { stopReason: string; httpStatus?: number; retryAfterSeconds?: number } = {
+      stopReason: "stop",
+    };
+
+    assignTransportErrorDetails(output as never, new Error("boom"));
+
+    expect(output.httpStatus).toBeUndefined();
+    expect(output.retryAfterSeconds).toBeUndefined();
+  });
+
+  it("parses Retry-After from delta-seconds, retry-after-ms, and HTTP-date forms", () => {
+    expect(parseTransportRetryAfterSeconds(new Headers({ "retry-after": "30" }))).toBe(30);
+    expect(parseTransportRetryAfterSeconds(new Headers({ "retry-after-ms": "1500" }))).toBe(1.5);
+    expect(parseTransportRetryAfterSeconds(new Headers())).toBeUndefined();
+
+    const future = new Date(Date.now() + 45_000).toUTCString();
+    const seconds = parseTransportRetryAfterSeconds(new Headers({ "retry-after": future }));
+    expect(seconds).toBeGreaterThan(40);
+    expect(seconds).toBeLessThanOrEqual(45);
+  });
+
   it("sanitizes unpaired surrogate code units", () => {
     const high = String.fromCharCode(0xd83d);
     const low = String.fromCharCode(0xdc00);

@@ -319,6 +319,8 @@ export interface AssistantMessage {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  httpStatus?: number; // HTTP status from a transport error response (e.g. 429), when available
+  retryAfterSeconds?: number; // Server-specified cooldown (e.g. Retry-After header) for auto-retry backoff
   timestamp: number; // Unix timestamp in milliseconds
 }
 

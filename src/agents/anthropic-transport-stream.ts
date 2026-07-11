@@ -83,6 +83,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  parseTransportRetryAfterSeconds,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
@@ -809,6 +810,32 @@ async function* parseAnthropicSseBody(
   }
 }
 
+/**
+ * Build the error thrown for a non-OK Anthropic Messages response, preserving
+ * the HTTP status and any server-specified `Retry-After` cooldown so the retry
+ * path (AgentSession.prepareRetry) can honor it instead of always falling back
+ * to fixed exponential backoff. The bespoke fetch client below is not a
+ * Stainless-style SDK, so this metadata would otherwise be discarded here.
+ */
+function createAnthropicMessagesHttpError(
+  response: Response,
+  detail: string,
+): Error & { status: number; httpStatus: number; retryAfterSeconds?: number } {
+  const message = detail || `Anthropic Messages request failed with HTTP ${response.status}`;
+  const error = new Error(message) as Error & {
+    status: number;
+    httpStatus: number;
+    retryAfterSeconds?: number;
+  };
+  error.status = response.status;
+  error.httpStatus = response.status;
+  const retryAfterSeconds = parseTransportRetryAfterSeconds(response.headers);
+  if (retryAfterSeconds !== undefined) {
+    error.retryAfterSeconds = retryAfterSeconds;
+  }
+  return error;
+}
+
 function createAnthropicMessagesClient(params: {
   apiKey?: string | null;
   authToken?: string;
@@ -837,9 +864,7 @@ function createAnthropicMessagesClient(params: {
         });
         if (!response.ok) {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(
-            detail || `Anthropic Messages request failed with HTTP ${response.status}`,
-          );
+          throw createAnthropicMessagesHttpError(response, detail);
         }
         if (!response.body) {
           return;

@@ -1,3 +1,4 @@
+import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
 /**
  * Shared transport-stream normalization helpers.
  *
@@ -30,6 +31,8 @@ type TransportOutputShape = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  httpStatus?: number;
+  retryAfterSeconds?: number;
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -88,6 +91,40 @@ export function mergeTransportHeaders(
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/**
+ * Parse an HTTP `Retry-After` cooldown (in seconds) from a response's headers.
+ * Supports the non-standard `retry-after-ms`, delta-seconds, and HTTP-date
+ * forms. Returns undefined when no usable value is present.
+ */
+export function parseTransportRetryAfterSeconds(headers: Headers): number | undefined {
+  const retryAfterMs = headers.get("retry-after-ms");
+  if (retryAfterMs) {
+    const trimmed = retryAfterMs.trim();
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+      const ms = Number(trimmed);
+      if (Number.isFinite(ms) && ms >= 0) {
+        return ms / 1000;
+      }
+    }
+  }
+
+  const retryAfter = headers.get("retry-after");
+  if (!retryAfter) {
+    return undefined;
+  }
+  const trimmed = retryAfter.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+  }
+
+  const retryAtMs = parseRetryAfterHttpDateMs(trimmed);
+  if (retryAtMs === undefined) {
+    return undefined;
+  }
+  return Math.max(0, (retryAtMs - Date.now()) / 1000);
 }
 
 export function mergeTransportMetadata<T extends Record<string, unknown>>(
@@ -149,6 +186,8 @@ type TransportErrorDetails = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  httpStatus?: number;
+  retryAfterSeconds?: number;
 };
 
 function readStringLikeProperty(value: unknown, key: string): string | undefined {
@@ -164,6 +203,21 @@ function readStringLikeProperty(value: unknown, key: string): string | undefined
     return String(raw);
   }
   return undefined;
+}
+
+/** Reads a finite, non-negative number property (integers coerced from numeric strings). */
+function readFiniteNonNegativeNumberProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  const numeric =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && raw.trim()
+        ? Number(raw)
+        : Number.NaN;
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : undefined;
 }
 
 function readObjectProperty(value: unknown, key: string): Record<string, unknown> | undefined {
@@ -229,11 +283,18 @@ function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
     normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(nestedError);
+  const httpStatus =
+    readFiniteNonNegativeNumberProperty(errorObject, "httpStatus") ??
+    readFiniteNonNegativeNumberProperty(errorObject, "status") ??
+    readFiniteNonNegativeNumberProperty(errorObject, "statusCode");
+  const retryAfterSeconds = readFiniteNonNegativeNumberProperty(errorObject, "retryAfterSeconds");
 
   return {
     ...(errorCode ? { errorCode } : {}),
     ...(errorType ? { errorType } : {}),
     ...(errorBody ? { errorBody } : {}),
+    ...(httpStatus !== undefined ? { httpStatus } : {}),
+    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
   };
 }
 
