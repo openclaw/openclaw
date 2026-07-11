@@ -42,6 +42,7 @@ describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
+    ["audit.activity.list", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["tasks.get", ["operator.read"]],
     ["taskSuggestions.list", ["operator.read"]],
@@ -559,6 +560,8 @@ describe("core gateway method classification", () => {
     expect(isGatewayMethodClassified("node.pending.drain")).toBe(true);
     expect(isGatewayMethodClassified("node.pending.pull")).toBe(true);
     expect(isGatewayMethodClassified("node.pluginSurface.refresh")).toBe(true);
+    expect(isGatewayMethodClassified("node.pluginTools.update")).toBe(true);
+    expect(isGatewayMethodClassified("node.skills.update")).toBe(true);
   });
 
   it("classifies every exposed core gateway handler method", () => {

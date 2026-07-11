@@ -2,3 +2,4 @@
 export { resolveSecretRefString } from "../../secrets/resolve.js";
 export { bootstrapWorker } from "./bootstrap.js";
 export { createWorkerBundleProducer, resolveWorkerNpmInstallationArtifact } from "./bundle.js";
+export { resolveWorkerSshIdentity } from "./identity.js";

@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
   source_id TEXT NOT NULL UNIQUE,
+  schema_version INTEGER NOT NULL DEFAULT 1,
   source_sequence INTEGER NOT NULL,
   occurred_at INTEGER NOT NULL,
   kind TEXT NOT NULL,
@@ -77,12 +78,25 @@ CREATE TABLE IF NOT EXISTS audit_events (
   error_code TEXT,
   actor_type TEXT NOT NULL,
   actor_id TEXT NOT NULL,
-  agent_id TEXT NOT NULL,
+  agent_id TEXT,
   session_key TEXT,
   session_id TEXT,
-  run_id TEXT NOT NULL,
+  run_id TEXT,
   tool_call_id TEXT,
-  tool_name TEXT
+  tool_name TEXT,
+  direction TEXT,
+  channel TEXT,
+  conversation_kind TEXT,
+  message_outcome TEXT,
+  reason_code TEXT,
+  delivery_kind TEXT,
+  failure_stage TEXT,
+  duration_ms INTEGER,
+  result_count INTEGER,
+  account_ref TEXT,
+  conversation_ref TEXT,
+  message_ref TEXT,
+  target_ref TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_time
@@ -102,6 +116,66 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_kind_sequence
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_status_sequence
   ON audit_events(status, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_channel_sequence
+  ON audit_events(channel, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_direction_sequence
+  ON audit_events(direction, sequence DESC);
+
+CREATE TABLE IF NOT EXISTS audit_identity_keys (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  key_id TEXT NOT NULL,
+  key BLOB NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS session_state_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedupe_key TEXT UNIQUE,
+  session_key TEXT NOT NULL,
+  session_id TEXT,
+  agent_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT,
+  run_id TEXT,
+  occurred_at INTEGER NOT NULL,
+  summary TEXT NOT NULL,
+  payload_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_state_events_session_sequence
+  ON session_state_events(session_key, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_session_state_events_time
+  ON session_state_events(occurred_at DESC, sequence DESC);
+
+CREATE TABLE IF NOT EXISTS session_state_heads (
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  last_sequence INTEGER NOT NULL,
+  pruned_max_sequence INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, agent_id)
+);
+
+-- Watcher identity is the bare session key, matching the process-local system-event
+-- queue it feeds. Producers only create rows for agent-qualified watcher keys;
+-- bare keys (session.scope="global") are ambiguous across agents and are excluded
+-- from the notice protocol until watcher identity is agent-scoped end-to-end.
+CREATE TABLE IF NOT EXISTS session_watch_cursors (
+  watcher_session_key TEXT NOT NULL,
+  target_session_key TEXT NOT NULL,
+  last_seen_sequence INTEGER NOT NULL DEFAULT 0,
+  notified_sequence INTEGER NOT NULL DEFAULT 0,
+  material_sequence INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (watcher_session_key, target_session_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_watch_cursors_target
+  ON session_watch_cursors(target_session_key);
 
 CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
   bundle_key TEXT NOT NULL PRIMARY KEY,
@@ -640,7 +714,11 @@ CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   complete INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  next_seq INTEGER NOT NULL
+  next_seq INTEGER NOT NULL,
+  -- Running estimate of this session's ledger footprint (row overhead plus
+  -- all event rows), maintained at insert/trim so budget checks never scan
+  -- acp_replay_events (#100622).
+  estimated_bytes INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_acp_replay_sessions_key_updated
@@ -656,6 +734,7 @@ CREATE TABLE IF NOT EXISTS acp_replay_events (
   session_key TEXT NOT NULL,
   run_id TEXT,
   update_json TEXT NOT NULL,
+  estimated_bytes INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES acp_replay_sessions(session_id) ON DELETE CASCADE
 );
@@ -1367,6 +1446,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   bootstrap_bundle_hash TEXT,
   bootstrap_openclaw_version TEXT,
   bootstrap_protocol_features_json TEXT,
+  owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0),
   teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed')),
   attached_session_ids_json TEXT NOT NULL DEFAULT '[]',
   created_at_ms INTEGER NOT NULL,
@@ -1379,4 +1459,28 @@ CREATE TABLE IF NOT EXISTS worker_environments (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
-  WHERE lease_id IS NOT NULL;\n`;
+  WHERE lease_id IS NOT NULL;
+
+-- One active, opaque admission credential per worker environment. Plaintext
+-- may be retried until delivery acknowledgement but never enters durable state.
+CREATE TABLE IF NOT EXISTS worker_environment_credentials (
+  environment_id TEXT NOT NULL PRIMARY KEY,
+  credential_hash TEXT NOT NULL UNIQUE,
+  bundle_hash TEXT NOT NULL,
+  session_id TEXT,
+  rpc_set_version INTEGER NOT NULL CHECK (rpc_set_version >= 1),
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 0),
+  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= 0),
+  delivered_at_ms INTEGER CHECK (delivered_at_ms >= 0),
+  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS fleet_cells (
+  tenant_id TEXT NOT NULL PRIMARY KEY,
+  created_at_ms INTEGER NOT NULL,
+  image TEXT NOT NULL,
+  runtime TEXT NOT NULL,
+  host_port INTEGER NOT NULL,
+  container_name TEXT NOT NULL,
+  data_dir TEXT NOT NULL
+);\n`;

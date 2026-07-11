@@ -106,19 +106,15 @@ html.openclaw-native-macos .shell-nav-expand {
 }
 
 /* Newer Mac apps host a native sidebar toggle in the titlebar next to
-   back/forward and add openclaw-native-nav; visually retire the floating
-   duplicate but keep it focusable: collapse focus restoration targets it
-   (app-host.ts) and keyboard/screen-reader users still need an in-page
-   expand control, so it reveals itself on keyboard focus like a skip link.
-   Older apps only add openclaw-native-macos and keep it visible. */
-html.openclaw-native-nav .shell-nav-expand {
-  opacity: 0;
-  pointer-events: none;
-}
-
-html.openclaw-native-nav .shell-nav-expand:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
+   back/forward and add openclaw-native-nav; the in-page toggles (desktop
+   collapse/expand plus the drawer hamburger below 1100px) would duplicate
+   it, so they disappear entirely (⌘B and the accessible titlebar button
+   cover keyboard/screen-reader use). Older apps only add
+   openclaw-native-macos and keep the web controls visible. */
+html.openclaw-native-nav .shell-nav-expand,
+html.openclaw-native-nav .sidebar-brand__collapse,
+html.openclaw-native-nav .topbar .topbar-nav-toggle {
+  display: none;
 }
 
 .shell--onboarding {
@@ -194,7 +190,10 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 
 .settings-sidebar__header {
   flex-shrink: 0;
-  padding: 14px 12px 6px;
+  /* 8px top pad centers the 32px back button on the shared 24px chrome
+     centerline, mirroring .sidebar-shell; macOS overrides with titlebar
+     clearance. */
+  padding: 8px 12px 6px;
 }
 
 .settings-sidebar__back {
@@ -717,7 +716,10 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  padding: 14px 10px 12px;
+  /* 9px top pad centers the brand row's 30px icons on the app's shared
+     24px chrome centerline (pane-header actions, floating toggles). The
+     macOS app overrides this with its 50px titlebar clearance. */
+  padding: 9px 10px 12px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -741,11 +743,29 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   flex: 1 1 auto;
 }
 
+/* Positioning box for the brand mark; the lobster pet's logo stand-in
+   (lobster-pet.css) overlays the img here during a logo visit. */
+.sidebar-brand__logo-slot {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
 .sidebar-brand__logo {
+  display: block;
   width: 24px;
   height: 24px;
   border-radius: var(--radius-md);
-  flex: 0 0 auto;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+
+/* The crab took over: the static mark steps aside until the visit ends. */
+.sidebar-brand__logo--vacated {
+  opacity: 0;
+  transform: scale(0.55);
 }
 
 .sidebar-brand__title {
@@ -817,6 +837,9 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   flex: 1;
   display: flex;
   flex-direction: column;
+  /* Children manage their own scrolling; clip so an overgrown section can
+     never paint over the sidebar footer. */
+  overflow: hidden;
 }
 
 .sidebar-shell__footer {
@@ -987,10 +1010,46 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   margin: 0 -8px;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
   scrollbar-width: thin;
   /* Sessions are app chrome, not hyperlinks: the whole region uses the
      default arrow cursor; the pointer hand is reserved for real links. */
   cursor: default;
+}
+
+.sidebar-recent-sessions::-webkit-scrollbar,
+.sidebar-recent-sessions::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-recent-sessions--scroll-top {
+  --sidebar-sessions-mask: linear-gradient(
+    to bottom,
+    black 0,
+    black calc(100% - 23px),
+    transparent 100%
+  );
+}
+
+.sidebar-recent-sessions--scroll-middle {
+  --sidebar-sessions-mask: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 23px,
+    black calc(100% - 23px),
+    transparent 100%
+  );
+}
+
+.sidebar-recent-sessions--scroll-bottom {
+  --sidebar-sessions-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
+}
+
+.sidebar-recent-sessions--scroll-top,
+.sidebar-recent-sessions--scroll-middle,
+.sidebar-recent-sessions--scroll-bottom {
+  -webkit-mask-image: var(--sidebar-sessions-mask);
+  mask-image: var(--sidebar-sessions-mask);
 }
 
 /* The scroller's children must not flex-shrink: shrink squeezes each section
@@ -1084,11 +1143,13 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 }
 
 .sidebar-session-group-count {
+  width: 26px;
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
+  text-align: center;
 }
 
 .sidebar-session-group-drag-handle {
@@ -1225,13 +1286,11 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   min-width: 0;
   min-height: 34px;
   padding-right: 4px;
-  border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: default;
   transition:
     background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
 
@@ -1240,17 +1299,20 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   color: var(--text);
 }
 
-.sidebar-recent-session--active {
-  background: color-mix(in srgb, var(--accent-subtle) 68%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+/* Selection is a filled neutral pill (hover fill, one step stronger), not an
+   accent border: 1px accent outlines read as focus/error chrome on the
+   red-leaning themes. Derive from --text so it holds in light + dark.
+   Doubled class outranks .sidebar-recent-session:hover so the selection fill
+   does not degrade to the weaker hover fill while the row is under pointer. */
+.sidebar-recent-session.sidebar-recent-session--active {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
   color: var(--text-strong);
 }
 
-/* Multi-select highlight: stronger border than --active so a selection stays
-   readable when it includes the active row. */
-.sidebar-recent-session--selected {
-  background: color-mix(in srgb, var(--accent-subtle) 52%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+/* Multi-select is an accent wash so it stays distinguishable by hue from the
+   neutral --active fill when a selection includes the active row. */
+.sidebar-recent-session.sidebar-recent-session--selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--text-strong);
 }
 
@@ -1393,6 +1455,10 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-width: 0;
+  flex: 0 0 26px;
   opacity: 0.5;
   transition: transform var(--duration-fast) ease;
 }
@@ -1488,6 +1554,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 }
 
 .sidebar-customize-menu__text {
+  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1967,6 +2034,12 @@ openclaw-session-menu[popover] {
   transition:
     margin-bottom 0.16s ease,
     margin-right 0.16s ease;
+}
+
+/* Programmatic focus anchor (tabindex="-1") used when collapsing the sidebar
+   with no visible in-page expand control; skip-link-style, so no ring. */
+.content:focus {
+  outline: none;
 }
 
 .content > * + * {

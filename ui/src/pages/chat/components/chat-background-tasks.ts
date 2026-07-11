@@ -28,6 +28,9 @@ import { paneSessionAgentId } from "./chat-session-workspace.ts";
 export type BackgroundTasksProps = {
   agentId: string;
   collapsed: boolean;
+  /** Pane too narrow for a side rail: presentation moves to a bottom strip
+   * (mirrors the workspace rail's narrow mode). */
+  narrowLayout: boolean;
   connected: boolean;
   canCancel: boolean;
   loading: boolean;
@@ -261,7 +264,7 @@ export function toggleBackgroundTasks(host: BackgroundTasksHost) {
 
 export function createBackgroundTasksProps(
   host: BackgroundTasksHost,
-  opts: { onOpenSession: (sessionKey: string) => void },
+  opts: { narrowLayout?: boolean; onOpenSession: (sessionKey: string) => void },
 ): BackgroundTasksProps {
   const state = getBackgroundTasksState(host);
   if (!host.connected) {
@@ -281,6 +284,7 @@ export function createBackgroundTasksProps(
   return {
     agentId: state.agentId,
     collapsed: state.collapsed,
+    narrowLayout: opts.narrowLayout === true,
     connected: host.connected,
     // tasks.cancel needs operator.write; read-only operators get no button.
     canCancel: host.connected && hasOperatorWriteAccess(host.hello?.auth ?? null),
@@ -308,7 +312,6 @@ export function backgroundTasksActiveCount(props: BackgroundTasksProps | undefin
 
 export function renderBackgroundTasksToggle(
   backgroundTasks: BackgroundTasksProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!backgroundTasks) {
     return nothing;
@@ -319,9 +322,7 @@ export function renderBackgroundTasksToggle(
   return html`
     <openclaw-tooltip .content=${label}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-tasks-open"} chat-tasks-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
         type="button"
         aria-label=${label}
         aria-expanded=${String(expanded)}
@@ -463,7 +464,9 @@ export function renderBackgroundTasksRail(
               @click=${backgroundTasks.onToggleCollapsed}
             >
               <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                >${icons.panelRightClose}</span
+                >${backgroundTasks.narrowLayout
+                  ? icons.panelBottomClose
+                  : icons.panelRightClose}</span
               >
             </button>
           </openclaw-tooltip>

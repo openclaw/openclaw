@@ -1208,14 +1208,14 @@ class ChatPane extends OpenClawLightDomElement {
              drag-and-drop. -->
         <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
         <div class="chat-pane__actions">
-          ${renderSessionDiffToggle(sessionWorkspace, "pane-header")}
-          ${renderBackgroundTasksToggle(backgroundTasks, "pane-header")}
-          ${renderSessionWorkspaceToggle(sessionWorkspace, "pane-header")}
+          ${renderSessionDiffToggle(sessionWorkspace)}
+          ${renderBackgroundTasksToggle(backgroundTasks)}
+          ${renderSessionWorkspaceToggle(sessionWorkspace)}
           ${!this.narrow
             ? html`
                 <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
                   <button
-                    class="btn btn--ghost btn--icon"
+                    class="btn btn--ghost btn--icon chat-icon-btn"
                     type="button"
                     aria-label=${t("chat.splitView.splitDown")}
                     @click=${() => this.onSplitDown?.(this.paneId)}
@@ -1225,7 +1225,7 @@ class ChatPane extends OpenClawLightDomElement {
                 </openclaw-tooltip>
                 <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
                   <button
-                    class="btn btn--ghost btn--icon"
+                    class="btn btn--ghost btn--icon chat-icon-btn"
                     type="button"
                     aria-label=${t("chat.splitView.splitRight")}
                     @click=${() => this.onSplitRight?.(this.paneId)}
@@ -1237,7 +1237,7 @@ class ChatPane extends OpenClawLightDomElement {
             : nothing}
           <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
             <button
-              class="btn btn--ghost btn--icon"
+              class="btn btn--ghost btn--icon chat-icon-btn"
               type="button"
               aria-label=${t("chat.splitView.closePane")}
               @click=${() => this.onClosePane?.(this.paneId)}
@@ -1283,18 +1283,24 @@ class ChatPane extends OpenClawLightDomElement {
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       narrowLayout: this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
     });
-    const backgroundTasks = createBackgroundTasksProps(state, {
-      onOpenSession: (sessionKey) => {
-        this.onPaneSessionChange?.(this.paneId, sessionKey);
-      },
-    });
     const railSideDocked =
       !sessionWorkspace.collapsed &&
       !sessionWorkspace.narrowLayout &&
       sessionWorkspace.dock !== "bottom";
-    // Every open side rail (workspace and/or background tasks) narrows the
-    // room left for the chat + detail split.
-    const sideRailCount = (railSideDocked ? 1 : 0) + (backgroundTasks.collapsed ? 0 : 1);
+    // The workspace rail claims the side slot first; the tasks rail needs
+    // room for both columns before it may side-dock next to it.
+    const backgroundTasks = createBackgroundTasksProps(state, {
+      narrowLayout:
+        this.paneWidth <
+        WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH + (railSideDocked ? WORKSPACE_RAIL_MAX_WIDTH : 0),
+      onOpenSession: (sessionKey) => {
+        this.onPaneSessionChange?.(this.paneId, sessionKey);
+      },
+    });
+    const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
+    // Every side-docked rail narrows the room left for the chat + detail
+    // split; bottom strips do not.
+    const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const detailSplitWidth = this.paneWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const props: ChatProps = {
       paneId: this.paneId,
@@ -1333,7 +1339,11 @@ class ChatPane extends OpenClawLightDomElement {
       disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
-      sessionHost: { agentsList: state.agentsList, hello: state.hello },
+      sessionHost: {
+        assistantAgentId: state.assistantAgentId,
+        agentsList: state.agentsList,
+        hello: state.hello,
+      },
       providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,

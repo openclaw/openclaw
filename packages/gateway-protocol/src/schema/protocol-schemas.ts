@@ -100,6 +100,15 @@ import {
   ArtifactsListParamsSchema,
   ArtifactsListResultSchema,
 } from "./artifacts.js";
+import {
+  AuditActivityAgentRunV1Schema,
+  AuditActivityEventV1Schema,
+  AuditActivityInboundMessageV1Schema,
+  AuditActivityListParamsSchema,
+  AuditActivityListResultSchema,
+  AuditActivityOutboundMessageV1Schema,
+  AuditActivityToolActionV1Schema,
+} from "./audit-activity.js";
 import { AuditEventSchema, AuditListParamsSchema, AuditListResultSchema } from "./audit.js";
 import {
   ChannelsStartParamsSchema,
@@ -161,8 +170,12 @@ import {
   CrestodianChatResultSchema,
   CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResultSchema,
+  CrestodianSetupAuthStartParamsSchema,
+  CrestodianSetupAuthStartResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
 } from "./crestodian.js";
 import {
   CronAddParamsSchema,
@@ -204,6 +217,7 @@ import {
   EnvironmentStatusSchema,
   WorkerEnvironmentMetadataSchema,
   WorkerEnvironmentStateSchema,
+  WorkerTunnelStatusSchema,
 } from "./environments.js";
 import {
   ExecApprovalsGetParamsSchema,
@@ -279,6 +293,10 @@ import {
   NodePairListParamsSchema,
   NodePairRemoveParamsSchema,
   NodePairRejectParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import {
@@ -465,6 +483,7 @@ export const ProtocolSchemas = {
   // Environment and agent-facing control RPC payloads.
   EnvironmentStatus: EnvironmentStatusSchema,
   WorkerEnvironmentState: WorkerEnvironmentStateSchema,
+  WorkerTunnelStatus: WorkerTunnelStatusSchema,
   WorkerEnvironmentMetadata: WorkerEnvironmentMetadataSchema,
   EnvironmentSummary: EnvironmentSummarySchema,
   EnvironmentsCreateParams: EnvironmentsCreateParamsSchema,
@@ -509,6 +528,10 @@ export const ProtocolSchemas = {
   NodePairRemoveParams: NodePairRemoveParamsSchema,
   NodeRenameParams: NodeRenameParamsSchema,
   NodeListParams: NodeListParamsSchema,
+  NodePluginToolDescriptor: NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParams: NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptor: NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParams: NodeSkillsUpdateParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
   NodeInvokeParams: NodeInvokeParamsSchema,
@@ -583,6 +606,13 @@ export const ProtocolSchemas = {
   SessionsUsageParams: SessionsUsageParamsSchema,
 
   // Audit/task ledgers and config/wizard setup payloads.
+  AuditActivityAgentRunV1: AuditActivityAgentRunV1Schema,
+  AuditActivityToolActionV1: AuditActivityToolActionV1Schema,
+  AuditActivityInboundMessageV1: AuditActivityInboundMessageV1Schema,
+  AuditActivityOutboundMessageV1: AuditActivityOutboundMessageV1Schema,
+  AuditActivityEventV1: AuditActivityEventV1Schema,
+  AuditActivityListParams: AuditActivityListParamsSchema,
+  AuditActivityListResult: AuditActivityListResultSchema,
   AuditEvent: AuditEventSchema,
   AuditListParams: AuditListParamsSchema,
   AuditListResult: AuditListResultSchema,
@@ -616,8 +646,12 @@ export const ProtocolSchemas = {
   CrestodianChatResult: CrestodianChatResultSchema,
   CrestodianSetupDetectParams: CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResult: CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParams: CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResult: CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParams: CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResult: CrestodianSetupActivateResultSchema,
+  CrestodianSetupAuthStartParams: CrestodianSetupAuthStartParamsSchema,
+  CrestodianSetupAuthStartResult: CrestodianSetupAuthStartResultSchema,
   WizardStartParams: WizardStartParamsSchema,
   WizardNextParams: WizardNextParamsSchema,
   WizardCancelParams: WizardCancelParamsSchema,

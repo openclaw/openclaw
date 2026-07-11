@@ -657,7 +657,7 @@
   },
   {
     "source": "Auth: where it lives (important)",
-    "target": "凭证：存储位置（重要）"
+    "target": "身份验证：存储位置（重要）"
   },
   {
     "source": "agent",
@@ -1458,5 +1458,13 @@
   {
     "source": "Crabbox plugin",
     "target": "Crabbox 插件"
+  },
+  {
+    "source": "Path 3 SQLite session artifact family",
+    "target": "Path 3 SQLite 会话工件族"
+  },
+  {
+    "source": "Path 3 live SQLite E2E harness",
+    "target": "Path 3 live SQLite E2E harness"
   }
 ]
