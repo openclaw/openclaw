@@ -1,7 +1,6 @@
 // Plugin-provided node.invoke policy adapter.
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
@@ -50,17 +49,23 @@ function normalizeRouteThreadId(value: unknown): string | number | null {
 }
 
 function resolveNodeInvokeTurnSourceFields(
-  rawParams: unknown,
+  turnSource:
+    | {
+        channel?: unknown;
+        to?: unknown;
+        accountId?: unknown;
+        threadId?: unknown;
+      }
+    | undefined,
 ): Pick<
   PluginApprovalRequestPayload,
   "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
 > {
-  const params = asNullableRecord(rawParams);
   return {
-    turnSourceChannel: normalizeOptionalString(params?.turnSourceChannel) ?? null,
-    turnSourceTo: normalizeOptionalString(params?.turnSourceTo) ?? null,
-    turnSourceAccountId: normalizeOptionalString(params?.turnSourceAccountId) ?? null,
-    turnSourceThreadId: normalizeRouteThreadId(params?.turnSourceThreadId),
+    turnSourceChannel: normalizeOptionalString(turnSource?.channel) ?? null,
+    turnSourceTo: normalizeOptionalString(turnSource?.to) ?? null,
+    turnSourceAccountId: normalizeOptionalString(turnSource?.accountId) ?? null,
+    turnSourceThreadId: normalizeRouteThreadId(turnSource?.threadId),
   };
 }
 
@@ -83,7 +88,7 @@ function createApprovalRuntime(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
   pluginId: string;
-  rawParams: unknown;
+  turnSource: Parameters<typeof resolveNodeInvokeTurnSourceFields>[0];
 }): OpenClawPluginNodeInvokePolicyContext["approvals"] | undefined {
   const manager = params.context.pluginApprovalManager;
   if (!manager) {
@@ -92,7 +97,8 @@ function createApprovalRuntime(params: {
   return {
     async request(input) {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
-      const turnSource = resolveNodeInvokeTurnSourceFields(params.rawParams);
+      const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
+      const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
         title: truncateUtf16Safe(input.title, 80),
@@ -100,8 +106,8 @@ function createApprovalRuntime(params: {
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
-        agentId: normalizeOptionalString(input.agentId) ?? null,
-        sessionKey: normalizeOptionalString(input.sessionKey) ?? null,
+        agentId: callerIdentity?.agentId ?? normalizeOptionalString(input.agentId) ?? null,
+        sessionKey: callerIdentity?.sessionKey ?? normalizeOptionalString(input.sessionKey) ?? null,
         turnSourceChannel: turnSource.turnSourceChannel,
         turnSourceTo: turnSource.turnSourceTo,
         turnSourceAccountId: turnSource.turnSourceAccountId,
@@ -131,7 +137,18 @@ function createApprovalRuntime(params: {
         requestEvent,
         twoPhase: false,
         approvalKind: "plugin",
-        deliverRequest: () => false,
+        deliverRequest: () => {
+          const forward = params.context.forwardPluginApprovalRequest;
+          if (!forward) {
+            return false;
+          }
+          return forward(requestEvent).catch((err: unknown) => {
+            params.context.logGateway?.error?.(
+              `plugin approvals: forward node policy request failed: ${String(err)}`,
+            );
+            return false;
+          });
+        },
       });
       return { id: record.id, decision: await decisionPromise };
     },
@@ -145,11 +162,20 @@ export async function applyPluginNodeInvokePolicy(params: {
   nodeSession: NodeSession;
   command: string;
   params: unknown;
-  rawParams?: unknown;
+  turnSource?: {
+    channel?: unknown;
+    to?: unknown;
+    accountId?: unknown;
+    threadId?: unknown;
+  };
   timeoutMs?: number;
   idempotencyKey?: string;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActivePluginGatewayNodePolicyRegistry();
+  // Route metadata is authority-bearing: only a signed agent-runtime caller may nominate it.
+  const trustedTurnSource = params.client?.internal?.agentRuntimeIdentity
+    ? params.turnSource
+    : undefined;
   const entry = registry?.nodeInvokePolicies?.find((candidate) =>
     candidate.policy.commands.includes(params.command),
   );
@@ -249,7 +275,7 @@ export async function applyPluginNodeInvokePolicy(params: {
       context: params.context,
       client: params.client,
       pluginId: entry.pluginId,
-      rawParams: params.rawParams ?? params.params,
+      turnSource: trustedTurnSource,
     }),
     invokeNode,
   });
