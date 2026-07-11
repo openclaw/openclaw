@@ -294,7 +294,9 @@ enum MacNodeCodexThreadCatalog {
             nextCursor: nextCursor,
             backwardsCursor: backwardsCursor))
     }
+}
 
+extension MacNodeCodexThreadCatalog {
     static func resolveInvocation(
         root: [String: Any]? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
