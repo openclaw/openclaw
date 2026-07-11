@@ -137,7 +137,7 @@ function defaultBatchResponse(stage: BatchStage): Response {
         { status: 200 },
       );
   }
-  throw new Error(`unexpected Gemini batch stage: ${stage}`);
+  throw new Error("unexpected Gemini batch stage");
 }
 
 function stubBatchFetch(
