@@ -103,7 +103,6 @@ function matchesSessionKey(params: {
 }
 
 type MSTeamsResetCandidateEntry = {
-  [key: string]: unknown;
   updatedAt?: number;
   sessionId?: string;
   sessionFile?: unknown;
@@ -170,14 +169,12 @@ function needsMSTeamsLifecycleRotation(entry: MSTeamsResetCandidateEntry): boole
   return entry.updatedAt !== 0 || hasMSTeamsProviderBinding(entry);
 }
 
-function createMSTeamsLifecycleResetEntry(
-  entry: MSTeamsResetCandidateEntry,
-): MSTeamsResetCandidateEntry {
+function createMSTeamsLifecycleResetEntry<T extends MSTeamsResetCandidateEntry>(entry: T): T {
   const next = {
     ...entry,
     sessionId: randomUUID(),
     updatedAt: 0,
-  };
+  } as T;
 
   delete next.sessionFile;
   delete next.sessionStartedAt;
