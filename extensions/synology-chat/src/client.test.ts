@@ -442,7 +442,7 @@ describe("fetchChatUsers", () => {
     const firstCall = firstHttpsGetCall();
     expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
-  it("evicts stale cache entries when inserting a fresh one", async () => {
+  it("evicts stale same-origin cache entries when inserting a fresh one", async () => {
     // The module-level chatUserCache only evicts stale entries on
     // successful insert. Verify that stale entries are removed from
     // the Map so a caller rotating through many webhook URLs cannot
@@ -475,6 +475,41 @@ describe("fetchChatUsers", () => {
     expect(chatUserCache.has(listUrlA)).toBe(false);
 
     // Verify fresh urlB is still present
+    expect(chatUserCache.has(listUrlB)).toBe(true);
+  });
+
+  it("preserves other-origin stale cache entries on cross-origin refresh", async () => {
+    // Regression: a successful refresh for endpoint B (nas2) must
+    // NOT evict endpoint A's stale entry (nas1).  If it did, A's
+    // last-known-good fallback would be lost and reply delivery
+    // would fall back to the incompatible webhook user ID.
+    const clientModule = await import("./client.js");
+    const { chatUserCache, CACHE_TTL_MS } = clientModule.testing;
+    const listUrlA =
+      "https://nas1.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22origin-a%22";
+    const listUrlB =
+      "https://nas2.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22origin-b%22";
+
+    // Seed cache with a stale entry for endpoint A (nas1 origin)
+    chatUserCache.set(listUrlA, {
+      users: [{ user_id: 1, username: "alice", nickname: "a" }],
+      cachedAt: fakeNowMs - CACHE_TTL_MS - 1,
+    });
+
+    // Refresh endpoint B (nas2, different origin) — must NOT
+    // evict A's stale entry
+    mockUserListResponse([{ user_id: 2, username: "bob", nickname: "b" }]);
+    await fetchChatUsers(
+      "https://nas2.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22origin-b%22",
+    );
+
+    // Verify A's stale entry is preserved (fallback for failed refresh)
+    expect(chatUserCache.has(listUrlA)).toBe(true);
+    expect(chatUserCache.get(listUrlA)?.users).toEqual([
+      { user_id: 1, username: "alice", nickname: "a" },
+    ]);
+
+    // Verify B's fresh entry is present
     expect(chatUserCache.has(listUrlB)).toBe(true);
   });
 });

@@ -196,9 +196,22 @@ export async function fetchChatUsers(
 
           if (result.success) {
             const users = result.data?.users ?? [];
-            // Evict stale entries so a hostile caller that rotates through
-            // many webhook URLs cannot grow the Map without bound.
+            // Evict stale entries for this origin so a hostile caller that
+            // rotates through many webhook URLs cannot grow the Map without
+            // bound. Preserve other origins' entries — a different endpoint's
+            // refresh must not delete another endpoint's last-known-good
+            // fallback (the stale-on-error contract in the failure branches).
+            const currentOrigin = parsedUrl.origin;
             for (const [key, entry] of chatUserCache) {
+              let sameOrigin = false;
+              try {
+                sameOrigin = new URL(key).origin === currentOrigin;
+              } catch {
+                // Malformed cache key — skip, do not evict.
+              }
+              if (!sameOrigin) {
+                continue;
+              }
               if (now - entry.cachedAt >= CACHE_TTL_MS) {
                 chatUserCache.delete(key);
               }
