@@ -6,6 +6,7 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
+import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
@@ -756,6 +757,21 @@ export function renderChatThread(props: ChatThreadProps) {
     maybeExpandChatHistoryRenderWindow(state, event, requestUpdate);
     props.onChatScroll?.(event);
   };
+  const handleChatThreadMouseDown = (event: MouseEvent) => {
+    // The thread's top padding is a titlebar band in the native macOS app:
+    // presses on bare thread background inside it start a window drag.
+    // Message content scrolled under the band hits its own elements, not the
+    // thread itself, so selection and clicks there stay untouched.
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+    const thread = event.currentTarget as HTMLElement;
+    const bandHeight = Number.parseFloat(getComputedStyle(thread).paddingTop);
+    if (!Number.isFinite(bandHeight) || event.offsetY > bandHeight) {
+      return;
+    }
+    beginNativeWindowDrag(event);
+  };
 
   return html`
     <div
@@ -772,6 +788,7 @@ export function renderChatThread(props: ChatThreadProps) {
         );
       })}
       @scroll=${handleChatThreadScroll}
+      @mousedown=${handleChatThreadMouseDown}
       @click=${(event: Event) => {
         handleMarkdownCodeBlockCopy(event);
         const target = markdownFileLinkFromEvent(event);

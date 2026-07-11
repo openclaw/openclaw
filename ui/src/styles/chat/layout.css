@@ -77,12 +77,24 @@ openclaw-chat-page {
   /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
-  padding: clamp(20px, 3vh, 28px) clamp(6px, 1vw, 12px) 6px;
+  /* The tall top inset is a titlebar band: it keeps the floating rail
+     openers (.chat-floating-toggles, 28px at top 10px) clear of the first
+     message and gives the native macOS app an empty strip that starts a
+     window drag (see the thread mousedown handler in chat-thread.ts). */
+  padding: clamp(44px, 5vh, 52px) clamp(6px, 1vw, 12px) 6px;
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
   border-radius: var(--radius-md);
   background: transparent;
+}
+
+/* Split panes spend their top row on the pane header (which is both the
+   toggle host and the drag surface), so their threads keep a compact inset.
+   The single-pane view is also an openclaw-chat-pane but renders no header,
+   hence the :has() guard. */
+openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
+  padding-top: clamp(20px, 3vh, 28px);
 }
 
 .chat-thread-inner > :first-child {
