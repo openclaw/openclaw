@@ -1192,6 +1192,102 @@ describe("initSessionState RawBody", () => {
     expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
+  it("tombstones the previous session's trajectory pair on a typed /reset, entering through the real initSessionState command path", async () => {
+    // Reproduces a live production failure observed on v2026.6.10: a typed
+    // /reset in webchat tombstoned
+    // the transcript but left the trajectory pair bare, with zero
+    // trajectory/cleanup/error log lines. persistSessionResetLifecycle (the
+    // function the previous fix round patched) is only ever reached from
+    // agent-runner.ts's internal role-ordering-conflict self-heal — never
+    // from a user-typed command. Every typed /new and /reset, and every
+    // implicit daily/idle rollover, actually goes through initSessionState
+    // (this file) -> commitReplySessionInitialization
+    // (config/sessions/session-accessor.ts), which previously called
+    // archivePreviousSessionTranscript and nothing else: zero trajectory
+    // coupling. This test enters through initSessionState itself, the real
+    // command-level path a typed /reset takes, not the inner lifecycle
+    // function directly.
+    const root = await makeCaseDir("openclaw-typed-reset-trajectory-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:webchat:direct:uuid:typed-reset-trajectory";
+    const existingSessionId = "session-with-live-trajectory";
+    const previousTranscript = path.join(root, `${existingSessionId}.jsonl`);
+
+    await fs.writeFile(
+      previousTranscript,
+      `${JSON.stringify({ type: "session", id: existingSessionId })}\n`,
+      "utf-8",
+    );
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        sessionFile: previousTranscript,
+        updatedAt: Date.now(),
+        systemSent: true,
+      },
+    });
+
+    const { resolveTrajectoryFilePath, resolveTrajectoryPointerFilePath } =
+      await import("../../trajectory/paths.js");
+    const { createTrajectoryRuntimeRecorder } = await import("../../trajectory/runtime.js");
+    const { clearTrajectoryWriterLifecycleRegistryForTest } =
+      await import("../../trajectory/writer-lifecycle.js");
+
+    const runtimeFile = resolveTrajectoryFilePath({
+      sessionFile: previousTranscript,
+      sessionId: existingSessionId,
+    });
+    const pointerPath = resolveTrajectoryPointerFilePath(previousTranscript);
+    const recorder = await createTrajectoryRuntimeRecorder({
+      sessionId: existingSessionId,
+      sessionFile: previousTranscript,
+    });
+    if (!recorder) {
+      throw new Error("expected trajectory runtime recorder");
+    }
+    recorder.recordEvent("prompt.submitted", { marker: "before-typed-reset" });
+    await recorder.flush();
+    await expect(fs.stat(runtimeFile)).resolves.toBeDefined();
+    await expect(fs.stat(pointerPath)).resolves.toBeDefined();
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/reset"],
+      },
+    } as OpenClawConfig;
+
+    try {
+      const result = await initSessionState({
+        ctx: {
+          RawBody: "/reset",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Surface: "webchat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+
+      await expect(fs.stat(runtimeFile)).rejects.toThrow();
+      await expect(fs.stat(pointerPath)).rejects.toThrow();
+      const tombstones = (await fs.readdir(root)).filter((file) =>
+        file.startsWith(`${path.basename(runtimeFile)}.reset.`),
+      );
+      const pointerTombstones = (await fs.readdir(root)).filter((file) =>
+        file.startsWith(`${path.basename(pointerPath)}.reset.`),
+      );
+      expect(tombstones).toHaveLength(1);
+      expect(pointerTombstones).toHaveLength(1);
+    } finally {
+      clearTrajectoryWriterLifecycleRegistryForTest();
+    }
+  });
+
   it("preserves a user model override across an implicit daily stale rollover (#90119)", async () => {
     // Regression: a user-set /model override persisted on a session that then
     // goes stale at the daily reset boundary must survive the implicit
