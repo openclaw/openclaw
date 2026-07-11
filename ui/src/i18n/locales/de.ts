@@ -2231,6 +2231,8 @@ export const de: TranslationMap = {
       finished: "Abgeschlossen ({count})",
       stopTask: "{title} stoppen",
       viewTranscript: "Transkript anzeigen",
+      toolUseOne: "1 Tool-Aufruf",
+      toolUseMany: "{count} Tool-Aufrufe",
     },
     sessionDiff: {
       title: "Änderungen",

@@ -763,6 +763,35 @@ export interface OfficialExternalPluginCatalogSnapshots {
   updated_at_ms: number;
 }
 
+export interface OperatorApprovals {
+  approval_id: string;
+  audience_session_keys_json: string;
+  consumed_at_ms: number | null;
+  consumed_by: string | null;
+  created_at_ms: number;
+  decision: string | null;
+  expires_at_ms: number;
+  kind: string;
+  presentation_json: string;
+  requested_by_client_id: string | null;
+  requested_by_device_id: string | null;
+  requested_by_device_token_auth: Generated<number>;
+  resolved_at_ms: number | null;
+  resolver_id: string | null;
+  resolver_kind: string | null;
+  reviewer_device_ids_json: string;
+  runtime_epoch: string;
+  source_agent_id: string | null;
+  source_run_id: string | null;
+  source_session_id: string | null;
+  source_session_key: string | null;
+  source_tool_call_id: string | null;
+  source_tool_name: string | null;
+  status: string;
+  terminal_reason: string | null;
+  updated_at_ms: number;
+}
+
 export interface PluginBindingApprovals {
   account_id: string;
   approved_at: number;
@@ -978,6 +1007,7 @@ export interface TaskRuns {
   error: string | null;
   label: string | null;
   last_event_at: number | null;
+  last_tool_name: string | null;
   notify_policy: string;
   owner_key: string;
   parent_flow_id: string | null;
@@ -996,6 +1026,7 @@ export interface TaskRuns {
   task_kind: string | null;
   terminal_outcome: string | null;
   terminal_summary: string | null;
+  tool_use_count: number | null;
 }
 
 export interface TuiLastSessions {
@@ -1180,6 +1211,7 @@ export interface DB {
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
+  operator_approvals: OperatorApprovals;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;

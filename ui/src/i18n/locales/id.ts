@@ -2208,6 +2208,8 @@ export const id: TranslationMap = {
       finished: "Selesai ({count})",
       stopTask: "Hentikan {title}",
       viewTranscript: "Lihat transkrip",
+      toolUseOne: "1 penggunaan alat",
+      toolUseMany: "{count} penggunaan alat",
     },
     sessionDiff: {
       title: "Perubahan",
