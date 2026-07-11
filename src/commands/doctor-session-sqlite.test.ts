@@ -2,13 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadExactSqliteSessionEntry,
   loadSqliteTranscriptEventsSync,
   upsertSqliteSessionEntry,
 } from "../config/sessions/session-accessor.sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as replaceFile from "../infra/replace-file.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { SessionSqliteMigrationManifest } from "./doctor-session-sqlite-migration-run.js";
@@ -389,6 +390,53 @@ describe("runDoctorSessionSqlite", () => {
       "session-1.trajectory.jsonl",
       "sessions.json",
     ]);
+  });
+
+  it("checkpoints bulk unreferenced archive moves without per-file manifest rewrites", async () => {
+    const store = createLegacyStore();
+    for (let index = 0; index < 64; index += 1) {
+      fs.writeFileSync(path.join(store.sessionDir, `orphan-${index}.jsonl`), "{}\n", {
+        mode: 0o600,
+      });
+    }
+    fs.writeFileSync(path.join(store.sessionDir, "orphan collision.jsonl"), "{}\n", {
+      mode: 0o600,
+    });
+    fs.writeFileSync(path.join(store.sessionDir, "orphan_collision.jsonl"), "{}\n", {
+      mode: 0o600,
+    });
+    const replaceFileAtomicSync = vi.spyOn(replaceFile, "replaceFileAtomicSync");
+
+    try {
+      const report = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "import",
+        store: store.storePath,
+      });
+      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+      const manifestWrites = replaceFileAtomicSync.mock.calls.filter(([options]) =>
+        options.filePath.includes("session-sqlite-migration-runs"),
+      ).length;
+      const plannedUnreferencedMoves =
+        manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "unreferenced-jsonl") ??
+        [];
+
+      expect(plannedUnreferencedMoves).toHaveLength(67);
+      expect(new Set(plannedUnreferencedMoves.map((move) => move.archivePath)).size).toBe(67);
+      expect(
+        manifest.targets[0]?.completedMoves.filter((move) => move.kind === "unreferenced-jsonl"),
+      ).toHaveLength(67);
+      expect(manifestWrites).toBeLessThan(20);
+      expect(replaceFileAtomicSync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filePath: report.migrationRun?.manifestPath,
+          mode: 0o600,
+          tempPrefix: path.basename(report.migrationRun?.manifestPath ?? ""),
+        }),
+      );
+    } finally {
+      replaceFileAtomicSync.mockRestore();
+    }
   });
 
   it("archives legacy trajectory pointer files with imported transcripts", async () => {
