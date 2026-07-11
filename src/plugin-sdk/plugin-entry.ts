@@ -52,6 +52,8 @@ export type WorkerLeaseStatus = import("../plugins/types.js").WorkerLeaseStatus;
 export type WorkerProfile = import("../plugins/types.js").WorkerProfile;
 export type WorkerProvider = import("../plugins/types.js").WorkerProvider;
 export type WorkerSshEndpoint = import("../plugins/types.js").WorkerSshEndpoint;
+export type WorkerSshIdentity = import("../plugins/types.js").WorkerSshIdentity;
+export type WorkerSshIdentityRequest = import("../plugins/types.js").WorkerSshIdentityRequest;
 export { WorkerProviderError } from "../plugins/types.js";
 export type ProviderAugmentModelCatalogContext =
   import("../plugins/types.js").ProviderAugmentModelCatalogContext;

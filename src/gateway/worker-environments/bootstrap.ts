@@ -1,26 +1,28 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import {
   type WorkerAdmissionHandshake,
   validateWorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
-import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
+import { normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { redactSensitiveText } from "../../logging/redact.js";
-import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
-import type { WorkerSshEndpoint } from "../../plugins/types.js";
+import type { WorkerSshEndpoint, WorkerSshIdentity } from "../../plugins/types.js";
 import {
   runCommandWithTimeout,
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
 import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from "./bundle.js";
+import {
+  prepareWorkerSsh,
+  type PreparedWorkerSsh,
+  workerSshCommandOptions,
+  workerSshOptions,
+  workerSshRemoteCommand,
+} from "./ssh.js";
 
 const BOOTSTRAP_ROOT = ".openclaw-worker";
 const BOOTSTRAP_RECEIPT = "bootstrap-receipt.json";
 const DEFAULT_BOOTSTRAP_TIMEOUT_MS = 10 * 60_000;
-const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 const NODE_MISSING_EXIT_CODE = 42;
 const NPM_MISSING_EXIT_CODE = 43;
 const LOCK_TIMEOUT_EXIT_CODE = 44;
@@ -32,10 +34,6 @@ const NPM_MISSING_MARKER = "OPENCLAW_WORKER_NPM_MISSING";
 const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
-const MAX_HOST_KEY_LENGTH = 16_384;
-const OPENSSH_HOST_KEY_TYPE_PATTERN =
-  /^(?:ssh|ecdsa-sha2|sk-(?:ssh|ecdsa-sha2))-[A-Za-z0-9@._+-]+$/u;
-const OPENSSH_HOST_KEY_DATA_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/u;
 
 // Keep these boundaries aligned with package.json engines.node and infra/runtime-guard.ts.
 const NODE_VERSION_CHECK_JS = String.raw`const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(process.versions.node);
@@ -473,9 +471,7 @@ cat "$receipt"
 printf '\n'
 `;
 
-export type ResolvedWorkerSshIdentity =
-  | { kind: "path"; path: string }
-  | { kind: "material"; contents: string };
+export type ResolvedWorkerSshIdentity = WorkerSshIdentity;
 
 export type WorkerBootstrapCommandRunner = (
   argv: string[],
@@ -495,56 +491,6 @@ export type WorkerBootstrapDependencies = {
   timeoutMs?: number;
   signal?: AbortSignal;
 };
-
-type PreparedSsh = {
-  sshTarget: string;
-  scpTarget: string;
-  port: number;
-  identityPath: string;
-  knownHostsPath: string;
-};
-
-function shellEscape(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-function remoteCommand(argv: readonly string[]): string {
-  return argv.map(shellEscape).join(" ");
-}
-
-function normalizeIdentityMaterial(contents: string): string {
-  const normalized = contents
-    .replace(/^\uFEFF/u, "")
-    .replace(/\r\n?/gu, "\n")
-    .replace(/\\r\\n|\\r/gu, "\\n")
-    .replace(/\\n/gu, "\n");
-  return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
-}
-
-function normalizeEndpoint(ssh: WorkerSshEndpoint): {
-  sshTarget: string;
-  scpTarget: string;
-  host: string;
-  port: number;
-} {
-  const host = ssh.host.trim();
-  const user = ssh.user.trim();
-  if (!Number.isInteger(ssh.port) || ssh.port < 1 || ssh.port > 65_535) {
-    throw new Error("Worker SSH port must be an integer between 1 and 65535");
-  }
-  const bracketedHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
-  const scpTarget = normalizeScpRemoteHost(`${user}@${bracketedHost}`);
-  if (!scpTarget) {
-    throw new Error("Worker SSH endpoint contains an invalid user or host");
-  }
-  const normalizedHost = bracketedHost.startsWith("[") ? bracketedHost.slice(1, -1) : bracketedHost;
-  return {
-    sshTarget: `${user}@${normalizedHost}`,
-    scpTarget,
-    host: normalizedHost,
-    port: ssh.port,
-  };
-}
 
 function normalizeHandshake(artifact: WorkerInstallationArtifact): WorkerAdmissionHandshake {
   const bundleHash = artifact.bundleHash.trim();
@@ -602,146 +548,6 @@ function parseReceiptJson(
   return parsed;
 }
 
-function pinnedKnownHostsLine(params: {
-  host: string;
-  port: number;
-  pinnedHostKey: string;
-}): string {
-  if (
-    params.pinnedHostKey.length > MAX_HOST_KEY_LENGTH ||
-    params.pinnedHostKey.includes("\n") ||
-    params.pinnedHostKey.includes("\r")
-  ) {
-    throw new Error("Pinned worker SSH host key must contain exactly one public key");
-  }
-  const trimmed = params.pinnedHostKey.trim();
-  const tokens = trimmed.split(/\s+/u);
-  const [algorithm, encodedKey] = tokens;
-  if (
-    tokens.length !== 2 ||
-    !algorithm ||
-    !encodedKey ||
-    !OPENSSH_HOST_KEY_TYPE_PATTERN.test(algorithm) ||
-    !OPENSSH_HOST_KEY_DATA_PATTERN.test(encodedKey) ||
-    encodedKey.length % 4 !== 0
-  ) {
-    throw new Error("Pinned worker SSH host key must use OpenSSH public-key format");
-  }
-  const hostLabel = params.port === 22 ? params.host : `[${params.host}]:${params.port}`;
-  return `${hostLabel} ${algorithm} ${encodedKey}\n`;
-}
-
-async function prepareSsh(params: {
-  ssh: WorkerSshEndpoint;
-  pinnedHostKey?: string;
-  temporaryDir: string;
-  resolveIdentity: WorkerBootstrapDependencies["resolveIdentity"];
-}): Promise<PreparedSsh> {
-  if (params.pinnedHostKey === undefined) {
-    throw new Error(
-      "Worker bootstrap is missing pinnedHostKey; WorkerProvider.provision() must return ssh.hostKey",
-    );
-  }
-  const endpoint = normalizeEndpoint(params.ssh);
-  const knownHosts = pinnedKnownHostsLine({
-    host: endpoint.host,
-    port: endpoint.port,
-    pinnedHostKey: params.pinnedHostKey,
-  });
-  const identity = await params.resolveIdentity(params.ssh.keyRef);
-  let identityPath: string;
-  if (identity.kind === "path") {
-    const resolvedPath = identity.path.trim();
-    if (!resolvedPath) {
-      throw new Error("Worker SSH identity path must be non-empty");
-    }
-    identityPath = path.resolve(resolvedPath);
-  } else {
-    if (!identity.contents.trim()) {
-      throw new Error("Worker SSH identity material must be non-empty");
-    }
-    registerSecretValueForRedaction(identity.contents);
-    const normalizedContents = normalizeIdentityMaterial(identity.contents);
-    if (normalizedContents !== identity.contents) {
-      registerSecretValueForRedaction(normalizedContents);
-    }
-    identityPath = path.join(params.temporaryDir, "identity");
-    await fs.writeFile(identityPath, normalizedContents, { mode: 0o600 });
-    await fs.chmod(identityPath, 0o600);
-  }
-
-  const knownHostsPath = path.join(params.temporaryDir, "known_hosts");
-  // This isolated file contains only trusted provisioning output. Bootstrap never learns a
-  // worker identity from the first connection.
-  await fs.writeFile(knownHostsPath, knownHosts, { mode: 0o600 });
-  return {
-    ...endpoint,
-    identityPath,
-    knownHostsPath,
-  };
-}
-
-function commonSshOptions(prepared: PreparedSsh): string[] {
-  return [
-    "-F",
-    "none",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ConnectTimeout=10",
-    "-o",
-    "NumberOfPasswordPrompts=0",
-    "-o",
-    "PreferredAuthentications=publickey",
-    "-o",
-    "StrictHostKeyChecking=yes",
-    "-o",
-    `UserKnownHostsFile=${prepared.knownHostsPath}`,
-    "-o",
-    "GlobalKnownHostsFile=none",
-    "-o",
-    "UpdateHostKeys=no",
-    "-o",
-    "ForwardAgent=no",
-    "-o",
-    "ForwardX11=no",
-    "-o",
-    "ForwardX11Trusted=no",
-    "-o",
-    "ClearAllForwardings=yes",
-    "-o",
-    "ExitOnForwardFailure=yes",
-    "-o",
-    "IdentityAgent=none",
-    "-i",
-    prepared.identityPath,
-    "-o",
-    "IdentitiesOnly=yes",
-  ];
-}
-
-function commandEnvironment(): NodeJS.ProcessEnv {
-  const names = ["HOME", "PATH", "LANG", "LC_ALL", "TZ", "SystemRoot", "WINDIR"] as const;
-  return Object.fromEntries(
-    names.flatMap((name) => (process.env[name] === undefined ? [] : [[name, process.env[name]]])),
-  );
-}
-
-function commandOptions(params: {
-  input?: string;
-  timeoutMs: number;
-  signal?: AbortSignal;
-}): CommandOptions {
-  return {
-    timeoutMs: params.timeoutMs,
-    input: params.input,
-    signal: params.signal,
-    baseEnv: commandEnvironment(),
-    maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
-    killProcessTree: true,
-  };
-}
-
 function commandFailure(phase: string, result: SpawnResult): Error {
   const output = redactSensitiveText(result.stderr.trim() || result.stdout.trim(), {
     mode: "tools",
@@ -758,7 +564,7 @@ function isSuccess(result: SpawnResult): boolean {
 }
 
 async function runSshScript(params: {
-  prepared: PreparedSsh;
+  prepared: PreparedWorkerSsh;
   runCommand: WorkerBootstrapCommandRunner;
   script: string;
   scriptArgs: readonly string[];
@@ -768,7 +574,7 @@ async function runSshScript(params: {
   return await params.runCommand(
     [
       "ssh",
-      ...commonSshOptions(params.prepared),
+      ...workerSshOptions(params.prepared, { forwarding: "disabled" }),
       "-a",
       "-x",
       "-T",
@@ -776,9 +582,13 @@ async function runSshScript(params: {
       String(params.prepared.port),
       "--",
       params.prepared.sshTarget,
-      remoteCommand(["sh", "-s", "--", ...params.scriptArgs]),
+      workerSshRemoteCommand(["sh", "-s", "--", ...params.scriptArgs]),
     ],
-    commandOptions({ input: params.script, timeoutMs: params.timeoutMs, signal: params.signal }),
+    workerSshCommandOptions({
+      input: params.script,
+      timeoutMs: params.timeoutMs,
+      signal: params.signal,
+    }),
   );
 }
 
@@ -787,7 +597,7 @@ rm -f -- "$1"
 `;
 
 async function cleanupRemoteUpload(params: {
-  prepared: PreparedSsh;
+  prepared: PreparedWorkerSsh;
   remotePath: string;
   runCommand: WorkerBootstrapCommandRunner;
   timeoutMs: number;
@@ -861,14 +671,13 @@ export async function bootstrapWorker(
   const receipt = normalizeHandshake(request.artifact);
   const timeoutMs = dependencies.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
-  const temporaryDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-bootstrap-"));
+  const prepared = await prepareWorkerSsh({
+    ssh: request.ssh,
+    pinnedHostKey: request.pinnedHostKey,
+    resolveIdentity: dependencies.resolveIdentity,
+    temporaryDirectoryPrefix: "openclaw-worker-bootstrap-",
+  });
   try {
-    const prepared = await prepareSsh({
-      ssh: request.ssh,
-      pinnedHostKey: request.pinnedHostKey,
-      temporaryDir,
-      resolveIdentity: dependencies.resolveIdentity,
-    });
     const preflight = parsePreflight(
       await runSshScript({
         prepared,
@@ -889,14 +698,14 @@ export async function bootstrapWorker(
         const transfer = await runCommand(
           [
             "scp",
-            ...commonSshOptions(prepared),
+            ...workerSshOptions(prepared, { forwarding: "disabled" }),
             "-P",
             String(prepared.port),
             "--",
             request.artifact.tarballPath,
             `${prepared.scpTarget}:${preflight.path}`,
           ],
-          commandOptions({ timeoutMs, signal: dependencies.signal }),
+          workerSshCommandOptions({ timeoutMs, signal: dependencies.signal }),
         );
         if (!isSuccess(transfer)) {
           throw commandFailure("bundle transfer", transfer);
@@ -946,6 +755,6 @@ export async function bootstrapWorker(
       throw error;
     }
   } finally {
-    await fs.rm(temporaryDir, { recursive: true, force: true });
+    await prepared.dispose();
   }
 }

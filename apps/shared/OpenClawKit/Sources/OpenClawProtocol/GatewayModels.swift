@@ -51,6 +51,13 @@ public enum WorkerEnvironmentState: String, Codable, Sendable {
     case orphaned = "orphaned"
 }
 
+public enum WorkerTunnelStatus: String, Codable, Sendable {
+    case stopped = "stopped"
+    case connecting = "connecting"
+    case connected = "connected"
+    case reconnecting = "reconnecting"
+}
+
 public enum NodePresenceAliveReason: String, Codable, Sendable {
     case background = "background"
     case silentPush = "silent_push"
@@ -691,6 +698,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let agems: Int
     public let idlems: Int?
     public let attachedsessionids: [String]
+    public let tunnelstatus: WorkerTunnelStatus
 
     public init(
         providerid: String,
@@ -698,7 +706,8 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         state: WorkerEnvironmentState,
         agems: Int,
         idlems: Int? = nil,
-        attachedsessionids: [String])
+        attachedsessionids: [String],
+        tunnelstatus: WorkerTunnelStatus)
     {
         self.providerid = providerid
         self.leaseid = leaseid
@@ -706,6 +715,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         self.agems = agems
         self.idlems = idlems
         self.attachedsessionids = attachedsessionids
+        self.tunnelstatus = tunnelstatus
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -715,6 +725,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         case agems = "ageMs"
         case idlems = "idleMs"
         case attachedsessionids = "attachedSessionIds"
+        case tunnelstatus = "tunnelStatus"
     }
 }
 

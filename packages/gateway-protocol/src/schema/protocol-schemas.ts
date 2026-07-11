@@ -204,6 +204,7 @@ import {
   EnvironmentStatusSchema,
   WorkerEnvironmentMetadataSchema,
   WorkerEnvironmentStateSchema,
+  WorkerTunnelStatusSchema,
 } from "./environments.js";
 import {
   ExecApprovalsGetParamsSchema,
@@ -465,6 +466,7 @@ export const ProtocolSchemas = {
   // Environment and agent-facing control RPC payloads.
   EnvironmentStatus: EnvironmentStatusSchema,
   WorkerEnvironmentState: WorkerEnvironmentStateSchema,
+  WorkerTunnelStatus: WorkerTunnelStatusSchema,
   WorkerEnvironmentMetadata: WorkerEnvironmentMetadataSchema,
   EnvironmentSummary: EnvironmentSummarySchema,
   EnvironmentsCreateParams: EnvironmentsCreateParamsSchema,

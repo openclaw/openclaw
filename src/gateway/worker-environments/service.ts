@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import type { SecretRef } from "../../config/types.secrets.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withTimeout } from "../../infra/fs-safe.js";
@@ -15,6 +16,7 @@ import {
   type WorkerProfile,
   type WorkerProvider,
   type WorkerSshEndpoint,
+  type WorkerSshIdentity,
 } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
@@ -26,6 +28,8 @@ import {
   type WorkerEnvironmentStore,
   type WorkerEnvironmentTransitionPatch as TransitionPatch,
 } from "./store.js";
+import type { WorkerTunnelRequest } from "./tunnel-contract.js";
+import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
 
 export type WorkerEnvironmentServiceErrorCode =
   | "profile_not_found"
@@ -58,8 +62,16 @@ export type WorkerEnvironmentServiceOptions = {
   bootstrapWorker: (params: {
     sshEndpoint: WorkerSshEndpoint;
     installation: WorkerInstallationArtifact;
+    resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
     signal: AbortSignal;
   }) => Promise<WorkerAdmissionHandshake>;
+  resolveSshIdentity?: (params: {
+    provider: WorkerProvider;
+    leaseId: string;
+    profile: WorkerProfile;
+    keyRef: SecretRef;
+  }) => Promise<WorkerSshIdentity>;
+  tunnelManager?: WorkerTunnelManager;
   reconcileIntervalMs?: number;
   providerCallTimeoutMs?: number;
   bootstrapCallTimeoutMs?: number;
@@ -113,12 +125,18 @@ function boundedError(error: unknown): string {
 
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
   const { store } = options;
+  const tunnels = options.tunnelManager;
   const warn = (message: string) => options.logger?.warn(message);
   const operations = new KeyedAsyncQueue();
   const activeOperations = new Set<Promise<unknown>>();
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
   let stopping = false;
+
+  const project = (record: WorkerEnvironmentRecord) => ({
+    ...record,
+    tunnelStatus: tunnels?.status(record.environmentId) ?? ("stopped" as const),
+  });
 
   const move = (r: WorkerEnvironmentRecord, to: WorkerEnvironmentState, patch?: TransitionPatch) =>
     store.transition({ environmentId: r.environmentId, from: r.state, to, patch });
@@ -177,6 +195,21 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     profile: requireWorkerProfile(record.profileSnapshot.settings),
   });
 
+  const identityResolverFor = (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    leaseId: string,
+  ) => {
+    const profile = requireWorkerProfile(record.profileSnapshot.settings);
+    const resolveSshIdentity = options.resolveSshIdentity;
+    return async (keyRef: SecretRef) => {
+      if (!resolveSshIdentity) {
+        throw new Error("Worker SSH identity resolution is unavailable");
+      }
+      return await callProvider(() => resolveSshIdentity({ provider, leaseId, profile, keyRef }));
+    };
+  };
+
   const providerFor = (providerId: string): WorkerProvider => {
     const provider = options.resolveProvider(providerId);
     if (provider) {
@@ -225,6 +258,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       lastError: detail,
     });
     const draining = move(requested, "draining", { lastError: detail });
+    await tunnels?.stop(record.environmentId);
     const destroying = move(draining, "destroying", { lastError: detail });
     try {
       await callProvider(() => provider.destroy(lifecycleLease(record, leaseId)));
@@ -255,6 +289,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         options.bootstrapWorker({
           sshEndpoint: record.sshEndpoint,
           installation,
+          resolveIdentity: identityResolverFor(record, provider, record.leaseId),
           signal,
         }),
       );
@@ -332,12 +367,18 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const cancelRequested = (record: WorkerEnvironmentRecord) =>
     move(record, "failed", { lastError: "Provisioning canceled before provider allocation" });
 
+  const beginDrain = (record: WorkerEnvironmentRecord) => {
+    const failurePatch =
+      record.teardownTerminalState === "failed" ? { lastError: record.lastError } : undefined;
+    return inState(record, "bootstrapping", "ready", "attached", "idle")
+      ? move(record, "draining", failurePatch)
+      : record;
+  };
+
   const beginDestroy = (record: WorkerEnvironmentRecord) => {
     const failurePatch =
       record.teardownTerminalState === "failed" ? { lastError: record.lastError } : undefined;
-    const draining = inState(record, "bootstrapping", "ready", "attached", "idle")
-      ? move(record, "draining", failurePatch)
-      : record;
+    const draining = beginDrain(record);
     if (draining.state === "draining") {
       return move(draining, "destroying", failurePatch);
     }
@@ -347,14 +388,17 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     throw serviceError("invalid_state", `Cannot destroy worker in state: ${record.state}`);
   };
 
-  const finishDestroy = async (r: WorkerEnvironmentRecord, provider: WorkerProvider) => {
+  const finishDestroy = async (r: WorkerEnvironmentRecord, provider?: WorkerProvider) => {
     if (!r.leaseId) {
       throw serviceError("invalid_state", "Worker environment has no lease");
     }
     const leaseId = r.leaseId;
-    const destroying = beginDestroy(r);
+    const draining = beginDrain(r);
+    await tunnels?.stop(r.environmentId);
+    const owningProvider = provider ?? providerFor(r.providerId);
+    const destroying = beginDestroy(draining);
     try {
-      await callProvider(() => provider.destroy(lifecycleLease(r, leaseId)));
+      await callProvider(() => owningProvider.destroy(lifecycleLease(r, leaseId)));
     } catch (error) {
       saveError(destroying, error);
       throw serviceError("provider_failure", "Worker provider operation failed");
@@ -393,10 +437,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const teardownExpected =
       record.destroyRequestedAtMs !== null || inState(record, "draining", "destroying");
     if (status === "destroyed" || (status === "unknown" && teardownExpected)) {
+      await tunnels?.stop(record.environmentId);
       finishProvenDestroy(record);
       return;
     }
     if (status === "unknown") {
+      await tunnels?.stop(record.environmentId);
       move(record, "orphaned", { lastError: "Worker provider no longer recognizes the lease" });
       return;
     }
@@ -513,13 +559,62 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         return cancelRequested(record);
       }
       if (record.leaseId) {
-        record = beginDestroy(record);
+        record = beginDrain(record);
+      }
+      if (!record.leaseId) {
+        const provider = providerFor(record.providerId);
+        record = await resumeProvision(record, provider);
+        return finishDestroy(record, provider);
+      }
+      return finishDestroy(record);
+    });
+  };
+
+  const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> => {
+    if (stopping) {
+      throw serviceError("invalid_state", "Worker environment service is stopping");
+    }
+    if (!tunnels) {
+      throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
+    }
+    let startup: Promise<WorkerTunnelHandle> | undefined;
+    await withLock(request.environmentId, async () => {
+      if (stopping) {
+        throw serviceError("invalid_state", "Worker environment service is stopping");
+      }
+      const record = store.get(request.environmentId);
+      if (!record) {
+        throw serviceError(
+          "environment_not_found",
+          `Unknown worker environment: ${request.environmentId}`,
+        );
+      }
+      if (
+        !inState(record, "ready", "idle", "attached") ||
+        record.destroyRequestedAtMs !== null ||
+        !record.leaseId ||
+        !record.sshEndpoint
+      ) {
+        throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
       }
       const provider = providerFor(record.providerId);
-      if (!record.leaseId) {
-        record = await resumeProvision(record, provider);
-      }
-      return finishDestroy(record, provider);
+      // Tunnel ownership is registered synchronously by the manager. Release the durable-state
+      // lock while SSH connects so drain/destroy can fence an indefinitely reconnecting start.
+      startup = tunnels.start({
+        ...request,
+        ssh: record.sshEndpoint,
+        resolveIdentity: identityResolverFor(record, provider, record.leaseId),
+      });
+    });
+    if (!startup) {
+      throw serviceError("invalid_state", "Worker tunnel failed to start");
+    }
+    return await startup;
+  };
+
+  const stopTunnel = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
+    await withLock(environmentId, async () => {
+      await tunnels?.stop(environmentId, ownerEpoch);
     });
   };
 
@@ -566,6 +661,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     stopping = true;
     clearInterval(interval);
     interval = undefined;
+    await tunnels?.stopAll();
     const reconciliation = reconcileInFlight;
     if (reconciliation) {
       await Promise.allSettled([reconciliation]);
@@ -576,10 +672,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   return {
-    list: store.list,
-    get: store.get,
-    create,
-    destroy,
+    list: () => store.list().map(project),
+    get: (environmentId: string) => {
+      const record = store.get(environmentId);
+      return record ? project(record) : undefined;
+    },
+    create: async (profileId: string, idempotencyKey: string) =>
+      project(await create(profileId, idempotencyKey)),
+    destroy: async (environmentId: string) => project(await destroy(environmentId)),
+    startTunnel,
+    stopTunnel,
     reconcileOnce,
     start,
     stop,
