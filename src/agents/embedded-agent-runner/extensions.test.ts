@@ -7,12 +7,15 @@ import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safegua
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { AuthStorage, ModelRegistry as RuntimeModelRegistry } from "../sessions/index.js";
 import { buildEmbeddedExtensionFactories, prepareSafeguardRuntimeTarget } from "./extensions.js";
 
 const mocks = vi.hoisted(() => ({
   prepareProviderRuntimeAuth: vi.fn(),
+  resolveModelAsync: vi.fn(),
   resolveModelWithRegistry: vi.fn(),
+  resolveOpenAIModelRoutes: vi.fn(),
   warn: vi.fn(),
 }));
 
@@ -31,11 +34,17 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
+vi.mock("../openai-model-routes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../openai-model-routes.js")>()),
+  resolveOpenAIModelRoutes: mocks.resolveOpenAIModelRoutes,
+}));
+
 vi.mock("./logger.js", () => ({
   log: { warn: mocks.warn },
 }));
 
 vi.mock("./model.js", () => ({
+  resolveModelAsync: mocks.resolveModelAsync,
   resolveModelWithRegistry: mocks.resolveModelWithRegistry,
 }));
 
@@ -88,7 +97,9 @@ describe("buildEmbeddedExtensionFactories", () => {
   beforeEach(() => {
     mocks.prepareProviderRuntimeAuth.mockReset();
     mocks.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+    mocks.resolveModelAsync.mockReset();
     mocks.resolveModelWithRegistry.mockReset();
+    mocks.resolveOpenAIModelRoutes.mockReset();
     mocks.warn.mockReset();
   });
 
@@ -190,14 +201,59 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
   });
 
-  it("binds profile-only auth before registering a cross-provider safeguard model", async () => {
-    const sessionManager = {} as SessionManager;
-    const sessionModel = createModel("anthropic", "claude-opus-4-6");
-    const compactionModel = createModel("openai", "gpt-5.6-luna", 128_000);
+  it("reuses a matching active runtime tuple when the safeguard target is unchanged", async () => {
+    const model = createModel("anthropic", "claude-opus-4-6");
     const authStorage = AuthStorage.inMemory({
       anthropic: { type: "api_key", key: "active-anthropic-key" },
     });
     const modelRegistry = RuntimeModelRegistry.inMemory(authStorage);
+    const runtimeAuthPlan: AgentRuntimeAuthPlan = {
+      providerForAuth: "anthropic",
+      modelId: "claude-opus-4-6",
+      authProfileProviderForAuth: "anthropic",
+      forwardedAuthProfileId: "anthropic:default",
+      forwardedAuthProfileSource: "auto",
+    };
+
+    const target = await prepareSafeguardRuntimeTarget({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+              model: "anthropic/claude-opus-4-6",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      model,
+      modelRegistry,
+      authProfileId: "anthropic:default",
+      runtimeAuthPlan,
+    });
+
+    expect(target?.model).toBe(model);
+    expect(target?.modelRegistry).toBe(modelRegistry);
+    expect(target?.runtimeAuthPlan).toBe(runtimeAuthPlan);
+    expect(mocks.resolveModelAsync).not.toHaveBeenCalled();
+  });
+
+  it("binds profile-only auth before registering a cross-provider safeguard model", async () => {
+    const sessionManager = {} as SessionManager;
+    const sessionModel = createModel("anthropic", "claude-opus-4-6");
+    const compactionModel = {
+      ...createModel("openai", "gpt-5.5", 128_000),
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
+    };
+    const authStorage = AuthStorage.inMemory({
+      anthropic: { type: "api_key", key: "active-anthropic-key" },
+    });
+    const modelRegistry = RuntimeModelRegistry.inMemory(authStorage);
+    const targetAuthStorage = AuthStorage.inMemory({});
+    const targetModelRegistry = RuntimeModelRegistry.inMemory(targetAuthStorage);
     const authProfileStore: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -208,22 +264,57 @@ describe("buildEmbeddedExtensionFactories", () => {
         },
       },
     };
+    const activeRuntimeAuthPlan: AgentRuntimeAuthPlan = {
+      providerForAuth: "anthropic",
+      modelId: "claude-opus-4-6",
+      authProfileProviderForAuth: "anthropic",
+      forwardedAuthProfileId: "anthropic:default",
+      forwardedAuthProfileSource: "auto",
+    };
     const cfg = {
       auth: {
         order: {
           openai: ["openai:compaction"],
         },
       },
+      models: {
+        providers: {
+          openai: {
+            auth: "api-key",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            request: { headers: { "x-safeguard-route": "prepared" } },
+            models: [],
+          },
+        },
+      },
       agents: {
         defaults: {
           compaction: {
             mode: "safeguard",
-            model: "openai/gpt-5.6-luna",
+            model: "openai/gpt-5.5",
           },
         },
       },
     } as OpenClawConfig;
     mocks.resolveModelWithRegistry.mockReturnValueOnce(compactionModel);
+    mocks.resolveOpenAIModelRoutes.mockReturnValue({
+      kind: "routes",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+          requestTransportOverrides: "present",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
+        },
+      ],
+    });
+    mocks.resolveModelAsync.mockResolvedValue({
+      model: compactionModel,
+      authStorage: targetAuthStorage,
+      modelRegistry: targetModelRegistry,
+    });
 
     const safeguardRuntimeTarget = await prepareSafeguardRuntimeTarget({
       cfg,
@@ -231,9 +322,9 @@ describe("buildEmbeddedExtensionFactories", () => {
       modelId: "claude-opus-4-6",
       model: sessionModel,
       modelRegistry,
-      authStorage,
       authProfileStore,
       authProfileId: "anthropic:default",
+      runtimeAuthPlan: activeRuntimeAuthPlan,
     });
     buildEmbeddedExtensionFactories({
       cfg,
@@ -246,13 +337,111 @@ describe("buildEmbeddedExtensionFactories", () => {
       safeguardRuntimeTarget,
     });
 
-    const boundAuth = await modelRegistry.getApiKeyAndHeaders(compactionModel);
+    const boundAuth =
+      await safeguardRuntimeTarget?.modelRegistry?.getApiKeyAndHeaders(compactionModel);
+    const activeTargetAuth = await modelRegistry.getApiKeyAndHeaders(compactionModel);
     expect(boundAuth).toMatchObject({ ok: true, apiKey: "profile-only-openai-key" });
+    expect(activeTargetAuth).toMatchObject({ ok: true, apiKey: undefined });
     expect(safeguardRuntimeTarget?.authProfileId).toBe("openai:compaction");
-    expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
-      model: compactionModel,
+    expect(safeguardRuntimeTarget?.runtimeAuthPlan).toMatchObject({
+      providerForAuth: "openai",
+      modelId: "gpt-5.5",
+      forwardedAuthProfileId: "openai:compaction",
+      selectedAuthMode: "api-key",
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authRequirement: "api-key",
+        requestTransportOverrides: "present",
+        runtimePolicy: { compatibleIds: expect.arrayContaining(["openclaw"]) },
+      },
+    });
+    expect(safeguardRuntimeTarget?.runtimeAuthPlan).not.toBe(activeRuntimeAuthPlan);
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime).toMatchObject({
       contextWindowTokens: 128_000,
     });
+    expect(runtime?.model).toBe(safeguardRuntimeTarget?.model);
+    expect(runtime?.modelRegistry).toBe(safeguardRuntimeTarget?.modelRegistry);
+    expect(runtime?.runtimeAuthPlan).toBe(safeguardRuntimeTarget?.runtimeAuthPlan);
+    expect(mocks.resolveModelAsync).toHaveBeenCalledWith(
+      "openai",
+      "gpt-5.5",
+      undefined,
+      cfg,
+      expect.objectContaining({
+        skipAgentDiscovery: true,
+        allowBundledStaticCatalogFallback: true,
+        preferBundledStaticCatalogTransport: true,
+      }),
+    );
+  });
+
+  it("keeps a same-provider safeguard profile isolated from the active model registry", async () => {
+    const activeModel = {
+      ...createModel("openai", "gpt-5.4"),
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
+    };
+    const compactionModel = {
+      ...createModel("openai", "gpt-5.5", 128_000),
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
+    };
+    const activeAuthStorage = AuthStorage.inMemory({
+      openai: { type: "api_key", key: "active-openai-key" },
+    });
+    const activeModelRegistry = RuntimeModelRegistry.inMemory(activeAuthStorage);
+    const targetAuthStorage = AuthStorage.inMemory({});
+    const targetModelRegistry = RuntimeModelRegistry.inMemory(targetAuthStorage);
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:compaction": {
+          type: "api_key",
+          provider: "openai",
+          key: "compaction-openai-key",
+        },
+      },
+      order: { openai: ["openai:compaction"] },
+    };
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            model: "openai/gpt-5.5",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.resolveModelAsync.mockResolvedValue({
+      model: compactionModel,
+      authStorage: targetAuthStorage,
+      modelRegistry: targetModelRegistry,
+    });
+
+    const target = await prepareSafeguardRuntimeTarget({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: activeModel,
+      modelRegistry: activeModelRegistry,
+      authProfileStore,
+    });
+
+    expect(await activeModelRegistry.getApiKeyAndHeaders(compactionModel)).toMatchObject({
+      ok: true,
+      apiKey: "active-openai-key",
+    });
+    expect(await target?.modelRegistry?.getApiKeyAndHeaders(target.model!)).toMatchObject({
+      ok: true,
+      apiKey: "compaction-openai-key",
+    });
+    expect(target?.runtimeAuthPlan?.forwardedAuthProfileId).toBe("openai:compaction");
+    expect(target?.modelRegistry).not.toBe(activeModelRegistry);
   });
 
   it("warns and keeps the active model when cross-provider safeguard auth is missing", async () => {
@@ -263,7 +452,14 @@ describe("buildEmbeddedExtensionFactories", () => {
       anthropic: { type: "api_key", key: "active-anthropic-key" },
     });
     const modelRegistry = RuntimeModelRegistry.inMemory(authStorage);
+    const targetAuthStorage = AuthStorage.inMemory({});
+    const targetModelRegistry = RuntimeModelRegistry.inMemory(targetAuthStorage);
     mocks.resolveModelWithRegistry.mockReturnValueOnce(compactionModel);
+    mocks.resolveModelAsync.mockResolvedValue({
+      model: compactionModel,
+      authStorage: targetAuthStorage,
+      modelRegistry: targetModelRegistry,
+    });
 
     const cfg = {
       agents: {
@@ -281,7 +477,6 @@ describe("buildEmbeddedExtensionFactories", () => {
       modelId: "claude-opus-4-6",
       model: sessionModel,
       modelRegistry,
-      authStorage,
       authProfileStore: { version: 1, profiles: {} },
       authProfileId: "anthropic:default",
     });

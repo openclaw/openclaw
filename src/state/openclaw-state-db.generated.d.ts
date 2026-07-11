@@ -12,6 +12,7 @@ export type Generated<T> =
 
 export interface AcpReplayEvents {
   at: number;
+  estimated_bytes: Generated<number>;
   run_id: string | null;
   seq: number;
   session_id: string;
@@ -23,6 +24,7 @@ export interface AcpReplaySessions {
   complete: number;
   created_at: number;
   cwd: string;
+  estimated_bytes: Generated<number>;
   next_seq: number;
   session_id: string;
   session_key: string;
@@ -1064,6 +1066,17 @@ export interface WebPushVapidKeys {
   updated_at_ms: number;
 }
 
+export interface WorkerEnvironmentCredentials {
+  bundle_hash: string;
+  credential_hash: string;
+  delivered_at_ms: number | null;
+  environment_id: string;
+  expires_at_ms: number;
+  owner_epoch: number;
+  rpc_set_version: number;
+  session_id: string | null;
+}
+
 export interface WorkerEnvironments {
   attached_session_ids_json: Generated<string>;
   bootstrap_bundle_hash: string | null;
@@ -1075,6 +1088,7 @@ export interface WorkerEnvironments {
   idle_since_at_ms: number | null;
   last_error: string | null;
   lease_id: string | null;
+  owner_epoch: Generated<number>;
   profile_id: string;
   profile_snapshot_json: string;
   provider_id: string;
@@ -1190,6 +1204,7 @@ export interface DB {
   voicewake_triggers: VoicewakeTriggers;
   web_push_subscriptions: WebPushSubscriptions;
   web_push_vapid_keys: WebPushVapidKeys;
+  worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environments: WorkerEnvironments;
   workspace_setup_state: WorkspaceSetupState;
   worktrees: Worktrees;

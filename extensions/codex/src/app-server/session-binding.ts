@@ -11,11 +11,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { z } from "zod";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -28,6 +24,7 @@ import type { CodexServiceTier } from "./protocol.js";
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 const BINDING_LEASE_RETRY_INTERVAL_MS = 1_000;
+const BOUNDED_BINDING_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/i;
 
 export {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -385,6 +382,57 @@ const storedBindingSchema = z.discriminatedUnion("state", [
 // id fences delayed lifecycle cleanup so an old generation cannot clear its successor.
 export type StoredCodexAppServerBinding = z.infer<typeof storedBindingSchema>;
 
+export function hashCodexAppServerBindingFingerprint(canonical: string): string {
+  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+}
+
+function normalizeLegacyBindingFingerprint(value: unknown): unknown {
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value === "[]" ||
+    BOUNDED_BINDING_FINGERPRINT_PATTERN.test(value)
+  ) {
+    return value;
+  }
+  return hashCodexAppServerBindingFingerprint(value);
+}
+
+function normalizeLegacyBindingFingerprints(
+  record: Record<string, unknown>,
+): Record<string, unknown> {
+  // Shipped sidecars can contain unbounded canonical JSON fingerprints. Bound
+  // them at the legacy encoder so plugin-state registration cannot reject the row.
+  let normalized = record;
+  for (const key of ["dynamicToolsFingerprint", "userMcpServersFingerprint"] as const) {
+    const value = record[key];
+    const next = normalizeLegacyBindingFingerprint(value);
+    if (next === value) {
+      continue;
+    }
+    if (normalized === record) {
+      normalized = { ...record };
+    }
+    normalized[key] = next;
+  }
+  return normalized;
+}
+
+export function normalizeStoredCodexAppServerBindingFingerprints(
+  value: unknown,
+): StoredCodexAppServerBinding | undefined {
+  const stored = readStoredCodexAppServerBinding(value);
+  if (!stored || stored.state !== "active") {
+    return stored;
+  }
+  const binding = normalizeLegacyBindingFingerprints(
+    stored.binding as unknown as Record<string, unknown>,
+  );
+  return binding === stored.binding
+    ? stored
+    : readStoredCodexAppServerBinding({ ...stored, binding });
+}
+
 /** Encodes a migrated sidecar binding as one canonical plugin-state row. */
 export function createStoredCodexAppServerBinding(
   value: unknown,
@@ -393,10 +441,11 @@ export function createStoredCodexAppServerBinding(
     lookup?: Omit<CodexAppServerAuthProfileLookup, "authProfileId">;
   } = {},
 ): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
-  const record = asRecord(value);
-  if (!record) {
+  const rawRecord = asRecord(value);
+  if (!rawRecord) {
     return undefined;
   }
+  const record = normalizeLegacyBindingFingerprints(rawRecord);
   if (record.schemaVersion !== 1 && record.schemaVersion !== 2) {
     return undefined;
   }
@@ -484,19 +533,19 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
     return plan.result;
   }
 
-  // Only a stale stable-key owner needs filesystem authority. Resolve it before
-  // the second mutation so session JSON work never runs inside SQLite's write transaction.
+  // Only a stale stable-key owner needs session-store authority. Resolve it before
+  // the second mutation so the session read never runs inside the binding write transaction.
   try {
     const storePath = resolveStorePath(params.config?.session?.store, {
       agentId: params.identity.agentId,
     });
-    const entry = resolveSessionStoreEntry({
-      store: loadSessionStore(storePath, {
-        skipCache: true,
-        hydrateSkillPromptRefs: false,
-      }),
+    const entry = getSessionEntry({
+      agentId: params.identity.agentId,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
       sessionKey,
-    }).existing;
+      storePath,
+    });
     if (entry?.sessionId !== params.identity.sessionId) {
       return false;
     }

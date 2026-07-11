@@ -20,7 +20,6 @@ const APP_ROUTE_DEFINITIONS = {
   "model-providers": { path: "/settings/model-providers", aliases: ["/model-providers"] },
   workboard: { path: "/workboard" },
   worktrees: { path: "/settings/worktrees", aliases: ["/worktrees"] },
-  instances: { path: "/instances" },
   sessions: { path: "/sessions" },
   usage: { path: "/usage" },
   debug: { path: "/debug" },
@@ -32,7 +31,6 @@ const APP_ROUTE_DEFINITIONS = {
   tasks: { path: "/tasks" },
   nodes: { path: "/nodes" },
   plugin: { path: "/plugin" },
-  dreams: { path: "/dreaming", aliases: ["/dreams"] },
 } as const;
 
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;

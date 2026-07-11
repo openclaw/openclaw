@@ -21,13 +21,15 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+} from "../model-auth.js";
+import { isOpenAIProvider } from "../openai-routing.js";
+import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
+import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import type { AgentToolResult } from "../runtime/index.js";
-import type {
-  AuthStorage,
-  ExtensionFactory,
-  ModelRegistry,
-  SessionManager,
-} from "../sessions/index.js";
+import type { ExtensionFactory, ModelRegistry, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
@@ -188,9 +190,12 @@ function hasCompactionModelOverride(cfg?: OpenClawConfig): boolean {
 
 export type SafeguardRuntimeTarget = {
   provider: string;
+  runtimeProvider?: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  modelRegistry?: ModelRegistry;
   authProfileId?: string;
+  runtimeAuthPlan?: AgentRuntimeAuthPlan;
   requiresAuthPreparation: boolean;
 };
 
@@ -203,8 +208,11 @@ function resolveSafeguardRuntimeTarget(params: {
   agentDir?: string;
   workspaceDir?: string;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  runtimeAuthPlan?: AgentRuntimeAuthPlan;
   harnessRuntime?: string;
   modelSelectionLocked?: boolean;
+  resolveOverrideModel?: boolean;
 }): SafeguardRuntimeTarget {
   const resolved = resolveEmbeddedCompactionTarget({
     config: params.cfg,
@@ -216,16 +224,35 @@ function resolveSafeguardRuntimeTarget(params: {
   });
   const provider = resolved.provider ?? params.provider;
   const modelId = resolved.model ?? params.modelId;
+  const matchingRuntimeAuthPlan =
+    params.runtimeAuthPlan &&
+    agentRuntimeAuthPlanMatchesTarget(params.runtimeAuthPlan, { provider, modelId })
+      ? params.runtimeAuthPlan
+      : undefined;
   if (
     !hasCompactionModelOverride(params.cfg) ||
     (provider === params.provider && modelId === params.modelId)
   ) {
     return {
       provider,
+      runtimeProvider: resolved.runtimeProvider,
       modelId,
       model: params.model,
+      modelRegistry: params.modelRegistry,
       authProfileId: resolved.authProfileId,
+      runtimeAuthPlan: matchingRuntimeAuthPlan,
       requiresAuthPreparation: false,
+    };
+  }
+
+  if (params.resolveOverrideModel === false) {
+    return {
+      provider,
+      runtimeProvider: resolved.runtimeProvider,
+      modelId,
+      model: undefined,
+      authProfileId: resolved.authProfileId,
+      requiresAuthPreparation: true,
     };
   }
 
@@ -243,8 +270,10 @@ function resolveSafeguardRuntimeTarget(params: {
   if (model) {
     return {
       provider,
+      runtimeProvider: resolved.runtimeProvider,
       modelId,
       model,
+      modelRegistry: params.modelRegistry,
       authProfileId: resolved.authProfileId,
       requiresAuthPreparation: true,
     };
@@ -258,40 +287,66 @@ function resolveSafeguardRuntimeTarget(params: {
     provider: params.provider,
     modelId: params.modelId,
     model: params.model,
+    modelRegistry: params.modelRegistry,
     authProfileId: params.authProfileId,
+    runtimeAuthPlan:
+      params.runtimeAuthPlan &&
+      agentRuntimeAuthPlanMatchesTarget(params.runtimeAuthPlan, {
+        provider: params.provider,
+        modelId: params.modelId,
+      })
+        ? params.runtimeAuthPlan
+        : undefined,
     requiresAuthPreparation: false,
   };
 }
 
 export async function prepareSafeguardRuntimeTarget(
   params: Parameters<typeof resolveSafeguardRuntimeTarget>[0] & {
-    authStorage: Pick<AuthStorage, "setRuntimeApiKey">;
+    /** Optional target-store injection for tests; callers must not pass the active scoped store. */
     authProfileStore?: AuthProfileStore;
   },
 ): Promise<SafeguardRuntimeTarget | undefined> {
   if (resolveEffectiveCompactionMode(params.cfg) !== "safeguard") {
     return undefined;
   }
-  const target = resolveSafeguardRuntimeTarget(params);
-  if (!target.requiresAuthPreparation || !target.model) {
+  const target = resolveSafeguardRuntimeTarget({ ...params, resolveOverrideModel: false });
+  if (!target.requiresAuthPreparation) {
     return target;
   }
 
   try {
+    const authProfileStore =
+      params.authProfileStore ??
+      (isOpenAIProvider(target.provider)
+        ? ensureAuthProfileStore(params.agentDir, {
+            externalCliProviderIds: ["openai"],
+            allowKeychainPrompt: false,
+          })
+        : ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+            allowKeychainPrompt: false,
+          }));
     const prepared = await prepareCompactionRuntimeAuth({
-      model: target.model,
+      provider: target.provider,
+      runtimeProvider: target.runtimeProvider,
       modelId: target.modelId,
       config: params.cfg,
-      authStorage: params.authStorage,
-      authProfileStore: params.authProfileStore,
+      authProfileStore,
       authProfileId: target.authProfileId,
+      authProfileIdSource:
+        target.authProfileId && target.authProfileId === params.authProfileId
+          ? params.authProfileIdSource
+          : undefined,
+      runtimeAuthPlan: params.runtimeAuthPlan,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
     return {
       ...target,
       model: prepared.model,
+      modelRegistry: prepared.modelRegistry,
       authProfileId: prepared.authProfileId,
+      runtimeAuthPlan: prepared.runtimeAuthPlan,
     };
   } catch (err) {
     log.warn(
@@ -302,7 +357,16 @@ export async function prepareSafeguardRuntimeTarget(
       provider: params.provider,
       modelId: params.modelId,
       model: params.model,
+      modelRegistry: params.modelRegistry,
       authProfileId: params.authProfileId,
+      runtimeAuthPlan:
+        params.runtimeAuthPlan &&
+        agentRuntimeAuthPlanMatchesTarget(params.runtimeAuthPlan, {
+          provider: params.provider,
+          modelId: params.modelId,
+        })
+          ? params.runtimeAuthPlan
+          : undefined,
       requiresAuthPreparation: false,
     };
   }
@@ -318,6 +382,8 @@ export function buildEmbeddedExtensionFactories(params: {
   modelRegistry?: ModelRegistry;
   agentDir?: string;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  runtimeAuthPlan?: AgentRuntimeAuthPlan;
   harnessRuntime?: string;
   modelSelectionLocked?: boolean;
   safeguardRuntimeTarget?: SafeguardRuntimeTarget;
@@ -345,6 +411,8 @@ export function buildEmbeddedExtensionFactories(params: {
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: runtimeTarget.model,
+      modelRegistry: runtimeTarget.modelRegistry,
+      runtimeAuthPlan: runtimeTarget.runtimeAuthPlan,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       workspaceDir: params.workspaceDir,
       postCompactionSections: compactionCfg?.postCompactionSections,

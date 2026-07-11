@@ -318,12 +318,14 @@ type ResolvedRequestAuth =
 async function resolveModelAuth(
   ctx: ExtensionContext,
   model: NonNullable<ExtensionContext["model"]>,
+  modelRegistryOverride?: ModelRegistryWithRequestAuthLookup,
 ): Promise<
   { ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; reason: string }
 > {
   let requestAuth: ResolvedRequestAuth;
   try {
-    const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
+    const modelRegistry =
+      modelRegistryOverride ?? (ctx.modelRegistry as ModelRegistryWithRequestAuthLookup);
     if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
       throw new Error("model registry auth lookup unavailable");
     }
@@ -1059,7 +1061,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const authResult = await resolveModelAuth(ctx, model);
+    const authResult = await resolveModelAuth(ctx, model, runtime?.modelRegistry);
     if (!authResult.ok) {
       setCompactionSafeguardCancelReason(ctx.sessionManager, authResult.reason);
       return { cancel: true };

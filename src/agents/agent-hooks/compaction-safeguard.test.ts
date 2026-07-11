@@ -2204,19 +2204,24 @@ describe("compaction-safeguard extension model fallback", () => {
       id: "claude-sonnet-4-6",
       name: "Claude Sonnet 4.6",
     });
+    const targetGetApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
+      ok: true,
+      apiKey: "target-key",
+    });
     setCompactionSafeguardRuntime(sessionManager, {
       model: compactionModel,
+      modelRegistry: { getApiKeyAndHeaders: targetGetApiKeyAndHeadersMock },
       recentTurnsPreserve: 0,
       qualityGuardEnabled: false,
     });
-    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
+    const activeGetApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
       ok: true,
-      apiKey: "test-key",
+      apiKey: "active-key",
     });
     const context = createCompactionContext({
       sessionManager,
       model: sessionModel,
-      getApiKeyAndHeadersMock,
+      getApiKeyAndHeadersMock: activeGetApiKeyAndHeadersMock,
     });
     const event = createCompactionEvent({
       messageText: "summarize me",
@@ -2229,7 +2234,8 @@ describe("compaction-safeguard extension model fallback", () => {
     const result = (await createCompactionHandler()(event, context)) as { cancel?: boolean };
 
     expect(result.cancel).not.toBe(true);
-    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(compactionModel);
+    expect(targetGetApiKeyAndHeadersMock).toHaveBeenCalledWith(compactionModel);
+    expect(activeGetApiKeyAndHeadersMock).not.toHaveBeenCalled();
     expect(mockSummarizeInStages.mock.calls.at(-1)?.[0]?.model).toBe(compactionModel);
   });
 
