@@ -159,10 +159,12 @@ export async function createWaSocket(
   verbose: boolean,
   opts: {
     authDir?: string;
+    browser?: [string, string, string];
     onQr?: (qr: string) => void;
     getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
     cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
     waWebSocketUrl?: string | URL;
+    qrTimeoutMs?: number;
   } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
@@ -207,7 +209,7 @@ export async function createWaSocket(
     version,
     logger,
     printQRInTerminal: false,
-    browser: ["openclaw", "cli", VERSION],
+    browser: opts.browser ?? ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
     ...socketTiming,
@@ -218,6 +220,7 @@ export async function createWaSocket(
     ...(waWebSocketUrl ? { waWebSocketUrl } : {}),
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
     ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
+    ...(opts.qrTimeoutMs ? { qrTimeout: opts.qrTimeoutMs } : {}),
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));

@@ -73,6 +73,14 @@ vi.mock("./session.js", async () => {
   };
 });
 
+vi.mock("./auth-store.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
+  return {
+    ...actual,
+    clearStalePhoneCodePairingAuthIfNeeded: vi.fn(async () => false),
+  };
+});
+
 vi.mock("./qr-terminal.js", () => ({
   renderQrTerminal: vi.fn(async (qr: string) => `terminal:${qr}\n`),
 }));
@@ -83,8 +91,9 @@ const formatErrorMock = vi.mocked(formatError);
 const renderQrTerminalMock = vi.mocked(renderQrTerminal);
 
 async function flushTasks() {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 8; i += 1) {
+    await Promise.resolve();
+  }
 }
 
 function runtimeMessageCalls(fn: RuntimeEnv["log"]) {

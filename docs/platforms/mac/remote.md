@@ -88,6 +88,7 @@ To configure from the UI instead:
 ## WhatsApp login flow (remote)
 
 - Run `openclaw channels login --channel whatsapp --verbose` **on the remote host**. Scan the QR with WhatsApp on your phone.
+- If QR scanning is unavailable, run `openclaw channels login --channel whatsapp --verbose --phone-number 15551234567` on the remote host, then enter the printed code in WhatsApp under _Linked Devices_ → _Link with phone number_.
 - Re-run login on that host if auth expires. The health check surfaces link problems.
 
 ## Troubleshooting

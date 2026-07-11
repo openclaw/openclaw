@@ -7,6 +7,7 @@ import { danger, info, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getActiveWebListener } from "./active-listener.js";
+import { clearStalePhoneCodePairingAuthIfNeeded } from "./auth-store.js";
 import {
   closeWaSocket,
   waitForWhatsAppLoginResult,
@@ -323,6 +324,11 @@ export async function startWebLoginWithQr(
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
   const socketTiming = resolveWhatsAppSocketTiming(cfg);
+  await clearStalePhoneCodePairingAuthIfNeeded({
+    authDir: account.authDir,
+    isLegacyAuthDir: account.isLegacyAuthDir,
+    runtime,
+  });
   const authState = await readWebAuthExistsForDecision(account.authDir);
   if (authState.outcome === "unstable") {
     return {
