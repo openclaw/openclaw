@@ -60,7 +60,7 @@ function resolveHookRunSummary(result: RunCronAgentTurnResult): string {
   );
 }
 
-function sanitizeHookConsoleValue(value: string | undefined): string | undefined {
+export function sanitizeHookConsoleValue(value: string | undefined): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
     return undefined;
