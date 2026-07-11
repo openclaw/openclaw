@@ -140,7 +140,10 @@ describe("renderWorkspace", () => {
       resolveFresh = resolve;
     });
     const request = vi.fn().mockReturnValueOnce(oldResult).mockReturnValueOnce(freshResult);
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = {
+      request,
+      addEventListener: vi.fn(() => () => {}),
+    } as unknown as GatewayBrowserClient;
     const state = getWorkspaceState(host);
     state.loaded = true;
     state.activeSlug = "main";
