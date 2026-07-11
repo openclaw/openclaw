@@ -76,6 +76,11 @@ import {
   type ChatPageHost,
 } from "./chat-state.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
+import {
+  createBackgroundTasksProps,
+  renderBackgroundTasksToggle,
+  type BackgroundTasksProps,
+} from "./components/chat-background-tasks.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   chatPullRequestId,
@@ -1114,7 +1119,10 @@ class ChatPane extends OpenClawLightDomElement {
     state.requestUpdate?.();
   }
 
-  private renderPaneHeader(sessionWorkspace: SessionWorkspaceProps) {
+  private renderPaneHeader(
+    sessionWorkspace: SessionWorkspaceProps,
+    backgroundTasks: BackgroundTasksProps,
+  ) {
     return html`
       <div class="chat-pane__header ${this.active ? "chat-pane__header--active" : ""}">
         <!-- Static text on purpose: an interactive session picker here would
@@ -1122,6 +1130,7 @@ class ChatPane extends OpenClawLightDomElement {
              drag-and-drop. -->
         <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
         <div class="chat-pane__actions">
+          ${renderBackgroundTasksToggle(backgroundTasks, "pane-header")}
           ${renderSessionWorkspaceToggle(sessionWorkspace, "pane-header")}
           ${!this.narrow
             ? html`
@@ -1181,6 +1190,11 @@ class ChatPane extends OpenClawLightDomElement {
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
     const sessionWorkspace = createSessionWorkspaceProps(state);
+    const backgroundTasks = createBackgroundTasksProps(state, {
+      onOpenSession: (sessionKey) => {
+        this.onPaneSessionChange?.(this.paneId, sessionKey);
+      },
+    });
     const props: ChatProps = {
       paneId: this.paneId,
       sessionKey: state.sessionKey,
@@ -1286,6 +1300,7 @@ class ChatPane extends OpenClawLightDomElement {
         },
       }),
       sessionWorkspace,
+      backgroundTasks,
       paneHeaderActive: this.showPaneHeader,
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(
@@ -1410,7 +1425,7 @@ class ChatPane extends OpenClawLightDomElement {
     if (!this.showPaneHeader) {
       return renderChat(props);
     }
-    return html`${this.renderPaneHeader(sessionWorkspace)}${renderChat(props)}`;
+    return html`${this.renderPaneHeader(sessionWorkspace, backgroundTasks)}${renderChat(props)}`;
   }
 }
 
